@@ -56,6 +56,9 @@ types that LLVM no longer stores.
   `BasicBlockUtils.h`, corrupting an `IRBuilderBase &Builder` parameter. It is
   now a C++ type alias, and the obsolete `NEW_BUILDER` configuration switch has
   been removed.
+- LLVM 22 keeps `Function::getBasicBlockList()` private. All 126 append-only
+  uses now attach detached blocks through `BasicBlock::insertInto`, preserving
+  their original construction order without accessing container internals.
 - The highest-risk typed-pointer hotspots are `named_type`, `type_name`,
   `dsptype_name`, `declare_extern`, and Faust sample-type detection. These need
   separate semantic ABI metadata rather than reconstructed pointer nesting.
@@ -79,6 +82,13 @@ types that LLVM no longer stores.
 
 ## Progress Log
 
+- 2026-07-23: Replaced all 126 direct basic-block list appends with the public
+  `BasicBlock::insertInto` API.
+  - Validation:
+    - `cmake --preset llvm22-debug` configured successfully.
+    - `cmake --build --preset llvm22-debug -- -j1` reported no private
+      `getBasicBlockList` access and advanced to the direct Faust `CreateGEP`
+      and `CreateLoad` signatures at `interpreter.cc:2135` and `:2209`.
 - 2026-07-23: Replaced the preprocessor `Builder` alias with
   `using Builder = llvm::IRBuilder<>` and selected modern `BinaryOperator`
   construction directly.

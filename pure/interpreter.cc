@@ -2063,7 +2063,7 @@ bool interpreter::LoadFaustDSP(bool priv, const char *name, string *msg,
 	(b.CreateICmpNE
 	 (v, ConstantPointerNull::get(dyn_cast<PointerType>(dsp_ty)), "cmp"),
 	 okbb, skipbb);
-      f->getBasicBlockList().push_back(okbb);
+      okbb->insertInto(f);
       b.SetInsertPoint(okbb);
       // Call init.
       args.push_back(v);
@@ -2072,7 +2072,7 @@ bool interpreter::LoadFaustDSP(bool priv, const char *name, string *msg,
       b.CreateCall(initfun, mkargs(args));
       b.CreateBr(skipbb);
       // Return the result.
-      f->getBasicBlockList().push_back(skipbb);
+      skipbb->insertInto(f);
       b.SetInsertPoint(skipbb);
       b.CreateRet(v);
     }
@@ -3707,7 +3707,7 @@ pure_expr *interpreter::const_defn(expr pat, expr& x, pure_expr*& e)
       state *start = m.start;
       simple_match(arg, start, matchedbb, failedbb);
       // matched => emit code for binding the variables
-      f.f->getBasicBlockList().push_back(matchedbb);
+      matchedbb->insertInto(f.f);
       f.builder.SetInsertPoint(matchedbb);
       if (!vi.guards.empty()) {
 	// verify guards
@@ -3722,7 +3722,7 @@ pure_expr *interpreter::const_defn(expr pat, expr& x, pure_expr*& e)
 	    f.builder.CreateCall(module->getFunction("pure_safe_typecheck"),
 				 mkargs(args));
 	  f.builder.CreateCondBr(check, checkedbb, failedbb);
-	  f.f->getBasicBlockList().push_back(checkedbb);
+	  checkedbb->insertInto(f.f);
 	  f.builder.SetInsertPoint(checkedbb);
 	}
       }
@@ -3737,7 +3737,7 @@ pure_expr *interpreter::const_defn(expr pat, expr& x, pure_expr*& e)
 	  Value *check = f.builder.CreateCall(module->getFunction("same"),
 					      mkargs(args));
 	  f.builder.CreateCondBr(check, checkedbb, failedbb);
-	  f.f->getBasicBlockList().push_back(checkedbb);
+	  checkedbb->insertInto(f.f);
 	  f.builder.SetInsertPoint(checkedbb);
 	}
       }
@@ -3759,7 +3759,7 @@ pure_expr *interpreter::const_defn(expr pat, expr& x, pure_expr*& e)
       // return the matchee to indicate success
       f.builder.CreateRet(arg);
       // failed => throw an exception
-      f.f->getBasicBlockList().push_back(failedbb);
+      failedbb->insertInto(f.f);
       f.builder.SetInsertPoint(failedbb);
       unwind();
       fun_finish();
@@ -12492,11 +12492,11 @@ Function *interpreter::declare_extern(int priv, string name, string restype,
       BasicBlock *forcebb = basic_block("force");
       BasicBlock *skipbb = basic_block("skip");
       b.CreateCondBr(checkv, forcebb, skipbb);
-      f->getBasicBlockList().push_back(forcebb);
+      forcebb->insertInto(f);
       b.SetInsertPoint(forcebb);
       b.CreateCall(module->getFunction("pure_force"), x);
       b.CreateBr(skipbb);
-      f->getBasicBlockList().push_back(skipbb);
+      skipbb->insertInto(f);
       b.SetInsertPoint(skipbb);
     }
     if (argt[i] == int1_type()) {
@@ -12505,7 +12505,7 @@ Function *interpreter::declare_extern(int priv, string name, string restype,
       Value *tagv = b.CreateLoad(b.CreateGEP(x, mkidxs(idx, idx+2)), "tag");
       b.CreateCondBr
 	(b.CreateICmpEQ(tagv, SInt(EXPR::INT), "cmp"), okbb, failedbb);
-      f->getBasicBlockList().push_back(okbb);
+      okbb->insertInto(f);
       b.SetInsertPoint(okbb);
       Value *pv = b.CreateBitCast(x, IntExprPtrTy, "intexpr");
       idx[1] = ValFldIndex;
@@ -12521,18 +12521,18 @@ Function *interpreter::declare_extern(int priv, string name, string restype,
       SwitchInst *sw = b.CreateSwitch(tagv, failedbb, 2);
       sw->addCase(SInt(EXPR::INT), intbb);
       sw->addCase(SInt(EXPR::BIGINT), mpzbb);
-      f->getBasicBlockList().push_back(intbb);
+      intbb->insertInto(f);
       b.SetInsertPoint(intbb);
       Value *pv = b.CreateBitCast(x, IntExprPtrTy, "intexpr");
       idx[1] = ValFldIndex;
       Value *intv = b.CreateLoad(b.CreateGEP(pv, mkidxs(idx, idx+2)), "intval");
       b.CreateBr(okbb);
-      f->getBasicBlockList().push_back(mpzbb);
+      mpzbb->insertInto(f);
       b.SetInsertPoint(mpzbb);
       // Handle the case of a bigint (mpz_t -> int).
       Value *mpzv = b.CreateCall(module->getFunction("pure_get_int"), x);
       b.CreateBr(okbb);
-      f->getBasicBlockList().push_back(okbb);
+      okbb->insertInto(f);
       b.SetInsertPoint(okbb);
       PHINode *phi = phi_node(b, int32_type(), 2);
       phi->addIncoming(intv, intbb);
@@ -12547,18 +12547,18 @@ Function *interpreter::declare_extern(int priv, string name, string restype,
       SwitchInst *sw = b.CreateSwitch(tagv, failedbb, 2);
       sw->addCase(SInt(EXPR::INT), intbb);
       sw->addCase(SInt(EXPR::BIGINT), mpzbb);
-      f->getBasicBlockList().push_back(intbb);
+      intbb->insertInto(f);
       b.SetInsertPoint(intbb);
       Value *pv = b.CreateBitCast(x, IntExprPtrTy, "intexpr");
       idx[1] = ValFldIndex;
       Value *intv = b.CreateLoad(b.CreateGEP(pv, mkidxs(idx, idx+2)), "intval");
       b.CreateBr(okbb);
-      f->getBasicBlockList().push_back(mpzbb);
+      mpzbb->insertInto(f);
       b.SetInsertPoint(mpzbb);
       // Handle the case of a bigint (mpz_t -> int).
       Value *mpzv = b.CreateCall(module->getFunction("pure_get_int"), x);
       b.CreateBr(okbb);
-      f->getBasicBlockList().push_back(okbb);
+      okbb->insertInto(f);
       b.SetInsertPoint(okbb);
       PHINode *phi = phi_node(b, int32_type(), 2);
       phi->addIncoming(intv, intbb);
@@ -12573,18 +12573,18 @@ Function *interpreter::declare_extern(int priv, string name, string restype,
       SwitchInst *sw = b.CreateSwitch(tagv, failedbb, 2);
       sw->addCase(SInt(EXPR::INT), intbb);
       sw->addCase(SInt(EXPR::BIGINT), mpzbb);
-      f->getBasicBlockList().push_back(intbb);
+      intbb->insertInto(f);
       b.SetInsertPoint(intbb);
       Value *pv = b.CreateBitCast(x, IntExprPtrTy, "intexpr");
       idx[1] = ValFldIndex;
       Value *intv = b.CreateLoad(b.CreateGEP(pv, mkidxs(idx, idx+2)), "intval");
       b.CreateBr(okbb);
-      f->getBasicBlockList().push_back(mpzbb);
+      mpzbb->insertInto(f);
       b.SetInsertPoint(mpzbb);
       // Handle the case of a bigint (mpz_t -> int).
       Value *mpzv = b.CreateCall(module->getFunction("pure_get_int"), x);
       b.CreateBr(okbb);
-      f->getBasicBlockList().push_back(okbb);
+      okbb->insertInto(f);
       b.SetInsertPoint(okbb);
       PHINode *phi = phi_node(b, int32_type(), 2);
       phi->addIncoming(intv, intbb);
@@ -12599,19 +12599,19 @@ Function *interpreter::declare_extern(int priv, string name, string restype,
       SwitchInst *sw = b.CreateSwitch(tagv, failedbb, 2);
       sw->addCase(SInt(EXPR::INT), intbb);
       sw->addCase(SInt(EXPR::BIGINT), mpzbb);
-      f->getBasicBlockList().push_back(intbb);
+      intbb->insertInto(f);
       b.SetInsertPoint(intbb);
       Value *pv = b.CreateBitCast(x, IntExprPtrTy, "intexpr");
       idx[1] = ValFldIndex;
       Value *intv = b.CreateLoad(b.CreateGEP(pv, mkidxs(idx, idx+2)), "intval");
       intv = b.CreateSExt(intv, int64_type());
       b.CreateBr(okbb);
-      f->getBasicBlockList().push_back(mpzbb);
+      mpzbb->insertInto(f);
       b.SetInsertPoint(mpzbb);
       // Handle the case of a bigint (mpz_t -> long).
       Value *mpzv = b.CreateCall(module->getFunction("pure_get_int64"), x);
       b.CreateBr(okbb);
-      f->getBasicBlockList().push_back(okbb);
+      okbb->insertInto(f);
       b.SetInsertPoint(okbb);
       PHINode *phi = phi_node(b, int64_type(), 2);
       phi->addIncoming(intv, intbb);
@@ -12623,7 +12623,7 @@ Function *interpreter::declare_extern(int priv, string name, string restype,
       Value *tagv = b.CreateLoad(b.CreateGEP(x, mkidxs(idx, idx+2)), "tag");
       b.CreateCondBr
 	(b.CreateICmpEQ(tagv, SInt(EXPR::DBL), "cmp"), okbb, failedbb);
-      f->getBasicBlockList().push_back(okbb);
+      okbb->insertInto(f);
       b.SetInsertPoint(okbb);
       Value *pv = b.CreateBitCast(x, DblExprPtrTy, "dblexpr");
       idx[1] = ValFldIndex;
@@ -12635,7 +12635,7 @@ Function *interpreter::declare_extern(int priv, string name, string restype,
       Value *tagv = b.CreateLoad(b.CreateGEP(x, mkidxs(idx, idx+2)), "tag");
       b.CreateCondBr
 	(b.CreateICmpEQ(tagv, SInt(EXPR::DBL), "cmp"), okbb, failedbb);
-      f->getBasicBlockList().push_back(okbb);
+      okbb->insertInto(f);
       b.SetInsertPoint(okbb);
       Value *pv = b.CreateBitCast(x, DblExprPtrTy, "dblexpr");
       idx[1] = ValFldIndex;
@@ -12654,7 +12654,7 @@ Function *interpreter::declare_extern(int priv, string name, string restype,
       sw->addCase(SInt(EXPR::PTR), ptrbb);
       sw->addCase(SInt(EXPR::STR), strbb);
       sw->addCase(SInt(EXPR::IMATRIX), matrixbb);
-      f->getBasicBlockList().push_back(ptrbb);
+      ptrbb->insertInto(f);
       b.SetInsertPoint(ptrbb);
       int tag = pointer_type_tag(CharPtrTy);
       if (tag) {
@@ -12667,7 +12667,7 @@ Function *interpreter::declare_extern(int priv, string name, string restype,
 	args.push_back(x);
 	Value *chk = b.CreateCall(g, mkargs(args));
 	b.CreateCondBr(chk, checkedbb, failedbb);
-	f->getBasicBlockList().push_back(checkedbb);
+	checkedbb->insertInto(f);
 	b.SetInsertPoint(checkedbb);
 	ptrbb = checkedbb;
       }
@@ -12677,16 +12677,16 @@ Function *interpreter::declare_extern(int priv, string name, string restype,
 	(b.CreateLoad(b.CreateGEP(pv, mkidxs(idx, idx+2)), "ptrval"),
 	 CharPtrTy);
       b.CreateBr(okbb);
-      f->getBasicBlockList().push_back(strbb);
+      strbb->insertInto(f);
       b.SetInsertPoint(strbb);
       Value *sv = b.CreateCall(module->getFunction("pure_get_cstring"), x);
       b.CreateBr(okbb);
-      f->getBasicBlockList().push_back(matrixbb);
+      matrixbb->insertInto(f);
       b.SetInsertPoint(matrixbb);
       Function *get_fun = module->getFunction("pure_get_matrix_data_byte");
       Value *matrixv = b.CreateBitCast(b.CreateCall(get_fun, x), CharPtrTy);
       b.CreateBr(okbb);
-      f->getBasicBlockList().push_back(okbb);
+      okbb->insertInto(f);
       b.SetInsertPoint(okbb);
       PHINode *phi = phi_node(b, CharPtrTy, 3);
       phi->addIncoming(ptrv, ptrbb);
@@ -12728,7 +12728,7 @@ Function *interpreter::declare_extern(int priv, string name, string restype,
 	sw->addCase(SInt(EXPR::DMATRIX), matrixbb);
 	sw->addCase(SInt(EXPR::CMATRIX), matrixbb);
       }
-      f->getBasicBlockList().push_back(ptrbb);
+      ptrbb->insertInto(f);
       b.SetInsertPoint(ptrbb);
       int tag = pointer_type_tag(argt[i]);
       if (tag) {
@@ -12741,7 +12741,7 @@ Function *interpreter::declare_extern(int priv, string name, string restype,
 	args.push_back(x);
 	Value *chk = b.CreateCall(g, mkargs(args));
 	b.CreateCondBr(chk, checkedbb, failedbb);
-	f->getBasicBlockList().push_back(checkedbb);
+	checkedbb->insertInto(f);
 	b.SetInsertPoint(checkedbb);
 	ptrbb = checkedbb;
       }
@@ -12749,11 +12749,11 @@ Function *interpreter::declare_extern(int priv, string name, string restype,
       idx[1] = ValFldIndex;
       Value *ptrv = b.CreateLoad(b.CreateGEP(pv, mkidxs(idx, idx+2)), "ptrval");
       b.CreateBr(okbb);
-      f->getBasicBlockList().push_back(matrixbb);
+      matrixbb->insertInto(f);
       b.SetInsertPoint(matrixbb);
       Value *matrixv = b.CreateCall(get_fun, x);
       b.CreateBr(okbb);
-      f->getBasicBlockList().push_back(okbb);
+      okbb->insertInto(f);
       b.SetInsertPoint(okbb);
       PHINode *phi = phi_node(b, VoidPtrTy, 2);
       phi->addIncoming(ptrv, ptrbb);
@@ -12778,7 +12778,7 @@ Function *interpreter::declare_extern(int priv, string name, string restype,
       sw->addCase(SInt(EXPR::PTR), ptrbb);
       if (is_char) sw->addCase(SInt(EXPR::IMATRIX), matrixbb);
       sw->addCase(SInt(EXPR::MATRIX), smatrixbb);
-      f->getBasicBlockList().push_back(ptrbb);
+      ptrbb->insertInto(f);
       b.SetInsertPoint(ptrbb);
       int tag = pointer_type_tag(argt[i]);
       if (tag) {
@@ -12791,7 +12791,7 @@ Function *interpreter::declare_extern(int priv, string name, string restype,
 	args.push_back(x);
 	Value *chk = b.CreateCall(g, mkargs(args));
 	b.CreateCondBr(chk, checkedbb, failedbb);
-	f->getBasicBlockList().push_back(checkedbb);
+	checkedbb->insertInto(f);
 	b.SetInsertPoint(checkedbb);
 	ptrbb = checkedbb;
       }
@@ -12801,16 +12801,16 @@ Function *interpreter::declare_extern(int priv, string name, string restype,
       b.CreateBr(okbb);
       Value *matrixv = 0;
       if (is_char) {
-	f->getBasicBlockList().push_back(matrixbb);
+	matrixbb->insertInto(f);
 	b.SetInsertPoint(matrixbb);
 	matrixv = b.CreateCall(get_fun, x);
 	b.CreateBr(okbb);
       }
-      f->getBasicBlockList().push_back(smatrixbb);
+      smatrixbb->insertInto(f);
       b.SetInsertPoint(smatrixbb);
       Value *smatrixv = b.CreateCall(sget_fun, x);
       b.CreateBr(okbb);
-      f->getBasicBlockList().push_back(okbb);
+      okbb->insertInto(f);
       b.SetInsertPoint(okbb);
       PHINode *phi = phi_node(b, VoidPtrTy, 3);
       phi->addIncoming(ptrv, ptrbb);
@@ -12860,7 +12860,7 @@ Function *interpreter::declare_extern(int priv, string name, string restype,
 	sw->addCase(SInt(EXPR::DMATRIX), matrixbb);
 	sw->addCase(SInt(EXPR::CMATRIX), matrixbb);
       }
-      f->getBasicBlockList().push_back(ptrbb);
+      ptrbb->insertInto(f);
       b.SetInsertPoint(ptrbb);
       int tag = pointer_type_tag(argt[i]);
       if (tag) {
@@ -12873,7 +12873,7 @@ Function *interpreter::declare_extern(int priv, string name, string restype,
 	args.push_back(x);
 	Value *chk = b.CreateCall(g, mkargs(args));
 	b.CreateCondBr(chk, checkedbb, failedbb);
-	f->getBasicBlockList().push_back(checkedbb);
+	checkedbb->insertInto(f);
 	b.SetInsertPoint(checkedbb);
 	ptrbb = checkedbb;
       }
@@ -12881,11 +12881,11 @@ Function *interpreter::declare_extern(int priv, string name, string restype,
       idx[1] = ValFldIndex;
       Value *ptrv = b.CreateLoad(b.CreateGEP(pv, mkidxs(idx, idx+2)), "ptrval");
       b.CreateBr(okbb);
-      f->getBasicBlockList().push_back(matrixbb);
+      matrixbb->insertInto(f);
       b.SetInsertPoint(matrixbb);
       Value *matrixv = b.CreateCall(get_fun, x);
       b.CreateBr(okbb);
-      f->getBasicBlockList().push_back(okbb);
+      okbb->insertInto(f);
       b.SetInsertPoint(okbb);
       PHINode *phi = phi_node(b, VoidPtrTy, 2);
       phi->addIncoming(ptrv, ptrbb);
@@ -12909,7 +12909,7 @@ Function *interpreter::declare_extern(int priv, string name, string restype,
 	ttag = EXPR::IMATRIX;
       b.CreateCondBr
 	(b.CreateICmpEQ(tagv, SInt(ttag), "cmp"), okbb, failedbb);
-      f->getBasicBlockList().push_back(okbb);
+      okbb->insertInto(f);
       b.SetInsertPoint(okbb);
       Value *matv = b.CreateCall(module->getFunction("pure_get_matrix"), x);
       unboxed[i] = b.CreateBitCast(matv, type);
@@ -12930,7 +12930,7 @@ Function *interpreter::declare_extern(int priv, string name, string restype,
       Value *tagv = b.CreateLoad(b.CreateGEP(x, mkidxs(idx, idx+2)), "tag");
       SwitchInst *sw = b.CreateSwitch(tagv, failedbb, 1);
       sw->addCase(SInt(EXPR::PTR), ptrbb);
-      f->getBasicBlockList().push_back(ptrbb);
+      ptrbb->insertInto(f);
       b.SetInsertPoint(ptrbb);
       Value *pv = b.CreateBitCast(x, PtrExprPtrTy, "ptrexpr");
       idx[1] = ValFldIndex;
@@ -12942,7 +12942,7 @@ Function *interpreter::declare_extern(int priv, string name, string restype,
       args.push_back(x);
       Value *chk = b.CreateCall(g, mkargs(args));
       b.CreateCondBr(chk, okbb, failedbb);
-      f->getBasicBlockList().push_back(okbb);
+      okbb->insertInto(f);
       b.SetInsertPoint(okbb);
       PHINode *phi = phi_node(b, VoidPtrTy, 1);
       phi->addIncoming(ptrv, ptrbb);
@@ -12982,25 +12982,25 @@ Function *interpreter::declare_extern(int priv, string name, string restype,
       sw->addCase(SInt(EXPR::DMATRIX), matrixbb);
       sw->addCase(SInt(EXPR::CMATRIX), matrixbb);
       sw->addCase(SInt(EXPR::IMATRIX), matrixbb);
-      f->getBasicBlockList().push_back(ptrbb);
+      ptrbb->insertInto(f);
       b.SetInsertPoint(ptrbb);
       // The following will work with both pointer and string expressions.
       Value *pv = b.CreateBitCast(x, PtrExprPtrTy, "ptrexpr");
       idx[1] = ValFldIndex;
       Value *ptrv = b.CreateLoad(b.CreateGEP(pv, mkidxs(idx, idx+2)), "ptrval");
       b.CreateBr(okbb);
-      f->getBasicBlockList().push_back(mpzbb);
+      mpzbb->insertInto(f);
       b.SetInsertPoint(mpzbb);
       // Handle the case of a bigint (mpz_t -> void*).
       Value *mpzv = b.CreateCall(module->getFunction("pure_get_bigint"), x);
       b.CreateBr(okbb);
       // Handle the case of a matrix (gsl_matrix_xyz* -> void*).
-      f->getBasicBlockList().push_back(matrixbb);
+      matrixbb->insertInto(f);
       b.SetInsertPoint(matrixbb);
       Value *matrixv =
 	b.CreateCall(module->getFunction("pure_get_matrix_data"), x);
       b.CreateBr(okbb);
-      f->getBasicBlockList().push_back(okbb);
+      okbb->insertInto(f);
       b.SetInsertPoint(okbb);
       PHINode *phi = phi_node(b, VoidPtrTy, 3);
       phi->addIncoming(ptrv, ptrbb);
@@ -13018,7 +13018,7 @@ Function *interpreter::declare_extern(int priv, string name, string restype,
       Value *tagv = b.CreateLoad(b.CreateGEP(x, mkidxs(idx, idx+2)), "tag");
       b.CreateCondBr
 	(b.CreateICmpEQ(tagv, SInt(EXPR::PTR), "cmp"), okbb, failedbb);
-      f->getBasicBlockList().push_back(okbb);
+      okbb->insertInto(f);
       b.SetInsertPoint(okbb);
       int tag = pointer_type_tag(argt[i]);
       if (tag) {
@@ -13031,7 +13031,7 @@ Function *interpreter::declare_extern(int priv, string name, string restype,
 	args.push_back(x);
 	Value *chk = b.CreateCall(g, mkargs(args));
 	b.CreateCondBr(chk, checkedbb, failedbb);
-	f->getBasicBlockList().push_back(checkedbb);
+	checkedbb->insertInto(f);
 	b.SetInsertPoint(checkedbb);
       }
       Value *pv = b.CreateBitCast(x, PtrExprPtrTy, "ptrexpr");
@@ -13132,7 +13132,7 @@ Function *interpreter::declare_extern(int priv, string name, string restype,
     BasicBlock *okbb = basic_block("ok");
     b.CreateCondBr
       (b.CreateICmpNE(u, NullExprPtr, "cmp"), okbb, noretbb);
-    f->getBasicBlockList().push_back(okbb);
+    okbb->insertInto(f);
     b.SetInsertPoint(okbb);
     // value is passed through
   } else if (is_pointer_type(type)) {
@@ -13205,7 +13205,7 @@ Function *interpreter::declare_extern(int priv, string name, string restype,
   }
   b.CreateRet(u);
   // The call failed. Provide a default value.
-  f->getBasicBlockList().push_back(noretbb);
+  noretbb->insertInto(f);
   b.SetInsertPoint(noretbb);
   if (debugging) {
     Function *f = module->getFunction("pure_debug_redn");
@@ -13217,7 +13217,7 @@ Function *interpreter::declare_extern(int priv, string name, string restype,
     b.CreateCall(f, mkargs(args));
   }
   b.CreateBr(failedbb);
-  f->getBasicBlockList().push_back(failedbb);
+  failedbb->insertInto(f);
   b.SetInsertPoint(failedbb);
   // free temporaries
   if (temps) b.CreateCall(module->getFunction("pure_free_cstrings"));
@@ -13242,7 +13242,7 @@ Function *interpreter::declare_extern(int priv, string name, string restype,
   // We first check for NULL values.
   BasicBlock *goodbb = basic_block("good"), *badbb = basic_block("bad");
   b.CreateCondBr(b.CreateICmpNE(defaultv, NullExprPtr), goodbb, badbb);
-  f->getBasicBlockList().push_back(goodbb);
+  goodbb->insertInto(f);
   b.SetInsertPoint(goodbb);
   // Everything's fine, invoke the default value to the arguments and return
   // the result.
@@ -13264,7 +13264,7 @@ Function *interpreter::declare_extern(int priv, string name, string restype,
   }
   b.CreateRet(defv);
   // NULL default value, raise a failed_match exception instead.
-  f->getBasicBlockList().push_back(badbb);
+  badbb->insertInto(f);
   b.SetInsertPoint(badbb);
   // Create a cbox for the failed_match symbol and invoke pure_throw (we can't
   // use unwind() here since there's no environment on the stack).
@@ -13694,7 +13694,7 @@ pure_expr *interpreter::dodefn(env vars, const vinfo& vi,
   state *start = m.start;
   simple_match(arg, start, matchedbb, failedbb);
   // matched => emit code for binding the variables
-  f.f->getBasicBlockList().push_back(matchedbb);
+  matchedbb->insertInto(f.f);
   f.builder.SetInsertPoint(matchedbb);
   if (!vi.guards.empty()) {
     // verify guards
@@ -13708,7 +13708,7 @@ pure_expr *interpreter::dodefn(env vars, const vinfo& vi,
 	f.builder.CreateCall(module->getFunction("pure_safe_typecheck"),
 			     mkargs(args));
       f.builder.CreateCondBr(check, checkedbb, failedbb);
-      f.f->getBasicBlockList().push_back(checkedbb);
+      checkedbb->insertInto(f.f);
       f.builder.SetInsertPoint(checkedbb);
     }
   }
@@ -13723,7 +13723,7 @@ pure_expr *interpreter::dodefn(env vars, const vinfo& vi,
       Value *check = f.builder.CreateCall(module->getFunction("same"),
 					  mkargs(args));
       f.builder.CreateCondBr(check, checkedbb, failedbb);
-      f.f->getBasicBlockList().push_back(checkedbb);
+      checkedbb->insertInto(f.f);
       f.builder.SetInsertPoint(checkedbb);
     }
   }
@@ -13764,7 +13764,7 @@ pure_expr *interpreter::dodefn(env vars, const vinfo& vi,
   // return the matchee to indicate success
   f.builder.CreateRet(arg);
   // failed => throw an exception
-  f.f->getBasicBlockList().push_back(failedbb);
+  failedbb->insertInto(f.f);
   f.builder.SetInsertPoint(failedbb);
   unwind();
   fun_finish();
@@ -13861,7 +13861,7 @@ Value *interpreter::when_codegen(expr x, matcher *m,
     BasicBlock *matchedbb = basic_block("matched");
     BasicBlock *failedbb = basic_block("failed");
     e.builder.CreateBr(bodybb);
-    e.f->getBasicBlockList().push_back(bodybb);
+    bodybb->insertInto(e.f);
     e.builder.SetInsertPoint(bodybb);
     Value *arg = e.args[0];
     // emit the matching code
@@ -13869,7 +13869,7 @@ Value *interpreter::when_codegen(expr x, matcher *m,
     if (debugging) debug_rule(0);
     simple_match(arg, start, matchedbb, failedbb);
     // matched => emit code for the reduct
-    e.f->getBasicBlockList().push_back(matchedbb);
+    matchedbb->insertInto(e.f);
     e.builder.SetInsertPoint(matchedbb);
     const rule& rr = m->r[0];
     if (!rr.vi.guards.empty()) {
@@ -13884,7 +13884,7 @@ Value *interpreter::when_codegen(expr x, matcher *m,
 	  e.builder.CreateCall(module->getFunction("pure_typecheck"),
 			       mkargs(args));
 	e.builder.CreateCondBr(check, checkedbb, failedbb);
-	e.f->getBasicBlockList().push_back(checkedbb);
+	checkedbb->insertInto(e.f);
 	e.builder.SetInsertPoint(checkedbb);
       }
     }
@@ -13899,7 +13899,7 @@ Value *interpreter::when_codegen(expr x, matcher *m,
 	Value *check = e.builder.CreateCall(module->getFunction("same"),
 					    mkargs(args));
 	e.builder.CreateCondBr(check, checkedbb, failedbb);
-	e.f->getBasicBlockList().push_back(checkedbb);
+	checkedbb->insertInto(e.f);
 	e.builder.SetInsertPoint(checkedbb);
       }
     }
@@ -13911,7 +13911,7 @@ Value *interpreter::when_codegen(expr x, matcher *m,
     Value *v = when_codegen(x, m+1, s, end, e.rp, level+1);
     if (v) e.CreateRet(v, e.rp);
     // failed => throw an exception
-    e.f->getBasicBlockList().push_back(failedbb);
+    failedbb->insertInto(e.f);
     e.builder.SetInsertPoint(failedbb);
     if (debugging) debug_redn(0);
     unwind(symtab.failed_match_sym().f);
@@ -14092,7 +14092,7 @@ Value *interpreter::builtin_codegen(expr x)
       BasicBlock *iffalsebb = basic_block("iffalse");
       BasicBlock *endbb = basic_block("end");
       b.CreateCondBr(condv, endbb, iffalsebb);
-      e.f->getBasicBlockList().push_back(iffalsebb);
+      iffalsebb->insertInto(e.f);
       b.SetInsertPoint(iffalsebb);
       Value *v = get_int(x.xval2());
 #if DEBUG
@@ -14106,7 +14106,7 @@ Value *interpreter::builtin_codegen(expr x)
 #endif
       b.CreateBr(endbb);
       iffalsebb = b.GetInsertBlock();
-      e.f->getBasicBlockList().push_back(endbb);
+      endbb->insertInto(e.f);
       b.SetInsertPoint(endbb);
       PHINode *phi = phi_node(b, int32_type(), 2, "fi");
       phi->addIncoming(u, iftruebb);
@@ -14120,7 +14120,7 @@ Value *interpreter::builtin_codegen(expr x)
       BasicBlock *iftruebb = basic_block("iftrue");
       BasicBlock *endbb = basic_block("end");
       b.CreateCondBr(condv, iftruebb, endbb);
-      e.f->getBasicBlockList().push_back(iftruebb);
+      iftruebb->insertInto(e.f);
       b.SetInsertPoint(iftruebb);
       Value *v = get_int(x.xval2());
 #if DEBUG
@@ -14134,7 +14134,7 @@ Value *interpreter::builtin_codegen(expr x)
 #endif
       b.CreateBr(endbb);
       iftruebb = b.GetInsertBlock();
-      e.f->getBasicBlockList().push_back(endbb);
+      endbb->insertInto(e.f);
       b.SetInsertPoint(endbb);
       PHINode *phi = phi_node(b, int32_type(), 2, "fi");
       phi->addIncoming(u, iffalsebb);
@@ -14165,11 +14165,11 @@ Value *interpreter::builtin_codegen(expr x)
       BasicBlock *endbb = basic_block("end");
       Value *cmp = b.CreateICmpULT(v, UInt(32));
       b.CreateCondBr(cmp, okbb, endbb);
-      act_env().f->getBasicBlockList().push_back(okbb);
+      okbb->insertInto(act_env().f);
       b.SetInsertPoint(okbb);
       Value *ok = b.CreateShl(u, v);
       b.CreateBr(endbb);
-      act_env().f->getBasicBlockList().push_back(endbb);
+      endbb->insertInto(act_env().f);
       b.SetInsertPoint(endbb);
       PHINode *phi = phi_node(b, int32_type(), 2);
       phi->addIncoming(ok, okbb);
@@ -14211,11 +14211,11 @@ Value *interpreter::builtin_codegen(expr x)
 	BasicBlock *errbb = basic_block("err");
 	Value *cmp = b.CreateICmpEQ(v, Zero);
 	b.CreateCondBr(cmp, errbb, okbb);
-	act_env().f->getBasicBlockList().push_back(errbb);
+	errbb->insertInto(act_env().f);
 	b.SetInsertPoint(errbb);
 	b.CreateCall(module->getFunction("pure_sigfpe"));
 	b.CreateRet(NullExprPtr);
-	act_env().f->getBasicBlockList().push_back(okbb);
+	okbb->insertInto(act_env().f);
 	b.SetInsertPoint(okbb);
 	return b.CreateSDiv(u, v);
       }
@@ -14229,11 +14229,11 @@ Value *interpreter::builtin_codegen(expr x)
 	BasicBlock *errbb = basic_block("err");
 	Value *cmp = b.CreateICmpEQ(v, Zero);
 	b.CreateCondBr(cmp, errbb, okbb);
-	act_env().f->getBasicBlockList().push_back(errbb);
+	errbb->insertInto(act_env().f);
 	b.SetInsertPoint(errbb);
 	b.CreateCall(module->getFunction("pure_sigfpe"));
 	b.CreateRet(NullExprPtr);
-	act_env().f->getBasicBlockList().push_back(okbb);
+	okbb->insertInto(act_env().f);
 	b.SetInsertPoint(okbb);
 	return b.CreateSRem(u, v);
       }
@@ -14327,14 +14327,14 @@ bool interpreter::logical_tailcall(int32_t tag, uint32_t n, expr x,
     b.CreateCondBr(condv, okbb, nokbb);
   else
     b.CreateCondBr(condv, nokbb, okbb);
-  e.f->getBasicBlockList().push_back(okbb);
+  okbb->insertInto(e.f);
   b.SetInsertPoint(okbb);
   Value *okval = ibox(u);
   e.CreateRet(okval, rp);
-  e.f->getBasicBlockList().push_back(nokbb);
+  nokbb->insertInto(e.f);
   b.SetInsertPoint(nokbb);
   toplevel_codegen(x.xval2(), rp);
-  e.f->getBasicBlockList().push_back(failedbb);
+  failedbb->insertInto(e.f);
   b.SetInsertPoint(failedbb);
   Value *failedval = call(tag, u0, codegen(x.xval2()));
   e.CreateRet(failedval, rp);
@@ -14358,21 +14358,21 @@ Value *interpreter::logical_funcall(int32_t tag, uint32_t n, expr x)
     b.CreateCondBr(condv, okbb, nokbb);
   else
     b.CreateCondBr(condv, nokbb, okbb);
-  e.f->getBasicBlockList().push_back(okbb);
+  okbb->insertInto(e.f);
   b.SetInsertPoint(okbb);
   Value *okval = ibox(u);
   b.CreateBr(endbb);
-  e.f->getBasicBlockList().push_back(nokbb);
+  nokbb->insertInto(e.f);
   b.SetInsertPoint(nokbb);
   Value *nokval = codegen(x.xval2());
   b.CreateBr(endbb);
   nokbb = b.GetInsertBlock();
-  e.f->getBasicBlockList().push_back(failedbb);
+  failedbb->insertInto(e.f);
   b.SetInsertPoint(failedbb);
   Value *failedval = call(tag, u0, codegen(x.xval2()));
   b.CreateBr(endbb);
   failedbb = b.GetInsertBlock();
-  e.f->getBasicBlockList().push_back(endbb);
+  endbb->insertInto(e.f);
   b.SetInsertPoint(endbb);
   PHINode *phi = phi_node(b, ExprPtrTy, 3, "fi");
   phi->addIncoming(okval, okbb);
@@ -15447,21 +15447,21 @@ Value *interpreter::cond(expr x, expr y, expr z)
   BasicBlock *endbb = basic_block("end");
   // create the branch instruction and emit the 'then' block
   f.builder.CreateCondBr(condv, thenbb, elsebb);
-  f.f->getBasicBlockList().push_back(thenbb);
+  thenbb->insertInto(f.f);
   f.builder.SetInsertPoint(thenbb);
   Value *thenv = codegen(y);
   f.builder.CreateBr(endbb);
   // current block might have changed, update thenbb for the phi
   thenbb = f.builder.GetInsertBlock();
   // emit the 'else' block
-  f.f->getBasicBlockList().push_back(elsebb);
+  elsebb->insertInto(f.f);
   f.builder.SetInsertPoint(elsebb);
   Value *elsev = codegen(z);
   f.builder.CreateBr(endbb);
   // current block might have changed, update elsebb for the phi
   elsebb = f.builder.GetInsertBlock();
   // emit the 'end' block and the phi node
-  f.f->getBasicBlockList().push_back(endbb);
+  endbb->insertInto(f.f);
   f.builder.SetInsertPoint(endbb);
   PHINode *phi = phi_node(f.builder, ExprPtrTy, 2, "fi");
   phi->addIncoming(thenv, thenbb);
@@ -15494,11 +15494,11 @@ void interpreter::toplevel_cond(expr x, expr y, expr z, const rule *rp)
   BasicBlock *elsebb = basic_block("else");
   // create the branch instruction and emit the 'then' block
   f.builder.CreateCondBr(condv, thenbb, elsebb);
-  f.f->getBasicBlockList().push_back(thenbb);
+  thenbb->insertInto(f.f);
   f.builder.SetInsertPoint(thenbb);
   toplevel_codegen(y, rp);
   // emit the 'else' block
-  f.f->getBasicBlockList().push_back(elsebb);
+  elsebb->insertInto(f.f);
   f.builder.SetInsertPoint(elsebb);
   toplevel_codegen(z, rp);
 }
@@ -16158,7 +16158,7 @@ void interpreter::fun_body(matcher *pm, matcher *mxs, bool nodefault)
 #endif
   BasicBlock *bodybb = basic_block("body");
   f.builder.CreateBr(bodybb);
-  f.f->getBasicBlockList().push_back(bodybb);
+  bodybb->insertInto(f.f);
   f.builder.SetInsertPoint(bodybb);
 #if DEBUG>1
   if (!is_init(f.name)) { ostringstream msg;
@@ -16175,7 +16175,7 @@ void interpreter::fun_body(matcher *pm, matcher *mxs, bool nodefault)
   if (debugging && !is_init(f.name)) debug_rule(0);
   complex_match(pm, mxs, failedbb);
   // emit code for a failed match
-  f.f->getBasicBlockList().push_back(failedbb);
+  failedbb->insertInto(f.f);
   f.builder.SetInsertPoint(failedbb);
   if (debugging && !is_init(f.name)) debug_redn(0);
   if (nodefault) {
@@ -16265,10 +16265,10 @@ void interpreter::unwind_iffalse(Value *v)
   BasicBlock *errbb = basic_block("err");
   BasicBlock *okbb = basic_block("ok");
   f.builder.CreateCondBr(v, okbb, errbb);
-  f.f->getBasicBlockList().push_back(errbb);
+  errbb->insertInto(f.f);
   f.builder.SetInsertPoint(errbb);
   unwind(symtab.failed_cond_sym().f);
-  f.f->getBasicBlockList().push_back(okbb);
+  okbb->insertInto(f.f);
   f.builder.SetInsertPoint(okbb);
 }
 
@@ -16280,10 +16280,10 @@ void interpreter::unwind_iftrue(Value *v)
   BasicBlock *errbb = basic_block("err");
   BasicBlock *okbb = basic_block("ok");
   f.builder.CreateCondBr(v, errbb, okbb);
-  f.f->getBasicBlockList().push_back(errbb);
+  errbb->insertInto(f.f);
   f.builder.SetInsertPoint(errbb);
   unwind(symtab.failed_cond_sym().f);
-  f.f->getBasicBlockList().push_back(okbb);
+  okbb->insertInto(f.f);
   f.builder.SetInsertPoint(okbb);
 }
 
@@ -16311,7 +16311,7 @@ void interpreter::verify_tag(Value *v, int32_t tag, BasicBlock *failedbb)
   assert(f.f!=0);
   BasicBlock *okbb = basic_block("ok");
   f.builder.CreateCondBr(check_tag(v, tag), okbb, failedbb);
-  f.f->getBasicBlockList().push_back(okbb);
+  okbb->insertInto(f.f);
   f.builder.SetInsertPoint(okbb);
 }
 
@@ -16347,11 +16347,11 @@ void interpreter::simple_match(Value *x, state*& s,
     BasicBlock *forcebb = basic_block("force");
     BasicBlock *skipbb = basic_block("skip");
     f.builder.CreateCondBr(checkv, forcebb, skipbb);
-    f.f->getBasicBlockList().push_back(forcebb);
+    forcebb->insertInto(f.f);
     f.builder.SetInsertPoint(forcebb);
     call("pure_force", x);
     f.builder.CreateBr(skipbb);
-    f.f->getBasicBlockList().push_back(skipbb);
+    skipbb->insertInto(f.f);
     f.builder.SetInsertPoint(skipbb);
     tagv = 0;
   }
@@ -16382,7 +16382,7 @@ void interpreter::simple_match(Value *x, state*& s,
     f.builder.CreateCondBr
       (f.builder.CreateICmpEQ(tagv, SInt(t.tag), "cmp"), okbb, failedbb);
     // next check the values (we inline these for max performance)
-    f.f->getBasicBlockList().push_back(okbb);
+    okbb->insertInto(f.f);
     f.builder.SetInsertPoint(okbb);
     Value *cmpv;
     if (t.tag == EXPR::INT) {
@@ -16408,7 +16408,7 @@ void interpreter::simple_match(Value *x, state*& s,
       (f.builder.CreateICmpEQ(tagv, SInt(t.tag), "cmp"), okbb, failedbb);
     // next check the values (like above, but we have to call the runtime for
     // these)
-    f.f->getBasicBlockList().push_back(okbb);
+    okbb->insertInto(f.f);
     f.builder.SetInsertPoint(okbb);
     Value *cmpv;
     if (t.tag == EXPR::BIGINT)
@@ -16431,7 +16431,7 @@ void interpreter::simple_match(Value *x, state*& s,
     sw->addCase(SInt(EXPR::CMATRIX), okbb);
     sw->addCase(SInt(EXPR::IMATRIX), okbb);
     // next check that the dimensions match
-    f.f->getBasicBlockList().push_back(okbb);
+    okbb->insertInto(f.f);
     f.builder.SetInsertPoint(okbb);
     okbb = basic_block("check");
     Value *ok = f.builder.CreateCall3(module->getFunction("matrix_check"),
@@ -16449,7 +16449,7 @@ void interpreter::simple_match(Value *x, state*& s,
 	if (t.tag == EXPR::VAR && t.ttag == 0) {
 	  s = t.st; continue;
 	}
-	f.f->getBasicBlockList().push_back(okbb);
+	okbb->insertInto(f.f);
 	f.builder.SetInsertPoint(okbb);
 	okbb = basic_block("check");
 	Value *y = f.builder.CreateCall3
@@ -16458,16 +16458,16 @@ void interpreter::simple_match(Value *x, state*& s,
 	BasicBlock *elem_nokbb = basic_block("elem_failed");
 	simple_match(y, s, elem_okbb, elem_nokbb);
 	// collect temporaries
-	f.f->getBasicBlockList().push_back(elem_okbb);
+	elem_okbb->insertInto(f.f);
 	f.builder.SetInsertPoint(elem_okbb);
 	f.builder.CreateCall(module->getFunction("pure_freenew"), y);
 	f.builder.CreateBr(okbb);
-	f.f->getBasicBlockList().push_back(elem_nokbb);
+	elem_nokbb->insertInto(f.f);
 	f.builder.SetInsertPoint(elem_nokbb);
 	f.builder.CreateCall(module->getFunction("pure_freenew"), y);
 	f.builder.CreateBr(failedbb);
       }
-    f.f->getBasicBlockList().push_back(okbb);
+    okbb->insertInto(f.f);
     f.builder.SetInsertPoint(okbb);
     f.builder.CreateBr(matchedbb);
     break;
@@ -16488,12 +16488,12 @@ void interpreter::simple_match(Value *x, state*& s,
       (f.builder.CreateICmpEQ(tagv, SInt(t.tag)), ok1bb, failedbb);
     s = t.st;
     // next match the first subterm...
-    f.f->getBasicBlockList().push_back(ok1bb);
+    ok1bb->insertInto(f.f);
     f.builder.SetInsertPoint(ok1bb);
     Value *x1 = f.CreateLoadGEP(ExprTy, x, Zero, ValFldIndex, "x1");
     simple_match(x1, s, ok2bb, failedbb);
     // and finally the second subterm...
-    f.f->getBasicBlockList().push_back(ok2bb);
+    ok2bb->insertInto(f.f);
     f.builder.SetInsertPoint(ok2bb);
     Value *x2 = f.CreateLoadGEP(ExprTy, x, Zero, ValFld2Index, "x2");
     simple_match(x2, s, matchedbb, failedbb);
@@ -16538,7 +16538,7 @@ void interpreter::complex_match(matcher *pm, matcher *mxs,
     state *start = pm->start;
     simple_match(arg, start, matchedbb, failedbb);
     // matched => emit code for the reduct, and return the result
-    f.f->getBasicBlockList().push_back(matchedbb);
+    matchedbb->insertInto(f.f);
     f.builder.SetInsertPoint(matchedbb);
     if (!pm->r[0].vi.guards.empty()) {
       // verify guards
@@ -16552,7 +16552,7 @@ void interpreter::complex_match(matcher *pm, matcher *mxs,
 	  f.builder.CreateCall(module->getFunction("pure_typecheck"),
 			       mkargs(args));
 	f.builder.CreateCondBr(check, checkedbb, failedbb);
-	f.f->getBasicBlockList().push_back(checkedbb);
+	checkedbb->insertInto(f.f);
 	f.builder.SetInsertPoint(checkedbb);
       }
     }
@@ -16567,7 +16567,7 @@ void interpreter::complex_match(matcher *pm, matcher *mxs,
 	Value *check = f.builder.CreateCall(module->getFunction("same"),
 					    mkargs(args));
 	f.builder.CreateCondBr(check, checkedbb, failedbb);
-	f.f->getBasicBlockList().push_back(checkedbb);
+	checkedbb->insertInto(f.f);
 	f.builder.SetInsertPoint(checkedbb);
       }
     }
@@ -16600,7 +16600,7 @@ void interpreter::complex_match(matcher *pm, matcher *mxs,
       // The rules to match an interface are generated automatically, so we
       // don't do any warnings about unreduced rules here.
       if (pm) {
-	f.f->getBasicBlockList().push_back(iffailedbb);
+	iffailedbb->insertInto(f.f);
 	f.builder.SetInsertPoint(iffailedbb);
 	// interface match failed, fall back to the regular type rules below
       }
@@ -16711,7 +16711,7 @@ void interpreter::complex_match(matcher *pm, const list<Value*>& xs, state *s,
   // readability, we don't actually need this as a label to branch to)
   BasicBlock *statebb = basic_block(mklabel("state", s->s));
   f.builder.CreateBr(statebb);
-  f.f->getBasicBlockList().push_back(statebb);
+  statebb->insertInto(f.f);
   f.builder.SetInsertPoint(statebb);
 #if DEBUG>1
   if (!is_init(f.name)) { ostringstream msg;
@@ -16739,11 +16739,11 @@ void interpreter::complex_match(matcher *pm, const list<Value*>& xs, state *s,
     BasicBlock *forcebb = basic_block("force");
     BasicBlock *skipbb = basic_block("skip");
     f.builder.CreateCondBr(checkv, forcebb, skipbb);
-    f.f->getBasicBlockList().push_back(forcebb);
+    forcebb->insertInto(f.f);
     f.builder.SetInsertPoint(forcebb);
     call("pure_force", x);
     f.builder.CreateBr(skipbb);
-    f.f->getBasicBlockList().push_back(skipbb);
+    skipbb->insertInto(f.f);
     f.builder.SetInsertPoint(skipbb);
     tagv = 0;
   }
@@ -16802,7 +16802,7 @@ void interpreter::complex_match(matcher *pm, const list<Value*>& xs, state *s,
     for (trans_map::iterator ti = tmap.begin(); ti != tmap.end(); ti++) {
       int32_t tag = ti->first;
       trans_list_info& info = ti->second;
-      f.f->getBasicBlockList().push_back(info.bb);
+      info.bb->insertInto(f.f);
       f.builder.SetInsertPoint(info.bb);
       if (tag == EXPR::APP || tag > 0) {
 	// singleton transition on a function symbol
@@ -16826,10 +16826,10 @@ void interpreter::complex_match(matcher *pm, const list<Value*>& xs, state *s,
 	  Value *ok = f.builder.CreateCall3(module->getFunction("matrix_check"),
 					    x, UInt(l->t->n), UInt(l->t->m));
 	  f.builder.CreateCondBr(ok, okbb, trynextbb);
-	  f.f->getBasicBlockList().push_back(okbb);
+	  okbb->insertInto(f.f);
 	  f.builder.SetInsertPoint(okbb);
 	  next_statem(l->t);
-	  f.f->getBasicBlockList().push_back(trynextbb);
+	  trynextbb->insertInto(f.f);
 	  f.builder.SetInsertPoint(trynextbb);
 	  if (k == info.tlist.end())
 	    f.builder.CreateBr(retrybb);
@@ -16859,10 +16859,10 @@ void interpreter::complex_match(matcher *pm, const list<Value*>& xs, state *s,
 	      cmpv = f.builder.CreateFCmpOEQ(dv, Dbl(l->t->d), "cmp");
 	    }
 	    f.builder.CreateCondBr(cmpv, okbb, trynextbb);
-	    f.f->getBasicBlockList().push_back(okbb);
+	    okbb->insertInto(f.f);
 	    f.builder.SetInsertPoint(okbb);
 	    next_state(l->t);
-	    f.f->getBasicBlockList().push_back(trynextbb);
+	    trynextbb->insertInto(f.f);
 	    f.builder.SetInsertPoint(trynextbb);
 	    if (k == info.tlist.end())
 	      f.builder.CreateBr(retrybb);
@@ -16878,10 +16878,10 @@ void interpreter::complex_match(matcher *pm, const list<Value*>& xs, state *s,
 	      cmpv = call("pure_cmp_string", x, l->t->s);
 	    cmpv = f.builder.CreateICmpEQ(cmpv, Zero, "cmp");
 	    f.builder.CreateCondBr(cmpv, okbb, trynextbb);
-	    f.f->getBasicBlockList().push_back(okbb);
+	    okbb->insertInto(f.f);
 	    f.builder.SetInsertPoint(okbb);
 	    next_state(l->t);
-	    f.f->getBasicBlockList().push_back(trynextbb);
+	    trynextbb->insertInto(f.f);
 	    f.builder.SetInsertPoint(trynextbb);
 	    if (k == info.tlist.end())
 	      f.builder.CreateBr(retrybb);
@@ -16891,7 +16891,7 @@ void interpreter::complex_match(matcher *pm, const list<Value*>& xs, state *s,
 	    //assert(0 && "not implemented");
 	    // We silently let everything else fail.
 	    f.builder.CreateBr(trynextbb);
-	    f.f->getBasicBlockList().push_back(trynextbb);
+	    trynextbb->insertInto(f.f);
 	    f.builder.SetInsertPoint(trynextbb);
 	    if (k == info.tlist.end())
 	      f.builder.CreateBr(retrybb);
@@ -16903,7 +16903,7 @@ void interpreter::complex_match(matcher *pm, const list<Value*>& xs, state *s,
   } else
     f.builder.CreateBr(retrybb);
   // retrybb => literal match failed, check for a typed variable match
-  f.f->getBasicBlockList().push_back(retrybb);
+  retrybb->insertInto(f.f);
   f.builder.SetInsertPoint(retrybb);
   t0 = s->tr.begin();
   transl::iterator t1 = t0;
@@ -16928,7 +16928,7 @@ void interpreter::complex_match(matcher *pm, const list<Value*>& xs, state *s,
     }
     // now handle the transitions on the different type tags
     for (t = t1, i = 0; t != s->tr.end() && t->tag == EXPR::VAR; t++, i++) {
-      f.f->getBasicBlockList().push_back(vtransbb[i]);
+      vtransbb[i]->insertInto(f.f);
       f.builder.SetInsertPoint(vtransbb[i]);
       next_state(t);
     }
@@ -16936,7 +16936,7 @@ void interpreter::complex_match(matcher *pm, const list<Value*>& xs, state *s,
     f.builder.CreateBr(defaultbb);
   // defaultbb => both literal and type variable matches failed, check for the
   // default transition
-  f.f->getBasicBlockList().push_back(defaultbb);
+  defaultbb->insertInto(f.f);
   f.builder.SetInsertPoint(defaultbb);
   if (t0->tag == EXPR::VAR && t0->ttag == 0)
     next_state(t0);
@@ -17022,7 +17022,7 @@ void interpreter::try_rules(matcher *pm, state *s, BasicBlock *failedbb,
     // skipped for the interface part of a type definition which never has any
     // local environment.
     if (!have_iface) f.fmap.select(*r);
-    f.f->getBasicBlockList().push_back(rulebb);
+    rulebb->insertInto(f.f);
     f.builder.SetInsertPoint(rulebb);
     BasicBlock *okbb = basic_block("ok");
     // determine the next rule block ('failed' if none)
@@ -17049,7 +17049,7 @@ void interpreter::try_rules(matcher *pm, state *s, BasicBlock *failedbb,
 	  f.builder.CreateCall(module->getFunction("pure_typecheck"),
 			       mkargs(args));
 	f.builder.CreateCondBr(check, checkedbb, nextbb);
-	f.f->getBasicBlockList().push_back(checkedbb);
+	checkedbb->insertInto(f.f);
 	f.builder.SetInsertPoint(checkedbb);
 	it = next_it;
       }
@@ -17065,7 +17065,7 @@ void interpreter::try_rules(matcher *pm, state *s, BasicBlock *failedbb,
 	Value *check = f.builder.CreateCall(module->getFunction("same"),
 					    mkargs(args));
 	f.builder.CreateCondBr(check, checkedbb, nextbb);
-	f.f->getBasicBlockList().push_back(checkedbb);
+	checkedbb->insertInto(f.f);
 	f.builder.SetInsertPoint(checkedbb);
       }
     }
@@ -17126,7 +17126,7 @@ void interpreter::try_rules(matcher *pm, state *s, BasicBlock *failedbb,
       f.builder.CreateBr(okbb);
     // ok => guard succeeded, return the reduct, otherwise we fall through
     // to the next rule (if any), or bail out with failure
-    f.f->getBasicBlockList().push_back(okbb);
+    okbb->insertInto(f.f);
     f.builder.SetInsertPoint(okbb);
     const rule *rp = 0;
     if (debugging && !is_init(f.name)) rp = &rr;
