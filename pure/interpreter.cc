@@ -10184,6 +10184,16 @@ using namespace llvm;
 #include <sstream>
 #include <time.h>
 
+static LoadInst *create_load_gep(Builder& builder, Type *source_type,
+				 Value *pointer, ArrayRef<Value*> indices,
+				 const Twine& name = "")
+{
+  Type *load_type = GetElementPtrInst::getIndexedType(source_type, indices);
+  assert(load_type);
+  Value *address = builder.CreateGEP(source_type, pointer, indices);
+  return builder.CreateLoad(load_type, address, name);
+}
+
 static inline bool is_c_sym(const string& name)
 {
   return name=="main" || sys::DynamicLibrary::SearchForAddressOfSymbol(name);
@@ -12312,7 +12322,7 @@ Function *interpreter::declare_extern(int priv, string name, string restype,
     if (argt[i] != ExprPtrTy) {
       // do a quick check on the tag value
       Value *idx[2] = { Zero, Zero };
-      Value *tagv = b.CreateLoad(b.CreateGEP(x, mkidxs(idx, idx+2)), "tag");
+      Value *tagv = create_load_gep(b, ExprTy, x, mkidxs(idx, idx+2), "tag");
       Value *checkv = b.CreateICmpEQ(tagv, Zero, "check");
       BasicBlock *forcebb = basic_block("force");
       BasicBlock *skipbb = basic_block("skip");
@@ -12327,14 +12337,14 @@ Function *interpreter::declare_extern(int priv, string name, string restype,
     if (argt[i] == int1_type()) {
       BasicBlock *okbb = basic_block("ok");
       Value *idx[2] = { Zero, Zero };
-      Value *tagv = b.CreateLoad(b.CreateGEP(x, mkidxs(idx, idx+2)), "tag");
+      Value *tagv = create_load_gep(b, ExprTy, x, mkidxs(idx, idx+2), "tag");
       b.CreateCondBr
 	(b.CreateICmpEQ(tagv, SInt(EXPR::INT), "cmp"), okbb, failedbb);
       okbb->insertInto(f);
       b.SetInsertPoint(okbb);
       Value *pv = b.CreateBitCast(x, IntExprPtrTy, "intexpr");
       idx[1] = ValFldIndex;
-      Value *iv = b.CreateLoad(b.CreateGEP(pv, mkidxs(idx, idx+2)), "intval");
+      Value *iv = create_load_gep(b, IntExprTy, pv, mkidxs(idx, idx+2), "intval");
       unboxed[i] = b.CreateICmpNE(iv, Zero);
     } else if (argt[i] == int8_type()) {
       /* We allow either ints or bigints to be passed for C integers. */
@@ -12342,7 +12352,7 @@ Function *interpreter::declare_extern(int priv, string name, string restype,
       BasicBlock *mpzbb = basic_block("mpz");
       BasicBlock *okbb = basic_block("ok");
       Value *idx[2] = { Zero, Zero };
-      Value *tagv = b.CreateLoad(b.CreateGEP(x, mkidxs(idx, idx+2)), "tag");
+      Value *tagv = create_load_gep(b, ExprTy, x, mkidxs(idx, idx+2), "tag");
       SwitchInst *sw = b.CreateSwitch(tagv, failedbb, 2);
       sw->addCase(SInt(EXPR::INT), intbb);
       sw->addCase(SInt(EXPR::BIGINT), mpzbb);
@@ -12350,7 +12360,7 @@ Function *interpreter::declare_extern(int priv, string name, string restype,
       b.SetInsertPoint(intbb);
       Value *pv = b.CreateBitCast(x, IntExprPtrTy, "intexpr");
       idx[1] = ValFldIndex;
-      Value *intv = b.CreateLoad(b.CreateGEP(pv, mkidxs(idx, idx+2)), "intval");
+      Value *intv = create_load_gep(b, IntExprTy, pv, mkidxs(idx, idx+2), "intval");
       b.CreateBr(okbb);
       mpzbb->insertInto(f);
       b.SetInsertPoint(mpzbb);
@@ -12368,7 +12378,7 @@ Function *interpreter::declare_extern(int priv, string name, string restype,
       BasicBlock *mpzbb = basic_block("mpz");
       BasicBlock *okbb = basic_block("ok");
       Value *idx[2] = { Zero, Zero };
-      Value *tagv = b.CreateLoad(b.CreateGEP(x, mkidxs(idx, idx+2)), "tag");
+      Value *tagv = create_load_gep(b, ExprTy, x, mkidxs(idx, idx+2), "tag");
       SwitchInst *sw = b.CreateSwitch(tagv, failedbb, 2);
       sw->addCase(SInt(EXPR::INT), intbb);
       sw->addCase(SInt(EXPR::BIGINT), mpzbb);
@@ -12376,7 +12386,7 @@ Function *interpreter::declare_extern(int priv, string name, string restype,
       b.SetInsertPoint(intbb);
       Value *pv = b.CreateBitCast(x, IntExprPtrTy, "intexpr");
       idx[1] = ValFldIndex;
-      Value *intv = b.CreateLoad(b.CreateGEP(pv, mkidxs(idx, idx+2)), "intval");
+      Value *intv = create_load_gep(b, IntExprTy, pv, mkidxs(idx, idx+2), "intval");
       b.CreateBr(okbb);
       mpzbb->insertInto(f);
       b.SetInsertPoint(mpzbb);
@@ -12394,7 +12404,7 @@ Function *interpreter::declare_extern(int priv, string name, string restype,
       BasicBlock *mpzbb = basic_block("mpz");
       BasicBlock *okbb = basic_block("ok");
       Value *idx[2] = { Zero, Zero };
-      Value *tagv = b.CreateLoad(b.CreateGEP(x, mkidxs(idx, idx+2)), "tag");
+      Value *tagv = create_load_gep(b, ExprTy, x, mkidxs(idx, idx+2), "tag");
       SwitchInst *sw = b.CreateSwitch(tagv, failedbb, 2);
       sw->addCase(SInt(EXPR::INT), intbb);
       sw->addCase(SInt(EXPR::BIGINT), mpzbb);
@@ -12402,7 +12412,7 @@ Function *interpreter::declare_extern(int priv, string name, string restype,
       b.SetInsertPoint(intbb);
       Value *pv = b.CreateBitCast(x, IntExprPtrTy, "intexpr");
       idx[1] = ValFldIndex;
-      Value *intv = b.CreateLoad(b.CreateGEP(pv, mkidxs(idx, idx+2)), "intval");
+      Value *intv = create_load_gep(b, IntExprTy, pv, mkidxs(idx, idx+2), "intval");
       b.CreateBr(okbb);
       mpzbb->insertInto(f);
       b.SetInsertPoint(mpzbb);
@@ -12420,7 +12430,7 @@ Function *interpreter::declare_extern(int priv, string name, string restype,
       BasicBlock *mpzbb = basic_block("mpz");
       BasicBlock *okbb = basic_block("ok");
       Value *idx[2] = { Zero, Zero };
-      Value *tagv = b.CreateLoad(b.CreateGEP(x, mkidxs(idx, idx+2)), "tag");
+      Value *tagv = create_load_gep(b, ExprTy, x, mkidxs(idx, idx+2), "tag");
       SwitchInst *sw = b.CreateSwitch(tagv, failedbb, 2);
       sw->addCase(SInt(EXPR::INT), intbb);
       sw->addCase(SInt(EXPR::BIGINT), mpzbb);
@@ -12428,7 +12438,7 @@ Function *interpreter::declare_extern(int priv, string name, string restype,
       b.SetInsertPoint(intbb);
       Value *pv = b.CreateBitCast(x, IntExprPtrTy, "intexpr");
       idx[1] = ValFldIndex;
-      Value *intv = b.CreateLoad(b.CreateGEP(pv, mkidxs(idx, idx+2)), "intval");
+      Value *intv = create_load_gep(b, IntExprTy, pv, mkidxs(idx, idx+2), "intval");
       intv = b.CreateSExt(intv, int64_type());
       b.CreateBr(okbb);
       mpzbb->insertInto(f);
@@ -12445,26 +12455,26 @@ Function *interpreter::declare_extern(int priv, string name, string restype,
     } else if (argt[i] == float_type()) {
       BasicBlock *okbb = basic_block("ok");
       Value *idx[2] = { Zero, Zero };
-      Value *tagv = b.CreateLoad(b.CreateGEP(x, mkidxs(idx, idx+2)), "tag");
+      Value *tagv = create_load_gep(b, ExprTy, x, mkidxs(idx, idx+2), "tag");
       b.CreateCondBr
 	(b.CreateICmpEQ(tagv, SInt(EXPR::DBL), "cmp"), okbb, failedbb);
       okbb->insertInto(f);
       b.SetInsertPoint(okbb);
       Value *pv = b.CreateBitCast(x, DblExprPtrTy, "dblexpr");
       idx[1] = ValFldIndex;
-      Value *dv = b.CreateLoad(b.CreateGEP(pv, mkidxs(idx, idx+2)), "dblval");
+      Value *dv = create_load_gep(b, DblExprTy, pv, mkidxs(idx, idx+2), "dblval");
       unboxed[i] = b.CreateFPTrunc(dv, float_type());
     } else if (argt[i] == double_type()) {
       BasicBlock *okbb = basic_block("ok");
       Value *idx[2] = { Zero, Zero };
-      Value *tagv = b.CreateLoad(b.CreateGEP(x, mkidxs(idx, idx+2)), "tag");
+      Value *tagv = create_load_gep(b, ExprTy, x, mkidxs(idx, idx+2), "tag");
       b.CreateCondBr
 	(b.CreateICmpEQ(tagv, SInt(EXPR::DBL), "cmp"), okbb, failedbb);
       okbb->insertInto(f);
       b.SetInsertPoint(okbb);
       Value *pv = b.CreateBitCast(x, DblExprPtrTy, "dblexpr");
       idx[1] = ValFldIndex;
-      Value *dv = b.CreateLoad(b.CreateGEP(pv, mkidxs(idx, idx+2)), "dblval");
+      Value *dv = create_load_gep(b, DblExprTy, pv, mkidxs(idx, idx+2), "dblval");
       unboxed[i] = dv;
     } else if (argt[i] == CharPtrTy) {
       /* String conversion. As of Pure 0.45, we also allow real char* pointers
@@ -12474,7 +12484,7 @@ Function *interpreter::declare_extern(int priv, string name, string restype,
       BasicBlock *matrixbb = basic_block("matrix");
       BasicBlock *okbb = basic_block("ok");
       Value *idx[2] = { Zero, Zero };
-      Value *tagv = b.CreateLoad(b.CreateGEP(x, mkidxs(idx, idx+2)), "tag");
+      Value *tagv = create_load_gep(b, ExprTy, x, mkidxs(idx, idx+2), "tag");
       SwitchInst *sw = b.CreateSwitch(tagv, failedbb, 3);
       sw->addCase(SInt(EXPR::PTR), ptrbb);
       sw->addCase(SInt(EXPR::STR), strbb);
@@ -12499,7 +12509,7 @@ Function *interpreter::declare_extern(int priv, string name, string restype,
       Value *pv = b.CreateBitCast(x, PtrExprPtrTy, "ptrexpr");
       idx[1] = ValFldIndex;
       Value *ptrv = b.CreateBitCast
-	(b.CreateLoad(b.CreateGEP(pv, mkidxs(idx, idx+2)), "ptrval"),
+	(create_load_gep(b, PtrExprTy, pv, mkidxs(idx, idx+2), "ptrval"),
 	 CharPtrTy);
       b.CreateBr(okbb);
       strbb->insertInto(f);
@@ -12536,7 +12546,7 @@ Function *interpreter::declare_extern(int priv, string name, string restype,
       BasicBlock *matrixbb = basic_block("matrix");
       BasicBlock *okbb = basic_block("ok");
       Value *idx[2] = { Zero, Zero };
-      Value *tagv = b.CreateLoad(b.CreateGEP(x, mkidxs(idx, idx+2)), "tag");
+      Value *tagv = create_load_gep(b, ExprTy, x, mkidxs(idx, idx+2), "tag");
       SwitchInst *sw = b.CreateSwitch(tagv, failedbb, 3);
       Function *get_fun =
 	is_short ? module->getFunction("pure_get_matrix_data_short") :
@@ -12572,7 +12582,7 @@ Function *interpreter::declare_extern(int priv, string name, string restype,
       }
       Value *pv = b.CreateBitCast(x, PtrExprPtrTy, "ptrexpr");
       idx[1] = ValFldIndex;
-      Value *ptrv = b.CreateLoad(b.CreateGEP(pv, mkidxs(idx, idx+2)), "ptrval");
+      Value *ptrv = create_load_gep(b, PtrExprTy, pv, mkidxs(idx, idx+2), "ptrval");
       b.CreateBr(okbb);
       matrixbb->insertInto(f);
       b.SetInsertPoint(matrixbb);
@@ -12593,7 +12603,7 @@ Function *interpreter::declare_extern(int priv, string name, string restype,
       BasicBlock *smatrixbb = basic_block("smatrix");
       BasicBlock *okbb = basic_block("ok");
       Value *idx[2] = { Zero, Zero };
-      Value *tagv = b.CreateLoad(b.CreateGEP(x, mkidxs(idx, idx+2)), "tag");
+      Value *tagv = create_load_gep(b, ExprTy, x, mkidxs(idx, idx+2), "tag");
       SwitchInst *sw = b.CreateSwitch(tagv, failedbb, 3);
       Function *sget_fun = module->getFunction
 	(is_char ? "pure_get_matrix_vector_char" :
@@ -12622,7 +12632,7 @@ Function *interpreter::declare_extern(int priv, string name, string restype,
       }
       Value *pv = b.CreateBitCast(x, PtrExprPtrTy, "ptrexpr");
       idx[1] = ValFldIndex;
-      Value *ptrv = b.CreateLoad(b.CreateGEP(pv, mkidxs(idx, idx+2)), "ptrval");
+      Value *ptrv = create_load_gep(b, PtrExprTy, pv, mkidxs(idx, idx+2), "ptrval");
       b.CreateBr(okbb);
       Value *matrixv = 0;
       if (is_char) {
@@ -12668,7 +12678,7 @@ Function *interpreter::declare_extern(int priv, string name, string restype,
       BasicBlock *matrixbb = basic_block("matrix");
       BasicBlock *okbb = basic_block("ok");
       Value *idx[2] = { Zero, Zero };
-      Value *tagv = b.CreateLoad(b.CreateGEP(x, mkidxs(idx, idx+2)), "tag");
+      Value *tagv = create_load_gep(b, ExprTy, x, mkidxs(idx, idx+2), "tag");
       SwitchInst *sw = b.CreateSwitch(tagv, failedbb, 3);
       Function *get_fun =
 	is_short ? module->getFunction("pure_get_matrix_vector_short") :
@@ -12704,7 +12714,7 @@ Function *interpreter::declare_extern(int priv, string name, string restype,
       }
       Value *pv = b.CreateBitCast(x, PtrExprPtrTy, "ptrexpr");
       idx[1] = ValFldIndex;
-      Value *ptrv = b.CreateLoad(b.CreateGEP(pv, mkidxs(idx, idx+2)), "ptrval");
+      Value *ptrv = create_load_gep(b, PtrExprTy, pv, mkidxs(idx, idx+2), "ptrval");
       b.CreateBr(okbb);
       matrixbb->insertInto(f);
       b.SetInsertPoint(matrixbb);
@@ -12722,7 +12732,7 @@ Function *interpreter::declare_extern(int priv, string name, string restype,
 	       argt[i] == GSLIntMatrixPtrTy) {
       BasicBlock *okbb = basic_block("ok");
       Value *idx[2] = { Zero, Zero };
-      Value *tagv = b.CreateLoad(b.CreateGEP(x, mkidxs(idx, idx+2)), "tag");
+      Value *tagv = create_load_gep(b, ExprTy, x, mkidxs(idx, idx+2), "tag");
       int32_t ttag = -99;
       if (argt[i] == GSLMatrixPtrTy)
 	ttag = EXPR::MATRIX;
@@ -12752,14 +12762,14 @@ Function *interpreter::declare_extern(int priv, string name, string restype,
       BasicBlock *ptrbb = basic_block("ptr");
       BasicBlock *okbb = basic_block("ok");
       Value *idx[2] = { Zero, Zero };
-      Value *tagv = b.CreateLoad(b.CreateGEP(x, mkidxs(idx, idx+2)), "tag");
+      Value *tagv = create_load_gep(b, ExprTy, x, mkidxs(idx, idx+2), "tag");
       SwitchInst *sw = b.CreateSwitch(tagv, failedbb, 1);
       sw->addCase(SInt(EXPR::PTR), ptrbb);
       ptrbb->insertInto(f);
       b.SetInsertPoint(ptrbb);
       Value *pv = b.CreateBitCast(x, PtrExprPtrTy, "ptrexpr");
       idx[1] = ValFldIndex;
-      Value *ptrv = b.CreateLoad(b.CreateGEP(pv, mkidxs(idx, idx+2)), "ptrval");
+      Value *ptrv = create_load_gep(b, PtrExprTy, pv, mkidxs(idx, idx+2), "ptrval");
       Function *g = module->getFunction("pure_check_tag");
       assert(g);
       vector<Value*> args;
@@ -12790,7 +12800,7 @@ Function *interpreter::declare_extern(int priv, string name, string restype,
       BasicBlock *matrixbb = basic_block("matrix");
       BasicBlock *okbb = basic_block("ok");
       Value *idx[2] = { Zero, Zero };
-      Value *tagv = b.CreateLoad(b.CreateGEP(x, mkidxs(idx, idx+2)), "tag");
+      Value *tagv = create_load_gep(b, ExprTy, x, mkidxs(idx, idx+2), "tag");
       SwitchInst *sw = b.CreateSwitch(tagv, failedbb, 7);
       /* We also allow bigints, strings and matrices to be passed as a void*
 	 here. The first case lets you use GMP routines directly in Pure if
@@ -12812,7 +12822,7 @@ Function *interpreter::declare_extern(int priv, string name, string restype,
       // The following will work with both pointer and string expressions.
       Value *pv = b.CreateBitCast(x, PtrExprPtrTy, "ptrexpr");
       idx[1] = ValFldIndex;
-      Value *ptrv = b.CreateLoad(b.CreateGEP(pv, mkidxs(idx, idx+2)), "ptrval");
+      Value *ptrv = create_load_gep(b, PtrExprTy, pv, mkidxs(idx, idx+2), "ptrval");
       b.CreateBr(okbb);
       mpzbb->insertInto(f);
       b.SetInsertPoint(mpzbb);
@@ -12840,7 +12850,7 @@ Function *interpreter::declare_extern(int priv, string name, string restype,
 	 may have to check its tag. */
       BasicBlock *okbb = basic_block("ok");
       Value *idx[2] = { Zero, Zero };
-      Value *tagv = b.CreateLoad(b.CreateGEP(x, mkidxs(idx, idx+2)), "tag");
+      Value *tagv = create_load_gep(b, ExprTy, x, mkidxs(idx, idx+2), "tag");
       b.CreateCondBr
 	(b.CreateICmpEQ(tagv, SInt(EXPR::PTR), "cmp"), okbb, failedbb);
       okbb->insertInto(f);
@@ -12861,7 +12871,7 @@ Function *interpreter::declare_extern(int priv, string name, string restype,
       }
       Value *pv = b.CreateBitCast(x, PtrExprPtrTy, "ptrexpr");
       idx[1] = ValFldIndex;
-      Value *ptrv = b.CreateLoad(b.CreateGEP(pv, mkidxs(idx, idx+2)), "ptrval");
+      Value *ptrv = create_load_gep(b, PtrExprTy, pv, mkidxs(idx, idx+2), "ptrval");
       unboxed[i] = ptrv;
       // Cast the pointer to the proper target type if necessary.
       if (type != VoidPtrTy)

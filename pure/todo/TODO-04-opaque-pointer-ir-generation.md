@@ -52,6 +52,9 @@ types that LLVM no longer stores.
 - The shared `Env` helpers now require that source type. `CreateLoadGEP` derives
   its load type with `GetElementPtrInst::getIndexedType`, keeping GEP and load
   types consistent without querying the opaque pointer.
+- A builder-independent `create_load_gep` helper applies the same rule to local
+  builders. `declare_extern` now supplies `ExprTy`, `IntExprTy`, `DblExprTy`, or
+  `PtrExprTy` for all 30 combined field-address/load operations.
 - The historical `Builder` macro expanded inside LLVM's own
   `BasicBlockUtils.h`, corrupting an `IRBuilderBase &Builder` parameter. It is
   now a C++ type alias, and the obsolete `NEW_BUILDER` configuration switch has
@@ -105,6 +108,13 @@ types that LLVM no longer stores.
 
 ## Progress Log
 
+- 2026-07-23: Ported all 30 combined GEP/load operations in `declare_extern`
+  to explicit expression structure layouts.
+  - Validation:
+    - `cmake --preset llvm22-debug` configured successfully.
+    - `cmake --build --preset llvm22-debug -- -j1` no longer reports nested
+      GEP/load signature errors in `declare_extern` and advances to standalone
+      global loads and later `Env::CreateGEP` call sites.
 - 2026-07-23: Removed invalid pointee introspection from external bitcode ABI
   classification.
   - Pointer signatures now return `<unknown C type>` and are rejected rather
