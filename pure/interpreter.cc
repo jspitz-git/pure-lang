@@ -63,10 +63,9 @@ char *alloca ();
 #include <llvm/Support/FileSystem.h>
 #include <llvm/Support/MemoryBuffer.h>
 #include <llvm/Support/raw_ostream.h>
+#include <llvm/Passes/OptimizationLevel.h>
+#include <llvm/Passes/PassBuilder.h>
 #include <llvm/TargetParser/Triple.h>
-#include <llvm/Transforms/InstCombine/InstCombine.h>
-#include <llvm/Transforms/Scalar/GVN.h>
-#include <llvm/Transforms/Utils.h>
 #include <llvm/Transforms/Utils/BasicBlockUtils.h>
 
 #include "config.h"
@@ -96,6 +95,60 @@ llvm::LLVMContext& pure_llvm_context()
 }
 
 map<uint32_t, void (*)(void*)> interpreter::locals_destroy_cb;
+
+struct NewPassManagerState {
+  llvm::LoopAnalysisManager loops;
+  llvm::FunctionAnalysisManager functions;
+  llvm::CGSCCAnalysisManager cgscc;
+  llvm::ModuleAnalysisManager modules;
+  llvm::PassBuilder builder;
+
+  NewPassManagerState()
+  {
+    builder.registerLoopAnalyses(loops);
+    builder.registerFunctionAnalyses(functions);
+    builder.registerCGSCCAnalyses(cgscc);
+    builder.registerModuleAnalyses(modules);
+    builder.crossRegisterProxies(loops, functions, cgscc, modules);
+  }
+
+  llvm::FunctionPassManager build_interactive_pipeline()
+  {
+    return builder.buildFunctionSimplificationPipeline(
+      llvm::OptimizationLevel::O1, llvm::ThinOrFullLTOPhase::None);
+  }
+
+  llvm::ModulePassManager build_module_pipeline()
+  {
+    return builder.buildPerModuleDefaultPipeline(llvm::OptimizationLevel::O1);
+  }
+
+  void verify(const llvm::Function& function, const char *stage)
+  {
+    string message;
+    llvm::raw_string_ostream out(message);
+    if (llvm::verifyFunction(function, &out)) {
+      out.flush();
+      string name = function.hasName() ? function.getName().str()
+                                       : "<anonymous>";
+      throw err("LLVM verifier failed "+string(stage)+" optimization of '"+
+                name+"':\n"+message);
+    }
+  }
+
+  void optimize(llvm::Function& function)
+  {
+#ifndef NDEBUG
+    verify(function, "before");
+#endif
+    functions.invalidate(function, llvm::PreservedAnalyses::none());
+    llvm::FunctionPassManager pipeline = build_interactive_pipeline();
+    pipeline.run(function, functions);
+#ifndef NDEBUG
+    verify(function, "after");
+#endif
+  }
+};
 
 static void* resolve_external(const std::string& name)
 {
@@ -212,6 +265,7 @@ void interpreter::init()
      in the future. */
   init_llvm_target();
   module = new Module(modname, context);
+  pass_state = new NewPassManagerState;
 #if !LLVM27
   MP = new ExistingModuleProvider(module);
 #endif
@@ -269,22 +323,7 @@ void interpreter::init()
 #endif // LLVM 2.5 and earlier
 #endif // LLVM 3.0 or earlier
   assert(JIT);
-  FPM = new legacy::FunctionPassManager(module);
-
-  // Set up the optimizer pipeline. Start with registering info about how the
-  // target lays out data structures.
   module->setDataLayout(JIT->getDataLayout());
-  // Promote allocas to registers.
-  FPM->add(createPromoteMemoryToRegisterPass());
-  // Do simple "peephole" optimizations and bit-twiddling optimizations.
-  FPM->add(createInstructionCombiningPass());
-  // Reassociate expressions.
-  FPM->add(createReassociatePass());
-  // Eliminate common subexpressions.
-  FPM->add(createGVNPass());
-  // Simplify the control flow graph (deleting unreachable blocks, etc).
-  FPM->add(createCFGSimplificationPass());
-  FPM->doInitialization();
 
   // Install a fallback mechanism to resolve references to the runtime, on
   // systems which do not allow the program to dlopen itself.
@@ -758,7 +797,7 @@ interpreter::interpreter(int _argc, char **_argv)
     nerrs(0), modno(-1), modctr(0), source_s(0), output(0),
     result(0), lastres(0), mem(0), exps(0), tmps(0), freectr(0),
     specials_only(false), module(0),
-    JIT(0), FPM(0), astk(0), sstk(__sstk),
+    JIT(0), pass_state(0), astk(0), sstk(__sstk),
     stoplevel(0), tracelevel(-1), debug_skip(false), trace_skip(false),
     fptr(__fptr), tags(0), line(0), column(0), tags_init(false),
     declare_op(false)
@@ -788,7 +827,7 @@ interpreter::interpreter(int32_t nsyms, char *syms,
     nerrs(0), modno(-1), modctr(0), source_s(0), output(0),
     result(0), lastres(0), mem(0), exps(0), tmps(0), freectr(0),
     specials_only(false), module(0),
-    JIT(0), FPM(0), astk(0), sstk(*_sstk),
+    JIT(0), pass_state(0), astk(0), sstk(*_sstk),
     stoplevel(0), tracelevel(-1), debug_skip(false), trace_skip(false),
     fptr(*(Env**)_fptr), tags(0), line(0), column(0), tags_init(false),
     declare_op(false)
@@ -911,10 +950,7 @@ interpreter::~interpreter()
   // LLVM 2.4 or later, or disable this line.
   if (JIT) delete JIT;
 #endif
-  if (FPM) {
-    FPM->doFinalization();
-    delete FPM;
-  }
+  delete pass_state;
   // if this was the global interpreter, reset it now
   if (g_interp == this) g_interp = 0;
 }
@@ -2248,8 +2284,7 @@ bool interpreter::LoadFaustDSP(bool priv, const char *name, string *msg,
     string fname = "$$faust$"+modname+"$"+*it;
     Function *f = module->getFunction(fname);
     assert(f);
-    verifyFunction(*f);
-    if (FPM) FPM->run(*f);
+    pass_state->optimize(*f);
     // The name under which the function is accessible in Pure.
     string asname = modname+"::"+*it;
     // The function type.
@@ -2408,8 +2443,7 @@ bool interpreter::LoadBitcode(bool priv, const char *name, string *msg)
     string fname = *it;
     Function *f = module->getFunction(fname);
     assert(f);
-    verifyFunction(*f);
-    if (FPM) FPM->run(*f);
+    pass_state->optimize(*f);
     // The name under which the function is accessible in Pure.
     string asname = fname;
     // The function type.
@@ -10835,7 +10869,6 @@ int interpreter::compiler(string out, list<string> libnames, string llcopts)
     }
   }
   b.CreateRet(0);
-  verifyFunction(*main);
   string verification_error;
   if (!verify_module(*module, verification_error))
     throw err("invalid LLVM module: "+verification_error);
@@ -13015,8 +13048,7 @@ Function *interpreter::declare_extern(int priv, string name, string restype,
 		 b.CreateLoad(v.v->getValueType(), v.v));
   }
   b.CreateRet(defaultv);
-  verifyFunction(*f);
-  if (FPM) FPM->run(*f);
+  pass_state->optimize(*f);
   if (verbose&verbosity::dump) {
     raw_ostream& out = outs();
     f->print(out);
@@ -15840,9 +15872,8 @@ Function *interpreter::fun_prolog(string name)
       if (cc == CallingConv::Fast) v->setTailCall();
       f.builder.CreateRet(v);
       // validate the generated code, checking for consistency
-      verifyFunction(*f.h);
       // optimize
-      if (FPM) FPM->run(*f.h);
+      pass_state->optimize(*f.h);
       // show output code, if requested
       if (verbose&verbosity::dump) {
 	raw_ostream& out = outs();
@@ -15953,10 +15984,8 @@ void interpreter::fun_finish()
 {
   Env& f = act_env();
   assert(f.f!=0);
-  // validate the generated code, checking for consistency
-  verifyFunction(*f.f);
-  // optimize
-  if (FPM) FPM->run(*f.f);
+  // optimize and validate the generated code
+  pass_state->optimize(*f.f);
   // show output code, if requested
   if (verbose&verbosity::dump)  {
     raw_ostream& out = outs();
