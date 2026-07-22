@@ -146,6 +146,7 @@ llvm::LLVMContext& pure_llvm_context();
 /* The Pure interpreter. */
 
 class interpreter;
+struct NewPassManagerState;
 
 // verbosity levels, these can be ORed together
 namespace verbosity {
@@ -1012,6 +1013,7 @@ public:
   llvm::Module *module;
   llvm::ExecutionEngine *JIT;
   llvm::legacy::FunctionPassManager *FPM;
+  NewPassManagerState *pass_state;
   llvm::StructType  *ExprTy, *IntExprTy, *DblExprTy, *StrExprTy, *PtrExprTy;
   llvm::StructType  *ComplexTy, *GSLMatrixTy, *GSLDoubleMatrixTy,
     *GSLComplexMatrixTy, *GSLIntMatrixTy;

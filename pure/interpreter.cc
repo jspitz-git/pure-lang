@@ -63,6 +63,7 @@ char *alloca ();
 #include <llvm/Support/FileSystem.h>
 #include <llvm/Support/MemoryBuffer.h>
 #include <llvm/Support/raw_ostream.h>
+#include <llvm/Passes/PassBuilder.h>
 #include <llvm/TargetParser/Triple.h>
 #include <llvm/Transforms/InstCombine/InstCombine.h>
 #include <llvm/Transforms/Scalar/GVN.h>
@@ -96,6 +97,23 @@ llvm::LLVMContext& pure_llvm_context()
 }
 
 map<uint32_t, void (*)(void*)> interpreter::locals_destroy_cb;
+
+struct NewPassManagerState {
+  llvm::LoopAnalysisManager loops;
+  llvm::FunctionAnalysisManager functions;
+  llvm::CGSCCAnalysisManager cgscc;
+  llvm::ModuleAnalysisManager modules;
+  llvm::PassBuilder builder;
+
+  NewPassManagerState()
+  {
+    builder.registerLoopAnalyses(loops);
+    builder.registerFunctionAnalyses(functions);
+    builder.registerCGSCCAnalyses(cgscc);
+    builder.registerModuleAnalyses(modules);
+    builder.crossRegisterProxies(loops, functions, cgscc, modules);
+  }
+};
 
 static void* resolve_external(const std::string& name)
 {
@@ -212,6 +230,7 @@ void interpreter::init()
      in the future. */
   init_llvm_target();
   module = new Module(modname, context);
+  pass_state = new NewPassManagerState;
 #if !LLVM27
   MP = new ExistingModuleProvider(module);
 #endif
@@ -758,7 +777,7 @@ interpreter::interpreter(int _argc, char **_argv)
     nerrs(0), modno(-1), modctr(0), source_s(0), output(0),
     result(0), lastres(0), mem(0), exps(0), tmps(0), freectr(0),
     specials_only(false), module(0),
-    JIT(0), FPM(0), astk(0), sstk(__sstk),
+    JIT(0), FPM(0), pass_state(0), astk(0), sstk(__sstk),
     stoplevel(0), tracelevel(-1), debug_skip(false), trace_skip(false),
     fptr(__fptr), tags(0), line(0), column(0), tags_init(false),
     declare_op(false)
@@ -788,7 +807,7 @@ interpreter::interpreter(int32_t nsyms, char *syms,
     nerrs(0), modno(-1), modctr(0), source_s(0), output(0),
     result(0), lastres(0), mem(0), exps(0), tmps(0), freectr(0),
     specials_only(false), module(0),
-    JIT(0), FPM(0), astk(0), sstk(*_sstk),
+    JIT(0), FPM(0), pass_state(0), astk(0), sstk(*_sstk),
     stoplevel(0), tracelevel(-1), debug_skip(false), trace_skip(false),
     fptr(*(Env**)_fptr), tags(0), line(0), column(0), tags_init(false),
     declare_op(false)
@@ -915,6 +934,7 @@ interpreter::~interpreter()
     FPM->doFinalization();
     delete FPM;
   }
+  delete pass_state;
   // if this was the global interpreter, reset it now
   if (g_interp == this) g_interp = 0;
 }

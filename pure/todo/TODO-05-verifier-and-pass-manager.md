@@ -18,7 +18,7 @@ fails with an actionable diagnostic before entering ORC.
 
 ## Task List
 
-1. [ ] Introduce reusable new-pass-manager analysis state.
+1. [x] Introduce reusable new-pass-manager analysis state.
 2. [ ] Select an initial interactive pipeline, preferably standard `O1`.
 3. [ ] Run function or module optimization at a clearly defined ownership boundary.
 4. [ ] Add verification before and after optimization in debug builds.
@@ -44,6 +44,16 @@ fails with an actionable diagnostic before entering ORC.
 
 ## Progress Log
 
+- 2026-07-23: Added interpreter-owned LLVM 22 new-pass-manager analysis state.
+  - `NewPassManagerState` owns `PassBuilder` plus loop, function, CGSCC, and
+    module analysis managers and cross-registers their proxies once.
+  - The implementation is hidden behind a forward-declared interpreter member;
+    the active legacy optimization pipeline is unchanged for this milestone.
+  - Validation:
+    - `cmake --preset llvm22-debug` configured successfully.
+    - `cmake --build --preset llvm22-debug -- -j1` compiled the new state with
+      zero warnings and no new errors; only the nine known legacy JIT errors
+      remain.
 - 2026-07-22: Initial verifier and pass-manager plan created.
   - Validation:
     - Not run; this update creates planning documentation only.
