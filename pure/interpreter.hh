@@ -254,18 +254,10 @@ struct VarInfo {
 #define getTargetData getDataLayout
 #endif
 
-#ifdef LLVM30
-/* Workarounds for LLVM 3.0 API breakage. */
 #define llvm_const_Type llvm::Type
 #define llvm_const_FunctionType llvm::FunctionType
 #define mkargs(args) llvm::ArrayRef<llvm::Value*>(args)
 #define mkidxs(beg, end) llvm::ArrayRef<llvm::Value*>(beg, end)
-#else
-#define llvm_const_Type const llvm::Type
-#define llvm_const_FunctionType const llvm::FunctionType
-#define mkargs(args) args.begin(), args.end()
-#define mkidxs(beg, end) beg, end
-#endif
 
 typedef list<Env*> EnvStack;
 typedef map<int32_t,Env*> EnvMap;
@@ -1044,221 +1036,77 @@ public:
   llvm::PointerType *ComplexPtrTy, *GSLMatrixPtrTy, *GSLDoubleMatrixPtrTy,
     *GSLComplexMatrixPtrTy, *GSLIntMatrixPtrTy;
 
-  // Helpers for LLVM 2.6 and 3.0 compatibility.
-#ifdef LLVM30
-  static llvm::IntegerType* int1_type()
-#else
-  static const llvm::IntegerType* int1_type()
-#endif
-#ifdef LLVM26
-  { return llvm::Type::getInt1Ty(llvm::getGlobalContext()); }
-#else
-  { return llvm::Type::Int1Ty; }
-#endif
-#ifdef LLVM30
-  static llvm::IntegerType* int8_type()
-#else
-  static const llvm::IntegerType* int8_type()
-#endif
-#ifdef LLVM26
-  { return llvm::Type::getInt8Ty(llvm::getGlobalContext()); }
-#else
-  { return llvm::Type::Int8Ty; }
-#endif
-#ifdef LLVM30
-  static llvm::IntegerType* int16_type()
-#else
-  static const llvm::IntegerType* int16_type()
-#endif
-#ifdef LLVM26
-  { return llvm::Type::getInt16Ty(llvm::getGlobalContext()); }
-#else
-  { return llvm::Type::Int16Ty; }
-#endif
-#ifdef LLVM30
-  static llvm::IntegerType* int32_type()
-#else
-  static const llvm::IntegerType* int32_type()
-#endif
-#ifdef LLVM26
-  { return llvm::Type::getInt32Ty(llvm::getGlobalContext()); }
-#else
-  { return llvm::Type::Int32Ty; }
-#endif
-#ifdef LLVM30
-  static llvm::IntegerType* int64_type()
-#else
-  static const llvm::IntegerType* int64_type()
-#endif
-#ifdef LLVM26
-  { return llvm::Type::getInt64Ty(llvm::getGlobalContext()); }
-#else
-  { return llvm::Type::Int64Ty; }
-#endif
-#ifdef LLVM30
-  static llvm::IntegerType* long_type()
-#else
-  static const llvm::IntegerType* long_type()
-#endif
+  // Helpers for constructing LLVM IR in the interpreter-owned context.
+  llvm::IntegerType* int1_type()
+  { return llvm::Type::getInt1Ty(context); }
+  llvm::IntegerType* int8_type()
+  { return llvm::Type::getInt8Ty(context); }
+  llvm::IntegerType* int16_type()
+  { return llvm::Type::getInt16Ty(context); }
+  llvm::IntegerType* int32_type()
+  { return llvm::Type::getInt32Ty(context); }
+  llvm::IntegerType* int64_type()
+  { return llvm::Type::getInt64Ty(context); }
+  llvm::IntegerType* long_type()
 #if SIZEOF_LONG==4
   { return int32_type(); }
 #else
   { return int64_type(); }
 #endif
-#ifdef LLVM30
-  static llvm::IntegerType* size_t_type()
-#else
-  static const llvm::IntegerType* size_t_type()
-#endif
+  llvm::IntegerType* size_t_type()
 #if SIZEOF_SIZE_T==4
   { return int32_type(); }
 #else
   { return int64_type(); }
 #endif
-  static llvm_const_Type* float_type()
-#ifdef LLVM26
-  { return llvm::Type::getFloatTy(llvm::getGlobalContext()); }
-#else
-  { return llvm::Type::FloatTy; }
-#endif
-  static llvm_const_Type* double_type()
-#ifdef LLVM26
-  { return llvm::Type::getDoubleTy(llvm::getGlobalContext()); }
-#else
-  { return llvm::Type::DoubleTy; }
-#endif
+  llvm::Type* float_type()
+  { return llvm::Type::getFloatTy(context); }
+  llvm::Type* double_type()
+  { return llvm::Type::getDoubleTy(context); }
+  llvm::Type* void_type()
+  { return llvm::Type::getVoidTy(context); }
 
-  static llvm_const_Type* void_type()
-#ifdef LLVM26
-  { return llvm::Type::getVoidTy(llvm::getGlobalContext()); }
-#else
-  { return llvm::Type::VoidTy; }
-#endif
-
-#ifdef LLVM30
-// OpaqueType doesn't exist any more in LLVM 3.0, instead we have to create a
-// named struct type.
-#define OpaqueType StructType
-#endif
-  static llvm::OpaqueType* opaque_type(const char *name)
-#ifdef LLVM30
-  {
-    return llvm::StructType::create(llvm::getGlobalContext(), name);
-  }
-#else
-// We just ignore the name here.
-#ifdef LLVM26
-  { return llvm::OpaqueType::get(llvm::getGlobalContext()); }
-#else
-  { return llvm::OpaqueType::get(); }
-#endif
-#endif
-
-#ifndef LLVM30
-  static llvm::OpaqueType* opaque_type()
-#ifdef LLVM26
-  { return llvm::OpaqueType::get(llvm::getGlobalContext()); }
-#else
-  { return llvm::OpaqueType::get(); }
-#endif
-#endif
+  llvm::StructType* opaque_type(const char *name)
+  { return llvm::StructType::create(context, name); }
 
   // anonymous struct types
-  static llvm::StructType* struct_type(std::vector<llvm_const_Type*>& elts)
-#ifdef LLVM30
-  {
-    // StructType::get takes an ArrayRef<Type*> argument in LLVM 3.0.
-    llvm::ArrayRef<llvm::Type*> myelts = elts;
-    return llvm::StructType::get(llvm::getGlobalContext(), myelts);
-  }
-#else
-#ifdef LLVM26
-  { return llvm::StructType::get(llvm::getGlobalContext(), elts); }
-#else
-  { return llvm::StructType::get(elts); }
-#endif
-#endif
+  llvm::StructType* struct_type(std::vector<llvm::Type*>& elts)
+  { return llvm::StructType::get(context, elts); }
 
-  // named struct types; these work differently in LLVM 3.0
+  // named struct types
   llvm::StructType* struct_type
-  (const char *name, std::vector<llvm_const_Type*>& elts)
-#ifdef LLVM30
+  (const char *name, std::vector<llvm::Type*>& elts)
   {
-    llvm::StructType *ty =
-      llvm::StructType::create(llvm::getGlobalContext(), name);
-    llvm::ArrayRef<llvm::Type*> myelts = elts;
-    ty->setBody(myelts);
+    llvm::StructType *ty = llvm::StructType::create(context, name);
+    ty->setBody(elts);
     return ty;
   }
-#else
-  {
-    llvm::StructType *ty =
-      llvm::StructType::get(
-#ifdef LLVM26
-			    llvm::getGlobalContext(),
-#endif
-			    elts);
-    module->addTypeName(name, ty);
-    return ty;
-  }
-#endif
 
   // array types
-  static llvm::ArrayType* array_type(llvm_const_Type* ty, size_t num_elts)
+  static llvm::ArrayType* array_type(llvm::Type* ty, size_t num_elts)
   { return llvm::ArrayType::get(ty, num_elts); }
 
-  static llvm::FunctionType* func_type(llvm_const_Type* res, std::vector<llvm_const_Type*>& args, bool varargs)
-#ifdef LLVM30
-  {
-    // FunctionType::get takes an ArrayRef<Type*> argument in LLVM 3.0.
-    llvm::ArrayRef<llvm::Type*> myargs = args;
-    return llvm::FunctionType::get(res, myargs, varargs);
-  }
-#else
+  static llvm::FunctionType* func_type
+  (llvm::Type* res, std::vector<llvm::Type*>& args, bool varargs)
   { return llvm::FunctionType::get(res, args, varargs); }
-#endif
 
-  static bool is_pointer_type(llvm_const_Type *ty)
-#ifdef LLVM27
+  static bool is_pointer_type(llvm::Type *ty)
   { return ty->isPointerTy(); }
-#else
-  { return ty->getTypeID() == llvm::Type::PointerTyID; }
-#endif
 
-  static bool is_struct_type(llvm_const_Type *ty)
-#ifdef LLVM27
+  static bool is_struct_type(llvm::Type *ty)
   { return ty->isStructTy(); }
-#else
-  { return ty->getTypeID() == llvm::Type::StructTyID; }
-#endif
 
-  static llvm::Constant* constant_char_array(const char *s)
-#ifdef LLVM31
-  { return llvm::ConstantDataArray::getString(llvm::getGlobalContext(), s); }
-#else
-#ifdef LLVM26
-  { return llvm::ConstantArray::get(llvm::getGlobalContext(), s); }
-#else
-  { return llvm::ConstantArray::get(s); }
-#endif
-#endif
+  llvm::Constant* constant_char_array(const char *s)
+  { return llvm::ConstantDataArray::getString(context, s); }
 
   static llvm::GlobalVariable* global_variable
   (llvm::Module *M, llvm::Type *Ty, bool isConstant,
    llvm::GlobalValue::LinkageTypes Linkage,
    llvm::Constant *Init = 0, string Name = "")
-#ifdef LLVM26
   { return new llvm::GlobalVariable(*M, Ty, isConstant, Linkage, Init, Name); }
-#else
-  { return new llvm::GlobalVariable(Ty, isConstant, Linkage, Init, Name, M); }
-#endif
 
   llvm::BasicBlock *basic_block(const char *name, llvm::Function* f = 0)
-#ifdef LLVM26
-  { return llvm::BasicBlock::Create(llvm::getGlobalContext(), name, f); }
-#else
-  { return llvm::BasicBlock::Create(name, f); }
-#endif
+  { return llvm::BasicBlock::Create(context, name, f); }
 
   llvm::PHINode *phi_node(Builder &b, llvm_const_Type *ty,
 			  unsigned n, const char *name = "")

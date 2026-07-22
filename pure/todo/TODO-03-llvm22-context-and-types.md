@@ -20,8 +20,8 @@ modern LLVM ownership and type APIs without historical preprocessor branches.
 ## Task List
 
 1. [x] Add explicit context ownership to the interpreter-facing LLVM state.
-2. [ ] Replace `getGlobalContext()` and context-free builders and modules.
-3. [ ] Modernize primitive, structure, function, and constant type helpers.
+2. [x] Replace `getGlobalContext()` and context-free builders and modules.
+3. [x] Modernize primitive, structure, function, and constant type helpers.
 4. [ ] Replace obsolete includes and remove corresponding configure feature macros.
 5. [ ] Compile the affected translation units and categorize remaining API failures.
 
@@ -37,9 +37,13 @@ modern LLVM ownership and type APIs without historical preprocessor branches.
 - A direct `LLVMContext` is sufficient for the mutable pre-ORC stage. TODO-06 can
   transfer or wrap this ownership in `ThreadSafeContext` when modules begin moving
   across ORC boundaries.
-- After these changes, compilation advances to obsolete type helpers and mandatory
-  opaque-pointer `CreateGEP`/`CreateLoad` signatures. Those failures belong to the
-  next TODO-03 milestones and TODO-04, respectively.
+- All module, bitcode-reader, basic-block, and local-builder construction now uses
+  the interpreter-owned context; `getGlobalContext()` is no longer referenced.
+- Primitive, recursive structure, function, string-constant, and global-variable
+  helpers now use the LLVM 22 APIs without LLVM 2.x/3.x alternatives.
+- Compilation now stops first at the mandatory opaque-pointer `CreateGEP` and
+  `CreateLoad` signatures in `Env`; that instruction-level migration belongs to
+  TODO-04.
 
 ## Guardrails
 
@@ -59,6 +63,18 @@ modern LLVM ownership and type APIs without historical preprocessor branches.
 
 ## Progress Log
 
+- 2026-07-22: Removed global-context use and modernized the shared LLVM type and
+  constant helper layer.
+  - Bitcode parsing now consumes a `MemoryBufferRef` and unwraps LLVM 22's
+    `Expected<std::unique_ptr<Module>>` while preserving the existing caller
+    ownership contract.
+  - Validation:
+    - `cmake --preset llvm22-debug` configured successfully.
+    - `cmake --build --preset llvm22-debug -- -j1` no longer reported removed
+      static types, structure helpers, `GlobalVariable` constructors, or
+      context-free `BasicBlock` construction.
+    - Compilation stopped at six expected opaque-pointer `CreateGEP`/`CreateLoad`
+      errors in `Env`; deferred to TODO-04 by scope.
 - 2026-07-22: Added explicit interpreter-owned LLVM context state and routed
   module and `Env` builder construction through it.
   - Validation:

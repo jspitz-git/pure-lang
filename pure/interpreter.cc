@@ -417,30 +417,13 @@ void interpreter::init()
      to the other types (using a bitcast on a pointer) as needed. */
 
   {
-#ifdef LLVM30
-    // LLVM 3.0 named structs make recursive types quite straightforward.
-    ExprTy = llvm::StructType::create
-      (llvm::getGlobalContext(), "struct.__pure__expr");
-    std::vector<llvm_const_Type*> elts;
+    ExprTy = llvm::StructType::create(context, "struct.__pure__expr");
+    std::vector<llvm::Type*> elts;
     elts.push_back(int32_type());
     elts.push_back(int32_type());
     elts.push_back(PointerType::get(ExprTy, 0));
     elts.push_back(PointerType::get(ExprTy, 0));
-    llvm::ArrayRef<llvm::Type*> myelts = elts;
-    ExprTy->setBody(myelts);
-#else
-    // Recursive struct, the old way.
-    PATypeHolder StructTy = opaque_type();
-    std::vector<llvm_const_Type*> elts;
-    elts.push_back(int32_type());
-    elts.push_back(int32_type());
-    elts.push_back(PointerType::get(StructTy, 0));
-    elts.push_back(PointerType::get(StructTy, 0));
-    ExprTy = struct_type(elts);
-    cast<OpaqueType>(StructTy.get())->refineAbstractTypeTo(ExprTy);
-    ExprTy = cast<StructType>(StructTy.get());
-    module->addTypeName("struct.__pure__expr", ExprTy);
-#endif
+    ExprTy->setBody(elts);
   }
   {
     std::vector<llvm_const_Type*> elts;
@@ -1901,12 +1884,13 @@ static llvm::Module *ParseBitcodeFile(llvm::MemoryBuffer *Buffer,
 				      std::string *ErrMsg)
 {
   using namespace llvm;
-  ErrorOr<Module *> ModuleOrErr = parseBitcodeFile(Buffer, Context);
-  if (error_code EC = ModuleOrErr.getError()) {
-    if (ErrMsg) *ErrMsg = EC.message();
+  Expected<std::unique_ptr<Module> > ModuleOrErr =
+    parseBitcodeFile(Buffer->getMemBufferRef(), Context);
+  if (!ModuleOrErr) {
+    if (ErrMsg) *ErrMsg = toString(ModuleOrErr.takeError());
     return 0;
-  } else
-  return ModuleOrErr.get();
+  }
+  return ModuleOrErr->release();
 }
 #endif
 
@@ -1948,11 +1932,7 @@ bool interpreter::LoadFaustDSP(bool priv, const char *name, string *msg,
     dsp_errmsg(name, msg);
     return false;
   }
-  Module *M = ParseBitcodeFile(buf,
-#ifdef LLVM26
-			       getGlobalContext(),
-#endif
-			       msg);
+  Module *M = ParseBitcodeFile(buf, context, msg);
   delete buf;
   if (!M) {
     dsp_errmsg(name, msg);
@@ -2099,11 +2079,7 @@ bool interpreter::LoadFaustDSP(bool priv, const char *name, string *msg,
       Function *f = Function::Create(ft, Function::ExternalLinkage,
 				     "$$faust$"+modname+"$newinit", module);
       BasicBlock *bb = basic_block("entry", f);
-#ifdef LLVM26
-      Builder b(getGlobalContext());
-#else
-      Builder b;
-#endif
+      Builder b(context);
       b.SetInsertPoint(bb);
       // Call new.
       vector<Value*> args;
@@ -2145,11 +2121,7 @@ bool interpreter::LoadFaustDSP(bool priv, const char *name, string *msg,
       Function *f = Function::Create(ft, Function::ExternalLinkage,
 				     "$$faust$"+modname+"$info", module);
       BasicBlock *bb = basic_block("entry", f);
-#ifdef LLVM26
-      Builder b(getGlobalContext());
-#else
-      Builder b;
-#endif
+      Builder b(context);
       b.SetInsertPoint(bb);
       // Call getNumInputs and getNumOutputs to obtain the number of input and
       // output channels.
@@ -2219,11 +2191,7 @@ bool interpreter::LoadFaustDSP(bool priv, const char *name, string *msg,
       Function *f = Function::Create(ft, Function::ExternalLinkage,
 				     "$$faust$"+modname+"$meta", module);
       BasicBlock *bb = basic_block("entry", f);
-#ifdef LLVM26
-      Builder b(getGlobalContext());
-#else
-      Builder b;
-#endif
+      Builder b(context);
       b.SetInsertPoint(bb);
       // Call the runtime function to create the internal meta data structure.
       Function *newfun = module->getFunction("faust_new_metadata");
@@ -2263,11 +2231,7 @@ bool interpreter::LoadFaustDSP(bool priv, const char *name, string *msg,
 				     "$$faust$"+modname+"$getSampleRate",
 				     module);
       BasicBlock *bb = basic_block("entry", f);
-#ifdef LLVM26
-      Builder b(getGlobalContext());
-#else
-      Builder b;
-#endif
+      Builder b(context);
       b.SetInsertPoint(bb);
       Value *v = b.CreateLoad(sr);
       b.CreateRet(v);
@@ -2420,11 +2384,7 @@ bool interpreter::LoadBitcode(bool priv, const char *name, string *msg)
     bc_errmsg(name, msg);
     return false;
   }
-  Module *M = ParseBitcodeFile(buf,
-#ifdef LLVM26
-			       getGlobalContext(),
-#endif
-			       msg);
+  Module *M = ParseBitcodeFile(buf, context, msg);
   delete buf;
   if (!M) {
     bc_errmsg(name, msg);
@@ -10188,13 +10148,13 @@ bool interpreter::del_const(int32_t sym)
 
 // Code generation.
 
-#define Dbl(d)		ConstantFP::get(interpreter::double_type(), d)
-#define Bool(i)		ConstantInt::get(interpreter::int1_type(), i)
-#define Char(i)		ConstantInt::get(interpreter::int8_type(), i)
-#define UInt(i)		ConstantInt::get(interpreter::int32_type(), i)
-#define SInt(i)		ConstantInt::get(interpreter::int32_type(), (uint64_t)i, true)
-#define UInt64(i)	ConstantInt::get(interpreter::int64_type(), i)
-#define SInt64(i)	ConstantInt::get(interpreter::int64_type(), (uint64_t)i, true)
+#define Dbl(d)		ConstantFP::get(interpreter::g_interp->double_type(), d)
+#define Bool(i)		ConstantInt::get(interpreter::g_interp->int1_type(), i)
+#define Char(i)		ConstantInt::get(interpreter::g_interp->int8_type(), i)
+#define UInt(i)		ConstantInt::get(interpreter::g_interp->int32_type(), i)
+#define SInt(i)		ConstantInt::get(interpreter::g_interp->int32_type(), (uint64_t)i, true)
+#define UInt64(i)	ConstantInt::get(interpreter::g_interp->int64_type(), i)
+#define SInt64(i)	ConstantInt::get(interpreter::g_interp->int64_type(), (uint64_t)i, true)
 #if SIZEOF_SIZE_T==4
 #define SizeInt(i)	UInt(i)
 #else
@@ -10788,11 +10748,7 @@ int interpreter::compiler(string out, list<string> libnames, string llcopts)
   Function *main = Function::Create(ft, Function::ExternalLinkage,
 				    mainname, module);
   BasicBlock *bb = basic_block("entry", main);
-#ifdef LLVM26
-  Builder b(llvm::getGlobalContext());
-#else
-  Builder b;
-#endif
+  Builder b(context);
   b.SetInsertPoint(bb);
   /* To make at least simple evals work, we have to dump the information in
      the symbol and external tables so that they can be reconstructed at
@@ -11474,7 +11430,7 @@ ReturnInst *Env::CreateRet(Value *v, const rule *rp)
 #else
 	    CallInst *c2 = c1->clone(
 #if LLVM26
-				     llvm::getGlobalContext()
+				     pure_llvm_context()
 #endif
 				     );
 #endif
@@ -12543,11 +12499,7 @@ Function *interpreter::declare_extern(int priv, string name, string restype,
   for (size_t i = 0; a != f->arg_end(); ++a, ++i) {
     a->setName(mklabel("arg", i)); args[i] = a;
   }
-#ifdef LLVM26
-  Builder b(llvm::getGlobalContext());
-#else
-  Builder b;
-#endif
+  Builder b(context);
   BasicBlock *bb = basic_block("entry", f),
     *noretbb = basic_block("noret"),
     *failedbb = basic_block("failed");
