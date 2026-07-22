@@ -1837,18 +1837,18 @@ get_membuf(const char *name, string *msg)
   return std::move(*BufferOrErr);
 }
 
-static llvm::Module *ParseBitcodeFile(const llvm::MemoryBuffer& Buffer,
-				      llvm::LLVMContext& Context,
-				      std::string *ErrMsg)
+static std::unique_ptr<llvm::Module>
+ParseBitcodeFile(const llvm::MemoryBuffer& Buffer,
+		 llvm::LLVMContext& Context, std::string *ErrMsg)
 {
   using namespace llvm;
   Expected<std::unique_ptr<Module> > ModuleOrErr =
     parseBitcodeFile(Buffer.getMemBufferRef(), Context);
   if (!ModuleOrErr) {
     if (ErrMsg) *ErrMsg = toString(ModuleOrErr.takeError());
-    return 0;
+    return nullptr;
   }
-  return ModuleOrErr->release();
+  return std::move(*ModuleOrErr);
 }
 
 bool interpreter::LoadFaustDSP(bool priv, const char *name, string *msg,
@@ -1889,7 +1889,7 @@ bool interpreter::LoadFaustDSP(bool priv, const char *name, string *msg,
     dsp_errmsg(name, msg);
     return false;
   }
-  Module *M = ParseBitcodeFile(*buf, context, msg);
+  std::unique_ptr<Module> M = ParseBitcodeFile(*buf, context, msg);
   if (!M) {
     dsp_errmsg(name, msg);
     return false;
@@ -1913,7 +1913,6 @@ bool interpreter::LoadFaustDSP(bool priv, const char *name, string *msg,
     // This doesn't look like a valid Faust bitcode module, bail out.
     if (msg) *msg = "Not a valid dsp file";
     dsp_errmsg(name, msg);
-    delete M;
     return false;
   }
   // Check whether getSampleRate is available.
@@ -1934,7 +1933,6 @@ bool interpreter::LoadFaustDSP(bool priv, const char *name, string *msg,
       if (msg)
 	*msg = "Module was previously compiled for " + prec + " precision";
       dsp_errmsg(name, msg);
-      delete M;
       return false;
     }
   }
@@ -2009,16 +2007,11 @@ bool interpreter::LoadFaustDSP(bool priv, const char *name, string *msg,
   }
   // Link the mangled module into the Pure module. This only needs to be done
   // if the module was modified.
-  if (modified && Linker::LinkModules(module, M,
-#ifdef LLVM30
-				      Linker::DestroySource,
-#endif
-				      msg)) {
-    delete M;
+  if (modified && Linker::linkModules(*module, std::move(M))) {
+    if (msg && msg->empty()) *msg = "Error linking dsp module";
     dsp_errmsg(name, msg);
     return false;
   }
-  delete M;
   // Add some convenience functions.
   list<string> myfuns;
   myfuns.push_back("newinit");
@@ -2340,7 +2333,7 @@ bool interpreter::LoadBitcode(bool priv, const char *name, string *msg)
     bc_errmsg(name, msg);
     return false;
   }
-  Module *M = ParseBitcodeFile(*buf, context, msg);
+  std::unique_ptr<Module> M = ParseBitcodeFile(*buf, context, msg);
   if (!M) {
     bc_errmsg(name, msg);
     return false;
@@ -2391,16 +2384,11 @@ bool interpreter::LoadBitcode(bool priv, const char *name, string *msg)
   }
   // Link the bitcode module into the Pure module. This only needs to be done
   // if the module wasnd't loaded before.
-  if (!loaded && Linker::LinkModules(module, M,
-#ifdef LLVM30
-				     Linker::DestroySource,
-#endif
-				     msg)) {
-    delete M;
+  if (!loaded && Linker::linkModules(*module, std::move(M))) {
+    if (msg && msg->empty()) *msg = "Error linking bitcode module";
     bc_errmsg(name, msg);
     return false;
   }
-  delete M;
   // Create wrappers.
   for (list<string>::iterator it = funs.begin(), end = funs.end();
        it != end; ++it) {

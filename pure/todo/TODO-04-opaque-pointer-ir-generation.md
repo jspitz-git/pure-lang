@@ -72,6 +72,9 @@ types that LLVM no longer stores.
 - Bitcode input now uses `MemoryBuffer::getFile` and `unique_ptr` ownership
   through both loaders. Parsing borrows a `const MemoryBuffer&`; no writable
   buffer casts or manual buffer deletion remain.
+- Parsed modules remain in `unique_ptr` ownership and are consumed by
+  `Linker::linkModules(Module&, unique_ptr<Module>)`. The removed
+  `DestroySource` flag and all manual module deletion paths are gone.
 - The highest-risk typed-pointer hotspots are `named_type`, `type_name`,
   `dsptype_name`, `declare_extern`, and Faust sample-type detection. These need
   separate semantic ABI metadata rather than reconstructed pointer nesting.
@@ -95,6 +98,12 @@ types that LLVM no longer stores.
 
 ## Progress Log
 
+- 2026-07-23: Modernized parsed-module ownership and linker calls.
+  - Validation:
+    - `cmake --preset llvm22-debug` configured successfully.
+    - `cmake --build --preset llvm22-debug -- -j1` no longer reports removed
+      `Linker::LinkModules` or `DestroySource` APIs.
+    - Compilation advances to the typed-pointer ABI logic in `bctype_name`.
 - 2026-07-23: Modernized instruction insertion and replacement in tail-call
   argument cleanup.
   - Validation:
