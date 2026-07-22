@@ -1,6 +1,6 @@
 # TODO-04 - Opaque-Pointer IR Generation
 
-Status: Open
+Status: Blocked on TODO-06 runtime validation
 Branch: todo/04-opaque-pointer-ir-generation
 
 ## Purpose
@@ -18,12 +18,77 @@ types that LLVM no longer stores.
 
 ## Task List
 
-1. [ ] Inventory obsolete `IRBuilder` signatures and typed-pointer assumptions.
-2. [ ] Port loads, stores, GEPs, calls, and indirect calls with explicit types.
-3. [ ] Replace pointer nesting comparisons in external and Faust ABI detection.
-4. [ ] Modernize function, basic block, attribute, and calling-convention APIs.
+1. [x] Inventory obsolete `IRBuilder` signatures and typed-pointer assumptions.
+2. [x] Port loads, stores, GEPs, calls, and indirect calls with explicit types.
+3. [x] Replace pointer nesting comparisons in external and Faust ABI detection.
+4. [x] Modernize function, basic block, attribute, and calling-convention APIs.
 5. [ ] Run `verifyFunction` and `verifyModule` over representative generated IR.
-6. [ ] Compile all IR generation code without deprecated compatibility wrappers.
+   Blocked until TODO-06 provides a runnable ORC-backed interpreter.
+6. [x] Compile all IR generation code without deprecated compatibility wrappers.
+
+## Inventory Findings
+
+- The main IR generator contains 63 `CreateGEP` call-site lines: 60 in
+  `interpreter.cc` and three shared `Env` wrappers in `interpreter.hh`.
+- It contains 46 `CreateLoad` call-site lines: 43 in `interpreter.cc` and three
+  `Env::CreateLoadGEP` wrappers. The six inline wrapper calls are the first LLVM
+  22 compile blockers because both GEP and load now require explicit source types.
+- There are 137 ordinary `CreateCall` call-site lines and five removed numbered
+  helpers (`CreateCall3`). Calls receiving an `llvm::Function*` retain function
+  type information; indirect or generic-value callees must carry an explicit
+  `FunctionType` during the port.
+- There are three stores, 53 bitcasts, and three constant pointer casts. No
+  `getElementType`, `getPointerElementType`, or `CreateStructGEP` use was found,
+  so pointee recovery is implicit in helper arguments and pointer comparisons
+  rather than concentrated in deprecated element-type queries.
+- `interpreter.cc` has 70 `PointerType::get` call-site lines. Under opaque
+  pointers, aliases such as `VoidPtrTy`, `CharPtrTy`, `ExprPtrTy`, and nested
+  pointer variants compare as the same address-space pointer type. Existing
+  equality tests therefore cannot distinguish external ABI types or Faust
+  precision.
+- Explicit GEP source types can be taken from existing semantic owners:
+  expression layout helpers use `ExprTy` and its variant structs, global arrays
+  expose their `GlobalVariable::getValueType()`, and compiler table globals retain
+  their declared array types. No pointee type needs to be guessed.
+- The shared `Env` helpers now require that source type. `CreateLoadGEP` derives
+  its load type with `GetElementPtrInst::getIndexedType`, keeping GEP and load
+  types consistent without querying the opaque pointer.
+- A builder-independent `create_load_gep` helper applies the same rule to local
+  builders. `declare_extern` now supplies `ExprTy`, `IntExprTy`, `DblExprTy`, or
+  `PtrExprTy` for all 30 combined field-address/load operations.
+- The historical `Builder` macro expanded inside LLVM's own
+  `BasicBlockUtils.h`, corrupting an `IRBuilderBase &Builder` parameter. It is
+  now a C++ type alias, and the obsolete `NEW_BUILDER` configuration switch has
+  been removed.
+- LLVM 22 keeps `Function::getBasicBlockList()` private. All 126 append-only
+  uses now attach detached blocks through `BasicBlock::insertInto`, preserving
+  their original construction order without accessing container internals.
+- Tail-call argument patching now inserts cloned and arithmetic instructions by
+  `BasicBlock::iterator` and uses the public two-argument
+  `ReplaceInstWithValue`; no private instruction list access remains.
+- Bitcode and Faust module metadata now uses `DataLayout` from the interpreter's
+  main module and explicit `Triple(HOST)`. Layout compatibility still checks
+  endianness and pointer size, but no longer depends on legacy JIT target-data
+  accessors.
+- Batch output now uses LLVM 22 `raw_fd_ostream`, `std::error_code`, modern
+  `OpenFlags`, and `WriteBitcodeToFile(Module&, raw_ostream&)`. The
+  `RAW_STREAM` and `NEW_OSTREAM*` compatibility matrix has been removed.
+- Bitcode input now uses `MemoryBuffer::getFile` and `unique_ptr` ownership
+  through both loaders. Parsing borrows a `const MemoryBuffer&`; no writable
+  buffer casts or manual buffer deletion remain.
+- Parsed modules remain in `unique_ptr` ownership and are consumed by
+  `Linker::linkModules(Module&, unique_ptr<Module>)`. The removed
+  `DestroySource` flag and all manual module deletion paths are gone.
+- The highest-risk typed-pointer hotspots are `named_type`, `type_name`,
+  `dsptype_name`, `declare_extern`, and Faust sample-type detection. These need
+  separate semantic ABI metadata rather than reconstructed pointer nesting.
+- `bctype_name` now rejects opaque pointer signatures instead of guessing their
+  former pointee type. Consequently, pointer-bearing external bitcode functions
+  are temporarily unavailable until an explicit Pure ABI metadata format is
+  implemented; scalar-only functions remain classifiable.
+- Faust 2.70.3 embeds `-single` or `-double` in the module source filename and
+  JSON compile options. Sample precision now uses that explicit compile metadata
+  instead of comparing the opaque `compute` parameter type.
 
 ## Guardrails
 
@@ -39,11 +104,296 @@ types that LLVM no longer stores.
 
 ## Open Questions
 
-- Should Faust precision be detected from function metadata or from non-pointer parameters?
+- What module/function metadata format should carry Pure C ABI names for opaque
+  pointer parameters and results in externally produced bitcode?
+
 - Which indirect call sites need explicit stored `FunctionType` metadata?
 
 ## Progress Log
 
+- 2026-07-23: Reached the TODO-04 compilation boundary and recorded the runtime
+  validation dependency.
+  - Clang 22 reports zero warnings and no errors in IR generation, opaque-pointer
+    ABI handling, function construction, pass setup, or verifier integration.
+  - The only nine compiler errors are two legacy `EngineBuilder` operations and
+    seven removed `ExecutionEngine::freeMachineCodeForFunction` calls, all owned
+    by TODO-06 or its resource-lifetime follow-ups.
+  - TODO-04 task 6 is complete. Task 5 remains deliberately open rather than
+    claiming unexecuted validation; TODO-05 owns the full verifier boundary and
+    TODO-06 must first make the interpreter runnable.
+  - Validation:
+    - `cmake --preset llvm22-debug` configured successfully.
+    - `cmake --build --preset llvm22-debug -- -j1` reached only the nine listed
+      legacy JIT errors with zero warnings.
+- 2026-07-23: Removed the remaining pre-LLVM-3 compatibility branches from
+  function-pass setup and floating-point IR generation.
+  - LLVM 22 now directly uses the module-based legacy function pass manager,
+    current data-layout access, unconditional pass initialization/finalization,
+    and `CreateFAdd`/`CreateFSub`/`CreateFMul`.
+  - Calling-convention sites already use current `CallingConv::ID`,
+    `setCallingConv`, and tail-call APIs; no function attribute sites exist.
+  - Together with the earlier public basic-block and iterator migrations, this
+    completes TODO-04 task 4.
+  - Validation:
+    - `cmake --preset llvm22-debug` configured successfully.
+    - `cmake --build --preset llvm22-debug -- -j1` retained zero warnings and
+      only the same nine legacy JIT errors.
+- 2026-07-23: Added whole-module LLVM verification at module boundaries.
+  - Faust and generic bitcode loads verify the linked module and report LLVM's
+    diagnostic through their existing error-message paths.
+  - Batch compilation verifies the completed module before emitting LLVM IR or
+    bitcode and raises a Pure compiler error on failure.
+  - Existing generated-function paths continue to call `verifyFunction`.
+  - Validation:
+    - `cmake --preset llvm22-debug` configured successfully.
+    - `cmake --build --preset llvm22-debug -- -j1` compiled the verifier helper
+      and all three call sites with zero warnings and no new errors; execution
+      of representative verification remains blocked by the nine legacy JIT
+      compile errors.
+- 2026-07-23: Removed GCC-only string truncation diagnostic pragmas from the
+  dragonegg command-line rewrite.
+  - The fixed-width in-place replacement now uses `memcpy`, which matches the
+    intent of preserving the existing string terminator.
+  - Validation:
+    - `cmake --preset llvm22-debug` configured successfully.
+    - `cmake --build --preset llvm22-debug -- -j1` now emits zero warnings and
+      only the same nine obsolete legacy JIT errors.
+- 2026-07-23: Updated complex-number constant conversion to the C++17 `<cmath>`
+  interface.
+  - Polar coordinates now use `std::cos` and `std::sin` explicitly.
+  - Validation:
+    - `cmake --preset llvm22-debug` configured successfully.
+    - `cmake --build --preset llvm22-debug -- -j1` removed all three math
+      diagnostics and reduced the build from 12 to nine errors; every remaining
+      error is now an obsolete legacy `ExecutionEngine` operation.
+- 2026-07-23: Replaced all typed `PointerType::get(Type*, ...)` construction
+  with LLVM 22 opaque pointers created from the interpreter context.
+  - Legacy aliases such as `ExprPtrTy`, matrix pointers, and numeric pointers
+    intentionally share one address-space-zero LLVM type; semantic distinctions
+    remain in structure layouts, explicit GEP types, and `CAbiType`.
+  - Removed the obsolete dummy `void` pointee structure.
+  - Validation:
+    - `cmake --preset llvm22-debug` configured successfully.
+    - `cmake --build --preset llvm22-debug -- -j1` removed all 18 typed-pointer
+      deprecation warnings, reducing warnings from 20 to two unrelated Clang
+      warning-option diagnostics; the same 12 unrelated errors remain.
+- 2026-07-23: Replaced the final deprecated instruction insertion positions
+  with `BasicBlock::iterator` positions.
+  - Argument cleanup calls remain immediately before the selected tail call or
+    return instruction.
+  - Validation:
+    - `cmake --preset llvm22-debug` configured successfully.
+    - `cmake --build --preset llvm22-debug -- -j1` removed both
+      `Instruction::InsertPosition` warnings, reducing warnings from 22 to 20;
+      the same 12 unrelated errors remain.
+- 2026-07-23: Restored the LLVM 22 legacy function-pass pipeline declarations.
+  - Added the dedicated LLVM headers for mem2reg, instruction combining, and
+    legacy GVN; pass order and behavior remain unchanged.
+  - Validation:
+    - `cmake --preset llvm22-debug` configured successfully.
+    - `cmake --build --preset llvm22-debug -- -j1` removed all three pass
+      factory errors and reduced the build from 15 to 12 errors, leaving only
+      legacy JIT APIs and the separate `<cmath>` compatibility issue.
+- 2026-07-23: Replaced Faust pointer-type inference with an explicit exported
+  function ABI classifier.
+  - DSP instances, `compute` sample buffers, JSON strings, Pure `info`/`meta`
+    results, and generic UI/metadata pointers are classified by function name,
+    argument position, and the validated `-single`/`-double` module option.
+  - Only arguments explicitly classified as `faust_dsp*` receive the module DSP
+    tag check; a first metadata/UI pointer is no longer assumed to be a DSP.
+  - A Faust 2.70.3 probe confirmed opaque `ptr` signatures and
+    `float**`/`double**` `compute` semantics. It also exposed a separate loader
+    compatibility issue: current Faust exports `allocate`, `destroy`, and
+    `getJSON`, but no `buildUserInterface`, which the legacy loader currently
+    requires during module recognition.
+  - Validation:
+    - `cmake --preset llvm22-debug` configured successfully.
+    - `cmake --build --preset llvm22-debug -- -j1` introduced no errors, reduced
+      warnings from 23 to 22, and retained the same 15 unrelated errors.
+- 2026-07-23: Removed the legacy typed-pointer name registry and all LLVM
+  pointee introspection from general C type conversion.
+  - `named_type` now maps every semantic C pointer to LLVM's context-owned
+    opaque `ptr`; `type_name` refuses to invent a C name for LLVM pointers.
+  - Deleted `type_map`, `pointer_types`, `pointer_type_of`,
+    `make_pointer_type`, `pointer_type_name`, and `mangle_type_name`.
+  - Validation:
+    - `cmake --preset llvm22-debug` configured successfully.
+    - `cmake --build --preset llvm22-debug -- -j1` reduced warnings from 57 to
+      23, introduced no new errors, and retained the same 15 unrelated errors.
+- 2026-07-23: Switched external wrapper argument and result dispatch from LLVM
+  pointer identity to semantic `CAbiType` descriptors.
+  - String, numeric vector, pointer-vector, matrix, `expr*`, Faust DSP, `void*`,
+    and custom tagged pointer paths now remain distinct with opaque pointers.
+  - Pointer tags are derived from preserved ABI names rather than `type_name`
+    guesses made from LLVM `ptr` values.
+  - Validation:
+    - `cmake --preset llvm22-debug` configured successfully.
+    - `cmake --build --preset llvm22-debug -- -j1` reported no errors in the
+      changed `CAbiType` or `declare_extern` code and retained the same 15
+      unrelated legacy JIT, pass declaration, and `<cmath>` build errors.
+- 2026-07-23: Added a semantic `CAbiType` descriptor independent of
+  `llvm::Type*` and stored return/argument descriptors in `ExternInfo`.
+  - ABI names are normalized and retain pointer depth, including custom tagged
+    pointer types, while LLVM types continue to describe only generated IR.
+  - Batch extern serialization and diagnostics now prefer the stored ABI names,
+    so opaque `ptr` values no longer erase declaration spelling.
+  - Repeated declarations compare both LLVM IR types and semantic ABI types.
+  - Validation pending: the terminal tool currently rejects the configured
+    project directory before running commands, and Zed diagnostics cannot find
+    the configured LLVM include directory.
+- 2026-07-23: Replaced Faust sample precision detection based on pointer nesting
+  with explicit Faust compile options.
+  - Validation:
+    - Faust 2.70.3 generated both single- and double-precision LLVM 17 bitcode;
+      `llvm-dis-22` showed `-single` and `-double` respectively in
+      `source_filename`, with matching typed GEP/load instructions.
+    - `cmake --preset llvm22-debug` configured successfully.
+    - `cmake --build --preset llvm22-debug -- -j1` accepts the new detection
+      code and retains only the existing 15 unrelated build errors.
+- 2026-07-23: Replaced all seven removed `CreateCall3` sites with regular
+  `CreateCall` and explicit argument lists.
+  - Validation:
+    - `cmake --preset llvm22-debug` configured successfully.
+    - `cmake --build --preset llvm22-debug -- -j1` reports no obsolete GEP,
+      load, direct-call, numbered-call, or indirect-call signature errors.
+    - TODO-04 task 2 is complete; the remaining 15 build errors are outside
+      this instruction-signature layer.
+- 2026-07-23: Ported the final 15 GEP call sites in list and matrix constant
+  generation.
+  - Fourteen global-array addresses use `GlobalVariable::getValueType()`; the
+    malloc-backed expression array uses `ExprPtrTy` as its element type.
+  - Validation:
+    - `cmake --preset llvm22-debug` configured successfully.
+    - `cmake --build --preset llvm22-debug -- -j1` reports no obsolete
+      `CreateGEP` signature and advances to the removed `CreateCall3` helpers.
+- 2026-07-23: Ported all 11 remaining standalone loads to explicit global value
+  types and supplied the stored `FunctionType` for the indirect Faust call.
+  - Validation:
+    - `cmake --preset llvm22-debug` configured successfully.
+    - `cmake --build --preset llvm22-debug -- -j1` reports no untyped
+      `CreateLoad` or indirect `CreateCall` diagnostics and advances to later
+      `Env::CreateGEP` call sites.
+- 2026-07-23: Ported all 30 combined GEP/load operations in `declare_extern`
+  to explicit expression structure layouts.
+  - Validation:
+    - `cmake --preset llvm22-debug` configured successfully.
+    - `cmake --build --preset llvm22-debug -- -j1` no longer reports nested
+      GEP/load signature errors in `declare_extern` and advances to standalone
+      global loads and later `Env::CreateGEP` call sites.
+- 2026-07-23: Removed invalid pointee introspection from external bitcode ABI
+  classification.
+  - Pointer signatures now return `<unknown C type>` and are rejected rather
+    than being silently assigned the wrong conversion wrapper.
+  - Removed the obsolete pointee-layout comparison helpers and
+    `Module::getTypeByName` calls.
+  - Validation:
+    - `cmake --preset llvm22-debug` configured successfully.
+    - `cmake --build --preset llvm22-debug -- -j1` advances past
+      `bctype_name` to direct opaque-pointer GEP/load errors in `declare_extern`.
+- 2026-07-23: Modernized parsed-module ownership and linker calls.
+  - Validation:
+    - `cmake --preset llvm22-debug` configured successfully.
+    - `cmake --build --preset llvm22-debug -- -j1` no longer reports removed
+      `Linker::LinkModules` or `DestroySource` APIs.
+    - Compilation advances to the typed-pointer ABI logic in `bctype_name`.
+- 2026-07-23: Modernized instruction insertion and replacement in tail-call
+  argument cleanup.
+  - Validation:
+    - `cmake --preset llvm22-debug` configured successfully.
+    - `cmake --build --preset llvm22-debug -- -j1` no longer reports private
+      `BasicBlock::getInstList`, old `ReplaceInstWithValue`, or deprecated
+      instruction-position errors.
+    - Compilation advances to the intentionally deferred opaque-pointer ABI
+      logic in `bctype_name`.
+- 2026-07-23: Replaced manual bitcode file buffering with LLVM 22 memory-buffer
+  ownership.
+  - Validation:
+    - `cmake --preset llvm22-debug` configured successfully.
+    - `cmake --build --preset llvm22-debug -- -j1` no longer reports
+      `MemoryBuffer::getNewMemBuffer` or raw/unique pointer conversion errors.
+    - Compilation advances through both loaders to the later typed-pointer ABI
+      and removed `Module::getTypeByName` code.
+- 2026-07-23: Replaced historical stream and bitcode output compatibility with
+  the LLVM 22 APIs.
+  - Validation:
+    - `cmake --preset llvm22-debug` regenerated configuration without
+      `NEW_OSTREAM` or `NEW_OSTREAM34`.
+    - `cmake --build --preset llvm22-debug -- -j1` no longer reports removed
+      `F_None`/`F_Text`, `raw_fd_ostream` constructor, or
+      `WriteBitcodeToFile` errors.
+    - Compilation advances to writable memory-buffer, linker, instruction-list,
+      and legacy JIT APIs.
+- 2026-07-23: Modernized target metadata handling in Faust loading, generic
+  bitcode loading, and batch compilation.
+  - Validation:
+    - `cmake --preset llvm22-debug` configured successfully.
+    - `cmake --build --preset llvm22-debug -- -j1` no longer reports
+      `getTargetData`, `DataLayout(Module*)`, or `std::string` to `Triple`
+      errors.
+    - Compilation advances to linker, output stream, bitcode writer, and legacy
+      JIT compatibility APIs.
+- 2026-07-23: Modernized LLVM value-name handling for `StringRef`.
+  - `is_init`, `is_faust`, and `is_faust_internal` now consume `StringRef`
+    directly; owned strings are created with `.str()` only where names are
+    stored or modified.
+  - Validation:
+    - `cmake --preset llvm22-debug` configured successfully.
+    - `cmake --build --preset llvm22-debug -- -j1` no longer reports implicit
+      `StringRef` to `std::string` conversions or the `is_init(getName())` error.
+    - Compilation advances to `Triple`, `DataLayout`, linker, stream flag, and
+      legacy JIT compatibility errors.
+- 2026-07-23: Added explicit global array types to the seven GEPs that build
+  the compiled interpreter and RTTI initialization tables.
+  - Validation:
+    - `cmake --preset llvm22-debug` configured successfully.
+    - The regular Debug build remains capped by earlier legacy JIT/linker
+      diagnostics.
+    - An unlimited `clang++-22 -fsyntax-only` check reported no GEP error in
+      the converted `compiler` range; its only error there is the later
+      `StringRef` argument passed to `is_init`.
+- 2026-07-23: Ported the first direct Faust GEP and load operations to explicit
+  `GlobalVariable::getValueType()` source types.
+  - Validation:
+    - `cmake --preset llvm22-debug` configured successfully.
+    - `cmake --build --preset llvm22-debug -- -j1` no longer reports the former
+      Faust errors at `interpreter.cc:2135` and `:2209`; compilation advances
+      through this code to the later bitcode/JIT compatibility layer.
+- 2026-07-23: Replaced all 126 direct basic-block list appends with the public
+  `BasicBlock::insertInto` API.
+  - Validation:
+    - `cmake --preset llvm22-debug` configured successfully.
+    - `cmake --build --preset llvm22-debug -- -j1` reported no private
+      `getBasicBlockList` access and advanced to the direct Faust `CreateGEP`
+      and `CreateLoad` signatures at `interpreter.cc:2135` and `:2209`.
+- 2026-07-23: Replaced the preprocessor `Builder` alias with
+  `using Builder = llvm::IRBuilder<>` and selected modern `BinaryOperator`
+  construction directly.
+  - Validation:
+    - `cmake --preset llvm22-debug` regenerated configuration without
+      `NEW_BUILDER`.
+    - `cmake --build --preset llvm22-debug -- -j1` no longer reports macro
+      expansion errors in LLVM's `BasicBlockUtils.h` and proceeds to Pure's
+      `StringRef`, linker, basic-block ownership, and legacy JIT APIs.
+- 2026-07-23: Ported the shared `Env::CreateGEP` and `Env::CreateLoadGEP`
+  helpers and all 44 call sites to explicit source types.
+  - Expression nodes use `ExprTy`, `IntExprTy`, or `DblExprTy`; shadow-stack
+    indexing uses `ExprPtrTy`; constant arrays use `GlobalVariable::getValueType()`.
+  - Validation:
+    - `cmake --preset llvm22-debug` configured successfully.
+    - `cmake --build --preset llvm22-debug -- -j1` compiled past all six former
+      inline helper errors and reached `interpreter.cc`.
+    - The build now reports later legacy `ExecutionEngine`, linker, `StringRef`,
+      and direct IR-builder API failures; no `Env` helper signature error remains.
+- 2026-07-23: Inventoried obsolete builder signatures and typed-pointer
+  assumptions on `todo/04-opaque-pointer-ir-generation`.
+  - Validation:
+    - Focused source counts found 63 GEP, 46 load, 137 ordinary call, five
+      numbered-call, three store, 53 bitcast, three constant-pointer-cast, and
+      70 pointer-construction call-site lines.
+    - No pointer element-type query was found.
+    - The latest `cmake --build --preset llvm22-debug -- -j1` baseline stops at
+      the three `Env::CreateGEP` and three `Env::CreateLoadGEP` wrappers, matching
+      the first planned implementation slice.
 - 2026-07-22: Initial opaque-pointer migration plan created.
   - Validation:
     - Not run; this update creates planning documentation only.

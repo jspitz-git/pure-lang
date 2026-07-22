@@ -178,13 +178,7 @@ struct VarInfo {
     : v(_v), vtag(_vtag), idx(_idx), p(_p) {}
 };
 
-#ifdef NEW_BUILDER
-/* LLVM 2.4 has a new IRBuilder class which takes some optional template
-   parameters. */
-#define Builder llvm::IRBuilder<>
-#else
-#define Builder llvm::IRBuilder
-#endif
+using Builder = llvm::IRBuilder<>;
 
 #ifdef NEW_USER_ITERATOR
 /* Workarounds for LLVM 3.5 API breakage. */
@@ -301,30 +295,44 @@ public:
   Env *parent;
   // reference counters
   uint32_t refc, *refp;
-  // convenience functions for invoking CreateGEP() and CreateLoad()
+  // Convenience functions for GEPs and loads with explicit source types.
   llvm::Value *CreateGEP
-  (llvm::Value *x, llvm::Value *i, const char* name = "")
-  { return builder.CreateGEP(x, i, name); }
+  (llvm::Type *ty, llvm::Value *x, llvm::Value *i, const char* name = "")
+  { return builder.CreateGEP(ty, x, i, name); }
   llvm::Value *CreateGEP
-  (llvm::Value *x, llvm::Value *i, llvm::Value *j, const char* name = "")
+  (llvm::Type *ty, llvm::Value *x, llvm::Value *i, llvm::Value *j,
+   const char* name = "")
   { llvm::Value* idxs[2] = { i, j };
-    return builder.CreateGEP(x, mkidxs(idxs, idxs+2), name);
+    return builder.CreateGEP(ty, x, mkidxs(idxs, idxs+2), name);
   }
   llvm::Value *CreateGEP
-  (llvm::Value *x, llvm::Value *i, llvm::Value *j, llvm::Value *k,
-   const char* name = "")
+  (llvm::Type *ty, llvm::Value *x, llvm::Value *i, llvm::Value *j,
+   llvm::Value *k, const char* name = "")
   { llvm::Value* idxs[3] = { i, j, k };
-    return builder.CreateGEP(x, mkidxs(idxs, idxs+3), name); }
+    return builder.CreateGEP(ty, x, mkidxs(idxs, idxs+3), name); }
   llvm::LoadInst *CreateLoadGEP
-  (llvm::Value *x, llvm::Value *i, const char* name = "")
-  { return builder.CreateLoad(CreateGEP(x, i), name); }
+  (llvm::Type *ty, llvm::Value *x, llvm::Value *i, const char* name = "")
+  { llvm::Value* idxs[1] = { i };
+    llvm::Type *loadTy = llvm::GetElementPtrInst::getIndexedType
+      (ty, mkidxs(idxs, idxs+1));
+    assert(loadTy);
+    return builder.CreateLoad(loadTy, CreateGEP(ty, x, i), name); }
   llvm::LoadInst *CreateLoadGEP
-  (llvm::Value *x, llvm::Value *i, llvm::Value *j, const char* name = "")
-  { return builder.CreateLoad(CreateGEP(x, i, j), name); }
-  llvm::LoadInst *CreateLoadGEP
-  (llvm::Value *x, llvm::Value *i, llvm::Value *j, llvm::Value *k,
+  (llvm::Type *ty, llvm::Value *x, llvm::Value *i, llvm::Value *j,
    const char* name = "")
-  { return builder.CreateLoad(CreateGEP(x, i, j, k), name); }
+  { llvm::Value* idxs[2] = { i, j };
+    llvm::Type *loadTy = llvm::GetElementPtrInst::getIndexedType
+      (ty, mkidxs(idxs, idxs+2));
+    assert(loadTy);
+    return builder.CreateLoad(loadTy, CreateGEP(ty, x, i, j), name); }
+  llvm::LoadInst *CreateLoadGEP
+  (llvm::Type *ty, llvm::Value *x, llvm::Value *i, llvm::Value *j,
+   llvm::Value *k, const char* name = "")
+  { llvm::Value* idxs[3] = { i, j, k };
+    llvm::Type *loadTy = llvm::GetElementPtrInst::getIndexedType
+      (ty, mkidxs(idxs, idxs+3));
+    assert(loadTy);
+    return builder.CreateLoad(loadTy, CreateGEP(ty, x, i, j, k), name); }
   // simplified interface to CreateCall()
   llvm::CallInst *CreateCall(llvm::Function *f,
 			     const vector<llvm::Value*>& args);
@@ -411,22 +419,53 @@ public:
   { if (key==0) key = ++act_key; return key; }
 };
 
+struct CAbiType {
+  enum Base {
+    unknown, void_, boolean, character, short_integer, integer, integer64,
+    long_integer, size, single, double_, expression, matrix, double_matrix,
+    complex_matrix, integer_matrix, custom
+  };
+
+  Base base;
+  unsigned pointer_depth;
+  string name;
+
+  CAbiType() : base(unknown), pointer_depth(0) {}
+  explicit CAbiType(const string& type_name);
+  bool is_pointer() const { return pointer_depth > 0; }
+  bool is(Base expected_base, unsigned expected_depth) const
+  { return base == expected_base && pointer_depth == expected_depth; }
+  bool operator==(const CAbiType& other) const
+  { return base == other.base && pointer_depth == other.pointer_depth &&
+      name == other.name; }
+  bool operator!=(const CAbiType& other) const { return !(*this == other); }
+};
+
 struct ExternInfo {
   // info about extern (C) functions callable from the Pure script
   int32_t tag;				// function symbol
   string name;				// real function name
   bool varargs;				// varargs function
-  llvm_const_Type* type;		// return type
-  vector<llvm_const_Type*> argtypes;	// argument types
+  llvm_const_Type* type;		// LLVM return type
+  vector<llvm_const_Type*> argtypes;	// LLVM argument types
+  CAbiType abi_type;			// semantic C ABI return type
+  vector<CAbiType> abi_argtypes;		// semantic C ABI argument types
   llvm::Function *f;			// Pure wrapper for the external
   ExternInfo()
-    : tag(0), varargs(false), type(0), argtypes(0), f(0)
+    : tag(0), varargs(false), type(0), argtypes(0), abi_argtypes(0), f(0)
   {}
   ExternInfo(int32_t _tag, const string&_name, llvm_const_Type *_type,
 	     vector<llvm_const_Type*> _argtypes, llvm::Function *_f,
 	     bool _varargs = false)
     : tag(_tag), name(_name), varargs(_varargs),
       type(_type), argtypes(_argtypes), f(_f)
+  {}
+  ExternInfo(int32_t _tag, const string&_name, llvm_const_Type *_type,
+	     vector<llvm_const_Type*> _argtypes, const CAbiType& _abi_type,
+	     const vector<CAbiType>& _abi_argtypes, llvm::Function *_f,
+	     bool _varargs = false)
+    : tag(_tag), name(_name), varargs(_varargs), type(_type),
+      argtypes(_argtypes), abi_type(_abi_type), abi_argtypes(_abi_argtypes), f(_f)
   {}
 };
 
@@ -490,7 +529,7 @@ struct bcdata_t {
 
 typedef map<string,bcdata_t> bcmap;
 
-typedef map<string,llvm_const_Type*> type_map;
+
 
 struct enventry {
   const env* e;
@@ -1062,29 +1101,19 @@ public:
   { return b.CreatePHI(ty); }
 #endif
 
-  type_map pointer_types;
-  map<llvm_const_Type*,type_map::iterator> pointer_type_of;
   map<string,int> pointer_tags;
   map<int,map<string,int>::iterator> pointer_type_with_tag;
   map<int,pointer_type_extra_info> pointer_type_info;
 
-  llvm_const_Type *make_pointer_type(const string& name);
-  string pointer_type_name(llvm_const_Type *type);
   int pointer_type_tag(const string& name);
-  int pointer_type_tag(llvm_const_Type *type)
-  {
-    assert(is_pointer_type(type));
-    return pointer_type_tag(type_name(type));
-  }
+
 
   llvm_const_Type *named_type(string name);
   string type_name(llvm_const_Type *type);
   string bctype_name(llvm_const_Type *type);
-  string dsptype_name(llvm_const_Type *type);
+  string dsptype_name(const string& function_name, llvm_const_Type *type,
+                      size_t argument, bool result, bool is_double);
   bool compatible_types(llvm_const_Type *type1, llvm_const_Type *type2);
-  llvm_const_Type *gslmatrix_type(llvm_const_Type *elem_ty,
-				  llvm_const_Type *block_ty,
-				  size_t padding = 0);
   set<llvm::Function*> always_used;
   map<int32_t,GlobalVar> globalvars;
   map<int32_t,Env> globalfuns, globaltypes;

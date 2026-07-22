@@ -36,7 +36,10 @@ char *alloca ();
 
 #include "interpreter.hh"
 #include "util.hh"
+#include <cmath>
+#include <memory>
 #include <sstream>
+#include <system_error>
 #include <stdarg.h>
 #include <errno.h>
 #include <sys/types.h>
@@ -52,12 +55,18 @@ char *alloca ();
 #include <glob.h>
 
 #include <llvm/Bitcode/BitcodeReader.h>
+#include <llvm/Bitcode/BitcodeWriter.h>
 #include <llvm/IR/CallingConv.h>
 #include <llvm/Linker/Linker.h>
 #include <llvm/Support/DynamicLibrary.h>
 #include <llvm/Support/Error.h>
+#include <llvm/Support/FileSystem.h>
 #include <llvm/Support/MemoryBuffer.h>
 #include <llvm/Support/raw_ostream.h>
+#include <llvm/TargetParser/Triple.h>
+#include <llvm/Transforms/InstCombine/InstCombine.h>
+#include <llvm/Transforms/Scalar/GVN.h>
+#include <llvm/Transforms/Utils.h>
 #include <llvm/Transforms/Utils/BasicBlockUtils.h>
 
 #include "config.h"
@@ -260,19 +269,11 @@ void interpreter::init()
 #endif // LLVM 2.5 and earlier
 #endif // LLVM 3.0 or earlier
   assert(JIT);
-#if LLVM27
   FPM = new legacy::FunctionPassManager(module);
-#else
-  FPM = new legacy::FunctionPassManager(MP);
-#endif
 
   // Set up the optimizer pipeline. Start with registering info about how the
   // target lays out data structures.
-#if LLVM35
   module->setDataLayout(JIT->getDataLayout());
-#else
-  FPM->add(new TargetData(*JIT->getTargetData()));
-#endif
   // Promote allocas to registers.
   FPM->add(createPromoteMemoryToRegisterPass());
   // Do simple "peephole" optimizations and bit-twiddling optimizations.
@@ -283,38 +284,26 @@ void interpreter::init()
   FPM->add(createGVNPass());
   // Simplify the control flow graph (deleting unreachable blocks, etc).
   FPM->add(createCFGSimplificationPass());
-#if LLVM31
-  // It seems that this is needed for LLVM 3.1 and later.
   FPM->doInitialization();
-#endif
 
   // Install a fallback mechanism to resolve references to the runtime, on
   // systems which do not allow the program to dlopen itself.
   JIT->InstallLazyFunctionCreator(resolve_external);
 
-  // Generic pointer type. LLVM doesn't like void*, so we use a pointer to a
-  // dummy struct instead. (This is a bit of a kludge. We'd rather use char*,
-  // as suggested in the LLVM documentation, but we need to keep char* and
-  // void* apart.)
-  {
-    std::vector<llvm_const_Type*> elts;
-    Type *VoidTy = struct_type("void", elts);
-    VoidPtrTy = PointerType::get(VoidTy, 0);
-  }
-
-  // Char pointer type.
-  CharPtrTy = PointerType::get(int8_type(), 0);
-
-  // int and double pointers.
-  IntPtrTy = PointerType::get(int32_type(), 0);
-  DoublePtrTy = PointerType::get(double_type(), 0);
+  // LLVM 22 uses one opaque pointer type per address space. Semantic C pointer
+  // distinctions are tracked separately by CAbiType.
+  PointerType *OpaquePtrTy = PointerType::get(context, 0);
+  VoidPtrTy = OpaquePtrTy;
+  CharPtrTy = OpaquePtrTy;
+  IntPtrTy = OpaquePtrTy;
+  DoublePtrTy = OpaquePtrTy;
 
   // Complex numbers (complex double).
   {
     std::vector<llvm_const_Type*> elts;
     elts.push_back(ArrayType::get(double_type(), 2));
     ComplexTy = struct_type(elts);
-    ComplexPtrTy = PointerType::get(ComplexTy, 0);
+    ComplexPtrTy = OpaquePtrTy;
   }
 
   // GSL-compatible matrix types. These are used to marshall GSL matrices in
@@ -328,7 +317,7 @@ void interpreter::init()
     elts.push_back(VoidPtrTy);		// block
     elts.push_back(int32_type());	// owner
     GSLMatrixTy = struct_type("struct.__gsl__matrix", elts);
-    GSLMatrixPtrTy = PointerType::get(GSLMatrixTy, 0);
+    GSLMatrixPtrTy = OpaquePtrTy;
   }
   {
     std::vector<llvm_const_Type*> elts;
@@ -339,7 +328,7 @@ void interpreter::init()
     elts.push_back(VoidPtrTy);		// block
     elts.push_back(int32_type());	// owner
     GSLDoubleMatrixTy = struct_type("struct.__gsl__matrix_double", elts);
-    GSLDoubleMatrixPtrTy = PointerType::get(GSLDoubleMatrixTy, 0);
+    GSLDoubleMatrixPtrTy = OpaquePtrTy;
   }
   {
     std::vector<llvm_const_Type*> elts;
@@ -350,7 +339,7 @@ void interpreter::init()
     elts.push_back(VoidPtrTy);		// block
     elts.push_back(int32_type());	// owner
     GSLComplexMatrixTy = struct_type("struct.__gsl__matrix_complex", elts);
-    GSLComplexMatrixPtrTy = PointerType::get(GSLComplexMatrixTy, 0);
+    GSLComplexMatrixPtrTy = OpaquePtrTy;
   }
   {
     std::vector<llvm_const_Type*> elts;
@@ -361,7 +350,7 @@ void interpreter::init()
     elts.push_back(VoidPtrTy);		// block
     elts.push_back(int32_type());	// owner
     GSLIntMatrixTy = struct_type("struct.__gsl__matrix_int", elts);
-    GSLIntMatrixPtrTy = PointerType::get(GSLIntMatrixTy, 0);
+    GSLIntMatrixPtrTy = OpaquePtrTy;
   }
 
   // Create the expr struct type.
@@ -398,8 +387,8 @@ void interpreter::init()
     std::vector<llvm::Type*> elts;
     elts.push_back(int32_type());
     elts.push_back(int32_type());
-    elts.push_back(PointerType::get(ExprTy, 0));
-    elts.push_back(PointerType::get(ExprTy, 0));
+    elts.push_back(OpaquePtrTy);
+    elts.push_back(OpaquePtrTy);
     ExprTy->setBody(elts);
   }
   {
@@ -433,12 +422,12 @@ void interpreter::init()
 
   // Corresponding pointer types.
 
-  ExprPtrTy = PointerType::get(ExprTy, 0);
-  ExprPtrPtrTy = PointerType::get(ExprPtrTy, 0);
-  IntExprPtrTy = PointerType::get(IntExprTy, 0);
-  DblExprPtrTy = PointerType::get(DblExprTy, 0);
-  StrExprPtrTy = PointerType::get(StrExprTy, 0);
-  PtrExprPtrTy = PointerType::get(PtrExprTy, 0);
+  ExprPtrTy = OpaquePtrTy;
+  ExprPtrPtrTy = OpaquePtrTy;
+  IntExprPtrTy = OpaquePtrTy;
+  DblExprPtrTy = OpaquePtrTy;
+  StrExprPtrTy = OpaquePtrTy;
+  PtrExprPtrTy = OpaquePtrTy;
 
   sstkvar = global_variable
     (module, ExprPtrPtrTy, false, GlobalVariable::InternalLinkage,
@@ -826,14 +815,19 @@ interpreter::interpreter(int32_t nsyms, char *syms,
   while (1) {
     sin >> f >> s_name >> s_type >> n_args;
     if (sin.fail()) break;
+    CAbiType abi_type(s_type);
     llvm_const_Type* rettype = named_type(s_type);
     vector<llvm_const_Type*> argtypes(n_args);
+    vector<CAbiType> abi_argtypes;
+    abi_argtypes.reserve(n_args);
     for (size_t i = 0; i < n_args; i++) {
       sin >> s_type;
+      abi_argtypes.push_back(CAbiType(s_type));
       argtypes[i] = named_type(s_type);
     }
     if (sin.fail() || sin.eof()) break;
-    externals[f] = ExternInfo(f, s_name, rettype, argtypes, 0);
+    externals[f] = ExternInfo(f, s_name, rettype, argtypes, abi_type,
+                              abi_argtypes, 0);
   }
   for (int32_t f = 1; f <= nsyms; f++) {
     symbol& sym = symtab.sym(f);
@@ -918,10 +912,7 @@ interpreter::~interpreter()
   if (JIT) delete JIT;
 #endif
   if (FPM) {
-#if LLVM31
-    // It seems that this is needed for LLVM 3.1 and later.
     FPM->doFinalization();
-#endif
     delete FPM;
   }
   // if this was the global interpreter, reset it now
@@ -1819,52 +1810,39 @@ static void dsp_errmsg(string name, string* msg)
     *msg = name+": Error linking dsp file";
 }
 
-// LLVM provides methods to do this, but they're not portable across LLVM
-// versions, so we do our own.
-static llvm::MemoryBuffer *get_membuf(const char *name, string *msg)
+static std::unique_ptr<llvm::MemoryBuffer>
+get_membuf(const char *name, string *msg)
 {
   using namespace llvm;
-  FILE *fp = fopen(name, "rb");
-  if (!fp) {
-    if (msg) *msg = strerror(errno);
-    return 0;
+  ErrorOr<std::unique_ptr<MemoryBuffer> > BufferOrErr =
+    MemoryBuffer::getFile(name, false, false);
+  if (!BufferOrErr) {
+    if (msg) *msg = BufferOrErr.getError().message();
+    return nullptr;
   }
-  struct stat st;
-  if (fstat(fileno(fp), &st)) {
-    if (msg) *msg = strerror(errno);
-    fclose(fp);
-    return 0;
-  }
-  size_t size = st.st_size;
-  MemoryBuffer *buf = MemoryBuffer::getNewMemBuffer(size, name);
-  if (!buf) {
-    if (msg) *msg = "Not enough memory";
-    fclose(fp);
-    return 0;
-  }
-  if (fread(const_cast<char*>(buf->getBufferStart()), size, 1, fp) < size &&
-      ferror(fp)) {
-    if (msg) *msg = strerror(errno);
-    fclose(fp);
-    delete buf;
-    return 0;
-  }
-  fclose(fp);
-  return buf;
+  return std::move(*BufferOrErr);
 }
 
-static llvm::Module *ParseBitcodeFile(llvm::MemoryBuffer *Buffer,
-				      llvm::LLVMContext& Context,
-				      std::string *ErrMsg)
+static std::unique_ptr<llvm::Module>
+ParseBitcodeFile(const llvm::MemoryBuffer& Buffer,
+		 llvm::LLVMContext& Context, std::string *ErrMsg)
 {
   using namespace llvm;
   Expected<std::unique_ptr<Module> > ModuleOrErr =
-    parseBitcodeFile(Buffer->getMemBufferRef(), Context);
+    parseBitcodeFile(Buffer.getMemBufferRef(), Context);
   if (!ModuleOrErr) {
     if (ErrMsg) *ErrMsg = toString(ModuleOrErr.takeError());
-    return 0;
+    return nullptr;
   }
-  return ModuleOrErr->release();
+  return std::move(*ModuleOrErr);
+}
+
+static bool verify_module(const llvm::Module& module, string& message)
+{
+  llvm::raw_string_ostream out(message);
+  bool invalid = llvm::verifyModule(module, &out);
+  out.flush();
+  return !invalid;
 }
 
 bool interpreter::LoadFaustDSP(bool priv, const char *name, string *msg,
@@ -1900,13 +1878,12 @@ bool interpreter::LoadFaustDSP(bool priv, const char *name, string *msg,
     // Check whether there's anything to do.
     if (declared && !modified) return true;
   }
-  MemoryBuffer *buf = get_membuf(name, msg);
+  std::unique_ptr<MemoryBuffer> buf = get_membuf(name, msg);
   if (!buf) {
     dsp_errmsg(name, msg);
     return false;
   }
-  Module *M = ParseBitcodeFile(buf, context, msg);
-  delete buf;
+  std::unique_ptr<Module> M = ParseBitcodeFile(*buf, context, msg);
   if (!M) {
     dsp_errmsg(name, msg);
     return false;
@@ -1919,7 +1896,7 @@ bool interpreter::LoadFaustDSP(bool priv, const char *name, string *msg,
   bool found = false;
   for (Module::iterator it = M->begin(), end = M->end(); it != end; ) {
     Function &f = *(it++);
-    string name = f.getName();
+    string name = f.getName().str();
     if (name.compare(0, len, buildui) == 0) {
       classname = name.substr(len);
       found = true;
@@ -1930,16 +1907,21 @@ bool interpreter::LoadFaustDSP(bool priv, const char *name, string *msg,
     // This doesn't look like a valid Faust bitcode module, bail out.
     if (msg) *msg = "Not a valid dsp file";
     dsp_errmsg(name, msg);
-    delete M;
     return false;
   }
   // Check whether getSampleRate is available.
   bool have_getSampleRate = M->getFunction("getSampleRate"+classname) != 0;
-  // Figure out whether our dsp uses float or double values.
-  Function *compute = M->getFunction("compute"+classname);
-  llvm_const_Type *type = compute->getFunctionType()->getParamType(2);
-  bool is_double = type ==
-    PointerType::get(PointerType::get(double_type(), 0), 0);
+  // Faust records the sample format in its compile options. Pointer parameter
+  // types cannot carry this information under LLVM's opaque-pointer model.
+  StringRef source = M->getSourceFileName();
+  bool has_single = source.contains("-single");
+  bool has_double = source.contains("-double");
+  if (has_single == has_double) {
+    if (msg) *msg = "Missing or ambiguous Faust sample format";
+    dsp_errmsg(name, msg);
+    return false;
+  }
+  bool is_double = has_double;
   if (loaded && modified) {
     // Do some more checking to make sure that the programmer didn't suddenly
     // change his mind about the precision of floating point data (-double
@@ -1951,16 +1933,15 @@ bool interpreter::LoadFaustDSP(bool priv, const char *name, string *msg,
       if (msg)
 	*msg = "Module was previously compiled for " + prec + " precision";
       dsp_errmsg(name, msg);
-      delete M;
       return false;
     }
   }
   // Fix up the target layout and triple set by the Faust compiler, in case
   // the dsp module was created on a different platform. (FIXME: We assume
   // that the Faust code itself is platform-agnostic.)
-  string layout = JIT->getTargetData()->getStringRepresentation(),
-    triple = HOST;
-  M->setDataLayout(layout); M->setTargetTriple(triple);
+  const DataLayout& target_layout = module->getDataLayout();
+  M->setDataLayout(target_layout);
+  M->setTargetTriple(Triple(HOST));
   // Mangle the global names of the Faust module since they are usually the
   // same for every module. XXXFIXME: Currently we leave the type names alone
   // and rely on the linker to make them unique instead. This works, but may
@@ -1971,7 +1952,7 @@ bool interpreter::LoadFaustDSP(bool priv, const char *name, string *msg,
   // Mangle the function names.
   for (Module::iterator it = M->begin(), end = M->end(); it != end; ++it) {
     Function &f = *it;
-    string name = f.getName();
+    string name = f.getName().str();
     // We always force external linkage here in order to avoid the automatic
     // renaming that the linker does for internal symbols.
     f.setLinkage(Function::ExternalLinkage);
@@ -1994,7 +1975,7 @@ bool interpreter::LoadFaustDSP(bool priv, const char *name, string *msg,
        it != end; ++it) {
     GlobalVariable &v = *it;
     if (!v.hasName()) continue;
-    string name = v.getName();
+    string name = v.getName().str();
     string vname = "$$__faust__$"+modname+"$"+name;
     v.setLinkage(GlobalVariable::ExternalLinkage);
     vars.push_back(name);
@@ -2007,13 +1988,13 @@ bool interpreter::LoadFaustDSP(bool priv, const char *name, string *msg,
     list<GlobalVariable*>& varptrs = data.varptrs;
     for (list<Function*>::iterator f = funptrs.begin();
 	 f != funptrs.end(); ++f) {
-      string fname = (*f)->getName();
+      string fname = (*f)->getName().str();
       (*f)->dropAllReferences();
       JIT->freeMachineCodeForFunction(*f);
     }
     for (list<GlobalVariable*>::iterator v = varptrs.begin();
 	 v != varptrs.end(); ++v) {
-      string vname = (*v)->getName();
+      string vname = (*v)->getName().str();
       (*v)->dropAllReferences();
       // XXXFIXME: Do we have to free the pointer returned by
       // updateGlobalMapping() here?
@@ -2026,16 +2007,17 @@ bool interpreter::LoadFaustDSP(bool priv, const char *name, string *msg,
   }
   // Link the mangled module into the Pure module. This only needs to be done
   // if the module was modified.
-  if (modified && Linker::LinkModules(module, M,
-#ifdef LLVM30
-				      Linker::DestroySource,
-#endif
-				      msg)) {
-    delete M;
+  if (modified && Linker::linkModules(*module, std::move(M))) {
+    if (msg && msg->empty()) *msg = "Error linking dsp module";
     dsp_errmsg(name, msg);
     return false;
   }
-  delete M;
+  string verification_error;
+  if (modified && !verify_module(*module, verification_error)) {
+    if (msg) *msg = "Invalid linked dsp module: "+verification_error;
+    dsp_errmsg(name, msg);
+    return false;
+  }
   // Add some convenience functions.
   list<string> myfuns;
   myfuns.push_back("newinit");
@@ -2063,7 +2045,7 @@ bool interpreter::LoadFaustDSP(bool priv, const char *name, string *msg,
 	(b.CreateICmpNE
 	 (v, ConstantPointerNull::get(dyn_cast<PointerType>(dsp_ty)), "cmp"),
 	 okbb, skipbb);
-      f->getBasicBlockList().push_back(okbb);
+      okbb->insertInto(f);
       b.SetInsertPoint(okbb);
       // Call init.
       args.push_back(v);
@@ -2072,7 +2054,7 @@ bool interpreter::LoadFaustDSP(bool priv, const char *name, string *msg,
       b.CreateCall(initfun, mkargs(args));
       b.CreateBr(skipbb);
       // Return the result.
-      f->getBasicBlockList().push_back(skipbb);
+      skipbb->insertInto(f);
       b.SetInsertPoint(skipbb);
       b.CreateRet(v);
     }
@@ -2132,7 +2114,7 @@ bool interpreter::LoadFaustDSP(bool priv, const char *name, string *msg,
       // "cast" the char array to a char*
       Value *idx[2] = { ConstantInt::get(interpreter::int32_type(), 0),
 			ConstantInt::get(interpreter::int32_type(), 0) };
-      Value *p = b.CreateGEP(w, mkidxs(idx, idx+2));
+      Value *p = b.CreateGEP(w->getValueType(), w, mkidxs(idx, idx+2));
       args.clear();
       args.push_back(n_in);
       args.push_back(n_out);
@@ -2206,7 +2188,7 @@ bool interpreter::LoadFaustDSP(bool priv, const char *name, string *msg,
       BasicBlock *bb = basic_block("entry", f);
       Builder b(context);
       b.SetInsertPoint(bb);
-      Value *v = b.CreateLoad(sr);
+      Value *v = b.CreateLoad(sr->getValueType(), sr);
       b.CreateRet(v);
     }
   }
@@ -2276,9 +2258,10 @@ bool interpreter::LoadFaustDSP(bool priv, const char *name, string *msg,
     size_t n = ft->getNumParams();
     vector<llvm_const_Type*> argt(n);
     for (size_t i = 0; i < n; i++) argt[i] = ft->getParamType(i);
-    string restype = dsptype_name(rest);
+    string restype = dsptype_name(*it, rest, 0, true, is_double);
     list<string> argtypes;
-    for (size_t i = 0; i < n; i++) argtypes.push_back(dsptype_name(argt[i]));
+    for (size_t i = 0; i < n; i++)
+      argtypes.push_back(dsptype_name(*it, argt[i], i, false, is_double));
     if (loaded && modified) {
       /* There's no need to actually regenerate the wrapper, we only have to
          patch up the function pointer here. */
@@ -2352,13 +2335,12 @@ bool interpreter::LoadBitcode(bool priv, const char *name, string *msg)
     // Check whether there's anything to do.
     if (declared) return true;
   }
-  MemoryBuffer *buf = get_membuf(name, msg);
+  std::unique_ptr<MemoryBuffer> buf = get_membuf(name, msg);
   if (!buf) {
     bc_errmsg(name, msg);
     return false;
   }
-  Module *M = ParseBitcodeFile(buf, context, msg);
-  delete buf;
+  std::unique_ptr<Module> M = ParseBitcodeFile(*buf, context, msg);
   if (!M) {
     bc_errmsg(name, msg);
     return false;
@@ -2368,8 +2350,9 @@ bool interpreter::LoadBitcode(bool priv, const char *name, string *msg)
   // mismatches in the target triple and just assume that bitcode files are ok
   // if the data layouts match. Not sure whether this assumption is always
   // valid.
-  string layout = JIT->getTargetData()->getStringRepresentation(),
-    triple = HOST;
+  const DataLayout& target_layout = module->getDataLayout();
+  const string layout = target_layout.getStringRepresentation();
+  const Triple target_triple(HOST);
   // We only give diagnostics on first load, to prevent a cascade of error
   // messages.
 #if 0
@@ -2381,30 +2364,21 @@ bool interpreter::LoadBitcode(bool priv, const char *name, string *msg)
     return false;
   }
 #endif
-#if LLVM35
-  if (!loaded && !M->getDataLayoutStr().empty() && M->getDataLayoutStr() != layout) {
-#else
-  if (!loaded && !M->getDataLayout().empty() && M->getDataLayout() != layout) {
-#endif
-    // Clang 2.9 has some minor mismatches with the JIT data layout (bug?),
-    // which are irrelevant for our purposes, so for the time being we just
-    // check endianness and pointer sizes here.
-    const TargetData &jit_dl = *JIT->getTargetData(), mod_dl = TargetData(M);
-    if (jit_dl.isLittleEndian() != mod_dl.isLittleEndian() ||
-	jit_dl.getPointerSize() != mod_dl.getPointerSize()) {
+  if (!loaded && !M->getDataLayoutStr().empty() &&
+      M->getDataLayoutStr() != layout) {
+    // Some producers have minor layout string differences which are irrelevant
+    // here, so compare endianness and pointer size before rejecting the module.
+    const DataLayout& module_layout = M->getDataLayout();
+    if (target_layout.isLittleEndian() != module_layout.isLittleEndian() ||
+	target_layout.getPointerSize() != module_layout.getPointerSize()) {
       if (msg)
-	*msg = "Mismatch in data layout '"+
-#if LLVM35
-	  M->getDataLayoutStr()
-#else
-	  M->getDataLayout()
-#endif
-	  +"'";
+	*msg = "Mismatch in data layout '"+M->getDataLayoutStr()+"'";
       bc_errmsg(name, msg);
       return false;
     }
   }
-  M->setDataLayout(layout); M->setTargetTriple(triple);
+  M->setDataLayout(target_layout);
+  M->setTargetTriple(target_triple);
   // Build a list of the external functions of the module so that we can wrap
   // them later.
   list<string> funs;
@@ -2412,21 +2386,22 @@ bool interpreter::LoadBitcode(bool priv, const char *name, string *msg)
     Function &f = *(it++);
     if (!f.isDeclaration() &&
 	f.getLinkage() == Function::ExternalLinkage) {
-      funs.push_back(f.getName());
+      funs.push_back(f.getName().str());
     }
   }
   // Link the bitcode module into the Pure module. This only needs to be done
   // if the module wasnd't loaded before.
-  if (!loaded && Linker::LinkModules(module, M,
-#ifdef LLVM30
-				     Linker::DestroySource,
-#endif
-				     msg)) {
-    delete M;
+  if (!loaded && Linker::linkModules(*module, std::move(M))) {
+    if (msg && msg->empty()) *msg = "Error linking bitcode module";
     bc_errmsg(name, msg);
     return false;
   }
-  delete M;
+  string verification_error;
+  if (!loaded && !verify_module(*module, verification_error)) {
+    if (msg) *msg = "Invalid linked bitcode module: "+verification_error;
+    bc_errmsg(name, msg);
+    return false;
+  }
   // Create wrappers.
   for (list<string>::iterator it = funs.begin(), end = funs.end();
        it != end; ++it) {
@@ -2717,9 +2692,7 @@ void interpreter::inline_code(bool priv, string &code)
       asmargs = strdup(args);
       const char *t = "-emit-llvm -c";
       char *s = strstr(asmargs, t);
-#pragma GCC diagnostic ignored "-Wstringop-truncation"
-      if (s) strncpy(s, "-flto      -S", strlen(t));
-#pragma GCC diagnostic warning "-Wstringop-truncation"
+      if (s) memcpy(s, "-flto      -S", strlen(t));
       args = asmargs;
     }
     string fname = nm, bcname = string(fnm)+ext, bcname2 = string(fnm)+".bc",
@@ -3707,7 +3680,7 @@ pure_expr *interpreter::const_defn(expr pat, expr& x, pure_expr*& e)
       state *start = m.start;
       simple_match(arg, start, matchedbb, failedbb);
       // matched => emit code for binding the variables
-      f.f->getBasicBlockList().push_back(matchedbb);
+      matchedbb->insertInto(f.f);
       f.builder.SetInsertPoint(matchedbb);
       if (!vi.guards.empty()) {
 	// verify guards
@@ -3722,7 +3695,7 @@ pure_expr *interpreter::const_defn(expr pat, expr& x, pure_expr*& e)
 	    f.builder.CreateCall(module->getFunction("pure_safe_typecheck"),
 				 mkargs(args));
 	  f.builder.CreateCondBr(check, checkedbb, failedbb);
-	  f.f->getBasicBlockList().push_back(checkedbb);
+	  checkedbb->insertInto(f.f);
 	  f.builder.SetInsertPoint(checkedbb);
 	}
       }
@@ -3737,7 +3710,7 @@ pure_expr *interpreter::const_defn(expr pat, expr& x, pure_expr*& e)
 	  Value *check = f.builder.CreateCall(module->getFunction("same"),
 					      mkargs(args));
 	  f.builder.CreateCondBr(check, checkedbb, failedbb);
-	  f.f->getBasicBlockList().push_back(checkedbb);
+	  checkedbb->insertInto(f.f);
 	  f.builder.SetInsertPoint(checkedbb);
 	}
       }
@@ -3759,7 +3732,7 @@ pure_expr *interpreter::const_defn(expr pat, expr& x, pure_expr*& e)
       // return the matchee to indicate success
       f.builder.CreateRet(arg);
       // failed => throw an exception
-      f.f->getBasicBlockList().push_back(failedbb);
+      failedbb->insertInto(f.f);
       f.builder.SetInsertPoint(failedbb);
       unwind();
       fun_finish();
@@ -10222,6 +10195,16 @@ using namespace llvm;
 #include <sstream>
 #include <time.h>
 
+static LoadInst *create_load_gep(Builder& builder, Type *source_type,
+				 Value *pointer, ArrayRef<Value*> indices,
+				 const Twine& name = "")
+{
+  Type *load_type = GetElementPtrInst::getIndexedType(source_type, indices);
+  assert(load_type);
+  Value *address = builder.CreateGEP(source_type, pointer, indices);
+  return builder.CreateLoad(load_type, address, name);
+}
+
 static inline bool is_c_sym(const string& name)
 {
   return name=="main" || sys::DynamicLibrary::SearchForAddressOfSymbol(name);
@@ -10236,10 +10219,10 @@ static string mkvarsym(const string& name)
     return name;
 }
 
-static inline bool is_init(const string& name)
+static inline bool is_init(llvm::StringRef name)
 {
-  return name.compare(0, 6, "$$init") == 0 &&
-    name.find_first_not_of("0123456789", 6) == string::npos;
+  return name.starts_with("$$init") &&
+    name.find_first_not_of("0123456789", 6) == llvm::StringRef::npos;
 }
 
 static inline bool is_type(const string& name)
@@ -10247,14 +10230,14 @@ static inline bool is_type(const string& name)
   return name.compare(0, 7, "$$type.") == 0;
 }
 
-static inline bool is_faust(const string& name)
+static inline bool is_faust(llvm::StringRef name)
 {
-  return name.compare(0, 8, "$$faust$") == 0;
+  return name.starts_with("$$faust$");
 }
 
-static inline bool is_faust_internal(const string& name)
+static inline bool is_faust_internal(llvm::StringRef name)
 {
-  return name.compare(0, 12, "$$__faust__$") == 0;
+  return name.starts_with("$$__faust__$");
 }
 
 static inline string faust_basename(const string& name)
@@ -10324,51 +10307,7 @@ static string& quote(string& s)
 #define DEBUG_USED 0
 #define DEBUG_UNUSED 0
 
-/* LLVM >= 2.6 raw_ostream compatibility. This is a mess. */
 
-// Use this to force the raw_ostream interface with LLVM <= 2.5.
-//#define RAW_STREAM 1
-#if !RAW_STREAM
-#define RAW_STREAM LLVM26
-#endif
-
-#if RAW_STREAM
-#if LLVM26
-#define ostream_error(os) os.has_error()
-#define ostream_clear_error(os) os.clear_error()
-#else
-// LLVM <= 2.5 doesn't have these methods.
-#define ostream_error(os) (0)
-#define ostream_clear_error(os) 
-#endif
-#else
-// !RAW_STREAM: Use the simple old std::ostream interface.
-#define ostream_error(os) os.fail()
-#define ostream_clear_error(os) os.clear()
-#endif
-
-#if NEW_OSTREAM34 && LLVM35
-#define NEW_OSTREAM35 1
-#endif
-
-#if NEW_OSTREAM35 // LLVM 3.5 cosmetic changes
-#include <llvm/Support/FileSystem.h>
-#define new_raw_fd_ostream(s,binary,msg) new llvm::raw_fd_ostream(s,msg,(binary)?llvm::sys::fs::F_None:llvm::sys::fs::F_Text)
-#else
-#if NEW_OSTREAM34 // LLVM 3.4 cosmetic changes
-#define new_raw_fd_ostream(s,binary,msg) new llvm::raw_fd_ostream(s,msg,(binary)?llvm::sys::fs::F_Binary:llvm::sys::fs::F_None)
-#else
-#if NEW_OSTREAM // LLVM >= 2.7 takes an enumeration as the last parameter
-#define new_raw_fd_ostream(s,binary,msg) new llvm::raw_fd_ostream(s,msg,(binary)?llvm::raw_fd_ostream::F_Binary:0)
-#else
-#if LLVM26 // LLVM 2.6 takes two flags (Binary, Force)
-#define new_raw_fd_ostream(s,binary,msg) new llvm::raw_fd_ostream(s,binary,1,msg)
-#else // LLVM 2.5 and earlier only have the Binary flag
-#define new_raw_fd_ostream(s,binary,msg) new llvm::raw_fd_ostream(s,binary,msg)
-#endif
-#endif
-#endif
-#endif
 
 void interpreter::check_used(set<Function*>& used,
 			     map<GlobalVariable*,Function*>& varmap)
@@ -10582,38 +10521,25 @@ int interpreter::compiler(string out, list<string> libnames, string llcopts)
      between different batch-compiled modules, but hopefully isn't too much of
      an obstacle in cases where the --main option is needed. */
   setlocale(LC_ALL, "C");
-#if RAW_STREAM
-  // As of LLVM 2.7 (svn), these need to be wrapped up in a raw_ostream.
-  string error;
-  // Note: raw_fd_ostream already handles "-".
+  std::error_code error;
+  llvm::sys::fs::OpenFlags flags =
+    bc_target ? llvm::sys::fs::OF_None : llvm::sys::fs::OF_Text;
+  // raw_fd_ostream handles "-" as standard output.
   llvm::raw_fd_ostream *codep =
-    new_raw_fd_ostream(target.c_str(),bc_target,error);
-  if (!error.empty()) {
-    std::cerr << "Error opening " << target << '\n';
+    new llvm::raw_fd_ostream(target, error, flags);
+  if (error) {
+    std::cerr << "Error opening " << target << ": " << error.message() << '\n';
     exit(1);
   }
   llvm::raw_fd_ostream &code = *codep;
-#else
-  std::ostream *codep =
-    bc_target?
-    new std::ofstream(target.c_str(), ios_base::out | ios_base::binary):
-    file_target?
-    new std::ofstream(target.c_str(), ios_base::out):
-    &std::cout;
-  std::ostream &code = *codep;
-#endif
   if (!file_target) out = target = "<stdout>";
-  if (ostream_error(code)) {
+  if (code.has_error()) {
     std::cerr << "Error opening " << target << '\n';
     exit(1);
   }
-  // Set the module data layout and triple for the target. FIXME: Maybe we
-  // should allow overriding these, but the user can also use the LLVM
-  // toolchain to cross-compile for different architectures.
-  string layout = JIT->getTargetData()->getStringRepresentation(),
-    triple = HOST;
-  module->setDataLayout(layout);
-  module->setTargetTriple(triple);
+  // The module already carries the JIT data layout established during
+  // initialization. Set the native target triple for batch output.
+  module->setTargetTriple(Triple(HOST));
   Function *initfun = module->getFunction("pure_interp_main");
   Function *freefun = module->getFunction("pure_freenew");
   // Eliminate unused functions.
@@ -10661,7 +10587,7 @@ int interpreter::compiler(string out, list<string> libnames, string llcopts)
       v.setLinkage(GlobalVariable::InternalLinkage);
     // While we're at it, also check for variables pointing to Faust functions
     // and update their initializations.
-    string name = v.getName();
+    string name = v.getName().str();
     if (is_faust_var(name)) {
       Function *f = module->getFunction(name.substr(1));
       assert(f);
@@ -10754,10 +10680,16 @@ int interpreter::compiler(string out, list<string> libnames, string llcopts)
 	    ExternInfo& info = kt->second;
 	    if (!strip || used.find(info.f) != used.end()) {
 	      externs[f] = ConstantExpr::getPointerCast(info.f, VoidPtrTy);
-	      sout << info.tag << " " << info.name << " " << type_name(info.type)
+	      sout << info.tag << " " << info.name << " "
+                   << (info.abi_type.name.empty() ? type_name(info.type)
+                                                  : info.abi_type.name)
 		   << " " << info.argtypes.size();
 	      for (size_t i = 0; i < info.argtypes.size(); i++)
-		sout << " " << type_name(info.argtypes[i]);
+		sout << " "
+                     << (i < info.abi_argtypes.size() &&
+                         !info.abi_argtypes[i].name.empty()
+                         ? info.abi_argtypes[i].name
+                         : type_name(info.argtypes[i]));
 	      sout << '\n';
 	      vars[f] = v.v;
 	    }
@@ -10816,14 +10748,22 @@ int interpreter::compiler(string out, list<string> libnames, string llcopts)
   args.push_back(a++);
   args.push_back(a++);
   args.push_back(SInt(n));
-  args.push_back(b.CreateGEP(syms, mkidxs(idx, idx+2)));
-  args.push_back(b.CreateBitCast(b.CreateGEP(vvars, mkidxs(idx, idx+2)),
-				 VoidPtrTy));
-  args.push_back(b.CreateBitCast(b.CreateGEP(vvals, mkidxs(idx, idx+2)),
-				 VoidPtrTy));
-  args.push_back(b.CreateGEP(varity, mkidxs(idx, idx+2)));
-  args.push_back(b.CreateBitCast(b.CreateGEP(vexterns, mkidxs(idx, idx+2)),
-				 VoidPtrTy));
+  args.push_back
+    (b.CreateGEP(syms->getValueType(), syms, mkidxs(idx, idx+2)));
+  args.push_back
+    (b.CreateBitCast
+     (b.CreateGEP(vvars->getValueType(), vvars, mkidxs(idx, idx+2)),
+      VoidPtrTy));
+  args.push_back
+    (b.CreateBitCast
+     (b.CreateGEP(vvals->getValueType(), vvals, mkidxs(idx, idx+2)),
+      VoidPtrTy));
+  args.push_back
+    (b.CreateGEP(varity->getValueType(), varity, mkidxs(idx, idx+2)));
+  args.push_back
+    (b.CreateBitCast
+     (b.CreateGEP(vexterns->getValueType(), vexterns, mkidxs(idx, idx+2)),
+      VoidPtrTy));
   args.push_back(b.CreateBitCast(sstkvar, VoidPtrTy));
   args.push_back(b.CreateBitCast(fptrvar, VoidPtrTy));
   b.CreateCall(initfun, mkargs(args));
@@ -10853,7 +10793,7 @@ int interpreter::compiler(string out, list<string> libnames, string llcopts)
        "$$str");
     // "cast" the char array to a char*
     Value *idx[2] = { Zero, Zero };
-    Value *p = b.CreateGEP(v, mkidxs(idx, idx+2));
+    Value *p = b.CreateGEP(v->getValueType(), v, mkidxs(idx, idx+2));
     argv[0] = p;
     argv[1] = SInt(tag);
     b.CreateCall(pure_rttifun, mkargs(argv));
@@ -10871,7 +10811,7 @@ int interpreter::compiler(string out, list<string> libnames, string llcopts)
        "$$faust_str");
     // "cast" the char array to a char*
     Value *idx[2] = { Zero, Zero };
-    Value *p = b.CreateGEP(v, mkidxs(idx, idx+2));
+    Value *p = b.CreateGEP(v->getValueType(), v, mkidxs(idx, idx+2));
     argv[0] = p;
     argv[1] = SInt(info.tag);
     argv[2] = Bool(info.dbl);
@@ -10896,9 +10836,12 @@ int interpreter::compiler(string out, list<string> libnames, string llcopts)
   }
   b.CreateRet(0);
   verifyFunction(*main);
+  string verification_error;
+  if (!verify_module(*module, verification_error))
+    throw err("invalid LLVM module: "+verification_error);
   // Emit output code (either LLVM assembler or bitcode).
   if (bc_target) {
-    WriteBitcodeToFile(module, code);
+    WriteBitcodeToFile(*module, code);
   } else {
     // Print a module header showing some useful information.
     time_t t; time(&t);
@@ -10906,16 +10849,12 @@ int interpreter::compiler(string out, list<string> libnames, string llcopts)
 	 << LLVM_VERSION << ") " << ctime(&t);
     module->print(code, 0);
   }
-  if (ostream_error(code)) {
+  if (code.has_error()) {
     std::cerr << "Error writing " << target << '\n';
     exit(1);
   }
-  ostream_clear_error(code);
-#if RAW_STREAM
+  code.clear_error();
   delete codep;
-#else
-  if (codep != &std::cout) delete codep;
-#endif
   // Compile and link, if requested.
   if (target != out) {
     assert(bc_target);
@@ -11093,15 +11032,53 @@ void interpreter::defn(int32_t tag, pure_expr *x, bool deprecated)
   restore_globals(g);
 }
 
+CAbiType::CAbiType(const string& type_name)
+  : base(unknown), pointer_depth(0)
+{
+  string base_name = type_name;
+  while (!base_name.empty() && base_name[base_name.size()-1] == '*') {
+    ++pointer_depth;
+    base_name.erase(base_name.size()-1);
+  }
+
+  if (base_name == "int8") base_name = "char";
+  else if (base_name == "int16") base_name = "short";
+  else if (base_name == "int32") base_name = "int";
+
+  if (base_name == "void") base = void_;
+  else if (base_name == "bool") base = boolean;
+  else if (base_name == "char") base = character;
+  else if (base_name == "short") base = short_integer;
+  else if (base_name == "int") base = integer;
+  else if (base_name == "int64") base = integer64;
+  else if (base_name == "long") base = long_integer;
+  else if (base_name == "size_t") base = size;
+  else if (base_name == "float") base = single;
+  else if (base_name == "double") base = double_;
+  else if (base_name == "expr") base = expression;
+  else if (base_name == "matrix") base = matrix;
+  else if (base_name == "dmatrix") base = double_matrix;
+  else if (base_name == "cmatrix") base = complex_matrix;
+  else if (base_name == "imatrix") base = integer_matrix;
+  else base = custom;
+
+  name = base_name;
+  name.append(pointer_depth, '*');
+}
+
 ostream &operator<< (ostream& os, const ExternInfo& info)
 {
   interpreter& interp = *interpreter::g_interp;
   string name = faust_basename(info.name);
-  os << "extern " << interp.type_name(info.type) << " " << name << "(";
+  const string& result_name = info.abi_type.name;
+  os << "extern "
+     << (result_name.empty() ? interp.type_name(info.type) : result_name)
+     << " " << name << "(";
   size_t n = info.argtypes.size();
   for (size_t i = 0; i < n; i++) {
     if (i > 0) os << ", ";
-    os << interp.type_name(info.argtypes[i]);
+    os << (i < info.abi_argtypes.size() && !info.abi_argtypes[i].name.empty()
+           ? info.abi_argtypes[i].name : interp.type_name(info.argtypes[i]));
   }
   if (info.varargs) os << ((n>0)?", ...":"...");
   os << ")";
@@ -11390,23 +11367,12 @@ ReturnInst *Env::CreateRet(Value *v, const rule *rp)
 	    free_fun = interp.module->getFunction("pure_pop_tail_args");
 	    free1_fun = interp.module->getFunction("pure_pop_tail_arg");
 	    /* Patch up this call to correct the offset of the environment. */
-#if LLVM27
 	    CallInst *c2 = cast<CallInst>(c1->clone());
-#else
-	    CallInst *c2 = c1->clone(
-#if LLVM26
-				     pure_llvm_context()
-#endif
-				     );
-#endif
-	    c1->getParent()->getInstList().insert(c1, c2);
-#ifdef NEW_BUILDER
-	    Value *v = BinaryOperator::CreateSub(c2, UInt(n+m+1), "", c1);
-#else
-	    Value *v = BinaryOperator::createSub(c2, UInt(n+m+1), "", c1);
-#endif
-	    BasicBlock::iterator ii(c1);
-	    ReplaceInstWithValue(c1->getParent()->getInstList(), ii, v);
+	    c2->insertBefore(c1->getIterator());
+	    Value *v = BinaryOperator::CreateSub
+	      (c2, UInt(n+m+1), "", c1->getIterator());
+	    BasicBlock::iterator ii = c1->getIterator();
+	    ReplaceInstWithValue(ii, v);
 	  }
 	}
       }
@@ -11430,7 +11396,7 @@ ReturnInst *Env::CreateRet(Value *v, const rule *rp)
       myargs.push_back(v);
     else
       myargs.push_back(ConstantPointerNull::get(interp.ExprPtrTy));
-    CallInst::Create(free1_fun, mkargs(myargs), "", pi);
+    CallInst::Create(free1_fun, mkargs(myargs), "", pi->getIterator());
   } else if (n+m != 0 || !interp.debugging) {
     vector<Value*> myargs;
     if (pi == ret)
@@ -11439,7 +11405,7 @@ ReturnInst *Env::CreateRet(Value *v, const rule *rp)
       myargs.push_back(ConstantPointerNull::get(interp.ExprPtrTy));
     myargs.push_back(UInt(n));
     myargs.push_back(UInt(m));
-    CallInst::Create(free_fun, mkargs(myargs), "", pi);
+    CallInst::Create(free_fun, mkargs(myargs), "", pi->getIterator());
   }
   return ret;
 }
@@ -11902,79 +11868,7 @@ int32_t interpreter::find_hash(Env *e)
   return 0; // not found
 }
 
-llvm_const_Type *interpreter::make_pointer_type(const string& name)
-{
-  type_map::iterator it = pointer_types.find(name);
-  if (it == pointer_types.end()) {
-    string namestr = (name.size()>0 && name[name.size()-1]=='*') ?
-      name.substr(0, name.size()-1) : name;
-    llvm_const_Type *ty = opaque_type(namestr.c_str());
-    pointer_types[name] = PointerType::get(ty, 0);
-    it = pointer_types.find(name);
-    assert(it != pointer_types.end());
-    pointer_type_of[ty] = it;
-  }
-  return it->second;
-}
 
-string mangle_type_name(string name)
-{
-  /* Type names in LLVM bitcode may well contain special characters not
-     permitted in identifiers, so we mangle them here. (This is very
-     simplistic and may easily map different bitcode names into the same
-     identifier. Oh well.) */
-  if (name.empty() || isdigit(name[0]))
-    // Probably a temporary name, we don't want those.
-    return "";
-  for (size_t i = 0, n = name.size(); i < n; i++)
-    if (!isalnum(name[i]))
-      name[i] = '_';
-  return name;
-}
-
-string interpreter::pointer_type_name(llvm_const_Type *type)
-{
-  assert(is_pointer_type(type));
-  llvm_const_Type *elem_type = type->getContainedType(0);
-  if (is_pointer_type(elem_type)) {
-    llvm_const_Type *ty = elem_type->getContainedType(0);
-    map<llvm_const_Type*,type_map::iterator>::const_iterator it =
-      pointer_type_of.find(ty);
-    if (it != pointer_type_of.end())
-      return it->second->first+"*";
-  }
-  map<llvm_const_Type*,type_map::iterator>::const_iterator it =
-    pointer_type_of.find(elem_type);
-  if (it != pointer_type_of.end())
-    return it->second->first;
-  /* This is an unknown pointer type, presumably from a bitcode file. Let's
-     count the levels of indirection to get the number of *'s right. */
-  size_t count = 1;
-  while (is_pointer_type(elem_type)) {
-    elem_type = elem_type->getContainedType(0);
-    count++;
-  }
-  /* What remains is a non-pointer type, which we consider irreducible. Try to
-     resolve that recursively, to get our name for it. If that doesn't work,
-     check whether the bitcode file has a name for it. If that doesn't work
-     either then just give up and assume "void". */
-  string name = type_name(elem_type);
-  if (name == "<unknown C type>") {
-#if LLVM30
-    name.clear();
-    if (elem_type->isStructTy()) {
-      StructType *ty = (StructType*)elem_type;
-      if (ty->hasName()) name = ty->getName();
-    }
-#else
-    name = module->getTypeName(elem_type);
-#endif
-    name = mangle_type_name(name);
-    if (name.empty()) name = "void";
-  }
-  name.append(count, '*');
-  return name;
-}
 
 int interpreter::pointer_type_tag(const string& name)
 {
@@ -12012,75 +11906,9 @@ llvm_const_Type *interpreter::named_type(string name)
     return float_type();
   else if (name == "double")
     return double_type();
-  else if (name == "char*" || name == "int8*")
-    return CharPtrTy;
-  else if (name == "short*" || name == "int16*")
-    return PointerType::get(int16_type(), 0);
-  else if (name == "int*" || name == "int32*")
-    return PointerType::get(int32_type(), 0);
-  else if (name == "int64*")
-    return PointerType::get(int64_type(), 0);
-  else if (name == "long*")
-    return PointerType::get(long_type(), 0);
-  else if (name == "size_t*")
-    return PointerType::get(size_t_type(), 0);
-  else if (name == "float*")
-    return PointerType::get(float_type(), 0);
-  else if (name == "double*")
-    return PointerType::get(double_type(), 0);
-  else if (name == "void**")
-    return PointerType::get(VoidPtrTy, 0);
-  else if (name == "char**")
-    return PointerType::get(CharPtrTy, 0);
-  else if (name == "short**" || name == "int16**")
-    return PointerType::get(PointerType::get(int16_type(), 0), 0);
-  else if (name == "int**" || name == "int32**")
-    return PointerType::get(PointerType::get(int32_type(), 0), 0);
-  else if (name == "float**")
-    return PointerType::get(PointerType::get(float_type(), 0), 0);
-  else if (name == "double**")
-    return PointerType::get(PointerType::get(double_type(), 0), 0);
-  else if (name == "expr*")
-    return ExprPtrTy;
-  else if (name == "expr**")
-    return ExprPtrPtrTy;
-  else if (name == "matrix*")
-    return GSLMatrixPtrTy;
-  else if (name == "dmatrix*")
-    return GSLDoubleMatrixPtrTy;
-  else if (name == "cmatrix*")
-    return GSLComplexMatrixPtrTy;
-  else if (name == "imatrix*")
-    return GSLIntMatrixPtrTy;
-  else if (name == "void*")
-    return VoidPtrTy;
-  else if (name.size() > 0 && name[name.size()-1] == '*') {
-    // Generic pointer type. First normalize this a bit, then create a
-    // placeholder type which uniquely identifies the type.
-    size_t pos = name.find_last_not_of('*');
-    if (pos != string::npos) {
-      string ptr = name.substr(pos+1);
-      name.erase(pos+1);
-      if (name == "int8")
-	name = "char";
-      else if (name == "int16")
-	name = "short";
-      else if (name == "int32")
-	name = "int";
-#if SIZEOF_LONG==8
-      else if (name == "int64")
-	name = "long";
-#endif
-      name += ptr;
-    }
-    if (name.size() > 1 && name[name.size()-2] == '*')
-      // generic pointer to pointer (effectively treated as void**)
-      return PointerType::get
-	(make_pointer_type(name.substr(0, name.size()-1)), 0);
-    else
-      // simple pointer type (effectively treated as void*)
-      return make_pointer_type(name);
-  } else
+  else if (CAbiType(name).is_pointer())
+    return PointerType::get(context, 0);
+  else
     throw err("unknown C type '"+name+"'");
 }
 
@@ -12114,149 +11942,49 @@ string interpreter::type_name(llvm_const_Type *type)
     return "float";
   else if (type == double_type())
     return "double";
-  else if (type == CharPtrTy)
-    return "char*";
-  else if (type == PointerType::get(int16_type(), 0))
-    return "short*";
-  else if (type == PointerType::get(int32_type(), 0))
-    return "int*";
-  else if (type == PointerType::get(int64_type(), 0))
-#if SIZEOF_LONG==8
-    return "long*";
-#else
-    return "int64*";
-#endif
-  else if (type == PointerType::get(float_type(), 0))
-    return "float*";
-  else if (type == PointerType::get(double_type(), 0))
-    return "double*";
-  else if (type == PointerType::get(VoidPtrTy, 0))
-    return "void**";
-  else if (type == PointerType::get(CharPtrTy, 0))
-    return "char**";
-  else if (type == PointerType::get(PointerType::get(int16_type(), 0), 0))
-    return "short**";
-  else if (type == PointerType::get(PointerType::get(int32_type(), 0), 0))
-    return "int**";
-  else if (type == PointerType::get(PointerType::get(float_type(), 0), 0))
-    return "float**";
-  else if (type == PointerType::get(PointerType::get(double_type(), 0), 0))
-    return "double**";
-  else if (type == ExprPtrTy)
-    return "expr*";
-  else if (type == ExprPtrPtrTy)
-    return "expr**";
-  else if (type == GSLMatrixPtrTy)
-    return "matrix*";
-  else if (type == GSLDoubleMatrixPtrTy)
-    return "dmatrix*";
-  else if (type == GSLComplexMatrixPtrTy)
-    return "cmatrix*";
-  else if (type == GSLIntMatrixPtrTy)
-    return "imatrix*";
-  else if (is_pointer_type(type))
-    return pointer_type_name(type);
   else
+    // Opaque pointers carry no C pointee type or pointer depth.
     return "<unknown C type>";
-}
-
-llvm_const_Type *interpreter::gslmatrix_type(llvm_const_Type *elem_ty,
-					     llvm_const_Type *block_ty,
-					     size_t padding)
-{
-  if (!elem_ty || !block_ty) return 0;
-  std::vector<llvm_const_Type*> elts;
-  elts.push_back(size_t_type());			// size1
-  elts.push_back(size_t_type());			// size2
-  elts.push_back(size_t_type());			// tda
-  elts.push_back(PointerType::get(elem_ty, 0));		// data
-  elts.push_back(PointerType::get(block_ty, 0));	// block
-  elts.push_back(int32_type());				// owner
-  if (padding>0)
-    elts.push_back(array_type(int8_type(), padding));	// padding (64 bit)
-  return struct_type(elts);
-}
-
-static bool struct_type_eq(llvm_const_Type *type, llvm_const_Type *type2)
-{
-  if (type == type2) return true;
-#ifdef LLVM30
-  if (!type || !type2) return false;
-  if ((dyn_cast<StructType>(type))->isLayoutIdentical
-      (dyn_cast<StructType>(type2)))
-    return true;
-#endif
-  return false;
 }
 
 string interpreter::bctype_name(llvm_const_Type *type)
 {
-  /* This is basically like type_name above, but we need to give special
-     treatment to some pointer types (Pure expressions, GSL matrices) which
-     may have different representations when coming from an external bitcode
-     file. */
-  if (is_pointer_type(type)) {
-    llvm_const_Type *elem_type = type->getContainedType(0);
-    if (is_struct_type(elem_type)) {
-      /* XXXFIXME: These checks really need to be rewritten so that they're
-	 less compiler-specific. Currently they only work with recent
-	 llvm-gcc, clang and dragonegg versions. */
-      // Special support for Pure expression pointers, passed through
-      // unchanged.
-      if (elem_type == module->getTypeByName("struct.pure_expr") ||
-	  elem_type == module->getTypeByName("struct._pure_expr"))
-	return "expr*";
-      // Special support for the GSL matrix types.
-      else if (elem_type == module->getTypeByName("struct.gsl_matrix") ||
-	       elem_type == module->getTypeByName("struct._gsl_matrix") ||
-	       struct_type_eq
-	       (elem_type, gslmatrix_type
-		(double_type(),
-		 module->getTypeByName("struct.gsl_block_struct"))) ||
-	       struct_type_eq
-	       (elem_type, gslmatrix_type
-		(double_type(),
-		 module->getTypeByName("struct.gsl_block_struct"), 4)))
-	return "dmatrix*";
-      else if (elem_type == module->getTypeByName("struct.gsl_matrix_int") ||
-	       elem_type == module->getTypeByName("struct._gsl_matrix_int") ||
-	       struct_type_eq
-	       (elem_type, gslmatrix_type
-		(int32_type(),
-		 module->getTypeByName("struct.gsl_block_int_struct"))) ||
-	       struct_type_eq
-	       (elem_type, gslmatrix_type
-		(int32_type(),
-		 module->getTypeByName("struct.gsl_block_int_struct"), 4)))
-	return "imatrix*";
-      else if (elem_type == module->getTypeByName
-	       ("struct.gsl_matrix_complex") ||
-	       elem_type == module->getTypeByName
-	       ("struct._gsl_matrix_complex") ||
-	       struct_type_eq
-	       (elem_type, gslmatrix_type
-		(double_type(),
-		 module->getTypeByName("struct.gsl_block_complex_struct"))) ||
-	       struct_type_eq
-	       (elem_type, gslmatrix_type
-		(double_type(),
-		 module->getTypeByName("struct.gsl_block_complex_struct"), 4)))
-	return "cmatrix*";
-    }
-  }
+  // LLVM 22 opaque pointers do not retain enough information to distinguish
+  // expr*, matrix pointers, numeric buffers, and generic C pointers. Reject
+  // such signatures until the bitcode module supplies explicit Pure ABI
+  // metadata rather than guessing from the pointer value.
+  if (is_pointer_type(type)) return "<unknown C type>";
   return type_name(type);
 }
 
-string interpreter::dsptype_name(llvm_const_Type *type)
+string interpreter::dsptype_name(const string& function_name,
+                                  llvm_const_Type *type, size_t argument,
+                                  bool result, bool is_double)
 {
-  /* Special version of bctype_name for Faust modules. This doesn't have the
-     Pure expression and GSL matrix types, but instead we map i8* to void*. */
-  if (type == CharPtrTy)
+  if (!is_pointer_type(type)) return type_name(type);
+
+  // LLVM opaque pointers do not encode Faust's C ABI. Derive pointer meaning
+  // from the stable exported interface and the explicit sample precision.
+  if (result) {
+    if (function_name == "info" || function_name == "meta") return "expr*";
+    if (function_name == "getJSON") return "char*";
+    if (function_name == "new" || function_name == "newinit" ||
+        function_name == "clone") return "faust_dsp*";
     return "void*";
-  else if (type == PointerType::get(CharPtrTy, 0))
-    return "void**";
-  else
-    return type_name(type);
+  }
+  if (function_name == "compute" && argument >= 2)
+    return is_double ? "double**" : "float**";
+  bool dsp_argument =
+    function_name == "allocate" || function_name == "buildUserInterface" ||
+    function_name == "clone" || function_name == "compute" ||
+    function_name == "delete" || function_name == "destroy" ||
+    function_name == "getNumInputs" || function_name == "getNumOutputs" ||
+    function_name == "getSampleRate" || function_name == "info" ||
+    function_name == "init" || function_name == "instanceClear" ||
+    function_name == "instanceConstants" || function_name == "instanceInit" ||
+    function_name == "instanceResetUserInterface";
+  if (argument == 0 && dsp_argument) return "faust_dsp*";
+  return "void*";
 }
 
 bool interpreter::compatible_types(llvm_const_Type *type1, llvm_const_Type *type2)
@@ -12290,12 +12018,16 @@ Function *interpreter::declare_extern(int priv, string name, string restype,
 				      bool varargs, void *fp,
 				      string asname, bool dll_check)
 {
-  // translate type names to LLVM types
+  // Keep semantic C ABI types separate from LLVM's opaque pointer types.
   size_t n = argtypes.size();
+  CAbiType abi_type(restype);
+  vector<CAbiType> abi_argtypes;
+  abi_argtypes.reserve(n);
   llvm_const_Type* type = named_type(restype);
   vector<llvm_const_Type*> argt(n);
   list<string>::const_iterator atype = argtypes.begin();
   for (size_t i = 0; i < n; i++, atype++) {
+    abi_argtypes.push_back(CAbiType(*atype));
     argt[i] = named_type(*atype);
     // sanity check
     if (argt[i] == void_type())
@@ -12421,7 +12153,8 @@ Function *interpreter::declare_extern(int priv, string name, string restype,
     // Already declared under the same name, check that declarations
     // match. Here we require the types to be literally the same.
     const ExternInfo& info = it->second;
-    if (type != info.type || argt != info.argtypes) {
+    if (type != info.type || argt != info.argtypes ||
+        abi_type != info.abi_type || abi_argtypes != info.abi_argtypes) {
       ostringstream msg;
       msg << "declaration of extern function '" << name
 	  << "' does not match previous declaration: " << info;
@@ -12487,33 +12220,34 @@ Function *interpreter::declare_extern(int priv, string name, string restype,
   for (size_t i = 0; i < n; i++) {
     Value *x = args[i];
     llvm_const_Type *type = (i<m)?gt->getParamType(i):argt[i];
+    const CAbiType& abi = abi_argtypes[i];
     // check for thunks which must be forced
-    if (argt[i] != ExprPtrTy) {
+    if (!abi.is(CAbiType::expression, 1)) {
       // do a quick check on the tag value
       Value *idx[2] = { Zero, Zero };
-      Value *tagv = b.CreateLoad(b.CreateGEP(x, mkidxs(idx, idx+2)), "tag");
+      Value *tagv = create_load_gep(b, ExprTy, x, mkidxs(idx, idx+2), "tag");
       Value *checkv = b.CreateICmpEQ(tagv, Zero, "check");
       BasicBlock *forcebb = basic_block("force");
       BasicBlock *skipbb = basic_block("skip");
       b.CreateCondBr(checkv, forcebb, skipbb);
-      f->getBasicBlockList().push_back(forcebb);
+      forcebb->insertInto(f);
       b.SetInsertPoint(forcebb);
       b.CreateCall(module->getFunction("pure_force"), x);
       b.CreateBr(skipbb);
-      f->getBasicBlockList().push_back(skipbb);
+      skipbb->insertInto(f);
       b.SetInsertPoint(skipbb);
     }
     if (argt[i] == int1_type()) {
       BasicBlock *okbb = basic_block("ok");
       Value *idx[2] = { Zero, Zero };
-      Value *tagv = b.CreateLoad(b.CreateGEP(x, mkidxs(idx, idx+2)), "tag");
+      Value *tagv = create_load_gep(b, ExprTy, x, mkidxs(idx, idx+2), "tag");
       b.CreateCondBr
 	(b.CreateICmpEQ(tagv, SInt(EXPR::INT), "cmp"), okbb, failedbb);
-      f->getBasicBlockList().push_back(okbb);
+      okbb->insertInto(f);
       b.SetInsertPoint(okbb);
       Value *pv = b.CreateBitCast(x, IntExprPtrTy, "intexpr");
       idx[1] = ValFldIndex;
-      Value *iv = b.CreateLoad(b.CreateGEP(pv, mkidxs(idx, idx+2)), "intval");
+      Value *iv = create_load_gep(b, IntExprTy, pv, mkidxs(idx, idx+2), "intval");
       unboxed[i] = b.CreateICmpNE(iv, Zero);
     } else if (argt[i] == int8_type()) {
       /* We allow either ints or bigints to be passed for C integers. */
@@ -12521,22 +12255,22 @@ Function *interpreter::declare_extern(int priv, string name, string restype,
       BasicBlock *mpzbb = basic_block("mpz");
       BasicBlock *okbb = basic_block("ok");
       Value *idx[2] = { Zero, Zero };
-      Value *tagv = b.CreateLoad(b.CreateGEP(x, mkidxs(idx, idx+2)), "tag");
+      Value *tagv = create_load_gep(b, ExprTy, x, mkidxs(idx, idx+2), "tag");
       SwitchInst *sw = b.CreateSwitch(tagv, failedbb, 2);
       sw->addCase(SInt(EXPR::INT), intbb);
       sw->addCase(SInt(EXPR::BIGINT), mpzbb);
-      f->getBasicBlockList().push_back(intbb);
+      intbb->insertInto(f);
       b.SetInsertPoint(intbb);
       Value *pv = b.CreateBitCast(x, IntExprPtrTy, "intexpr");
       idx[1] = ValFldIndex;
-      Value *intv = b.CreateLoad(b.CreateGEP(pv, mkidxs(idx, idx+2)), "intval");
+      Value *intv = create_load_gep(b, IntExprTy, pv, mkidxs(idx, idx+2), "intval");
       b.CreateBr(okbb);
-      f->getBasicBlockList().push_back(mpzbb);
+      mpzbb->insertInto(f);
       b.SetInsertPoint(mpzbb);
       // Handle the case of a bigint (mpz_t -> int).
       Value *mpzv = b.CreateCall(module->getFunction("pure_get_int"), x);
       b.CreateBr(okbb);
-      f->getBasicBlockList().push_back(okbb);
+      okbb->insertInto(f);
       b.SetInsertPoint(okbb);
       PHINode *phi = phi_node(b, int32_type(), 2);
       phi->addIncoming(intv, intbb);
@@ -12547,22 +12281,22 @@ Function *interpreter::declare_extern(int priv, string name, string restype,
       BasicBlock *mpzbb = basic_block("mpz");
       BasicBlock *okbb = basic_block("ok");
       Value *idx[2] = { Zero, Zero };
-      Value *tagv = b.CreateLoad(b.CreateGEP(x, mkidxs(idx, idx+2)), "tag");
+      Value *tagv = create_load_gep(b, ExprTy, x, mkidxs(idx, idx+2), "tag");
       SwitchInst *sw = b.CreateSwitch(tagv, failedbb, 2);
       sw->addCase(SInt(EXPR::INT), intbb);
       sw->addCase(SInt(EXPR::BIGINT), mpzbb);
-      f->getBasicBlockList().push_back(intbb);
+      intbb->insertInto(f);
       b.SetInsertPoint(intbb);
       Value *pv = b.CreateBitCast(x, IntExprPtrTy, "intexpr");
       idx[1] = ValFldIndex;
-      Value *intv = b.CreateLoad(b.CreateGEP(pv, mkidxs(idx, idx+2)), "intval");
+      Value *intv = create_load_gep(b, IntExprTy, pv, mkidxs(idx, idx+2), "intval");
       b.CreateBr(okbb);
-      f->getBasicBlockList().push_back(mpzbb);
+      mpzbb->insertInto(f);
       b.SetInsertPoint(mpzbb);
       // Handle the case of a bigint (mpz_t -> int).
       Value *mpzv = b.CreateCall(module->getFunction("pure_get_int"), x);
       b.CreateBr(okbb);
-      f->getBasicBlockList().push_back(okbb);
+      okbb->insertInto(f);
       b.SetInsertPoint(okbb);
       PHINode *phi = phi_node(b, int32_type(), 2);
       phi->addIncoming(intv, intbb);
@@ -12573,22 +12307,22 @@ Function *interpreter::declare_extern(int priv, string name, string restype,
       BasicBlock *mpzbb = basic_block("mpz");
       BasicBlock *okbb = basic_block("ok");
       Value *idx[2] = { Zero, Zero };
-      Value *tagv = b.CreateLoad(b.CreateGEP(x, mkidxs(idx, idx+2)), "tag");
+      Value *tagv = create_load_gep(b, ExprTy, x, mkidxs(idx, idx+2), "tag");
       SwitchInst *sw = b.CreateSwitch(tagv, failedbb, 2);
       sw->addCase(SInt(EXPR::INT), intbb);
       sw->addCase(SInt(EXPR::BIGINT), mpzbb);
-      f->getBasicBlockList().push_back(intbb);
+      intbb->insertInto(f);
       b.SetInsertPoint(intbb);
       Value *pv = b.CreateBitCast(x, IntExprPtrTy, "intexpr");
       idx[1] = ValFldIndex;
-      Value *intv = b.CreateLoad(b.CreateGEP(pv, mkidxs(idx, idx+2)), "intval");
+      Value *intv = create_load_gep(b, IntExprTy, pv, mkidxs(idx, idx+2), "intval");
       b.CreateBr(okbb);
-      f->getBasicBlockList().push_back(mpzbb);
+      mpzbb->insertInto(f);
       b.SetInsertPoint(mpzbb);
       // Handle the case of a bigint (mpz_t -> int).
       Value *mpzv = b.CreateCall(module->getFunction("pure_get_int"), x);
       b.CreateBr(okbb);
-      f->getBasicBlockList().push_back(okbb);
+      okbb->insertInto(f);
       b.SetInsertPoint(okbb);
       PHINode *phi = phi_node(b, int32_type(), 2);
       phi->addIncoming(intv, intbb);
@@ -12599,23 +12333,23 @@ Function *interpreter::declare_extern(int priv, string name, string restype,
       BasicBlock *mpzbb = basic_block("mpz");
       BasicBlock *okbb = basic_block("ok");
       Value *idx[2] = { Zero, Zero };
-      Value *tagv = b.CreateLoad(b.CreateGEP(x, mkidxs(idx, idx+2)), "tag");
+      Value *tagv = create_load_gep(b, ExprTy, x, mkidxs(idx, idx+2), "tag");
       SwitchInst *sw = b.CreateSwitch(tagv, failedbb, 2);
       sw->addCase(SInt(EXPR::INT), intbb);
       sw->addCase(SInt(EXPR::BIGINT), mpzbb);
-      f->getBasicBlockList().push_back(intbb);
+      intbb->insertInto(f);
       b.SetInsertPoint(intbb);
       Value *pv = b.CreateBitCast(x, IntExprPtrTy, "intexpr");
       idx[1] = ValFldIndex;
-      Value *intv = b.CreateLoad(b.CreateGEP(pv, mkidxs(idx, idx+2)), "intval");
+      Value *intv = create_load_gep(b, IntExprTy, pv, mkidxs(idx, idx+2), "intval");
       intv = b.CreateSExt(intv, int64_type());
       b.CreateBr(okbb);
-      f->getBasicBlockList().push_back(mpzbb);
+      mpzbb->insertInto(f);
       b.SetInsertPoint(mpzbb);
       // Handle the case of a bigint (mpz_t -> long).
       Value *mpzv = b.CreateCall(module->getFunction("pure_get_int64"), x);
       b.CreateBr(okbb);
-      f->getBasicBlockList().push_back(okbb);
+      okbb->insertInto(f);
       b.SetInsertPoint(okbb);
       PHINode *phi = phi_node(b, int64_type(), 2);
       phi->addIncoming(intv, intbb);
@@ -12624,28 +12358,28 @@ Function *interpreter::declare_extern(int priv, string name, string restype,
     } else if (argt[i] == float_type()) {
       BasicBlock *okbb = basic_block("ok");
       Value *idx[2] = { Zero, Zero };
-      Value *tagv = b.CreateLoad(b.CreateGEP(x, mkidxs(idx, idx+2)), "tag");
+      Value *tagv = create_load_gep(b, ExprTy, x, mkidxs(idx, idx+2), "tag");
       b.CreateCondBr
 	(b.CreateICmpEQ(tagv, SInt(EXPR::DBL), "cmp"), okbb, failedbb);
-      f->getBasicBlockList().push_back(okbb);
+      okbb->insertInto(f);
       b.SetInsertPoint(okbb);
       Value *pv = b.CreateBitCast(x, DblExprPtrTy, "dblexpr");
       idx[1] = ValFldIndex;
-      Value *dv = b.CreateLoad(b.CreateGEP(pv, mkidxs(idx, idx+2)), "dblval");
+      Value *dv = create_load_gep(b, DblExprTy, pv, mkidxs(idx, idx+2), "dblval");
       unboxed[i] = b.CreateFPTrunc(dv, float_type());
     } else if (argt[i] == double_type()) {
       BasicBlock *okbb = basic_block("ok");
       Value *idx[2] = { Zero, Zero };
-      Value *tagv = b.CreateLoad(b.CreateGEP(x, mkidxs(idx, idx+2)), "tag");
+      Value *tagv = create_load_gep(b, ExprTy, x, mkidxs(idx, idx+2), "tag");
       b.CreateCondBr
 	(b.CreateICmpEQ(tagv, SInt(EXPR::DBL), "cmp"), okbb, failedbb);
-      f->getBasicBlockList().push_back(okbb);
+      okbb->insertInto(f);
       b.SetInsertPoint(okbb);
       Value *pv = b.CreateBitCast(x, DblExprPtrTy, "dblexpr");
       idx[1] = ValFldIndex;
-      Value *dv = b.CreateLoad(b.CreateGEP(pv, mkidxs(idx, idx+2)), "dblval");
+      Value *dv = create_load_gep(b, DblExprTy, pv, mkidxs(idx, idx+2), "dblval");
       unboxed[i] = dv;
-    } else if (argt[i] == CharPtrTy) {
+    } else if (abi.is(CAbiType::character, 1)) {
       /* String conversion. As of Pure 0.45, we also allow real char* pointers
 	 and int matrices as byte* inputs here. */
       BasicBlock *ptrbb = basic_block("ptr");
@@ -12653,14 +12387,14 @@ Function *interpreter::declare_extern(int priv, string name, string restype,
       BasicBlock *matrixbb = basic_block("matrix");
       BasicBlock *okbb = basic_block("ok");
       Value *idx[2] = { Zero, Zero };
-      Value *tagv = b.CreateLoad(b.CreateGEP(x, mkidxs(idx, idx+2)), "tag");
+      Value *tagv = create_load_gep(b, ExprTy, x, mkidxs(idx, idx+2), "tag");
       SwitchInst *sw = b.CreateSwitch(tagv, failedbb, 3);
       sw->addCase(SInt(EXPR::PTR), ptrbb);
       sw->addCase(SInt(EXPR::STR), strbb);
       sw->addCase(SInt(EXPR::IMATRIX), matrixbb);
-      f->getBasicBlockList().push_back(ptrbb);
+      ptrbb->insertInto(f);
       b.SetInsertPoint(ptrbb);
-      int tag = pointer_type_tag(CharPtrTy);
+      int tag = pointer_type_tag(abi.name);
       if (tag) {
 	// We must check the pointer tag here.
 	BasicBlock *checkedbb = basic_block("checked");
@@ -12671,26 +12405,26 @@ Function *interpreter::declare_extern(int priv, string name, string restype,
 	args.push_back(x);
 	Value *chk = b.CreateCall(g, mkargs(args));
 	b.CreateCondBr(chk, checkedbb, failedbb);
-	f->getBasicBlockList().push_back(checkedbb);
+	checkedbb->insertInto(f);
 	b.SetInsertPoint(checkedbb);
 	ptrbb = checkedbb;
       }
       Value *pv = b.CreateBitCast(x, PtrExprPtrTy, "ptrexpr");
       idx[1] = ValFldIndex;
       Value *ptrv = b.CreateBitCast
-	(b.CreateLoad(b.CreateGEP(pv, mkidxs(idx, idx+2)), "ptrval"),
+	(create_load_gep(b, PtrExprTy, pv, mkidxs(idx, idx+2), "ptrval"),
 	 CharPtrTy);
       b.CreateBr(okbb);
-      f->getBasicBlockList().push_back(strbb);
+      strbb->insertInto(f);
       b.SetInsertPoint(strbb);
       Value *sv = b.CreateCall(module->getFunction("pure_get_cstring"), x);
       b.CreateBr(okbb);
-      f->getBasicBlockList().push_back(matrixbb);
+      matrixbb->insertInto(f);
       b.SetInsertPoint(matrixbb);
       Function *get_fun = module->getFunction("pure_get_matrix_data_byte");
       Value *matrixv = b.CreateBitCast(b.CreateCall(get_fun, x), CharPtrTy);
       b.CreateBr(okbb);
-      f->getBasicBlockList().push_back(okbb);
+      okbb->insertInto(f);
       b.SetInsertPoint(okbb);
       PHINode *phi = phi_node(b, CharPtrTy, 3);
       phi->addIncoming(ptrv, ptrbb);
@@ -12699,23 +12433,24 @@ Function *interpreter::declare_extern(int priv, string name, string restype,
       unboxed[i] = phi; temps = true; vtemps = true;
       if (type != CharPtrTy)
 	unboxed[i] = b.CreateBitCast(unboxed[i], type);
-    } else if (argt[i] == PointerType::get(int16_type(), 0) ||
-	       argt[i] == PointerType::get(int32_type(), 0) ||
-	       argt[i] == PointerType::get(int64_type(), 0) ||
-	       argt[i] == PointerType::get(double_type(), 0) ||
-	       argt[i] == PointerType::get(float_type(), 0)) {
+    } else if (abi.pointer_depth == 1 &&
+               (abi.base == CAbiType::short_integer ||
+                abi.base == CAbiType::integer ||
+                abi.base == CAbiType::integer64 ||
+                abi.base == CAbiType::single ||
+                abi.base == CAbiType::double_)) {
       /* These get special treatment, because we also allow numeric matrices
 	 to be passed as an integer or floating point vector here. */
-      bool is_short = argt[i] == PointerType::get(int16_type(), 0);
-      bool is_int = argt[i] == PointerType::get(int32_type(), 0);
-      bool is_int64 = argt[i] == PointerType::get(int64_type(), 0);
-      bool is_float = argt[i] == PointerType::get(float_type(), 0);
-      bool is_double = argt[i] == PointerType::get(double_type(), 0);
+      bool is_short = abi.base == CAbiType::short_integer;
+      bool is_int = abi.base == CAbiType::integer;
+      bool is_int64 = abi.base == CAbiType::integer64;
+      bool is_float = abi.base == CAbiType::single;
+      bool is_double = abi.base == CAbiType::double_;
       BasicBlock *ptrbb = basic_block("ptr");
       BasicBlock *matrixbb = basic_block("matrix");
       BasicBlock *okbb = basic_block("ok");
       Value *idx[2] = { Zero, Zero };
-      Value *tagv = b.CreateLoad(b.CreateGEP(x, mkidxs(idx, idx+2)), "tag");
+      Value *tagv = create_load_gep(b, ExprTy, x, mkidxs(idx, idx+2), "tag");
       SwitchInst *sw = b.CreateSwitch(tagv, failedbb, 3);
       Function *get_fun =
 	is_short ? module->getFunction("pure_get_matrix_data_short") :
@@ -12732,9 +12467,9 @@ Function *interpreter::declare_extern(int priv, string name, string restype,
 	sw->addCase(SInt(EXPR::DMATRIX), matrixbb);
 	sw->addCase(SInt(EXPR::CMATRIX), matrixbb);
       }
-      f->getBasicBlockList().push_back(ptrbb);
+      ptrbb->insertInto(f);
       b.SetInsertPoint(ptrbb);
-      int tag = pointer_type_tag(argt[i]);
+      int tag = pointer_type_tag(abi.name);
       if (tag) {
 	// We must check the pointer tag here.
 	BasicBlock *checkedbb = basic_block("checked");
@@ -12745,34 +12480,35 @@ Function *interpreter::declare_extern(int priv, string name, string restype,
 	args.push_back(x);
 	Value *chk = b.CreateCall(g, mkargs(args));
 	b.CreateCondBr(chk, checkedbb, failedbb);
-	f->getBasicBlockList().push_back(checkedbb);
+	checkedbb->insertInto(f);
 	b.SetInsertPoint(checkedbb);
 	ptrbb = checkedbb;
       }
       Value *pv = b.CreateBitCast(x, PtrExprPtrTy, "ptrexpr");
       idx[1] = ValFldIndex;
-      Value *ptrv = b.CreateLoad(b.CreateGEP(pv, mkidxs(idx, idx+2)), "ptrval");
+      Value *ptrv = create_load_gep(b, PtrExprTy, pv, mkidxs(idx, idx+2), "ptrval");
       b.CreateBr(okbb);
-      f->getBasicBlockList().push_back(matrixbb);
+      matrixbb->insertInto(f);
       b.SetInsertPoint(matrixbb);
       Value *matrixv = b.CreateCall(get_fun, x);
       b.CreateBr(okbb);
-      f->getBasicBlockList().push_back(okbb);
+      okbb->insertInto(f);
       b.SetInsertPoint(okbb);
       PHINode *phi = phi_node(b, VoidPtrTy, 2);
       phi->addIncoming(ptrv, ptrbb);
       phi->addIncoming(matrixv, matrixbb);
       unboxed[i] = b.CreateBitCast(phi, type); vtemps = true;
-    } else if (argt[i] == PointerType::get(VoidPtrTy, 0) ||
-	       argt[i] == PointerType::get(CharPtrTy, 0)) {
+    } else if (abi.pointer_depth == 2 &&
+               (abi.base == CAbiType::void_ ||
+                abi.base == CAbiType::character)) {
       /* Conversion of symbolic vectors to void** and char**. */
-      bool is_char = argt[i] == PointerType::get(CharPtrTy, 0);
+      bool is_char = abi.base == CAbiType::character;
       BasicBlock *ptrbb = basic_block("ptr");
       BasicBlock *matrixbb = basic_block("matrix");
       BasicBlock *smatrixbb = basic_block("smatrix");
       BasicBlock *okbb = basic_block("ok");
       Value *idx[2] = { Zero, Zero };
-      Value *tagv = b.CreateLoad(b.CreateGEP(x, mkidxs(idx, idx+2)), "tag");
+      Value *tagv = create_load_gep(b, ExprTy, x, mkidxs(idx, idx+2), "tag");
       SwitchInst *sw = b.CreateSwitch(tagv, failedbb, 3);
       Function *sget_fun = module->getFunction
 	(is_char ? "pure_get_matrix_vector_char" :
@@ -12782,9 +12518,9 @@ Function *interpreter::declare_extern(int priv, string name, string restype,
       sw->addCase(SInt(EXPR::PTR), ptrbb);
       if (is_char) sw->addCase(SInt(EXPR::IMATRIX), matrixbb);
       sw->addCase(SInt(EXPR::MATRIX), smatrixbb);
-      f->getBasicBlockList().push_back(ptrbb);
+      ptrbb->insertInto(f);
       b.SetInsertPoint(ptrbb);
-      int tag = pointer_type_tag(argt[i]);
+      int tag = pointer_type_tag(abi.name);
       if (tag) {
 	// We must check the pointer tag here.
 	BasicBlock *checkedbb = basic_block("checked");
@@ -12795,59 +12531,50 @@ Function *interpreter::declare_extern(int priv, string name, string restype,
 	args.push_back(x);
 	Value *chk = b.CreateCall(g, mkargs(args));
 	b.CreateCondBr(chk, checkedbb, failedbb);
-	f->getBasicBlockList().push_back(checkedbb);
+	checkedbb->insertInto(f);
 	b.SetInsertPoint(checkedbb);
 	ptrbb = checkedbb;
       }
       Value *pv = b.CreateBitCast(x, PtrExprPtrTy, "ptrexpr");
       idx[1] = ValFldIndex;
-      Value *ptrv = b.CreateLoad(b.CreateGEP(pv, mkidxs(idx, idx+2)), "ptrval");
+      Value *ptrv = create_load_gep(b, PtrExprTy, pv, mkidxs(idx, idx+2), "ptrval");
       b.CreateBr(okbb);
       Value *matrixv = 0;
       if (is_char) {
-	f->getBasicBlockList().push_back(matrixbb);
+	matrixbb->insertInto(f);
 	b.SetInsertPoint(matrixbb);
 	matrixv = b.CreateCall(get_fun, x);
 	b.CreateBr(okbb);
       }
-      f->getBasicBlockList().push_back(smatrixbb);
+      smatrixbb->insertInto(f);
       b.SetInsertPoint(smatrixbb);
       Value *smatrixv = b.CreateCall(sget_fun, x);
       b.CreateBr(okbb);
-      f->getBasicBlockList().push_back(okbb);
+      okbb->insertInto(f);
       b.SetInsertPoint(okbb);
       PHINode *phi = phi_node(b, VoidPtrTy, 3);
       phi->addIncoming(ptrv, ptrbb);
       if (is_char) phi->addIncoming(matrixv, matrixbb);
       phi->addIncoming(smatrixv, smatrixbb);
       unboxed[i] = b.CreateBitCast(phi, type); vtemps = true;
-    } else if (argt[i] ==
-	       PointerType::get(PointerType::get(int16_type(), 0), 0) ||
-	       argt[i] ==
-	       PointerType::get(PointerType::get(int32_type(), 0), 0) ||
-	       argt[i] ==
-	       PointerType::get(PointerType::get(int64_type(), 0), 0) ||
-	       argt[i] ==
-	       PointerType::get(PointerType::get(double_type(), 0), 0) ||
-	       argt[i] ==
-	       PointerType::get(PointerType::get(float_type(), 0), 0)) {
+    } else if (abi.pointer_depth == 2 &&
+               (abi.base == CAbiType::short_integer ||
+                abi.base == CAbiType::integer ||
+                abi.base == CAbiType::integer64 ||
+                abi.base == CAbiType::single ||
+                abi.base == CAbiType::double_)) {
       /* Conversion of matrices to vectors of pointers pointing to the rows of
 	 the matrix. These allow a matrix to be modified in-place. */
-      bool is_short = argt[i] ==
-	PointerType::get(PointerType::get(int16_type(), 0), 0);
-      bool is_int = argt[i] ==
-	PointerType::get(PointerType::get(int32_type(), 0), 0);
-      bool is_int64 = argt[i] ==
-	PointerType::get(PointerType::get(int64_type(), 0), 0);
-      bool is_float = argt[i] ==
-	PointerType::get(PointerType::get(float_type(), 0), 0);
-      bool is_double = argt[i] ==
-	PointerType::get(PointerType::get(double_type(), 0), 0);
+      bool is_short = abi.base == CAbiType::short_integer;
+      bool is_int = abi.base == CAbiType::integer;
+      bool is_int64 = abi.base == CAbiType::integer64;
+      bool is_float = abi.base == CAbiType::single;
+      bool is_double = abi.base == CAbiType::double_;
       BasicBlock *ptrbb = basic_block("ptr");
       BasicBlock *matrixbb = basic_block("matrix");
       BasicBlock *okbb = basic_block("ok");
       Value *idx[2] = { Zero, Zero };
-      Value *tagv = b.CreateLoad(b.CreateGEP(x, mkidxs(idx, idx+2)), "tag");
+      Value *tagv = create_load_gep(b, ExprTy, x, mkidxs(idx, idx+2), "tag");
       SwitchInst *sw = b.CreateSwitch(tagv, failedbb, 3);
       Function *get_fun =
 	is_short ? module->getFunction("pure_get_matrix_vector_short") :
@@ -12864,9 +12591,9 @@ Function *interpreter::declare_extern(int priv, string name, string restype,
 	sw->addCase(SInt(EXPR::DMATRIX), matrixbb);
 	sw->addCase(SInt(EXPR::CMATRIX), matrixbb);
       }
-      f->getBasicBlockList().push_back(ptrbb);
+      ptrbb->insertInto(f);
       b.SetInsertPoint(ptrbb);
-      int tag = pointer_type_tag(argt[i]);
+      int tag = pointer_type_tag(abi.name);
       if (tag) {
 	// We must check the pointer tag here.
 	BasicBlock *checkedbb = basic_block("checked");
@@ -12877,47 +12604,48 @@ Function *interpreter::declare_extern(int priv, string name, string restype,
 	args.push_back(x);
 	Value *chk = b.CreateCall(g, mkargs(args));
 	b.CreateCondBr(chk, checkedbb, failedbb);
-	f->getBasicBlockList().push_back(checkedbb);
+	checkedbb->insertInto(f);
 	b.SetInsertPoint(checkedbb);
 	ptrbb = checkedbb;
       }
       Value *pv = b.CreateBitCast(x, PtrExprPtrTy, "ptrexpr");
       idx[1] = ValFldIndex;
-      Value *ptrv = b.CreateLoad(b.CreateGEP(pv, mkidxs(idx, idx+2)), "ptrval");
+      Value *ptrv = create_load_gep(b, PtrExprTy, pv, mkidxs(idx, idx+2), "ptrval");
       b.CreateBr(okbb);
-      f->getBasicBlockList().push_back(matrixbb);
+      matrixbb->insertInto(f);
       b.SetInsertPoint(matrixbb);
       Value *matrixv = b.CreateCall(get_fun, x);
       b.CreateBr(okbb);
-      f->getBasicBlockList().push_back(okbb);
+      okbb->insertInto(f);
       b.SetInsertPoint(okbb);
       PHINode *phi = phi_node(b, VoidPtrTy, 2);
       phi->addIncoming(ptrv, ptrbb);
       phi->addIncoming(matrixv, matrixbb);
       unboxed[i] = b.CreateBitCast(phi, type); vtemps = true;
-    } else if (argt[i] == GSLMatrixPtrTy ||
-	       argt[i] == GSLDoubleMatrixPtrTy ||
-	       argt[i] == GSLComplexMatrixPtrTy ||
-	       argt[i] == GSLIntMatrixPtrTy) {
+    } else if (abi.pointer_depth == 1 &&
+               (abi.base == CAbiType::matrix ||
+                abi.base == CAbiType::double_matrix ||
+                abi.base == CAbiType::complex_matrix ||
+                abi.base == CAbiType::integer_matrix)) {
       BasicBlock *okbb = basic_block("ok");
       Value *idx[2] = { Zero, Zero };
-      Value *tagv = b.CreateLoad(b.CreateGEP(x, mkidxs(idx, idx+2)), "tag");
+      Value *tagv = create_load_gep(b, ExprTy, x, mkidxs(idx, idx+2), "tag");
       int32_t ttag = -99;
-      if (argt[i] == GSLMatrixPtrTy)
+      if (abi.base == CAbiType::matrix)
 	ttag = EXPR::MATRIX;
-      else if (argt[i] == GSLDoubleMatrixPtrTy)
+      else if (abi.base == CAbiType::double_matrix)
 	ttag = EXPR::DMATRIX;
-      else if (argt[i] == GSLComplexMatrixPtrTy)
+      else if (abi.base == CAbiType::complex_matrix)
 	ttag = EXPR::CMATRIX;
-      else if (argt[i] == GSLIntMatrixPtrTy)
+      else if (abi.base == CAbiType::integer_matrix)
 	ttag = EXPR::IMATRIX;
       b.CreateCondBr
 	(b.CreateICmpEQ(tagv, SInt(ttag), "cmp"), okbb, failedbb);
-      f->getBasicBlockList().push_back(okbb);
+      okbb->insertInto(f);
       b.SetInsertPoint(okbb);
       Value *matv = b.CreateCall(module->getFunction("pure_get_matrix"), x);
       unboxed[i] = b.CreateBitCast(matv, type);
-    } else if (argt[i] == ExprPtrTy) {
+    } else if (abi.is(CAbiType::expression, 1)) {
       // passed through
       unboxed[i] = x;
       // Cast the pointer to the proper target type if necessary. This is only
@@ -12925,20 +12653,20 @@ Function *interpreter::declare_extern(int priv, string name, string restype,
       // its own internal representation of the expression data type.
       if (type != ExprPtrTy)
 	unboxed[i] = b.CreateBitCast(unboxed[i], type);
-    } else if (i == 0 && is_pointer_type(argt[i]) && is_faust_fun) {
+    } else if (i == 0 && abi.name == "faust_dsp*" && is_faust_fun) {
       /* The first argument in a Faust call, if it is a pointer, is always the
 	 dsp. Check the pointer against the module tag. */
       BasicBlock *ptrbb = basic_block("ptr");
       BasicBlock *okbb = basic_block("ok");
       Value *idx[2] = { Zero, Zero };
-      Value *tagv = b.CreateLoad(b.CreateGEP(x, mkidxs(idx, idx+2)), "tag");
+      Value *tagv = create_load_gep(b, ExprTy, x, mkidxs(idx, idx+2), "tag");
       SwitchInst *sw = b.CreateSwitch(tagv, failedbb, 1);
       sw->addCase(SInt(EXPR::PTR), ptrbb);
-      f->getBasicBlockList().push_back(ptrbb);
+      ptrbb->insertInto(f);
       b.SetInsertPoint(ptrbb);
       Value *pv = b.CreateBitCast(x, PtrExprPtrTy, "ptrexpr");
       idx[1] = ValFldIndex;
-      Value *ptrv = b.CreateLoad(b.CreateGEP(pv, mkidxs(idx, idx+2)), "ptrval");
+      Value *ptrv = create_load_gep(b, PtrExprTy, pv, mkidxs(idx, idx+2), "ptrval");
       Function *g = module->getFunction("pure_check_tag");
       assert(g);
       vector<Value*> args;
@@ -12946,7 +12674,7 @@ Function *interpreter::declare_extern(int priv, string name, string restype,
       args.push_back(x);
       Value *chk = b.CreateCall(g, mkargs(args));
       b.CreateCondBr(chk, okbb, failedbb);
-      f->getBasicBlockList().push_back(okbb);
+      okbb->insertInto(f);
       b.SetInsertPoint(okbb);
       PHINode *phi = phi_node(b, VoidPtrTy, 1);
       phi->addIncoming(ptrv, ptrbb);
@@ -12963,13 +12691,13 @@ Function *interpreter::declare_extern(int priv, string name, string restype,
 	args.push_back(x);
 	b.CreateCall(f, mkargs(args));
       }
-    } else if (argt[i] == VoidPtrTy) {
+    } else if (abi.is(CAbiType::void_, 1)) {
       BasicBlock *ptrbb = basic_block("ptr");
       BasicBlock *mpzbb = basic_block("mpz");
       BasicBlock *matrixbb = basic_block("matrix");
       BasicBlock *okbb = basic_block("ok");
       Value *idx[2] = { Zero, Zero };
-      Value *tagv = b.CreateLoad(b.CreateGEP(x, mkidxs(idx, idx+2)), "tag");
+      Value *tagv = create_load_gep(b, ExprTy, x, mkidxs(idx, idx+2), "tag");
       SwitchInst *sw = b.CreateSwitch(tagv, failedbb, 7);
       /* We also allow bigints, strings and matrices to be passed as a void*
 	 here. The first case lets you use GMP routines directly in Pure if
@@ -12986,25 +12714,25 @@ Function *interpreter::declare_extern(int priv, string name, string restype,
       sw->addCase(SInt(EXPR::DMATRIX), matrixbb);
       sw->addCase(SInt(EXPR::CMATRIX), matrixbb);
       sw->addCase(SInt(EXPR::IMATRIX), matrixbb);
-      f->getBasicBlockList().push_back(ptrbb);
+      ptrbb->insertInto(f);
       b.SetInsertPoint(ptrbb);
       // The following will work with both pointer and string expressions.
       Value *pv = b.CreateBitCast(x, PtrExprPtrTy, "ptrexpr");
       idx[1] = ValFldIndex;
-      Value *ptrv = b.CreateLoad(b.CreateGEP(pv, mkidxs(idx, idx+2)), "ptrval");
+      Value *ptrv = create_load_gep(b, PtrExprTy, pv, mkidxs(idx, idx+2), "ptrval");
       b.CreateBr(okbb);
-      f->getBasicBlockList().push_back(mpzbb);
+      mpzbb->insertInto(f);
       b.SetInsertPoint(mpzbb);
       // Handle the case of a bigint (mpz_t -> void*).
       Value *mpzv = b.CreateCall(module->getFunction("pure_get_bigint"), x);
       b.CreateBr(okbb);
       // Handle the case of a matrix (gsl_matrix_xyz* -> void*).
-      f->getBasicBlockList().push_back(matrixbb);
+      matrixbb->insertInto(f);
       b.SetInsertPoint(matrixbb);
       Value *matrixv =
 	b.CreateCall(module->getFunction("pure_get_matrix_data"), x);
       b.CreateBr(okbb);
-      f->getBasicBlockList().push_back(okbb);
+      okbb->insertInto(f);
       b.SetInsertPoint(okbb);
       PHINode *phi = phi_node(b, VoidPtrTy, 3);
       phi->addIncoming(ptrv, ptrbb);
@@ -13014,17 +12742,17 @@ Function *interpreter::declare_extern(int priv, string name, string restype,
       // Cast the pointer to the proper target type if necessary.
       if (type != VoidPtrTy)
 	unboxed[i] = b.CreateBitCast(unboxed[i], type);
-    } else if (is_pointer_type(argt[i])) {
+    } else if (abi.is_pointer()) {
       /* Generic pointer type. Only a proper pointer is allowed here, and we
 	 may have to check its tag. */
       BasicBlock *okbb = basic_block("ok");
       Value *idx[2] = { Zero, Zero };
-      Value *tagv = b.CreateLoad(b.CreateGEP(x, mkidxs(idx, idx+2)), "tag");
+      Value *tagv = create_load_gep(b, ExprTy, x, mkidxs(idx, idx+2), "tag");
       b.CreateCondBr
 	(b.CreateICmpEQ(tagv, SInt(EXPR::PTR), "cmp"), okbb, failedbb);
-      f->getBasicBlockList().push_back(okbb);
+      okbb->insertInto(f);
       b.SetInsertPoint(okbb);
-      int tag = pointer_type_tag(argt[i]);
+      int tag = pointer_type_tag(abi.name);
       if (tag) {
 	// We must check the pointer tag here.
 	BasicBlock *checkedbb = basic_block("checked");
@@ -13035,12 +12763,12 @@ Function *interpreter::declare_extern(int priv, string name, string restype,
 	args.push_back(x);
 	Value *chk = b.CreateCall(g, mkargs(args));
 	b.CreateCondBr(chk, checkedbb, failedbb);
-	f->getBasicBlockList().push_back(checkedbb);
+	checkedbb->insertInto(f);
 	b.SetInsertPoint(checkedbb);
       }
       Value *pv = b.CreateBitCast(x, PtrExprPtrTy, "ptrexpr");
       idx[1] = ValFldIndex;
-      Value *ptrv = b.CreateLoad(b.CreateGEP(pv, mkidxs(idx, idx+2)), "ptrval");
+      Value *ptrv = create_load_gep(b, PtrExprTy, pv, mkidxs(idx, idx+2), "ptrval");
       unboxed[i] = ptrv;
       // Cast the pointer to the proper target type if necessary.
       if (type != VoidPtrTy)
@@ -13066,7 +12794,7 @@ Function *interpreter::declare_extern(int priv, string name, string restype,
     /* We do an indirect call here, so that it can be patched up later when a
        Faust dsp gets reloaded. (This works similar to global Pure functions
        which are also invoked indirectly through global variables.) */
-    PointerType *fptype = PointerType::get(gt, 0);
+    PointerType *fptype = PointerType::get(context, 0);
     GlobalVariable *v = global_variable
       (module, fptype, false, GlobalVariable::InternalLinkage,
        ConstantPointerNull::get(fptype),
@@ -13075,7 +12803,8 @@ Function *interpreter::declare_extern(int priv, string name, string restype,
     assert(fp);
     *fp = JIT->getPointerToFunction(g);
     JIT->addGlobalMapping(v, fp);
-    u = b.CreateCall(b.CreateLoad(v), mkargs(unboxed));
+    Value *callee = b.CreateLoad(v->getValueType(), v);
+    u = b.CreateCall(gt, callee, mkargs(unboxed));
   } else
     u = b.CreateCall(g, mkargs(unboxed));
   // box the result
@@ -13100,14 +12829,13 @@ Function *interpreter::declare_extern(int priv, string name, string restype,
 		     b.CreateFPExt(u, double_type()));
   else if (type == double_type())
     u = b.CreateCall(module->getFunction("pure_double"), u);
-  else if (type == CharPtrTy)
+  else if (abi_type.is(CAbiType::character, 1))
     u = b.CreateCall(module->getFunction("pure_cstring_dup"), u);
-  else if (is_pointer_type(type) &&
-	   is_pointer_type(type->getContainedType(0))) {
+  else if (abi_type.pointer_depth > 1) {
     u = b.CreateCall(module->getFunction("pure_pointer"),
 		     b.CreateBitCast(u, VoidPtrTy));
     // We may have to set the proper pointer tag here.
-    int tag = pointer_type_tag(type);
+    int tag = pointer_type_tag(abi_type.name);
     if (tag) {
       Function *f = module->getFunction("pure_tag");
       assert(f);
@@ -13116,19 +12844,19 @@ Function *interpreter::declare_extern(int priv, string name, string restype,
       args.push_back(u);
       b.CreateCall(f, mkargs(args));
     }
-  } else if (type == GSLMatrixPtrTy)
+  } else if (abi_type.is(CAbiType::matrix, 1))
     u = b.CreateCall(module->getFunction("pure_symbolic_matrix"),
 		     b.CreateBitCast(u, VoidPtrTy));
-  else if (type == GSLDoubleMatrixPtrTy)
+  else if (abi_type.is(CAbiType::double_matrix, 1))
     u = b.CreateCall(module->getFunction("pure_double_matrix"),
 		     b.CreateBitCast(u, VoidPtrTy));
-  else if (type == GSLComplexMatrixPtrTy)
+  else if (abi_type.is(CAbiType::complex_matrix, 1))
     u = b.CreateCall(module->getFunction("pure_complex_matrix"),
 		     b.CreateBitCast(u, VoidPtrTy));
-  else if (type == GSLIntMatrixPtrTy)
+  else if (abi_type.is(CAbiType::integer_matrix, 1))
     u = b.CreateCall(module->getFunction("pure_int_matrix"),
 		     b.CreateBitCast(u, VoidPtrTy));
-  else if (type == ExprPtrTy) {
+  else if (abi_type.is(CAbiType::expression, 1)) {
     if (gt->getReturnType() != ExprPtrTy)
       // bitcast the result to an expr*
       u = b.CreateBitCast(u, ExprPtrTy);
@@ -13136,10 +12864,10 @@ Function *interpreter::declare_extern(int priv, string name, string restype,
     BasicBlock *okbb = basic_block("ok");
     b.CreateCondBr
       (b.CreateICmpNE(u, NullExprPtr, "cmp"), okbb, noretbb);
-    f->getBasicBlockList().push_back(okbb);
+    okbb->insertInto(f);
     b.SetInsertPoint(okbb);
     // value is passed through
-  } else if (is_pointer_type(type)) {
+  } else if (abi_type.is_pointer()) {
     if (gt->getReturnType() != VoidPtrTy)
       // bitcast the pointer result to a void*
       u = b.CreateBitCast(u, VoidPtrTy);
@@ -13166,14 +12894,14 @@ Function *interpreter::declare_extern(int priv, string name, string restype,
 	  Function *f = module->getFunction("pure_sentry");
 	  assert(f);
 	  vector<Value*> args;
-	  args.push_back(b.CreateLoad(v.v));
+	  args.push_back(b.CreateLoad(v.v->getValueType(), v.v));
 	  args.push_back(u);
 	  b.CreateCall(f, mkargs(args));
 	}
       }
     } else {
       // We may have to set the proper pointer tag here.
-      int tag = pointer_type_tag(type);
+      int tag = pointer_type_tag(abi_type.name);
       if (tag) {
 	Function *f = module->getFunction("pure_tag");
 	assert(f);
@@ -13209,7 +12937,7 @@ Function *interpreter::declare_extern(int priv, string name, string restype,
   }
   b.CreateRet(u);
   // The call failed. Provide a default value.
-  f->getBasicBlockList().push_back(noretbb);
+  noretbb->insertInto(f);
   b.SetInsertPoint(noretbb);
   if (debugging) {
     Function *f = module->getFunction("pure_debug_redn");
@@ -13221,7 +12949,7 @@ Function *interpreter::declare_extern(int priv, string name, string restype,
     b.CreateCall(f, mkargs(args));
   }
   b.CreateBr(failedbb);
-  f->getBasicBlockList().push_back(failedbb);
+  failedbb->insertInto(f);
   b.SetInsertPoint(failedbb);
   // free temporaries
   if (temps) b.CreateCall(module->getFunction("pure_free_cstrings"));
@@ -13242,11 +12970,11 @@ Function *interpreter::declare_extern(int priv, string name, string restype,
     JIT->addGlobalMapping(v.v, &v.x);
   }
   if (v.x) pure_free(v.x); v.x = cv;
-  Value *defaultv = b.CreateLoad(v.v);
+  Value *defaultv = b.CreateLoad(v.v->getValueType(), v.v);
   // We first check for NULL values.
   BasicBlock *goodbb = basic_block("good"), *badbb = basic_block("bad");
   b.CreateCondBr(b.CreateICmpNE(defaultv, NullExprPtr), goodbb, badbb);
-  f->getBasicBlockList().push_back(goodbb);
+  goodbb->insertInto(f);
   b.SetInsertPoint(goodbb);
   // Everything's fine, invoke the default value to the arguments and return
   // the result.
@@ -13268,7 +12996,7 @@ Function *interpreter::declare_extern(int priv, string name, string restype,
   }
   b.CreateRet(defv);
   // NULL default value, raise a failed_match exception instead.
-  f->getBasicBlockList().push_back(badbb);
+  badbb->insertInto(f);
   b.SetInsertPoint(badbb);
   // Create a cbox for the failed_match symbol and invoke pure_throw (we can't
   // use unwind() here since there's no environment on the stack).
@@ -13283,20 +13011,18 @@ Function *interpreter::declare_extern(int priv, string name, string restype,
       JIT->addGlobalMapping(v.v, &v.x);
     }
     if (v.x) pure_free(v.x); v.x = pure_new(cv);
-    b.CreateCall(module->getFunction("pure_throw"), b.CreateLoad(v.v));
+    b.CreateCall(module->getFunction("pure_throw"),
+		 b.CreateLoad(v.v->getValueType(), v.v));
   }
   b.CreateRet(defaultv);
   verifyFunction(*f);
   if (FPM) FPM->run(*f);
   if (verbose&verbosity::dump) {
-#if RAW_STREAM
     raw_ostream& out = outs();
-#else
-    ostream& out = std::cout;
-#endif
     f->print(out);
   }
-  externals[sym.f] = ExternInfo(sym.f, name, type, argt, f, varargs);
+  externals[sym.f] = ExternInfo(sym.f, name, type, argt, abi_type,
+                                abi_argtypes, f, varargs);
   return f;
 }
 
@@ -13305,7 +13031,7 @@ Value *interpreter::envptr(bool local)
   if (!fptr || !local)
     return NullPtr;
   else
-    return act_builder().CreateLoad(fptrvar);
+    return act_builder().CreateLoad(fptrvar->getValueType(), fptrvar);
 }
 
 Value *interpreter::constptr(const void *p)
@@ -13698,7 +13424,7 @@ pure_expr *interpreter::dodefn(env vars, const vinfo& vi,
   state *start = m.start;
   simple_match(arg, start, matchedbb, failedbb);
   // matched => emit code for binding the variables
-  f.f->getBasicBlockList().push_back(matchedbb);
+  matchedbb->insertInto(f.f);
   f.builder.SetInsertPoint(matchedbb);
   if (!vi.guards.empty()) {
     // verify guards
@@ -13712,7 +13438,7 @@ pure_expr *interpreter::dodefn(env vars, const vinfo& vi,
 	f.builder.CreateCall(module->getFunction("pure_safe_typecheck"),
 			     mkargs(args));
       f.builder.CreateCondBr(check, checkedbb, failedbb);
-      f.f->getBasicBlockList().push_back(checkedbb);
+      checkedbb->insertInto(f.f);
       f.builder.SetInsertPoint(checkedbb);
     }
   }
@@ -13727,7 +13453,7 @@ pure_expr *interpreter::dodefn(env vars, const vinfo& vi,
       Value *check = f.builder.CreateCall(module->getFunction("same"),
 					  mkargs(args));
       f.builder.CreateCondBr(check, checkedbb, failedbb);
-      f.f->getBasicBlockList().push_back(checkedbb);
+      checkedbb->insertInto(f.f);
       f.builder.SetInsertPoint(checkedbb);
     }
   }
@@ -13768,7 +13494,7 @@ pure_expr *interpreter::dodefn(env vars, const vinfo& vi,
   // return the matchee to indicate success
   f.builder.CreateRet(arg);
   // failed => throw an exception
-  f.f->getBasicBlockList().push_back(failedbb);
+  failedbb->insertInto(f.f);
   f.builder.SetInsertPoint(failedbb);
   unwind();
   fun_finish();
@@ -13865,7 +13591,7 @@ Value *interpreter::when_codegen(expr x, matcher *m,
     BasicBlock *matchedbb = basic_block("matched");
     BasicBlock *failedbb = basic_block("failed");
     e.builder.CreateBr(bodybb);
-    e.f->getBasicBlockList().push_back(bodybb);
+    bodybb->insertInto(e.f);
     e.builder.SetInsertPoint(bodybb);
     Value *arg = e.args[0];
     // emit the matching code
@@ -13873,7 +13599,7 @@ Value *interpreter::when_codegen(expr x, matcher *m,
     if (debugging) debug_rule(0);
     simple_match(arg, start, matchedbb, failedbb);
     // matched => emit code for the reduct
-    e.f->getBasicBlockList().push_back(matchedbb);
+    matchedbb->insertInto(e.f);
     e.builder.SetInsertPoint(matchedbb);
     const rule& rr = m->r[0];
     if (!rr.vi.guards.empty()) {
@@ -13888,7 +13614,7 @@ Value *interpreter::when_codegen(expr x, matcher *m,
 	  e.builder.CreateCall(module->getFunction("pure_typecheck"),
 			       mkargs(args));
 	e.builder.CreateCondBr(check, checkedbb, failedbb);
-	e.f->getBasicBlockList().push_back(checkedbb);
+	checkedbb->insertInto(e.f);
 	e.builder.SetInsertPoint(checkedbb);
       }
     }
@@ -13903,7 +13629,7 @@ Value *interpreter::when_codegen(expr x, matcher *m,
 	Value *check = e.builder.CreateCall(module->getFunction("same"),
 					    mkargs(args));
 	e.builder.CreateCondBr(check, checkedbb, failedbb);
-	e.f->getBasicBlockList().push_back(checkedbb);
+	checkedbb->insertInto(e.f);
 	e.builder.SetInsertPoint(checkedbb);
       }
     }
@@ -13915,7 +13641,7 @@ Value *interpreter::when_codegen(expr x, matcher *m,
     Value *v = when_codegen(x, m+1, s, end, e.rp, level+1);
     if (v) e.CreateRet(v, e.rp);
     // failed => throw an exception
-    e.f->getBasicBlockList().push_back(failedbb);
+    failedbb->insertInto(e.f);
     e.builder.SetInsertPoint(failedbb);
     if (debugging) debug_redn(0);
     unwind(symtab.failed_match_sym().f);
@@ -13932,7 +13658,7 @@ Value *interpreter::get_int_check(Value *u, BasicBlock *failedbb)
   verify_tag(u, EXPR::INT, failedbb);
   // get the value
   Value *p = e.builder.CreateBitCast(u, IntExprPtrTy, "intexpr");
-  Value *v = e.CreateLoadGEP(p, Zero, ValFldIndex, "intval");
+  Value *v = e.CreateLoadGEP(IntExprTy, p, Zero, ValFldIndex, "intval");
   // collect the temporary, it's not needed any more
   call("pure_freenew", u);
   return v;
@@ -13960,7 +13686,7 @@ Value *interpreter::get_int(expr x)
       assert(x.tag() == EXPR::VAR);
       Value *u = codegen(x);
       Value *p = e.builder.CreateBitCast(u, IntExprPtrTy, "intexpr");
-      Value *v = e.CreateLoadGEP(p, Zero, ValFldIndex, "intval");
+      Value *v = e.CreateLoadGEP(IntExprTy, p, Zero, ValFldIndex, "intval");
 #if 0
       // collect the temporary, it's not needed any more
       call("pure_freenew", u);
@@ -13971,7 +13697,7 @@ Value *interpreter::get_int(expr x)
       assert(x.tag() == EXPR::VAR && x.ttag() == EXPR::DBL);
       Value *u = codegen(x);
       Value *p = e.builder.CreateBitCast(u, DblExprPtrTy, "dblexpr");
-      Value *v = e.CreateLoadGEP(p, Zero, ValFldIndex, "dblval");
+      Value *v = e.CreateLoadGEP(DblExprTy, p, Zero, ValFldIndex, "dblval");
       v = e.builder.CreateFPToSI(v, int32_type());
 #if 0
       // collect the temporary, it's not needed any more
@@ -13987,7 +13713,7 @@ Value *interpreter::get_int(expr x)
     verify_tag(u, EXPR::INT);
     // get the value
     Value *p = e.builder.CreateBitCast(u, IntExprPtrTy, "intexpr");
-    Value *v = e.CreateLoadGEP(p, Zero, ValFldIndex, "intval");
+    Value *v = e.CreateLoadGEP(IntExprTy, p, Zero, ValFldIndex, "intval");
     // collect the temporary, it's not needed any more
     call("pure_freenew", u);
     return v;
@@ -14016,7 +13742,7 @@ Value *interpreter::get_double(expr x)
       assert(x.tag() == EXPR::VAR);
       Value *u = codegen(x);
       Value *p = e.builder.CreateBitCast(u, IntExprPtrTy, "intexpr");
-      Value *v = e.CreateLoadGEP(p, Zero, ValFldIndex, "intval");
+      Value *v = e.CreateLoadGEP(IntExprTy, p, Zero, ValFldIndex, "intval");
       v = e.builder.CreateSIToFP(v, double_type());
 #if 0
       // collect the temporary, it's not needed any more
@@ -14028,7 +13754,7 @@ Value *interpreter::get_double(expr x)
       assert(x.tag() == EXPR::VAR && x.ttag() == EXPR::DBL);
       Value *u = codegen(x);
       Value *p = e.builder.CreateBitCast(u, DblExprPtrTy, "dblexpr");
-      Value *v = e.CreateLoadGEP(p, Zero, ValFldIndex, "dblval");
+      Value *v = e.CreateLoadGEP(DblExprTy, p, Zero, ValFldIndex, "dblval");
 #if 0
       // collect the temporary, it's not needed any more
       call("pure_freenew", u);
@@ -14043,7 +13769,7 @@ Value *interpreter::get_double(expr x)
     verify_tag(u, EXPR::DBL);
     // get the value
     Value *p = e.builder.CreateBitCast(u, DblExprPtrTy, "dblexpr");
-    Value *v = e.CreateLoadGEP(p, Zero, ValFldIndex, "dblval");
+    Value *v = e.CreateLoadGEP(DblExprTy, p, Zero, ValFldIndex, "dblval");
     // collect the temporary, it's not needed any more
     call("pure_freenew", u);
     return v;
@@ -14076,11 +13802,7 @@ Value *interpreter::builtin_codegen(expr x)
     // unary double operations
     Value *u = get_double(x.xval2());
     if (f.tag() == symtab.neg_sym().f)
-#ifdef LLVM26
       return b.CreateFSub(Dbl(0.0), u);
-#else
-      return b.CreateSub(Dbl(0.0), u);
-#endif
     else {
       assert(0 && "error in type checker");
       return 0;
@@ -14096,7 +13818,7 @@ Value *interpreter::builtin_codegen(expr x)
       BasicBlock *iffalsebb = basic_block("iffalse");
       BasicBlock *endbb = basic_block("end");
       b.CreateCondBr(condv, endbb, iffalsebb);
-      e.f->getBasicBlockList().push_back(iffalsebb);
+      iffalsebb->insertInto(e.f);
       b.SetInsertPoint(iffalsebb);
       Value *v = get_int(x.xval2());
 #if DEBUG
@@ -14110,7 +13832,7 @@ Value *interpreter::builtin_codegen(expr x)
 #endif
       b.CreateBr(endbb);
       iffalsebb = b.GetInsertBlock();
-      e.f->getBasicBlockList().push_back(endbb);
+      endbb->insertInto(e.f);
       b.SetInsertPoint(endbb);
       PHINode *phi = phi_node(b, int32_type(), 2, "fi");
       phi->addIncoming(u, iftruebb);
@@ -14124,7 +13846,7 @@ Value *interpreter::builtin_codegen(expr x)
       BasicBlock *iftruebb = basic_block("iftrue");
       BasicBlock *endbb = basic_block("end");
       b.CreateCondBr(condv, iftruebb, endbb);
-      e.f->getBasicBlockList().push_back(iftruebb);
+      iftruebb->insertInto(e.f);
       b.SetInsertPoint(iftruebb);
       Value *v = get_int(x.xval2());
 #if DEBUG
@@ -14138,7 +13860,7 @@ Value *interpreter::builtin_codegen(expr x)
 #endif
       b.CreateBr(endbb);
       iftruebb = b.GetInsertBlock();
-      e.f->getBasicBlockList().push_back(endbb);
+      endbb->insertInto(e.f);
       b.SetInsertPoint(endbb);
       PHINode *phi = phi_node(b, int32_type(), 2, "fi");
       phi->addIncoming(u, iffalsebb);
@@ -14169,11 +13891,11 @@ Value *interpreter::builtin_codegen(expr x)
       BasicBlock *endbb = basic_block("end");
       Value *cmp = b.CreateICmpULT(v, UInt(32));
       b.CreateCondBr(cmp, okbb, endbb);
-      act_env().f->getBasicBlockList().push_back(okbb);
+      okbb->insertInto(act_env().f);
       b.SetInsertPoint(okbb);
       Value *ok = b.CreateShl(u, v);
       b.CreateBr(endbb);
-      act_env().f->getBasicBlockList().push_back(endbb);
+      endbb->insertInto(act_env().f);
       b.SetInsertPoint(endbb);
       PHINode *phi = phi_node(b, int32_type(), 2);
       phi->addIncoming(ok, okbb);
@@ -14215,11 +13937,11 @@ Value *interpreter::builtin_codegen(expr x)
 	BasicBlock *errbb = basic_block("err");
 	Value *cmp = b.CreateICmpEQ(v, Zero);
 	b.CreateCondBr(cmp, errbb, okbb);
-	act_env().f->getBasicBlockList().push_back(errbb);
+	errbb->insertInto(act_env().f);
 	b.SetInsertPoint(errbb);
 	b.CreateCall(module->getFunction("pure_sigfpe"));
 	b.CreateRet(NullExprPtr);
-	act_env().f->getBasicBlockList().push_back(okbb);
+	okbb->insertInto(act_env().f);
 	b.SetInsertPoint(okbb);
 	return b.CreateSDiv(u, v);
       }
@@ -14233,11 +13955,11 @@ Value *interpreter::builtin_codegen(expr x)
 	BasicBlock *errbb = basic_block("err");
 	Value *cmp = b.CreateICmpEQ(v, Zero);
 	b.CreateCondBr(cmp, errbb, okbb);
-	act_env().f->getBasicBlockList().push_back(errbb);
+	errbb->insertInto(act_env().f);
 	b.SetInsertPoint(errbb);
 	b.CreateCall(module->getFunction("pure_sigfpe"));
 	b.CreateRet(NullExprPtr);
-	act_env().f->getBasicBlockList().push_back(okbb);
+	okbb->insertInto(act_env().f);
 	b.SetInsertPoint(okbb);
 	return b.CreateSRem(u, v);
       }
@@ -14277,21 +13999,12 @@ Value *interpreter::builtin_codegen(expr x)
     else if (f.tag() == symtab.notequal_sym().f)
       return b.CreateZExt
 	(b.CreateFCmpONE(u, v), int32_type());
-#ifdef LLVM26
     else if (f.tag() == symtab.plus_sym().f)
       return b.CreateFAdd(u, v);
     else if (f.tag() == symtab.minus_sym().f)
       return b.CreateFSub(u, v);
     else if (f.tag() == symtab.mult_sym().f)
       return b.CreateFMul(u, v);
-#else
-    else if (f.tag() == symtab.plus_sym().f)
-      return b.CreateAdd(u, v);
-    else if (f.tag() == symtab.minus_sym().f)
-      return b.CreateSub(u, v);
-    else if (f.tag() == symtab.mult_sym().f)
-      return b.CreateMul(u, v);
-#endif
     else if (f.tag() == symtab.fdiv_sym().f)
       return b.CreateFDiv(u, v);
     else {
@@ -14331,14 +14044,14 @@ bool interpreter::logical_tailcall(int32_t tag, uint32_t n, expr x,
     b.CreateCondBr(condv, okbb, nokbb);
   else
     b.CreateCondBr(condv, nokbb, okbb);
-  e.f->getBasicBlockList().push_back(okbb);
+  okbb->insertInto(e.f);
   b.SetInsertPoint(okbb);
   Value *okval = ibox(u);
   e.CreateRet(okval, rp);
-  e.f->getBasicBlockList().push_back(nokbb);
+  nokbb->insertInto(e.f);
   b.SetInsertPoint(nokbb);
   toplevel_codegen(x.xval2(), rp);
-  e.f->getBasicBlockList().push_back(failedbb);
+  failedbb->insertInto(e.f);
   b.SetInsertPoint(failedbb);
   Value *failedval = call(tag, u0, codegen(x.xval2()));
   e.CreateRet(failedval, rp);
@@ -14362,21 +14075,21 @@ Value *interpreter::logical_funcall(int32_t tag, uint32_t n, expr x)
     b.CreateCondBr(condv, okbb, nokbb);
   else
     b.CreateCondBr(condv, nokbb, okbb);
-  e.f->getBasicBlockList().push_back(okbb);
+  okbb->insertInto(e.f);
   b.SetInsertPoint(okbb);
   Value *okval = ibox(u);
   b.CreateBr(endbb);
-  e.f->getBasicBlockList().push_back(nokbb);
+  nokbb->insertInto(e.f);
   b.SetInsertPoint(nokbb);
   Value *nokval = codegen(x.xval2());
   b.CreateBr(endbb);
   nokbb = b.GetInsertBlock();
-  e.f->getBasicBlockList().push_back(failedbb);
+  failedbb->insertInto(e.f);
   b.SetInsertPoint(failedbb);
   Value *failedval = call(tag, u0, codegen(x.xval2()));
   b.CreateBr(endbb);
   failedbb = b.GetInsertBlock();
-  e.f->getBasicBlockList().push_back(endbb);
+  endbb->insertInto(e.f);
   b.SetInsertPoint(endbb);
   PHINode *phi = phi_node(b, ExprPtrTy, 3, "fi");
   phi->addIncoming(okval, okbb);
@@ -14581,14 +14294,14 @@ Value *interpreter::list_codegen(expr x, bool quote)
 	GlobalVariable *w = global_variable
 	  (module, ArrayType::get(int32_type(), n), true,
 	   GlobalVariable::InternalLinkage, a, "$$intv");
-	p = act_env().CreateGEP(w, Zero, Zero);
+	p = act_env().CreateGEP(w->getValueType(), w, Zero, Zero);
       } else {
 	Constant *a = ConstantArray::get
 	  (ArrayType::get(double_type(), n), c);
 	GlobalVariable *w = global_variable
 	  (module, ArrayType::get(double_type(), n), true,
 	   GlobalVariable::InternalLinkage, a, "$$doublev");
-	p = act_env().CreateGEP(w, Zero, Zero);
+	p = act_env().CreateGEP(w->getValueType(), w, Zero, Zero);
       }
       Value *u = 0;
       if (!x.is_pair() && tl.tag() != symtab.nil_sym().f)
@@ -14645,9 +14358,9 @@ Value *interpreter::list_codegen(expr x, bool quote)
       GlobalVariable *sz_w = global_variable
 	(module, ArrayType::get(int32_type(), n), true,
 	 GlobalVariable::InternalLinkage, sz_a, "$$bigintv_sz");
-      Value *p = act_env().CreateGEP(w, Zero, Zero);
-      Value *offs_p = act_env().CreateGEP(offs_w, Zero, Zero);
-      Value *sz_p = act_env().CreateGEP(sz_w, Zero, Zero);
+      Value *p = act_env().CreateGEP(w->getValueType(), w, Zero, Zero);
+      Value *offs_p = act_env().CreateGEP(offs_w->getValueType(), offs_w, Zero, Zero);
+      Value *sz_p = act_env().CreateGEP(sz_w->getValueType(), sz_w, Zero, Zero);
       Value *u = 0;
       if (!x.is_pair() && tl.tag() != symtab.nil_sym().f)
 	u = codegen(tl, quote);
@@ -14693,8 +14406,8 @@ Value *interpreter::list_codegen(expr x, bool quote)
       GlobalVariable *offs_w = global_variable
 	(module, ArrayType::get(int32_type(), n), true,
 	 GlobalVariable::InternalLinkage, offs_a, "$$strv_offs");
-      Value *p = act_env().CreateGEP(w, Zero, Zero);
-      Value *offs_p = act_env().CreateGEP(offs_w, Zero, Zero);
+      Value *p = act_env().CreateGEP(w->getValueType(), w, Zero, Zero);
+      Value *offs_p = act_env().CreateGEP(offs_w->getValueType(), offs_w, Zero, Zero);
       Value *u = 0;
       if (!x.is_pair() && tl.tag() != symtab.nil_sym().f)
 	u = codegen(tl, quote);
@@ -14720,7 +14433,7 @@ Value *interpreter::list_codegen(expr x, bool quote)
       Value *idx[1];
       idx[0] = UInt(i++);
       act_builder().CreateStore
-	(v, act_builder().CreateGEP(a, mkidxs(idx, idx+1)));
+	(v, act_builder().CreateGEP(ExprPtrTy, a, mkidxs(idx, idx+1)));
     }
     Value *u = 0;
     if (!x.is_pair() && tl.tag() != symtab.nil_sym().f)
@@ -14780,7 +14493,7 @@ static bool is_complex(interpreter& interp, expr x, double& a, double& b)
     }
     if (f.tag() == polar.f) {
       double r = a, t = b;
-      a = r*cos(t); b = r*sin(t);
+      a = r*std::cos(t); b = r*std::sin(t);
     }
     return true;
   } else
@@ -14878,14 +14591,14 @@ Value *interpreter::matrix_codegen(expr x)
 	GlobalVariable *w = global_variable
 	  (module, ArrayType::get(int32_type(), N), true,
 	   GlobalVariable::InternalLinkage, a, "$$intv");
-	p = act_env().CreateGEP(w, Zero, Zero);
+	p = act_env().CreateGEP(w->getValueType(), w, Zero, Zero);
       } else {
 	Constant *a = ConstantArray::get
 	  (ArrayType::get(double_type(), N), c);
 	GlobalVariable *w = global_variable
 	  (module, ArrayType::get(double_type(), N), true,
 	   GlobalVariable::InternalLinkage, a, "$$doublev");
-	p = act_env().CreateGEP(w, Zero, Zero);
+	p = act_env().CreateGEP(w->getValueType(), w, Zero, Zero);
       }
       vector<Value*> args;
       args.push_back(SInt(n));
@@ -14932,9 +14645,9 @@ Value *interpreter::matrix_codegen(expr x)
       GlobalVariable *sz_w = global_variable
 	(module, ArrayType::get(int32_type(), N), true,
 	 GlobalVariable::InternalLinkage, sz_a, "$$bigintv_sz");
-      Value *p = act_env().CreateGEP(w, Zero, Zero);
-      Value *offs_p = act_env().CreateGEP(offs_w, Zero, Zero);
-      Value *sz_p = act_env().CreateGEP(sz_w, Zero, Zero);
+      Value *p = act_env().CreateGEP(w->getValueType(), w, Zero, Zero);
+      Value *offs_p = act_env().CreateGEP(offs_w->getValueType(), offs_w, Zero, Zero);
+      Value *sz_p = act_env().CreateGEP(sz_w->getValueType(), sz_w, Zero, Zero);
       vector<Value*> args;
       args.push_back(SizeInt(n));
       args.push_back(SizeInt(m));
@@ -14972,8 +14685,8 @@ Value *interpreter::matrix_codegen(expr x)
       GlobalVariable *offs_w = global_variable
 	(module, ArrayType::get(int32_type(), N), true,
 	 GlobalVariable::InternalLinkage, offs_a, "$$strv_offs");
-      Value *p = act_env().CreateGEP(w, Zero, Zero);
-      Value *offs_p = act_env().CreateGEP(offs_w, Zero, Zero);
+      Value *p = act_env().CreateGEP(w->getValueType(), w, Zero, Zero);
+      Value *offs_p = act_env().CreateGEP(offs_w->getValueType(), offs_w, Zero, Zero);
       vector<Value*> args;
       args.push_back(SizeInt(n));
       args.push_back(SizeInt(m));
@@ -15031,9 +14744,10 @@ Value *interpreter::codegen(expr x, bool quote)
       // global function, its cbox must exist already)
       map<int32_t,GlobalVar>::iterator v2 = globalvars.find(v->x->tag);
       if (v2 != globalvars.end())
-	return act_builder().CreateLoad(v2->second.v);
+	return act_builder().CreateLoad
+	  (v2->second.v->getValueType(), v2->second.v);
     }
-    return act_builder().CreateLoad(v->v);
+    return act_builder().CreateLoad(v->v->getValueType(), v->v);
   }
   // matrix:
   case EXPR::MATRIX: {
@@ -15315,7 +15029,8 @@ Value *interpreter::codegen(expr x, bool quote)
     // check for an existing global variable
     map<int32_t,GlobalVar>::iterator v = globalvars.find(x.tag());
     if (v != globalvars.end()) {
-      Value *u = act_builder().CreateLoad(v->second.v);
+      Value *u = act_builder().CreateLoad
+	(v->second.v->getValueType(), v->second.v);
 #if DEBUG>2
       string msg = "codegen: global "+symtab.sym(x.tag()).s+" -> %p -> %p";
       debug(msg.c_str(), v->second.v, u);
@@ -15380,7 +15095,7 @@ Value *interpreter::cbox(int32_t tag)
     JIT->addGlobalMapping(v.v, &v.x);
   }
   if (v.x) pure_free(v.x); v.x = pure_new(cv);
-  return act_builder().CreateLoad(v.v);
+  return act_builder().CreateLoad(v.v->getValueType(), v.v);
 }
 
 // Execute a parameterless function.
@@ -15400,7 +15115,8 @@ Value *interpreter::call(int32_t f, Value *x, Value *y)
   // If we already have a definition then use it, otherwise create a cbox
   // which can be patched up later.
   if (v != globalvars.end())
-    retv = act_builder().CreateLoad(v->second.v);
+    retv = act_builder().CreateLoad
+      (v->second.v->getValueType(), v->second.v);
   else
     retv = cbox(f);
   retv = apply(retv, x);
@@ -15451,21 +15167,21 @@ Value *interpreter::cond(expr x, expr y, expr z)
   BasicBlock *endbb = basic_block("end");
   // create the branch instruction and emit the 'then' block
   f.builder.CreateCondBr(condv, thenbb, elsebb);
-  f.f->getBasicBlockList().push_back(thenbb);
+  thenbb->insertInto(f.f);
   f.builder.SetInsertPoint(thenbb);
   Value *thenv = codegen(y);
   f.builder.CreateBr(endbb);
   // current block might have changed, update thenbb for the phi
   thenbb = f.builder.GetInsertBlock();
   // emit the 'else' block
-  f.f->getBasicBlockList().push_back(elsebb);
+  elsebb->insertInto(f.f);
   f.builder.SetInsertPoint(elsebb);
   Value *elsev = codegen(z);
   f.builder.CreateBr(endbb);
   // current block might have changed, update elsebb for the phi
   elsebb = f.builder.GetInsertBlock();
   // emit the 'end' block and the phi node
-  f.f->getBasicBlockList().push_back(endbb);
+  endbb->insertInto(f.f);
   f.builder.SetInsertPoint(endbb);
   PHINode *phi = phi_node(f.builder, ExprPtrTy, 2, "fi");
   phi->addIncoming(thenv, thenbb);
@@ -15498,11 +15214,11 @@ void interpreter::toplevel_cond(expr x, expr y, expr z, const rule *rp)
   BasicBlock *elsebb = basic_block("else");
   // create the branch instruction and emit the 'then' block
   f.builder.CreateCondBr(condv, thenbb, elsebb);
-  f.f->getBasicBlockList().push_back(thenbb);
+  thenbb->insertInto(f.f);
   f.builder.SetInsertPoint(thenbb);
   toplevel_codegen(y, rp);
   // emit the 'else' block
-  f.f->getBasicBlockList().push_back(elsebb);
+  elsebb->insertInto(f.f);
   f.builder.SetInsertPoint(elsebb);
   toplevel_codegen(z, rp);
 }
@@ -15576,10 +15292,11 @@ Value *interpreter::vref(Value *x, path p)
       // matrix path
       uint32_t r = argidx(p, i), c = argidx(p, i);
       Function *f = module->getFunction("matrix_elem_at2");
-      x = b.CreateCall3(f, x, UInt(r), UInt(c));
+      x = b.CreateCall(f, {x, UInt(r), UInt(c)});
       if (i < n) tmp = x;
     } else {
-      x = e.CreateLoadGEP(x, Zero, SubFldIndex(p[i]), mklabel("x", i, p[i]+1));
+      x = e.CreateLoadGEP
+	(ExprTy, x, Zero, SubFldIndex(p[i]), mklabel("x", i, p[i]+1));
       i++;
     }
   }
@@ -15611,10 +15328,11 @@ Value *interpreter::vref(int32_t tag, path p)
       // matrix path
       uint32_t r = argidx(p, i), c = argidx(p, i);
       Function *f = module->getFunction("matrix_elem_at2");
-      v = b.CreateCall3(f, v, UInt(r), UInt(c));
+      v = b.CreateCall(f, {v, UInt(r), UInt(c)});
       if (i < n) tmp = v;
     } else {
-      v = e.CreateLoadGEP(v, Zero, SubFldIndex(p[i]), mklabel("x", i, p[i]+1));
+      v = e.CreateLoadGEP
+	(ExprTy, v, Zero, SubFldIndex(p[i]), mklabel("x", i, p[i]+1));
       i++;
     }
   }
@@ -15631,8 +15349,9 @@ Value *interpreter::vref(int32_t tag, uint32_t v)
 {
   // environment proxy
   Env &e = act_env();
-  Value *sstkptr = e.builder.CreateLoad(sstkvar);
-  return e.CreateLoadGEP(sstkptr, e.builder.CreateAdd(e.envs, UInt(v)));
+  Value *sstkptr = e.builder.CreateLoad(sstkvar->getValueType(), sstkvar);
+  return e.CreateLoadGEP
+    (ExprPtrTy, sstkptr, e.builder.CreateAdd(e.envs, UInt(v)));
 }
 
 Value *interpreter::vref(int32_t tag, uint8_t idx, path p)
@@ -15814,7 +15533,7 @@ Value *interpreter::call(string name, const char *s)
      GlobalVariable::InternalLinkage, constant_char_array(s),
      "$$str");
   // "cast" the char array to a char*
-  Value *p = e.CreateGEP(v, Zero, Zero);
+  Value *p = e.CreateGEP(v->getValueType(), v, Zero, Zero);
   return call(name, p);
 }
 
@@ -15832,7 +15551,7 @@ Value *interpreter::call(string name, Value *x, const char *s)
      GlobalVariable::InternalLinkage, constant_char_array(s),
      "$$str");
   // "cast" the char array to a char*
-  Value *p = e.CreateGEP(v, Zero, Zero);
+  Value *p = e.CreateGEP(v->getValueType(), v, Zero, Zero);
   return call(name, x, p);
 }
 
@@ -15887,7 +15606,7 @@ void interpreter::make_bigint(const mpz_t& z, Value*& sz, Value*& ptr)
        GlobalVariable::InternalLinkage, limbs, "$$limbs");
   }
   // "cast" the int array to a int*
-  ptr = e.CreateGEP(v, Zero, Zero);
+  ptr = e.CreateGEP(v->getValueType(), v, Zero, Zero);
 }
 
 // Debugger calls.
@@ -15931,7 +15650,7 @@ Value *interpreter::debug(const char *format)
      GlobalVariable::InternalLinkage, constant_char_array(format),
      "$$str");
   // "cast" the char array to a char*
-  Value *p = e.CreateGEP(v, Zero, Zero);
+  Value *p = e.CreateGEP(v->getValueType(), v, Zero, Zero);
   vector<Value*> args;
   args.push_back(SInt(e.tag));
   args.push_back(p);
@@ -15948,7 +15667,7 @@ Value *interpreter::debug(const char *format, Value *x)
      GlobalVariable::InternalLinkage, constant_char_array(format),
      "$$str");
   // "cast" the char array to a char*
-  Value *p = e.CreateGEP(v, Zero, Zero);
+  Value *p = e.CreateGEP(v->getValueType(), v, Zero, Zero);
   vector<Value*> args;
   args.push_back(SInt(e.tag));
   args.push_back(p);
@@ -15966,7 +15685,7 @@ Value *interpreter::debug(const char *format, Value *x, Value *y)
      GlobalVariable::InternalLinkage, constant_char_array(format),
      "$$str");
   // "cast" the char array to a char*
-  Value *p = e.CreateGEP(v, Zero, Zero);
+  Value *p = e.CreateGEP(v->getValueType(), v, Zero, Zero);
   vector<Value*> args;
   args.push_back(SInt(e.tag));
   args.push_back(p);
@@ -15985,7 +15704,7 @@ Value *interpreter::debug(const char *format, Value *x, Value *y, Value *z)
      GlobalVariable::InternalLinkage, constant_char_array(format),
      "$$str");
   // "cast" the char array to a char*
-  Value *p = e.CreateGEP(v, Zero, Zero);
+  Value *p = e.CreateGEP(v->getValueType(), v, Zero, Zero);
   vector<Value*> args;
   args.push_back(SInt(e.tag));
   args.push_back(p);
@@ -16126,11 +15845,7 @@ Function *interpreter::fun_prolog(string name)
       if (FPM) FPM->run(*f.h);
       // show output code, if requested
       if (verbose&verbosity::dump) {
-#if RAW_STREAM
 	raw_ostream& out = outs();
-#else
-	ostream& out = std::cout;
-#endif
 	f.h->print(out);
       }
     }
@@ -16159,7 +15874,7 @@ void interpreter::fun_body(matcher *pm, matcher *mxs, bool nodefault)
 #endif
   BasicBlock *bodybb = basic_block("body");
   f.builder.CreateBr(bodybb);
-  f.f->getBasicBlockList().push_back(bodybb);
+  bodybb->insertInto(f.f);
   f.builder.SetInsertPoint(bodybb);
 #if DEBUG>1
   if (!is_init(f.name)) { ostringstream msg;
@@ -16176,7 +15891,7 @@ void interpreter::fun_body(matcher *pm, matcher *mxs, bool nodefault)
   if (debugging && !is_init(f.name)) debug_rule(0);
   complex_match(pm, mxs, failedbb);
   // emit code for a failed match
-  f.f->getBasicBlockList().push_back(failedbb);
+  failedbb->insertInto(f.f);
   f.builder.SetInsertPoint(failedbb);
   if (debugging && !is_init(f.name)) debug_redn(0);
   if (nodefault) {
@@ -16196,9 +15911,10 @@ void interpreter::fun_body(matcher *pm, matcher *mxs, bool nodefault)
     // failed match is non-fatal, instead we return a "thunk" (literal fbox)
     // of ourself applied to our arguments as the result
     vector<Value*> x(f.m);
-    Value *sstkptr = f.builder.CreateLoad(sstkvar);
+    Value *sstkptr = f.builder.CreateLoad(sstkvar->getValueType(), sstkvar);
     for (size_t i = 0; i < f.m; i++) {
-      x[i] = f.CreateLoadGEP(sstkptr, f.builder.CreateAdd(f.envs, UInt(i)));
+      x[i] = f.CreateLoadGEP
+	(ExprPtrTy, sstkptr, f.builder.CreateAdd(f.envs, UInt(i)));
       assert(x[i]->getType() == ExprPtrTy);
     }
     if (f.m == 1)
@@ -16243,11 +15959,7 @@ void interpreter::fun_finish()
   if (FPM) FPM->run(*f.f);
   // show output code, if requested
   if (verbose&verbosity::dump)  {
-#if RAW_STREAM
     raw_ostream& out = outs();
-#else
-    ostream& out = std::cout;
-#endif
     f.f->print(out);
   }
 #if DEBUG>1
@@ -16265,10 +15977,10 @@ void interpreter::unwind_iffalse(Value *v)
   BasicBlock *errbb = basic_block("err");
   BasicBlock *okbb = basic_block("ok");
   f.builder.CreateCondBr(v, okbb, errbb);
-  f.f->getBasicBlockList().push_back(errbb);
+  errbb->insertInto(f.f);
   f.builder.SetInsertPoint(errbb);
   unwind(symtab.failed_cond_sym().f);
-  f.f->getBasicBlockList().push_back(okbb);
+  okbb->insertInto(f.f);
   f.builder.SetInsertPoint(okbb);
 }
 
@@ -16280,10 +15992,10 @@ void interpreter::unwind_iftrue(Value *v)
   BasicBlock *errbb = basic_block("err");
   BasicBlock *okbb = basic_block("ok");
   f.builder.CreateCondBr(v, errbb, okbb);
-  f.f->getBasicBlockList().push_back(errbb);
+  errbb->insertInto(f.f);
   f.builder.SetInsertPoint(errbb);
   unwind(symtab.failed_cond_sym().f);
-  f.f->getBasicBlockList().push_back(okbb);
+  okbb->insertInto(f.f);
   f.builder.SetInsertPoint(okbb);
 }
 
@@ -16292,7 +16004,7 @@ Value *interpreter::check_tag(Value *v, int32_t tag)
   // check that the given expression value has the given tag, return true if
   // so and false otherwise
   assert(v->getType() == ExprPtrTy);
-  Value *tagv = act_env().CreateLoadGEP(v, Zero, Zero, "tag");
+  Value *tagv = act_env().CreateLoadGEP(ExprTy, v, Zero, Zero, "tag");
   return act_builder().CreateICmpEQ(tagv, SInt(tag));
 }
 
@@ -16311,7 +16023,7 @@ void interpreter::verify_tag(Value *v, int32_t tag, BasicBlock *failedbb)
   assert(f.f!=0);
   BasicBlock *okbb = basic_block("ok");
   f.builder.CreateCondBr(check_tag(v, tag), okbb, failedbb);
-  f.f->getBasicBlockList().push_back(okbb);
+  okbb->insertInto(f.f);
   f.builder.SetInsertPoint(okbb);
 }
 
@@ -16342,16 +16054,16 @@ void interpreter::simple_match(Value *x, state*& s,
   // check for thunks which must be forced
   if (t.tag != EXPR::VAR || t.ttag != 0) {
     // do a quick check on the tag value
-    tagv = f.CreateLoadGEP(x, Zero, Zero, "tag");
+    tagv = f.CreateLoadGEP(ExprTy, x, Zero, Zero, "tag");
     Value *checkv = f.builder.CreateICmpEQ(tagv, Zero, "check");
     BasicBlock *forcebb = basic_block("force");
     BasicBlock *skipbb = basic_block("skip");
     f.builder.CreateCondBr(checkv, forcebb, skipbb);
-    f.f->getBasicBlockList().push_back(forcebb);
+    forcebb->insertInto(f.f);
     f.builder.SetInsertPoint(forcebb);
     call("pure_force", x);
     f.builder.CreateBr(skipbb);
-    f.f->getBasicBlockList().push_back(skipbb);
+    skipbb->insertInto(f.f);
     f.builder.SetInsertPoint(skipbb);
     tagv = 0;
   }
@@ -16362,7 +16074,7 @@ void interpreter::simple_match(Value *x, state*& s,
       f.builder.CreateBr(matchedbb);
     else {
       // typed variable, must match type tag against value
-      if (!tagv) tagv = f.CreateLoadGEP(x, Zero, Zero, "tag");
+      if (!tagv) tagv = f.CreateLoadGEP(ExprTy, x, Zero, Zero, "tag");
       if (t.ttag == EXPR::MATRIX) {
 	// this can denote any type of matrix, mask the subtype nibble
 	Value *tagv1 = f.builder.CreateAnd(tagv, UInt(0xfffffff0));
@@ -16378,20 +16090,20 @@ void interpreter::simple_match(Value *x, state*& s,
   case EXPR::DBL: {
     // first check the tag
     BasicBlock *okbb = basic_block("ok");
-    if (!tagv) tagv = f.CreateLoadGEP(x, Zero, Zero, "tag");
+    if (!tagv) tagv = f.CreateLoadGEP(ExprTy, x, Zero, Zero, "tag");
     f.builder.CreateCondBr
       (f.builder.CreateICmpEQ(tagv, SInt(t.tag), "cmp"), okbb, failedbb);
     // next check the values (we inline these for max performance)
-    f.f->getBasicBlockList().push_back(okbb);
+    okbb->insertInto(f.f);
     f.builder.SetInsertPoint(okbb);
     Value *cmpv;
     if (t.tag == EXPR::INT) {
       Value *pv = f.builder.CreateBitCast(x, IntExprPtrTy, "intexpr");
-      Value *iv = f.CreateLoadGEP(pv, Zero, ValFldIndex, "intval");
+      Value *iv = f.CreateLoadGEP(IntExprTy, pv, Zero, ValFldIndex, "intval");
       cmpv = f.builder.CreateICmpEQ(iv, SInt(t.i), "cmp");
     } else {
       Value *pv = f.builder.CreateBitCast(x, DblExprPtrTy, "dblexpr");
-      Value *dv = f.CreateLoadGEP(pv, Zero, ValFldIndex, "dblval");
+      Value *dv = f.CreateLoadGEP(DblExprTy, pv, Zero, ValFldIndex, "dblval");
       cmpv = f.builder.CreateFCmpOEQ(dv, Dbl(t.d), "cmp");
     }
     f.builder.CreateCondBr(cmpv, matchedbb, failedbb);
@@ -16403,12 +16115,12 @@ void interpreter::simple_match(Value *x, state*& s,
     // first do a quick check on the tag so that we may avoid an expensive
     // call if the tags don't match
     BasicBlock *okbb = basic_block("ok");
-    if (!tagv) tagv = f.CreateLoadGEP(x, Zero, Zero, "tag");
+    if (!tagv) tagv = f.CreateLoadGEP(ExprTy, x, Zero, Zero, "tag");
     f.builder.CreateCondBr
       (f.builder.CreateICmpEQ(tagv, SInt(t.tag), "cmp"), okbb, failedbb);
     // next check the values (like above, but we have to call the runtime for
     // these)
-    f.f->getBasicBlockList().push_back(okbb);
+    okbb->insertInto(f.f);
     f.builder.SetInsertPoint(okbb);
     Value *cmpv;
     if (t.tag == EXPR::BIGINT)
@@ -16424,18 +16136,18 @@ void interpreter::simple_match(Value *x, state*& s,
     // first do a quick check on the tag so that we may avoid an expensive
     // call if the tags don't match
     BasicBlock *okbb = basic_block("ok");
-    if (!tagv) tagv = f.CreateLoadGEP(x, Zero, Zero, "tag");
+    if (!tagv) tagv = f.CreateLoadGEP(ExprTy, x, Zero, Zero, "tag");
     SwitchInst *sw = f.builder.CreateSwitch(tagv, failedbb, 4);
     sw->addCase(SInt(EXPR::MATRIX), okbb);
     sw->addCase(SInt(EXPR::DMATRIX), okbb);
     sw->addCase(SInt(EXPR::CMATRIX), okbb);
     sw->addCase(SInt(EXPR::IMATRIX), okbb);
     // next check that the dimensions match
-    f.f->getBasicBlockList().push_back(okbb);
+    okbb->insertInto(f.f);
     f.builder.SetInsertPoint(okbb);
     okbb = basic_block("check");
-    Value *ok = f.builder.CreateCall3(module->getFunction("matrix_check"),
-				      x, UInt(t.n), UInt(t.m));
+    Value *ok = f.builder.CreateCall
+      (module->getFunction("matrix_check"), {x, UInt(t.n), UInt(t.m)});
     f.builder.CreateCondBr(ok, okbb, failedbb);
     // finally match the elements
     s = t.st;
@@ -16449,25 +16161,25 @@ void interpreter::simple_match(Value *x, state*& s,
 	if (t.tag == EXPR::VAR && t.ttag == 0) {
 	  s = t.st; continue;
 	}
-	f.f->getBasicBlockList().push_back(okbb);
+	okbb->insertInto(f.f);
 	f.builder.SetInsertPoint(okbb);
 	okbb = basic_block("check");
-	Value *y = f.builder.CreateCall3
-	  (module->getFunction("matrix_elem_at2"), x, UInt(i), UInt(j));
+	Value *y = f.builder.CreateCall
+	  (module->getFunction("matrix_elem_at2"), {x, UInt(i), UInt(j)});
 	BasicBlock *elem_okbb = basic_block("elem_ok");
 	BasicBlock *elem_nokbb = basic_block("elem_failed");
 	simple_match(y, s, elem_okbb, elem_nokbb);
 	// collect temporaries
-	f.f->getBasicBlockList().push_back(elem_okbb);
+	elem_okbb->insertInto(f.f);
 	f.builder.SetInsertPoint(elem_okbb);
 	f.builder.CreateCall(module->getFunction("pure_freenew"), y);
 	f.builder.CreateBr(okbb);
-	f.f->getBasicBlockList().push_back(elem_nokbb);
+	elem_nokbb->insertInto(f.f);
 	f.builder.SetInsertPoint(elem_nokbb);
 	f.builder.CreateCall(module->getFunction("pure_freenew"), y);
 	f.builder.CreateBr(failedbb);
       }
-    f.f->getBasicBlockList().push_back(okbb);
+    okbb->insertInto(f.f);
     f.builder.SetInsertPoint(okbb);
     f.builder.CreateBr(matchedbb);
     break;
@@ -16483,26 +16195,26 @@ void interpreter::simple_match(Value *x, state*& s,
     // first match the tag...
     BasicBlock *ok1bb = basic_block("arg1");
     BasicBlock *ok2bb = basic_block("arg2");
-    if (!tagv) tagv = f.CreateLoadGEP(x, Zero, Zero, "tag");
+    if (!tagv) tagv = f.CreateLoadGEP(ExprTy, x, Zero, Zero, "tag");
     f.builder.CreateCondBr
       (f.builder.CreateICmpEQ(tagv, SInt(t.tag)), ok1bb, failedbb);
     s = t.st;
     // next match the first subterm...
-    f.f->getBasicBlockList().push_back(ok1bb);
+    ok1bb->insertInto(f.f);
     f.builder.SetInsertPoint(ok1bb);
-    Value *x1 = f.CreateLoadGEP(x, Zero, ValFldIndex, "x1");
+    Value *x1 = f.CreateLoadGEP(ExprTy, x, Zero, ValFldIndex, "x1");
     simple_match(x1, s, ok2bb, failedbb);
     // and finally the second subterm...
-    f.f->getBasicBlockList().push_back(ok2bb);
+    ok2bb->insertInto(f.f);
     f.builder.SetInsertPoint(ok2bb);
-    Value *x2 = f.CreateLoadGEP(x, Zero, ValFld2Index, "x2");
+    Value *x2 = f.CreateLoadGEP(ExprTy, x, Zero, ValFld2Index, "x2");
     simple_match(x2, s, matchedbb, failedbb);
     break;
   }
   default:
     assert(t.tag > 0);
     // just do a quick check on the tag
-    if (!tagv) tagv = f.CreateLoadGEP(x, Zero, Zero, "tag");
+    if (!tagv) tagv = f.CreateLoadGEP(ExprTy, x, Zero, Zero, "tag");
     f.builder.CreateCondBr
       (f.builder.CreateICmpEQ(tagv, SInt(t.tag)), matchedbb, failedbb);
     s = t.st;
@@ -16538,7 +16250,7 @@ void interpreter::complex_match(matcher *pm, matcher *mxs,
     state *start = pm->start;
     simple_match(arg, start, matchedbb, failedbb);
     // matched => emit code for the reduct, and return the result
-    f.f->getBasicBlockList().push_back(matchedbb);
+    matchedbb->insertInto(f.f);
     f.builder.SetInsertPoint(matchedbb);
     if (!pm->r[0].vi.guards.empty()) {
       // verify guards
@@ -16552,7 +16264,7 @@ void interpreter::complex_match(matcher *pm, matcher *mxs,
 	  f.builder.CreateCall(module->getFunction("pure_typecheck"),
 			       mkargs(args));
 	f.builder.CreateCondBr(check, checkedbb, failedbb);
-	f.f->getBasicBlockList().push_back(checkedbb);
+	checkedbb->insertInto(f.f);
 	f.builder.SetInsertPoint(checkedbb);
       }
     }
@@ -16567,7 +16279,7 @@ void interpreter::complex_match(matcher *pm, matcher *mxs,
 	Value *check = f.builder.CreateCall(module->getFunction("same"),
 					    mkargs(args));
 	f.builder.CreateCondBr(check, checkedbb, failedbb);
-	f.f->getBasicBlockList().push_back(checkedbb);
+	checkedbb->insertInto(f.f);
 	f.builder.SetInsertPoint(checkedbb);
       }
     }
@@ -16600,7 +16312,7 @@ void interpreter::complex_match(matcher *pm, matcher *mxs,
       // The rules to match an interface are generated automatically, so we
       // don't do any warnings about unreduced rules here.
       if (pm) {
-	f.f->getBasicBlockList().push_back(iffailedbb);
+	iffailedbb->insertInto(f.f);
 	f.builder.SetInsertPoint(iffailedbb);
 	// interface match failed, fall back to the regular type rules below
       }
@@ -16648,8 +16360,8 @@ void interpreter::complex_match(matcher *pm, matcher *mxs,
   do {								\
     state *s = t->st;						\
     list<Value*> ys = xs; ys.pop_front();			\
-    Value *x1 = f.CreateLoadGEP(x, Zero, ValFldIndex, "x1");	\
-    Value *x2 = f.CreateLoadGEP(x, Zero, ValFld2Index, "x2");	\
+    Value *x1 = f.CreateLoadGEP(ExprTy, x, Zero, ValFldIndex, "x1");	\
+    Value *x2 = f.CreateLoadGEP(ExprTy, x, Zero, ValFld2Index, "x2");	\
     ys.push_front(x2); ys.push_front(x1);			\
     complex_match(pm, ys, s, failedbb, reduced, tmps);		\
   } while (0)
@@ -16664,8 +16376,8 @@ void interpreter::complex_match(matcher *pm, matcher *mxs,
     list<Value*> tmps1 = tmps;					\
     for (uint32_t i = 0; i < t->n; i++)				\
       for (uint32_t j = 0; j < t->m; j++) {			\
-        Value *y = f.builder.CreateCall3			\
-	  (module->getFunction("matrix_elem_at2"), x, UInt(i), UInt(j)); \
+	Value *y = f.builder.CreateCall				\
+	  (module->getFunction("matrix_elem_at2"), {x, UInt(i), UInt(j)}); \
 	zs.push_back(y);					\
 	tmps1.push_front(y);					\
       }								\
@@ -16711,7 +16423,7 @@ void interpreter::complex_match(matcher *pm, const list<Value*>& xs, state *s,
   // readability, we don't actually need this as a label to branch to)
   BasicBlock *statebb = basic_block(mklabel("state", s->s));
   f.builder.CreateBr(statebb);
-  f.f->getBasicBlockList().push_back(statebb);
+  statebb->insertInto(f.f);
   f.builder.SetInsertPoint(statebb);
 #if DEBUG>1
   if (!is_init(f.name)) { ostringstream msg;
@@ -16734,23 +16446,23 @@ void interpreter::complex_match(matcher *pm, const list<Value*>& xs, state *s,
   // check for thunks which must be forced
   if (must_force) {
     // do a quick check on the tag value
-    tagv = f.CreateLoadGEP(x, Zero, Zero, "tag");
+    tagv = f.CreateLoadGEP(ExprTy, x, Zero, Zero, "tag");
     Value *checkv = f.builder.CreateICmpEQ(tagv, Zero, "check");
     BasicBlock *forcebb = basic_block("force");
     BasicBlock *skipbb = basic_block("skip");
     f.builder.CreateCondBr(checkv, forcebb, skipbb);
-    f.f->getBasicBlockList().push_back(forcebb);
+    forcebb->insertInto(f.f);
     f.builder.SetInsertPoint(forcebb);
     call("pure_force", x);
     f.builder.CreateBr(skipbb);
-    f.f->getBasicBlockList().push_back(skipbb);
+    skipbb->insertInto(f.f);
     f.builder.SetInsertPoint(skipbb);
     tagv = 0;
   }
   if (t0 != s->tr.end()) {
     assert(n > m);
     // get the tag value
-    if (!tagv) tagv = f.CreateLoadGEP(x, Zero, Zero, "tag");
+    if (!tagv) tagv = f.CreateLoadGEP(ExprTy, x, Zero, Zero, "tag");
     // set up the switch instruction branching over the different tags
     SwitchInst *sw = f.builder.CreateSwitch(tagv, retrybb, n-m);
     /* NOTE: For constant transitions there may be multiple transitions under
@@ -16802,7 +16514,7 @@ void interpreter::complex_match(matcher *pm, const list<Value*>& xs, state *s,
     for (trans_map::iterator ti = tmap.begin(); ti != tmap.end(); ti++) {
       int32_t tag = ti->first;
       trans_list_info& info = ti->second;
-      f.f->getBasicBlockList().push_back(info.bb);
+      info.bb->insertInto(f.f);
       f.builder.SetInsertPoint(info.bb);
       if (tag == EXPR::APP || tag > 0) {
 	// singleton transition on a function symbol
@@ -16823,13 +16535,14 @@ void interpreter::complex_match(matcher *pm, const list<Value*>& xs, state *s,
 	  BasicBlock *okbb = l->bb;
 	  BasicBlock *trynextbb =
 	    basic_block(mklabel("next.state", s->s, l->t->n, l->t->m));
-	  Value *ok = f.builder.CreateCall3(module->getFunction("matrix_check"),
-					    x, UInt(l->t->n), UInt(l->t->m));
+	  Value *ok = f.builder.CreateCall
+	    (module->getFunction("matrix_check"),
+	     {x, UInt(l->t->n), UInt(l->t->m)});
 	  f.builder.CreateCondBr(ok, okbb, trynextbb);
-	  f.f->getBasicBlockList().push_back(okbb);
+	  okbb->insertInto(f.f);
 	  f.builder.SetInsertPoint(okbb);
 	  next_statem(l->t);
-	  f.f->getBasicBlockList().push_back(trynextbb);
+	  trynextbb->insertInto(f.f);
 	  f.builder.SetInsertPoint(trynextbb);
 	  if (k == info.tlist.end())
 	    f.builder.CreateBr(retrybb);
@@ -16851,18 +16564,18 @@ void interpreter::complex_match(matcher *pm, const list<Value*>& xs, state *s,
 	    Value *cmpv;
 	    if (tag == EXPR::INT) {
 	      Value *pv = f.builder.CreateBitCast(x, IntExprPtrTy, "intexpr");
-	      Value *iv = f.CreateLoadGEP(pv, Zero, ValFldIndex, "intval");
+	      Value *iv = f.CreateLoadGEP(IntExprTy, pv, Zero, ValFldIndex, "intval");
 	      cmpv = f.builder.CreateICmpEQ(iv, SInt(l->t->i), "cmp");
 	    } else {
 	      Value *pv = f.builder.CreateBitCast(x, DblExprPtrTy, "dblexpr");
-	      Value *dv = f.CreateLoadGEP(pv, Zero, ValFldIndex, "dblval");
+	      Value *dv = f.CreateLoadGEP(DblExprTy, pv, Zero, ValFldIndex, "dblval");
 	      cmpv = f.builder.CreateFCmpOEQ(dv, Dbl(l->t->d), "cmp");
 	    }
 	    f.builder.CreateCondBr(cmpv, okbb, trynextbb);
-	    f.f->getBasicBlockList().push_back(okbb);
+	    okbb->insertInto(f.f);
 	    f.builder.SetInsertPoint(okbb);
 	    next_state(l->t);
-	    f.f->getBasicBlockList().push_back(trynextbb);
+	    trynextbb->insertInto(f.f);
 	    f.builder.SetInsertPoint(trynextbb);
 	    if (k == info.tlist.end())
 	      f.builder.CreateBr(retrybb);
@@ -16878,10 +16591,10 @@ void interpreter::complex_match(matcher *pm, const list<Value*>& xs, state *s,
 	      cmpv = call("pure_cmp_string", x, l->t->s);
 	    cmpv = f.builder.CreateICmpEQ(cmpv, Zero, "cmp");
 	    f.builder.CreateCondBr(cmpv, okbb, trynextbb);
-	    f.f->getBasicBlockList().push_back(okbb);
+	    okbb->insertInto(f.f);
 	    f.builder.SetInsertPoint(okbb);
 	    next_state(l->t);
-	    f.f->getBasicBlockList().push_back(trynextbb);
+	    trynextbb->insertInto(f.f);
 	    f.builder.SetInsertPoint(trynextbb);
 	    if (k == info.tlist.end())
 	      f.builder.CreateBr(retrybb);
@@ -16891,7 +16604,7 @@ void interpreter::complex_match(matcher *pm, const list<Value*>& xs, state *s,
 	    //assert(0 && "not implemented");
 	    // We silently let everything else fail.
 	    f.builder.CreateBr(trynextbb);
-	    f.f->getBasicBlockList().push_back(trynextbb);
+	    trynextbb->insertInto(f.f);
 	    f.builder.SetInsertPoint(trynextbb);
 	    if (k == info.tlist.end())
 	      f.builder.CreateBr(retrybb);
@@ -16903,14 +16616,14 @@ void interpreter::complex_match(matcher *pm, const list<Value*>& xs, state *s,
   } else
     f.builder.CreateBr(retrybb);
   // retrybb => literal match failed, check for a typed variable match
-  f.f->getBasicBlockList().push_back(retrybb);
+  retrybb->insertInto(f.f);
   f.builder.SetInsertPoint(retrybb);
   t0 = s->tr.begin();
   transl::iterator t1 = t0;
   if (t1->tag == EXPR::VAR && t1->ttag == 0) t1++;
   if (t1 != s->tr.end() && t1->tag == EXPR::VAR) {
     // get the tag value
-    if (!tagv) tagv = f.CreateLoadGEP(x, Zero, Zero, "tag");
+    if (!tagv) tagv = f.CreateLoadGEP(ExprTy, x, Zero, Zero, "tag");
     // set up the switch instruction branching over the different type tags
     SwitchInst *sw = f.builder.CreateSwitch(tagv, defaultbb);
     vector<BasicBlock*> vtransbb;
@@ -16928,7 +16641,7 @@ void interpreter::complex_match(matcher *pm, const list<Value*>& xs, state *s,
     }
     // now handle the transitions on the different type tags
     for (t = t1, i = 0; t != s->tr.end() && t->tag == EXPR::VAR; t++, i++) {
-      f.f->getBasicBlockList().push_back(vtransbb[i]);
+      vtransbb[i]->insertInto(f.f);
       f.builder.SetInsertPoint(vtransbb[i]);
       next_state(t);
     }
@@ -16936,7 +16649,7 @@ void interpreter::complex_match(matcher *pm, const list<Value*>& xs, state *s,
     f.builder.CreateBr(defaultbb);
   // defaultbb => both literal and type variable matches failed, check for the
   // default transition
-  f.f->getBasicBlockList().push_back(defaultbb);
+  defaultbb->insertInto(f.f);
   f.builder.SetInsertPoint(defaultbb);
   if (t0->tag == EXPR::VAR && t0->ttag == 0)
     next_state(t0);
@@ -17022,7 +16735,7 @@ void interpreter::try_rules(matcher *pm, state *s, BasicBlock *failedbb,
     // skipped for the interface part of a type definition which never has any
     // local environment.
     if (!have_iface) f.fmap.select(*r);
-    f.f->getBasicBlockList().push_back(rulebb);
+    rulebb->insertInto(f.f);
     f.builder.SetInsertPoint(rulebb);
     BasicBlock *okbb = basic_block("ok");
     // determine the next rule block ('failed' if none)
@@ -17049,7 +16762,7 @@ void interpreter::try_rules(matcher *pm, state *s, BasicBlock *failedbb,
 	  f.builder.CreateCall(module->getFunction("pure_typecheck"),
 			       mkargs(args));
 	f.builder.CreateCondBr(check, checkedbb, nextbb);
-	f.f->getBasicBlockList().push_back(checkedbb);
+	checkedbb->insertInto(f.f);
 	f.builder.SetInsertPoint(checkedbb);
 	it = next_it;
       }
@@ -17065,7 +16778,7 @@ void interpreter::try_rules(matcher *pm, state *s, BasicBlock *failedbb,
 	Value *check = f.builder.CreateCall(module->getFunction("same"),
 					    mkargs(args));
 	f.builder.CreateCondBr(check, checkedbb, nextbb);
-	f.f->getBasicBlockList().push_back(checkedbb);
+	checkedbb->insertInto(f.f);
 	f.builder.SetInsertPoint(checkedbb);
       }
     }
@@ -17126,7 +16839,7 @@ void interpreter::try_rules(matcher *pm, state *s, BasicBlock *failedbb,
       f.builder.CreateBr(okbb);
     // ok => guard succeeded, return the reduct, otherwise we fall through
     // to the next rule (if any), or bail out with failure
-    f.f->getBasicBlockList().push_back(okbb);
+    okbb->insertInto(f.f);
     f.builder.SetInsertPoint(okbb);
     const rule *rp = 0;
     if (debugging && !is_init(f.name)) rp = &rr;
@@ -17140,7 +16853,7 @@ void interpreter::try_rules(matcher *pm, state *s, BasicBlock *failedbb,
       if (f.n+f.m != 0 || !debugging) {
 	// do cleanup
 	Function *free_fun = module->getFunction("pure_pop_args");
-	f.builder.CreateCall3(free_fun, retv, UInt(f.n), UInt(f.m));
+	f.builder.CreateCall(free_fun, {retv, UInt(f.n), UInt(f.m)});
       }
       f.builder.CreateRet(retv);
     } else if (tail) {
