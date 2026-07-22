@@ -21,7 +21,7 @@ types that LLVM no longer stores.
 1. [x] Inventory obsolete `IRBuilder` signatures and typed-pointer assumptions.
 2. [x] Port loads, stores, GEPs, calls, and indirect calls with explicit types.
 3. [x] Replace pointer nesting comparisons in external and Faust ABI detection.
-4. [ ] Modernize function, basic block, attribute, and calling-convention APIs.
+4. [x] Modernize function, basic block, attribute, and calling-convention APIs.
 5. [ ] Run `verifyFunction` and `verifyModule` over representative generated IR.
 6. [ ] Compile all IR generation code without deprecated compatibility wrappers.
 
@@ -110,6 +110,19 @@ types that LLVM no longer stores.
 
 ## Progress Log
 
+- 2026-07-23: Removed the remaining pre-LLVM-3 compatibility branches from
+  function-pass setup and floating-point IR generation.
+  - LLVM 22 now directly uses the module-based legacy function pass manager,
+    current data-layout access, unconditional pass initialization/finalization,
+    and `CreateFAdd`/`CreateFSub`/`CreateFMul`.
+  - Calling-convention sites already use current `CallingConv::ID`,
+    `setCallingConv`, and tail-call APIs; no function attribute sites exist.
+  - Together with the earlier public basic-block and iterator migrations, this
+    completes TODO-04 task 4.
+  - Validation:
+    - `cmake --preset llvm22-debug` configured successfully.
+    - `cmake --build --preset llvm22-debug -- -j1` retained zero warnings and
+      only the same nine legacy JIT errors.
 - 2026-07-23: Added whole-module LLVM verification at module boundaries.
   - Faust and generic bitcode loads verify the linked module and report LLVM's
     diagnostic through their existing error-message paths.

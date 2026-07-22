@@ -269,19 +269,11 @@ void interpreter::init()
 #endif // LLVM 2.5 and earlier
 #endif // LLVM 3.0 or earlier
   assert(JIT);
-#if LLVM27
   FPM = new legacy::FunctionPassManager(module);
-#else
-  FPM = new legacy::FunctionPassManager(MP);
-#endif
 
   // Set up the optimizer pipeline. Start with registering info about how the
   // target lays out data structures.
-#if LLVM35
   module->setDataLayout(JIT->getDataLayout());
-#else
-  FPM->add(new TargetData(*JIT->getTargetData()));
-#endif
   // Promote allocas to registers.
   FPM->add(createPromoteMemoryToRegisterPass());
   // Do simple "peephole" optimizations and bit-twiddling optimizations.
@@ -292,10 +284,7 @@ void interpreter::init()
   FPM->add(createGVNPass());
   // Simplify the control flow graph (deleting unreachable blocks, etc).
   FPM->add(createCFGSimplificationPass());
-#if LLVM31
-  // It seems that this is needed for LLVM 3.1 and later.
   FPM->doInitialization();
-#endif
 
   // Install a fallback mechanism to resolve references to the runtime, on
   // systems which do not allow the program to dlopen itself.
@@ -923,10 +912,7 @@ interpreter::~interpreter()
   if (JIT) delete JIT;
 #endif
   if (FPM) {
-#if LLVM31
-    // It seems that this is needed for LLVM 3.1 and later.
     FPM->doFinalization();
-#endif
     delete FPM;
   }
   // if this was the global interpreter, reset it now
@@ -13816,11 +13802,7 @@ Value *interpreter::builtin_codegen(expr x)
     // unary double operations
     Value *u = get_double(x.xval2());
     if (f.tag() == symtab.neg_sym().f)
-#ifdef LLVM26
       return b.CreateFSub(Dbl(0.0), u);
-#else
-      return b.CreateSub(Dbl(0.0), u);
-#endif
     else {
       assert(0 && "error in type checker");
       return 0;
@@ -14017,21 +13999,12 @@ Value *interpreter::builtin_codegen(expr x)
     else if (f.tag() == symtab.notequal_sym().f)
       return b.CreateZExt
 	(b.CreateFCmpONE(u, v), int32_type());
-#ifdef LLVM26
     else if (f.tag() == symtab.plus_sym().f)
       return b.CreateFAdd(u, v);
     else if (f.tag() == symtab.minus_sym().f)
       return b.CreateFSub(u, v);
     else if (f.tag() == symtab.mult_sym().f)
       return b.CreateFMul(u, v);
-#else
-    else if (f.tag() == symtab.plus_sym().f)
-      return b.CreateAdd(u, v);
-    else if (f.tag() == symtab.minus_sym().f)
-      return b.CreateSub(u, v);
-    else if (f.tag() == symtab.mult_sym().f)
-      return b.CreateMul(u, v);
-#endif
     else if (f.tag() == symtab.fdiv_sym().f)
       return b.CreateFDiv(u, v);
     else {
