@@ -21,7 +21,7 @@ tests are represented without relying on Autoconf for the new build.
 
 1. [x] Add `CMakeLists.txt`, helper modules, and LLVM 22 version checks.
 2. [x] Generate `config.h` and model required platform feature checks.
-3. [ ] Define runtime, interpreter, executable, and generated-source dependencies.
+3. [x] Define runtime, interpreter, executable, and generated-source dependencies.
 4. [ ] Add install rules and CTest integration for `run-tests`.
 5. [ ] Add CMake presets for `llvm22-debug`, `llvm22-release`, and `llvm22-asan`.
 6. [ ] Configure with Ninja and document expected LLVM-related compile failures.
@@ -37,8 +37,8 @@ tests are represented without relying on Autoconf for the new build.
   readline, and PCRE POSIX.
 - GSL, Faust, Flang, GFortran, and Sphinx are detected as optional tools for
   examples, integration fixtures, and documentation.
-- LLVM's package reported missing optional LibEdit, Zlib, zstd, and Curl
-  development files, but bootstrap configuration completed successfully.
+- LLVM's exported targets require LibEdit, Zlib, zstd, and Curl development
+  packages. Their installation is now part of the reference environment.
 - `PureConfigure.cmake` now derives the target triple from Clang, detects ABI
   sizes and endianness, checks required headers/functions, and generates
   `config.h` from `config.h.cmake`.
@@ -49,6 +49,13 @@ tests are represented without relying on Autoconf for the new build.
   after target compile definitions are finalized.
 - A small set of historical LLVM feature defines remains as a documented bridge
   for the unported sources; TODO-03 removes these compatibility branches.
+- `PureTargets.cmake` defines Bison/Flex generation in the build tree, shared
+  `libpure` ABI version 8.0.0, the `pure` executable, and `pure-main-object` for
+  embedding.
+- Runtime sources link LLVM, GMP, MPFR, PCRE POSIX, threads, Iconv, `dl`, and
+  `libm`; the executable adds readline. The `strptime.c` fallback is conditional.
+- Generated `parser.cc`, `parser.hh`, `location.hh`, `position.hh`, `stack.hh`,
+  and `lexer.cc` remain build artifacts and are not written into the source tree.
 
 ## Guardrails
 
@@ -65,11 +72,20 @@ tests are represented without relying on Autoconf for the new build.
 
 ## Open Questions
 
-- Should normal builds regenerate Flex/Bison outputs or use checked-in generated files?
 - Which installation layouts beyond Linux must remain supported initially?
 
 ## Progress Log
 
+- 2026-07-22: Added generated-source, runtime library, interpreter executable,
+  and embedding object targets.
+  - Validation:
+    - CMake generation succeeded after installing LLVM's Zlib, zstd, and Curl
+      development dependencies.
+    - `cmake --build build/llvm22-targets --target pure-generated-sources
+      --verbose` generated all Flex/Bison outputs in the build tree.
+    - `cmake --build build/llvm22-targets --target pure-main-object --verbose`
+      compiled `pure_main.c` successfully with Clang 22.
+    - Removed the temporary `build/llvm22-targets` directory after validation.
 - 2026-07-22: Added platform checks and generated CMake `config.h` support.
   - Validation:
     - Reconfigured with Clang/LLVM 22 and Ninja successfully.
