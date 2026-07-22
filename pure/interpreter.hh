@@ -529,7 +529,7 @@ struct bcdata_t {
 
 typedef map<string,bcdata_t> bcmap;
 
-typedef map<string,llvm_const_Type*> type_map;
+
 
 struct enventry {
   const env* e;
@@ -1101,20 +1101,12 @@ public:
   { return b.CreatePHI(ty); }
 #endif
 
-  type_map pointer_types;
-  map<llvm_const_Type*,type_map::iterator> pointer_type_of;
   map<string,int> pointer_tags;
   map<int,map<string,int>::iterator> pointer_type_with_tag;
   map<int,pointer_type_extra_info> pointer_type_info;
 
-  llvm_const_Type *make_pointer_type(const string& name);
-  string pointer_type_name(llvm_const_Type *type);
   int pointer_type_tag(const string& name);
-  int pointer_type_tag(llvm_const_Type *type)
-  {
-    assert(is_pointer_type(type));
-    return pointer_type_tag(type_name(type));
-  }
+
 
   llvm_const_Type *named_type(string name);
   string type_name(llvm_const_Type *type);

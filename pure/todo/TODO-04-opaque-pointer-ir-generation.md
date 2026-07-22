@@ -110,6 +110,16 @@ types that LLVM no longer stores.
 
 ## Progress Log
 
+- 2026-07-23: Removed the legacy typed-pointer name registry and all LLVM
+  pointee introspection from general C type conversion.
+  - `named_type` now maps every semantic C pointer to LLVM's context-owned
+    opaque `ptr`; `type_name` refuses to invent a C name for LLVM pointers.
+  - Deleted `type_map`, `pointer_types`, `pointer_type_of`,
+    `make_pointer_type`, `pointer_type_name`, and `mangle_type_name`.
+  - Validation:
+    - `cmake --preset llvm22-debug` configured successfully.
+    - `cmake --build --preset llvm22-debug -- -j1` reduced warnings from 57 to
+      23, introduced no new errors, and retained the same 15 unrelated errors.
 - 2026-07-23: Switched external wrapper argument and result dispatch from LLVM
   pointer identity to semantic `CAbiType` descriptors.
   - String, numeric vector, pointer-vector, matrix, `expr*`, Faust DSP, `void*`,

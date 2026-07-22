@@ -11865,79 +11865,7 @@ int32_t interpreter::find_hash(Env *e)
   return 0; // not found
 }
 
-llvm_const_Type *interpreter::make_pointer_type(const string& name)
-{
-  type_map::iterator it = pointer_types.find(name);
-  if (it == pointer_types.end()) {
-    string namestr = (name.size()>0 && name[name.size()-1]=='*') ?
-      name.substr(0, name.size()-1) : name;
-    llvm_const_Type *ty = opaque_type(namestr.c_str());
-    pointer_types[name] = PointerType::get(ty, 0);
-    it = pointer_types.find(name);
-    assert(it != pointer_types.end());
-    pointer_type_of[ty] = it;
-  }
-  return it->second;
-}
 
-string mangle_type_name(string name)
-{
-  /* Type names in LLVM bitcode may well contain special characters not
-     permitted in identifiers, so we mangle them here. (This is very
-     simplistic and may easily map different bitcode names into the same
-     identifier. Oh well.) */
-  if (name.empty() || isdigit(name[0]))
-    // Probably a temporary name, we don't want those.
-    return "";
-  for (size_t i = 0, n = name.size(); i < n; i++)
-    if (!isalnum(name[i]))
-      name[i] = '_';
-  return name;
-}
-
-string interpreter::pointer_type_name(llvm_const_Type *type)
-{
-  assert(is_pointer_type(type));
-  llvm_const_Type *elem_type = type->getContainedType(0);
-  if (is_pointer_type(elem_type)) {
-    llvm_const_Type *ty = elem_type->getContainedType(0);
-    map<llvm_const_Type*,type_map::iterator>::const_iterator it =
-      pointer_type_of.find(ty);
-    if (it != pointer_type_of.end())
-      return it->second->first+"*";
-  }
-  map<llvm_const_Type*,type_map::iterator>::const_iterator it =
-    pointer_type_of.find(elem_type);
-  if (it != pointer_type_of.end())
-    return it->second->first;
-  /* This is an unknown pointer type, presumably from a bitcode file. Let's
-     count the levels of indirection to get the number of *'s right. */
-  size_t count = 1;
-  while (is_pointer_type(elem_type)) {
-    elem_type = elem_type->getContainedType(0);
-    count++;
-  }
-  /* What remains is a non-pointer type, which we consider irreducible. Try to
-     resolve that recursively, to get our name for it. If that doesn't work,
-     check whether the bitcode file has a name for it. If that doesn't work
-     either then just give up and assume "void". */
-  string name = type_name(elem_type);
-  if (name == "<unknown C type>") {
-#if LLVM30
-    name.clear();
-    if (elem_type->isStructTy()) {
-      StructType *ty = (StructType*)elem_type;
-      if (ty->hasName()) name = ty->getName();
-    }
-#else
-    name = module->getTypeName(elem_type);
-#endif
-    name = mangle_type_name(name);
-    if (name.empty()) name = "void";
-  }
-  name.append(count, '*');
-  return name;
-}
 
 int interpreter::pointer_type_tag(const string& name)
 {
@@ -11975,75 +11903,9 @@ llvm_const_Type *interpreter::named_type(string name)
     return float_type();
   else if (name == "double")
     return double_type();
-  else if (name == "char*" || name == "int8*")
-    return CharPtrTy;
-  else if (name == "short*" || name == "int16*")
-    return PointerType::get(int16_type(), 0);
-  else if (name == "int*" || name == "int32*")
-    return PointerType::get(int32_type(), 0);
-  else if (name == "int64*")
-    return PointerType::get(int64_type(), 0);
-  else if (name == "long*")
-    return PointerType::get(long_type(), 0);
-  else if (name == "size_t*")
-    return PointerType::get(size_t_type(), 0);
-  else if (name == "float*")
-    return PointerType::get(float_type(), 0);
-  else if (name == "double*")
-    return PointerType::get(double_type(), 0);
-  else if (name == "void**")
-    return PointerType::get(VoidPtrTy, 0);
-  else if (name == "char**")
-    return PointerType::get(CharPtrTy, 0);
-  else if (name == "short**" || name == "int16**")
-    return PointerType::get(PointerType::get(int16_type(), 0), 0);
-  else if (name == "int**" || name == "int32**")
-    return PointerType::get(PointerType::get(int32_type(), 0), 0);
-  else if (name == "float**")
-    return PointerType::get(PointerType::get(float_type(), 0), 0);
-  else if (name == "double**")
-    return PointerType::get(PointerType::get(double_type(), 0), 0);
-  else if (name == "expr*")
-    return ExprPtrTy;
-  else if (name == "expr**")
-    return ExprPtrPtrTy;
-  else if (name == "matrix*")
-    return GSLMatrixPtrTy;
-  else if (name == "dmatrix*")
-    return GSLDoubleMatrixPtrTy;
-  else if (name == "cmatrix*")
-    return GSLComplexMatrixPtrTy;
-  else if (name == "imatrix*")
-    return GSLIntMatrixPtrTy;
-  else if (name == "void*")
-    return VoidPtrTy;
-  else if (name.size() > 0 && name[name.size()-1] == '*') {
-    // Generic pointer type. First normalize this a bit, then create a
-    // placeholder type which uniquely identifies the type.
-    size_t pos = name.find_last_not_of('*');
-    if (pos != string::npos) {
-      string ptr = name.substr(pos+1);
-      name.erase(pos+1);
-      if (name == "int8")
-	name = "char";
-      else if (name == "int16")
-	name = "short";
-      else if (name == "int32")
-	name = "int";
-#if SIZEOF_LONG==8
-      else if (name == "int64")
-	name = "long";
-#endif
-      name += ptr;
-    }
-    if (name.size() > 1 && name[name.size()-2] == '*')
-      // generic pointer to pointer (effectively treated as void**)
-      return PointerType::get
-	(make_pointer_type(name.substr(0, name.size()-1)), 0);
-    else
-      // simple pointer type (effectively treated as void*)
-      return make_pointer_type(name);
-  } else
+  else if (CAbiType(name).is_pointer())
+    return PointerType::get(context, 0);
+  else
     throw err("unknown C type '"+name+"'");
 }
 
@@ -12077,49 +11939,8 @@ string interpreter::type_name(llvm_const_Type *type)
     return "float";
   else if (type == double_type())
     return "double";
-  else if (type == CharPtrTy)
-    return "char*";
-  else if (type == PointerType::get(int16_type(), 0))
-    return "short*";
-  else if (type == PointerType::get(int32_type(), 0))
-    return "int*";
-  else if (type == PointerType::get(int64_type(), 0))
-#if SIZEOF_LONG==8
-    return "long*";
-#else
-    return "int64*";
-#endif
-  else if (type == PointerType::get(float_type(), 0))
-    return "float*";
-  else if (type == PointerType::get(double_type(), 0))
-    return "double*";
-  else if (type == PointerType::get(VoidPtrTy, 0))
-    return "void**";
-  else if (type == PointerType::get(CharPtrTy, 0))
-    return "char**";
-  else if (type == PointerType::get(PointerType::get(int16_type(), 0), 0))
-    return "short**";
-  else if (type == PointerType::get(PointerType::get(int32_type(), 0), 0))
-    return "int**";
-  else if (type == PointerType::get(PointerType::get(float_type(), 0), 0))
-    return "float**";
-  else if (type == PointerType::get(PointerType::get(double_type(), 0), 0))
-    return "double**";
-  else if (type == ExprPtrTy)
-    return "expr*";
-  else if (type == ExprPtrPtrTy)
-    return "expr**";
-  else if (type == GSLMatrixPtrTy)
-    return "matrix*";
-  else if (type == GSLDoubleMatrixPtrTy)
-    return "dmatrix*";
-  else if (type == GSLComplexMatrixPtrTy)
-    return "cmatrix*";
-  else if (type == GSLIntMatrixPtrTy)
-    return "imatrix*";
-  else if (is_pointer_type(type))
-    return pointer_type_name(type);
   else
+    // Opaque pointers carry no C pointee type or pointer depth.
     return "<unknown C type>";
 }
 
