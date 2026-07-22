@@ -36,6 +36,7 @@ char *alloca ();
 
 #include "interpreter.hh"
 #include "util.hh"
+#include <memory>
 #include <sstream>
 #include <system_error>
 #include <stdarg.h>
@@ -1823,47 +1824,26 @@ static void dsp_errmsg(string name, string* msg)
     *msg = name+": Error linking dsp file";
 }
 
-// LLVM provides methods to do this, but they're not portable across LLVM
-// versions, so we do our own.
-static llvm::MemoryBuffer *get_membuf(const char *name, string *msg)
+static std::unique_ptr<llvm::MemoryBuffer>
+get_membuf(const char *name, string *msg)
 {
   using namespace llvm;
-  FILE *fp = fopen(name, "rb");
-  if (!fp) {
-    if (msg) *msg = strerror(errno);
-    return 0;
+  ErrorOr<std::unique_ptr<MemoryBuffer> > BufferOrErr =
+    MemoryBuffer::getFile(name, false, false);
+  if (!BufferOrErr) {
+    if (msg) *msg = BufferOrErr.getError().message();
+    return nullptr;
   }
-  struct stat st;
-  if (fstat(fileno(fp), &st)) {
-    if (msg) *msg = strerror(errno);
-    fclose(fp);
-    return 0;
-  }
-  size_t size = st.st_size;
-  MemoryBuffer *buf = MemoryBuffer::getNewMemBuffer(size, name);
-  if (!buf) {
-    if (msg) *msg = "Not enough memory";
-    fclose(fp);
-    return 0;
-  }
-  if (fread(const_cast<char*>(buf->getBufferStart()), size, 1, fp) < size &&
-      ferror(fp)) {
-    if (msg) *msg = strerror(errno);
-    fclose(fp);
-    delete buf;
-    return 0;
-  }
-  fclose(fp);
-  return buf;
+  return std::move(*BufferOrErr);
 }
 
-static llvm::Module *ParseBitcodeFile(llvm::MemoryBuffer *Buffer,
+static llvm::Module *ParseBitcodeFile(const llvm::MemoryBuffer& Buffer,
 				      llvm::LLVMContext& Context,
 				      std::string *ErrMsg)
 {
   using namespace llvm;
   Expected<std::unique_ptr<Module> > ModuleOrErr =
-    parseBitcodeFile(Buffer->getMemBufferRef(), Context);
+    parseBitcodeFile(Buffer.getMemBufferRef(), Context);
   if (!ModuleOrErr) {
     if (ErrMsg) *ErrMsg = toString(ModuleOrErr.takeError());
     return 0;
@@ -1904,13 +1884,12 @@ bool interpreter::LoadFaustDSP(bool priv, const char *name, string *msg,
     // Check whether there's anything to do.
     if (declared && !modified) return true;
   }
-  MemoryBuffer *buf = get_membuf(name, msg);
+  std::unique_ptr<MemoryBuffer> buf = get_membuf(name, msg);
   if (!buf) {
     dsp_errmsg(name, msg);
     return false;
   }
-  Module *M = ParseBitcodeFile(buf, context, msg);
-  delete buf;
+  Module *M = ParseBitcodeFile(*buf, context, msg);
   if (!M) {
     dsp_errmsg(name, msg);
     return false;
@@ -2356,13 +2335,12 @@ bool interpreter::LoadBitcode(bool priv, const char *name, string *msg)
     // Check whether there's anything to do.
     if (declared) return true;
   }
-  MemoryBuffer *buf = get_membuf(name, msg);
+  std::unique_ptr<MemoryBuffer> buf = get_membuf(name, msg);
   if (!buf) {
     bc_errmsg(name, msg);
     return false;
   }
-  Module *M = ParseBitcodeFile(buf, context, msg);
-  delete buf;
+  Module *M = ParseBitcodeFile(*buf, context, msg);
   if (!M) {
     bc_errmsg(name, msg);
     return false;

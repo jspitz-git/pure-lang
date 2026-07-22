@@ -66,6 +66,9 @@ types that LLVM no longer stores.
 - Batch output now uses LLVM 22 `raw_fd_ostream`, `std::error_code`, modern
   `OpenFlags`, and `WriteBitcodeToFile(Module&, raw_ostream&)`. The
   `RAW_STREAM` and `NEW_OSTREAM*` compatibility matrix has been removed.
+- Bitcode input now uses `MemoryBuffer::getFile` and `unique_ptr` ownership
+  through both loaders. Parsing borrows a `const MemoryBuffer&`; no writable
+  buffer casts or manual buffer deletion remain.
 - The highest-risk typed-pointer hotspots are `named_type`, `type_name`,
   `dsptype_name`, `declare_extern`, and Faust sample-type detection. These need
   separate semantic ABI metadata rather than reconstructed pointer nesting.
@@ -89,6 +92,14 @@ types that LLVM no longer stores.
 
 ## Progress Log
 
+- 2026-07-23: Replaced manual bitcode file buffering with LLVM 22 memory-buffer
+  ownership.
+  - Validation:
+    - `cmake --preset llvm22-debug` configured successfully.
+    - `cmake --build --preset llvm22-debug -- -j1` no longer reports
+      `MemoryBuffer::getNewMemBuffer` or raw/unique pointer conversion errors.
+    - Compilation advances through both loaders to the later typed-pointer ABI
+      and removed `Module::getTypeByName` code.
 - 2026-07-23: Replaced historical stream and bitcode output compatibility with
   the LLVM 22 APIs.
   - Validation:
