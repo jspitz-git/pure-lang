@@ -24,3 +24,30 @@ g 12;
 
 f (-12);
 g (-12);
+
+// Keep three generations alive at once, then release newer closures before
+// invoking the oldest one again. This exercises code lifetime independently
+// from the current global definition.
+
+evalcmd "clear foo";
+foo x = x+100;
+let f1 = foo;
+
+evalcmd "clear foo";
+foo x = x+200;
+let f2 = foo;
+
+evalcmd "clear foo";
+foo x = x+300;
+let f3 = foo;
+
+f1 1;
+f2 1;
+f3 1;
+
+evalcmd "clear f2";
+f3 2;
+f1 2;
+
+evalcmd "clear f3";
+f1 3;

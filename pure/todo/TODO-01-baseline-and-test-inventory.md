@@ -21,6 +21,8 @@ changes can be evaluated against a clear, runnable set of expectations.
 1. [x] Document how the current test runner discovers inputs and expected results.
 2. [x] Map tests to the migration areas and record important coverage gaps.
 3. [ ] Add focused tests for function redefinition and closure code lifetime.
+   - `test052` now covers three simultaneous generations and out-of-order closure
+     release; execution remains pending until the LLVM 22 interpreter is runnable.
 4. [ ] Define the initial smoke subset that each later TODO must run.
 5. [ ] Validate the test inventory and record any tests that cannot run before the port.
 
@@ -68,8 +70,9 @@ changes can be evaluated against a clear, runnable set of expectations.
 
 - No minimal test repeatedly compiles and removes anonymous evaluation functions,
   so ORC `ResourceTracker` cleanup and memory growth are not covered.
-- `test052` detects stale pointers after redefinition, but there is no focused
-  stress case with several generations and closures released in different orders.
+- `test052` now includes a focused case with three generations and closures
+  released in a different order, but it cannot be behaviorally validated until
+  the LLVM 22 interpreter is runnable.
 - Proper tail-call behavior is not asserted at a depth that would overflow the C
   stack without tail-call elimination; the deep cases in `test004` are commented.
 - Unresolved external symbols and ORC lookup/materialization errors have no golden
@@ -104,6 +107,14 @@ as opaque historical `.bc` files.
 
 ## Progress Log
 
+- 2026-07-22: Extended `test052` with three live function generations and
+  out-of-order release of newer closures before invoking the oldest closure.
+  - Validation:
+    - `git diff --check` passed for the test source, golden log, and TODO update.
+    - Static review confirmed matching commands and expected scalar results in
+      `test052.pure` and `test052.log`.
+    - Execution is blocked because neither generated `run-tests` nor a compatible
+      `pure` executable exists; checklist item 3 remains open until it runs.
 - 2026-07-22: Mapped migration areas to focused regression tests and recorded
   gaps in resource cleanup, deep tail calls, symbol failures, bitcode, Faust,
   and sanitizer stress coverage.
