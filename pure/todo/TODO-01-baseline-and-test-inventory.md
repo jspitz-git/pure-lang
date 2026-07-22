@@ -137,10 +137,12 @@ the port in the current checkout:
   interpreter, so none form an LLVM-independent executable subset.
 - `special.pure` is outside the default runner, but it also requires the interpreter.
 - The blob fixtures are data inputs for `test042`, not standalone validation tools.
-- Generic bitcode examples cannot provide a baseline run: GFortran and GSL are
-  unavailable, while the existing Makefile targets obsolete compiler workflows.
-- Faust DSP examples cannot provide a baseline because the Faust compiler is
-  unavailable. Sphinx 7.2.6 is installed, but documentation generation does not
+- GFortran 13.3.0, Flang 22.1.8, and GSL 2.7.1 are available for rebuilding
+  native and LLVM bitcode examples. The existing examples Makefile still targets
+  obsolete DragonEgg workflows and must be modernized before use.
+- Faust 2.70.3 is available with an LLVM IR backend built against LLVM 17.0.6.
+  Its output must be checked for LLVM 22 compatibility before it becomes a test
+  fixture. Sphinx 7.2.6 is also installed, but documentation generation does not
   validate interpreter or JIT behavior.
 
 These are expected migration constraints, not test failures. The first behavioral
@@ -161,11 +163,22 @@ smoke subset.
 
 ## Open Questions
 
-- Should GFortran, GSL, and a compatible Faust release be installed during their
-  feature-specific TODOs, or should those integration tests remain optional?
+- Is bitcode emitted by Faust 2.70.3 with its LLVM 17.0.6 backend accepted by
+  LLVM 22 without conversion, or should Faust emit textual IR for `llvm-as-22`?
+- Should Fortran bitcode fixtures use Flang 22 exclusively while GFortran remains
+  limited to native Fortran examples?
 
 ## Progress Log
 
+- 2026-07-22: Updated optional integration-tool availability after installation.
+  - Validation:
+    - `faust --version` reported Faust 2.70.3 with an LLVM 17.0.6 backend.
+    - `gfortran --version` reported GFortran 13.3.0.
+    - `flang-22 --version` reported Flang 22.1.8.
+    - `pkg-config --modversion gsl` reported GSL 2.7.1 with link flags
+      `-lgsl -lgslcblas -lm`.
+    - The missing generated runner and compatible `pure` executable remain the
+      blockers to behavioral execution.
 - 2026-07-22: Completed static inventory validation and recorded all current
   blockers to a pre-port behavioral run.
   - Validation:
