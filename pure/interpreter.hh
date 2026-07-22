@@ -301,30 +301,44 @@ public:
   Env *parent;
   // reference counters
   uint32_t refc, *refp;
-  // convenience functions for invoking CreateGEP() and CreateLoad()
+  // Convenience functions for GEPs and loads with explicit source types.
   llvm::Value *CreateGEP
-  (llvm::Value *x, llvm::Value *i, const char* name = "")
-  { return builder.CreateGEP(x, i, name); }
+  (llvm::Type *ty, llvm::Value *x, llvm::Value *i, const char* name = "")
+  { return builder.CreateGEP(ty, x, i, name); }
   llvm::Value *CreateGEP
-  (llvm::Value *x, llvm::Value *i, llvm::Value *j, const char* name = "")
+  (llvm::Type *ty, llvm::Value *x, llvm::Value *i, llvm::Value *j,
+   const char* name = "")
   { llvm::Value* idxs[2] = { i, j };
-    return builder.CreateGEP(x, mkidxs(idxs, idxs+2), name);
+    return builder.CreateGEP(ty, x, mkidxs(idxs, idxs+2), name);
   }
   llvm::Value *CreateGEP
-  (llvm::Value *x, llvm::Value *i, llvm::Value *j, llvm::Value *k,
-   const char* name = "")
+  (llvm::Type *ty, llvm::Value *x, llvm::Value *i, llvm::Value *j,
+   llvm::Value *k, const char* name = "")
   { llvm::Value* idxs[3] = { i, j, k };
-    return builder.CreateGEP(x, mkidxs(idxs, idxs+3), name); }
+    return builder.CreateGEP(ty, x, mkidxs(idxs, idxs+3), name); }
   llvm::LoadInst *CreateLoadGEP
-  (llvm::Value *x, llvm::Value *i, const char* name = "")
-  { return builder.CreateLoad(CreateGEP(x, i), name); }
+  (llvm::Type *ty, llvm::Value *x, llvm::Value *i, const char* name = "")
+  { llvm::Value* idxs[1] = { i };
+    llvm::Type *loadTy = llvm::GetElementPtrInst::getIndexedType
+      (ty, mkidxs(idxs, idxs+1));
+    assert(loadTy);
+    return builder.CreateLoad(loadTy, CreateGEP(ty, x, i), name); }
   llvm::LoadInst *CreateLoadGEP
-  (llvm::Value *x, llvm::Value *i, llvm::Value *j, const char* name = "")
-  { return builder.CreateLoad(CreateGEP(x, i, j), name); }
-  llvm::LoadInst *CreateLoadGEP
-  (llvm::Value *x, llvm::Value *i, llvm::Value *j, llvm::Value *k,
+  (llvm::Type *ty, llvm::Value *x, llvm::Value *i, llvm::Value *j,
    const char* name = "")
-  { return builder.CreateLoad(CreateGEP(x, i, j, k), name); }
+  { llvm::Value* idxs[2] = { i, j };
+    llvm::Type *loadTy = llvm::GetElementPtrInst::getIndexedType
+      (ty, mkidxs(idxs, idxs+2));
+    assert(loadTy);
+    return builder.CreateLoad(loadTy, CreateGEP(ty, x, i, j), name); }
+  llvm::LoadInst *CreateLoadGEP
+  (llvm::Type *ty, llvm::Value *x, llvm::Value *i, llvm::Value *j,
+   llvm::Value *k, const char* name = "")
+  { llvm::Value* idxs[3] = { i, j, k };
+    llvm::Type *loadTy = llvm::GetElementPtrInst::getIndexedType
+      (ty, mkidxs(idxs, idxs+3));
+    assert(loadTy);
+    return builder.CreateLoad(loadTy, CreateGEP(ty, x, i, j, k), name); }
   // simplified interface to CreateCall()
   llvm::CallInst *CreateCall(llvm::Function *f,
 			     const vector<llvm::Value*>& args);

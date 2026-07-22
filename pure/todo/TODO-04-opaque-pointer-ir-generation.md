@@ -49,6 +49,9 @@ types that LLVM no longer stores.
   expression layout helpers use `ExprTy` and its variant structs, global arrays
   expose their `GlobalVariable::getValueType()`, and compiler table globals retain
   their declared array types. No pointee type needs to be guessed.
+- The shared `Env` helpers now require that source type. `CreateLoadGEP` derives
+  its load type with `GetElementPtrInst::getIndexedType`, keeping GEP and load
+  types consistent without querying the opaque pointer.
 - The highest-risk typed-pointer hotspots are `named_type`, `type_name`,
   `dsptype_name`, `declare_extern`, and Faust sample-type detection. These need
   separate semantic ABI metadata rather than reconstructed pointer nesting.
@@ -72,6 +75,16 @@ types that LLVM no longer stores.
 
 ## Progress Log
 
+- 2026-07-23: Ported the shared `Env::CreateGEP` and `Env::CreateLoadGEP`
+  helpers and all 44 call sites to explicit source types.
+  - Expression nodes use `ExprTy`, `IntExprTy`, or `DblExprTy`; shadow-stack
+    indexing uses `ExprPtrTy`; constant arrays use `GlobalVariable::getValueType()`.
+  - Validation:
+    - `cmake --preset llvm22-debug` configured successfully.
+    - `cmake --build --preset llvm22-debug -- -j1` compiled past all six former
+      inline helper errors and reached `interpreter.cc`.
+    - The build now reports later legacy `ExecutionEngine`, linker, `StringRef`,
+      and direct IR-builder API failures; no `Env` helper signature error remains.
 - 2026-07-23: Inventoried obsolete builder signatures and typed-pointer
   assumptions on `todo/04-opaque-pointer-ir-generation`.
   - Validation:

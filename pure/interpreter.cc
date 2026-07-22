@@ -13932,7 +13932,7 @@ Value *interpreter::get_int_check(Value *u, BasicBlock *failedbb)
   verify_tag(u, EXPR::INT, failedbb);
   // get the value
   Value *p = e.builder.CreateBitCast(u, IntExprPtrTy, "intexpr");
-  Value *v = e.CreateLoadGEP(p, Zero, ValFldIndex, "intval");
+  Value *v = e.CreateLoadGEP(IntExprTy, p, Zero, ValFldIndex, "intval");
   // collect the temporary, it's not needed any more
   call("pure_freenew", u);
   return v;
@@ -13960,7 +13960,7 @@ Value *interpreter::get_int(expr x)
       assert(x.tag() == EXPR::VAR);
       Value *u = codegen(x);
       Value *p = e.builder.CreateBitCast(u, IntExprPtrTy, "intexpr");
-      Value *v = e.CreateLoadGEP(p, Zero, ValFldIndex, "intval");
+      Value *v = e.CreateLoadGEP(IntExprTy, p, Zero, ValFldIndex, "intval");
 #if 0
       // collect the temporary, it's not needed any more
       call("pure_freenew", u);
@@ -13971,7 +13971,7 @@ Value *interpreter::get_int(expr x)
       assert(x.tag() == EXPR::VAR && x.ttag() == EXPR::DBL);
       Value *u = codegen(x);
       Value *p = e.builder.CreateBitCast(u, DblExprPtrTy, "dblexpr");
-      Value *v = e.CreateLoadGEP(p, Zero, ValFldIndex, "dblval");
+      Value *v = e.CreateLoadGEP(DblExprTy, p, Zero, ValFldIndex, "dblval");
       v = e.builder.CreateFPToSI(v, int32_type());
 #if 0
       // collect the temporary, it's not needed any more
@@ -13987,7 +13987,7 @@ Value *interpreter::get_int(expr x)
     verify_tag(u, EXPR::INT);
     // get the value
     Value *p = e.builder.CreateBitCast(u, IntExprPtrTy, "intexpr");
-    Value *v = e.CreateLoadGEP(p, Zero, ValFldIndex, "intval");
+    Value *v = e.CreateLoadGEP(IntExprTy, p, Zero, ValFldIndex, "intval");
     // collect the temporary, it's not needed any more
     call("pure_freenew", u);
     return v;
@@ -14016,7 +14016,7 @@ Value *interpreter::get_double(expr x)
       assert(x.tag() == EXPR::VAR);
       Value *u = codegen(x);
       Value *p = e.builder.CreateBitCast(u, IntExprPtrTy, "intexpr");
-      Value *v = e.CreateLoadGEP(p, Zero, ValFldIndex, "intval");
+      Value *v = e.CreateLoadGEP(IntExprTy, p, Zero, ValFldIndex, "intval");
       v = e.builder.CreateSIToFP(v, double_type());
 #if 0
       // collect the temporary, it's not needed any more
@@ -14028,7 +14028,7 @@ Value *interpreter::get_double(expr x)
       assert(x.tag() == EXPR::VAR && x.ttag() == EXPR::DBL);
       Value *u = codegen(x);
       Value *p = e.builder.CreateBitCast(u, DblExprPtrTy, "dblexpr");
-      Value *v = e.CreateLoadGEP(p, Zero, ValFldIndex, "dblval");
+      Value *v = e.CreateLoadGEP(DblExprTy, p, Zero, ValFldIndex, "dblval");
 #if 0
       // collect the temporary, it's not needed any more
       call("pure_freenew", u);
@@ -14043,7 +14043,7 @@ Value *interpreter::get_double(expr x)
     verify_tag(u, EXPR::DBL);
     // get the value
     Value *p = e.builder.CreateBitCast(u, DblExprPtrTy, "dblexpr");
-    Value *v = e.CreateLoadGEP(p, Zero, ValFldIndex, "dblval");
+    Value *v = e.CreateLoadGEP(DblExprTy, p, Zero, ValFldIndex, "dblval");
     // collect the temporary, it's not needed any more
     call("pure_freenew", u);
     return v;
@@ -15579,7 +15579,8 @@ Value *interpreter::vref(Value *x, path p)
       x = b.CreateCall3(f, x, UInt(r), UInt(c));
       if (i < n) tmp = x;
     } else {
-      x = e.CreateLoadGEP(x, Zero, SubFldIndex(p[i]), mklabel("x", i, p[i]+1));
+      x = e.CreateLoadGEP
+	(ExprTy, x, Zero, SubFldIndex(p[i]), mklabel("x", i, p[i]+1));
       i++;
     }
   }
@@ -15614,7 +15615,8 @@ Value *interpreter::vref(int32_t tag, path p)
       v = b.CreateCall3(f, v, UInt(r), UInt(c));
       if (i < n) tmp = v;
     } else {
-      v = e.CreateLoadGEP(v, Zero, SubFldIndex(p[i]), mklabel("x", i, p[i]+1));
+      v = e.CreateLoadGEP
+	(ExprTy, v, Zero, SubFldIndex(p[i]), mklabel("x", i, p[i]+1));
       i++;
     }
   }
@@ -15632,7 +15634,8 @@ Value *interpreter::vref(int32_t tag, uint32_t v)
   // environment proxy
   Env &e = act_env();
   Value *sstkptr = e.builder.CreateLoad(sstkvar);
-  return e.CreateLoadGEP(sstkptr, e.builder.CreateAdd(e.envs, UInt(v)));
+  return e.CreateLoadGEP
+    (ExprPtrTy, sstkptr, e.builder.CreateAdd(e.envs, UInt(v)));
 }
 
 Value *interpreter::vref(int32_t tag, uint8_t idx, path p)
@@ -15814,7 +15817,7 @@ Value *interpreter::call(string name, const char *s)
      GlobalVariable::InternalLinkage, constant_char_array(s),
      "$$str");
   // "cast" the char array to a char*
-  Value *p = e.CreateGEP(v, Zero, Zero);
+  Value *p = e.CreateGEP(v->getValueType(), v, Zero, Zero);
   return call(name, p);
 }
 
@@ -15832,7 +15835,7 @@ Value *interpreter::call(string name, Value *x, const char *s)
      GlobalVariable::InternalLinkage, constant_char_array(s),
      "$$str");
   // "cast" the char array to a char*
-  Value *p = e.CreateGEP(v, Zero, Zero);
+  Value *p = e.CreateGEP(v->getValueType(), v, Zero, Zero);
   return call(name, x, p);
 }
 
@@ -15887,7 +15890,7 @@ void interpreter::make_bigint(const mpz_t& z, Value*& sz, Value*& ptr)
        GlobalVariable::InternalLinkage, limbs, "$$limbs");
   }
   // "cast" the int array to a int*
-  ptr = e.CreateGEP(v, Zero, Zero);
+  ptr = e.CreateGEP(v->getValueType(), v, Zero, Zero);
 }
 
 // Debugger calls.
@@ -15931,7 +15934,7 @@ Value *interpreter::debug(const char *format)
      GlobalVariable::InternalLinkage, constant_char_array(format),
      "$$str");
   // "cast" the char array to a char*
-  Value *p = e.CreateGEP(v, Zero, Zero);
+  Value *p = e.CreateGEP(v->getValueType(), v, Zero, Zero);
   vector<Value*> args;
   args.push_back(SInt(e.tag));
   args.push_back(p);
@@ -15948,7 +15951,7 @@ Value *interpreter::debug(const char *format, Value *x)
      GlobalVariable::InternalLinkage, constant_char_array(format),
      "$$str");
   // "cast" the char array to a char*
-  Value *p = e.CreateGEP(v, Zero, Zero);
+  Value *p = e.CreateGEP(v->getValueType(), v, Zero, Zero);
   vector<Value*> args;
   args.push_back(SInt(e.tag));
   args.push_back(p);
@@ -15966,7 +15969,7 @@ Value *interpreter::debug(const char *format, Value *x, Value *y)
      GlobalVariable::InternalLinkage, constant_char_array(format),
      "$$str");
   // "cast" the char array to a char*
-  Value *p = e.CreateGEP(v, Zero, Zero);
+  Value *p = e.CreateGEP(v->getValueType(), v, Zero, Zero);
   vector<Value*> args;
   args.push_back(SInt(e.tag));
   args.push_back(p);
@@ -15985,7 +15988,7 @@ Value *interpreter::debug(const char *format, Value *x, Value *y, Value *z)
      GlobalVariable::InternalLinkage, constant_char_array(format),
      "$$str");
   // "cast" the char array to a char*
-  Value *p = e.CreateGEP(v, Zero, Zero);
+  Value *p = e.CreateGEP(v->getValueType(), v, Zero, Zero);
   vector<Value*> args;
   args.push_back(SInt(e.tag));
   args.push_back(p);
@@ -16198,7 +16201,8 @@ void interpreter::fun_body(matcher *pm, matcher *mxs, bool nodefault)
     vector<Value*> x(f.m);
     Value *sstkptr = f.builder.CreateLoad(sstkvar);
     for (size_t i = 0; i < f.m; i++) {
-      x[i] = f.CreateLoadGEP(sstkptr, f.builder.CreateAdd(f.envs, UInt(i)));
+      x[i] = f.CreateLoadGEP
+	(ExprPtrTy, sstkptr, f.builder.CreateAdd(f.envs, UInt(i)));
       assert(x[i]->getType() == ExprPtrTy);
     }
     if (f.m == 1)
@@ -16292,7 +16296,7 @@ Value *interpreter::check_tag(Value *v, int32_t tag)
   // check that the given expression value has the given tag, return true if
   // so and false otherwise
   assert(v->getType() == ExprPtrTy);
-  Value *tagv = act_env().CreateLoadGEP(v, Zero, Zero, "tag");
+  Value *tagv = act_env().CreateLoadGEP(ExprTy, v, Zero, Zero, "tag");
   return act_builder().CreateICmpEQ(tagv, SInt(tag));
 }
 
@@ -16342,7 +16346,7 @@ void interpreter::simple_match(Value *x, state*& s,
   // check for thunks which must be forced
   if (t.tag != EXPR::VAR || t.ttag != 0) {
     // do a quick check on the tag value
-    tagv = f.CreateLoadGEP(x, Zero, Zero, "tag");
+    tagv = f.CreateLoadGEP(ExprTy, x, Zero, Zero, "tag");
     Value *checkv = f.builder.CreateICmpEQ(tagv, Zero, "check");
     BasicBlock *forcebb = basic_block("force");
     BasicBlock *skipbb = basic_block("skip");
@@ -16362,7 +16366,7 @@ void interpreter::simple_match(Value *x, state*& s,
       f.builder.CreateBr(matchedbb);
     else {
       // typed variable, must match type tag against value
-      if (!tagv) tagv = f.CreateLoadGEP(x, Zero, Zero, "tag");
+      if (!tagv) tagv = f.CreateLoadGEP(ExprTy, x, Zero, Zero, "tag");
       if (t.ttag == EXPR::MATRIX) {
 	// this can denote any type of matrix, mask the subtype nibble
 	Value *tagv1 = f.builder.CreateAnd(tagv, UInt(0xfffffff0));
@@ -16378,7 +16382,7 @@ void interpreter::simple_match(Value *x, state*& s,
   case EXPR::DBL: {
     // first check the tag
     BasicBlock *okbb = basic_block("ok");
-    if (!tagv) tagv = f.CreateLoadGEP(x, Zero, Zero, "tag");
+    if (!tagv) tagv = f.CreateLoadGEP(ExprTy, x, Zero, Zero, "tag");
     f.builder.CreateCondBr
       (f.builder.CreateICmpEQ(tagv, SInt(t.tag), "cmp"), okbb, failedbb);
     // next check the values (we inline these for max performance)
@@ -16387,11 +16391,11 @@ void interpreter::simple_match(Value *x, state*& s,
     Value *cmpv;
     if (t.tag == EXPR::INT) {
       Value *pv = f.builder.CreateBitCast(x, IntExprPtrTy, "intexpr");
-      Value *iv = f.CreateLoadGEP(pv, Zero, ValFldIndex, "intval");
+      Value *iv = f.CreateLoadGEP(IntExprTy, pv, Zero, ValFldIndex, "intval");
       cmpv = f.builder.CreateICmpEQ(iv, SInt(t.i), "cmp");
     } else {
       Value *pv = f.builder.CreateBitCast(x, DblExprPtrTy, "dblexpr");
-      Value *dv = f.CreateLoadGEP(pv, Zero, ValFldIndex, "dblval");
+      Value *dv = f.CreateLoadGEP(DblExprTy, pv, Zero, ValFldIndex, "dblval");
       cmpv = f.builder.CreateFCmpOEQ(dv, Dbl(t.d), "cmp");
     }
     f.builder.CreateCondBr(cmpv, matchedbb, failedbb);
@@ -16403,7 +16407,7 @@ void interpreter::simple_match(Value *x, state*& s,
     // first do a quick check on the tag so that we may avoid an expensive
     // call if the tags don't match
     BasicBlock *okbb = basic_block("ok");
-    if (!tagv) tagv = f.CreateLoadGEP(x, Zero, Zero, "tag");
+    if (!tagv) tagv = f.CreateLoadGEP(ExprTy, x, Zero, Zero, "tag");
     f.builder.CreateCondBr
       (f.builder.CreateICmpEQ(tagv, SInt(t.tag), "cmp"), okbb, failedbb);
     // next check the values (like above, but we have to call the runtime for
@@ -16424,7 +16428,7 @@ void interpreter::simple_match(Value *x, state*& s,
     // first do a quick check on the tag so that we may avoid an expensive
     // call if the tags don't match
     BasicBlock *okbb = basic_block("ok");
-    if (!tagv) tagv = f.CreateLoadGEP(x, Zero, Zero, "tag");
+    if (!tagv) tagv = f.CreateLoadGEP(ExprTy, x, Zero, Zero, "tag");
     SwitchInst *sw = f.builder.CreateSwitch(tagv, failedbb, 4);
     sw->addCase(SInt(EXPR::MATRIX), okbb);
     sw->addCase(SInt(EXPR::DMATRIX), okbb);
@@ -16483,26 +16487,26 @@ void interpreter::simple_match(Value *x, state*& s,
     // first match the tag...
     BasicBlock *ok1bb = basic_block("arg1");
     BasicBlock *ok2bb = basic_block("arg2");
-    if (!tagv) tagv = f.CreateLoadGEP(x, Zero, Zero, "tag");
+    if (!tagv) tagv = f.CreateLoadGEP(ExprTy, x, Zero, Zero, "tag");
     f.builder.CreateCondBr
       (f.builder.CreateICmpEQ(tagv, SInt(t.tag)), ok1bb, failedbb);
     s = t.st;
     // next match the first subterm...
     f.f->getBasicBlockList().push_back(ok1bb);
     f.builder.SetInsertPoint(ok1bb);
-    Value *x1 = f.CreateLoadGEP(x, Zero, ValFldIndex, "x1");
+    Value *x1 = f.CreateLoadGEP(ExprTy, x, Zero, ValFldIndex, "x1");
     simple_match(x1, s, ok2bb, failedbb);
     // and finally the second subterm...
     f.f->getBasicBlockList().push_back(ok2bb);
     f.builder.SetInsertPoint(ok2bb);
-    Value *x2 = f.CreateLoadGEP(x, Zero, ValFld2Index, "x2");
+    Value *x2 = f.CreateLoadGEP(ExprTy, x, Zero, ValFld2Index, "x2");
     simple_match(x2, s, matchedbb, failedbb);
     break;
   }
   default:
     assert(t.tag > 0);
     // just do a quick check on the tag
-    if (!tagv) tagv = f.CreateLoadGEP(x, Zero, Zero, "tag");
+    if (!tagv) tagv = f.CreateLoadGEP(ExprTy, x, Zero, Zero, "tag");
     f.builder.CreateCondBr
       (f.builder.CreateICmpEQ(tagv, SInt(t.tag)), matchedbb, failedbb);
     s = t.st;
@@ -16648,8 +16652,8 @@ void interpreter::complex_match(matcher *pm, matcher *mxs,
   do {								\
     state *s = t->st;						\
     list<Value*> ys = xs; ys.pop_front();			\
-    Value *x1 = f.CreateLoadGEP(x, Zero, ValFldIndex, "x1");	\
-    Value *x2 = f.CreateLoadGEP(x, Zero, ValFld2Index, "x2");	\
+    Value *x1 = f.CreateLoadGEP(ExprTy, x, Zero, ValFldIndex, "x1");	\
+    Value *x2 = f.CreateLoadGEP(ExprTy, x, Zero, ValFld2Index, "x2");	\
     ys.push_front(x2); ys.push_front(x1);			\
     complex_match(pm, ys, s, failedbb, reduced, tmps);		\
   } while (0)
@@ -16734,7 +16738,7 @@ void interpreter::complex_match(matcher *pm, const list<Value*>& xs, state *s,
   // check for thunks which must be forced
   if (must_force) {
     // do a quick check on the tag value
-    tagv = f.CreateLoadGEP(x, Zero, Zero, "tag");
+    tagv = f.CreateLoadGEP(ExprTy, x, Zero, Zero, "tag");
     Value *checkv = f.builder.CreateICmpEQ(tagv, Zero, "check");
     BasicBlock *forcebb = basic_block("force");
     BasicBlock *skipbb = basic_block("skip");
@@ -16750,7 +16754,7 @@ void interpreter::complex_match(matcher *pm, const list<Value*>& xs, state *s,
   if (t0 != s->tr.end()) {
     assert(n > m);
     // get the tag value
-    if (!tagv) tagv = f.CreateLoadGEP(x, Zero, Zero, "tag");
+    if (!tagv) tagv = f.CreateLoadGEP(ExprTy, x, Zero, Zero, "tag");
     // set up the switch instruction branching over the different tags
     SwitchInst *sw = f.builder.CreateSwitch(tagv, retrybb, n-m);
     /* NOTE: For constant transitions there may be multiple transitions under
@@ -16851,11 +16855,11 @@ void interpreter::complex_match(matcher *pm, const list<Value*>& xs, state *s,
 	    Value *cmpv;
 	    if (tag == EXPR::INT) {
 	      Value *pv = f.builder.CreateBitCast(x, IntExprPtrTy, "intexpr");
-	      Value *iv = f.CreateLoadGEP(pv, Zero, ValFldIndex, "intval");
+	      Value *iv = f.CreateLoadGEP(IntExprTy, pv, Zero, ValFldIndex, "intval");
 	      cmpv = f.builder.CreateICmpEQ(iv, SInt(l->t->i), "cmp");
 	    } else {
 	      Value *pv = f.builder.CreateBitCast(x, DblExprPtrTy, "dblexpr");
-	      Value *dv = f.CreateLoadGEP(pv, Zero, ValFldIndex, "dblval");
+	      Value *dv = f.CreateLoadGEP(DblExprTy, pv, Zero, ValFldIndex, "dblval");
 	      cmpv = f.builder.CreateFCmpOEQ(dv, Dbl(l->t->d), "cmp");
 	    }
 	    f.builder.CreateCondBr(cmpv, okbb, trynextbb);
@@ -16910,7 +16914,7 @@ void interpreter::complex_match(matcher *pm, const list<Value*>& xs, state *s,
   if (t1->tag == EXPR::VAR && t1->ttag == 0) t1++;
   if (t1 != s->tr.end() && t1->tag == EXPR::VAR) {
     // get the tag value
-    if (!tagv) tagv = f.CreateLoadGEP(x, Zero, Zero, "tag");
+    if (!tagv) tagv = f.CreateLoadGEP(ExprTy, x, Zero, Zero, "tag");
     // set up the switch instruction branching over the different type tags
     SwitchInst *sw = f.builder.CreateSwitch(tagv, defaultbb);
     vector<BasicBlock*> vtransbb;
