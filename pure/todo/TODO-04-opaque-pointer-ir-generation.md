@@ -59,6 +59,9 @@ types that LLVM no longer stores.
 - LLVM 22 keeps `Function::getBasicBlockList()` private. All 126 append-only
   uses now attach detached blocks through `BasicBlock::insertInto`, preserving
   their original construction order without accessing container internals.
+- Tail-call argument patching now inserts cloned and arithmetic instructions by
+  `BasicBlock::iterator` and uses the public two-argument
+  `ReplaceInstWithValue`; no private instruction list access remains.
 - Bitcode and Faust module metadata now uses `DataLayout` from the interpreter's
   main module and explicit `Triple(HOST)`. Layout compatibility still checks
   endianness and pointer size, but no longer depends on legacy JIT target-data
@@ -92,6 +95,15 @@ types that LLVM no longer stores.
 
 ## Progress Log
 
+- 2026-07-23: Modernized instruction insertion and replacement in tail-call
+  argument cleanup.
+  - Validation:
+    - `cmake --preset llvm22-debug` configured successfully.
+    - `cmake --build --preset llvm22-debug -- -j1` no longer reports private
+      `BasicBlock::getInstList`, old `ReplaceInstWithValue`, or deprecated
+      instruction-position errors.
+    - Compilation advances to the intentionally deferred opaque-pointer ABI
+      logic in `bctype_name`.
 - 2026-07-23: Replaced manual bitcode file buffering with LLVM 22 memory-buffer
   ownership.
   - Validation:

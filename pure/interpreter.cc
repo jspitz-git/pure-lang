@@ -11311,19 +11311,12 @@ ReturnInst *Env::CreateRet(Value *v, const rule *rp)
 	    free_fun = interp.module->getFunction("pure_pop_tail_args");
 	    free1_fun = interp.module->getFunction("pure_pop_tail_arg");
 	    /* Patch up this call to correct the offset of the environment. */
-#if LLVM27
 	    CallInst *c2 = cast<CallInst>(c1->clone());
-#else
-	    CallInst *c2 = c1->clone(
-#if LLVM26
-				     pure_llvm_context()
-#endif
-				     );
-#endif
-	    c1->getParent()->getInstList().insert(c1, c2);
-	    Value *v = BinaryOperator::CreateSub(c2, UInt(n+m+1), "", c1);
-	    BasicBlock::iterator ii(c1);
-	    ReplaceInstWithValue(c1->getParent()->getInstList(), ii, v);
+	    c2->insertBefore(c1->getIterator());
+	    Value *v = BinaryOperator::CreateSub
+	      (c2, UInt(n+m+1), "", c1->getIterator());
+	    BasicBlock::iterator ii = c1->getIterator();
+	    ReplaceInstWithValue(ii, v);
 	  }
 	}
       }
