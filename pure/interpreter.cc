@@ -103,6 +103,12 @@ int interpreter::brkflag = 0;
 int interpreter::brkmask = 0;
 bool interpreter::g_init = false;
 
+llvm::LLVMContext& pure_llvm_context()
+{
+  assert(interpreter::g_interp);
+  return interpreter::g_interp->llvm_context();
+}
+
 map<uint32_t, void (*)(void*)> interpreter::locals_destroy_cb;
 
 static void* resolve_external(const std::string& name)
@@ -218,12 +224,8 @@ void interpreter::init()
   /* Accommodate the major API breakage in recent LLVM versions. This is just
      horrible, maybe we should drop support for anything older than LLVM 2.6
      in the future. */
-#if LLVM26
   init_llvm_target();
-  module = new Module(modname, llvm::getGlobalContext());
-#else
-  module = new Module(modname);
-#endif
+  module = new Module(modname, context);
 #if !LLVM27
   MP = new ExistingModuleProvider(module);
 #endif
@@ -282,9 +284,9 @@ void interpreter::init()
 #endif // LLVM 3.0 or earlier
   assert(JIT);
 #if LLVM27
-  FPM = new FunctionPassManager(module);
+  FPM = new legacy::FunctionPassManager(module);
 #else
-  FPM = new FunctionPassManager(MP);
+  FPM = new legacy::FunctionPassManager(MP);
 #endif
 
   // Set up the optimizer pipeline. Start with registering info about how the

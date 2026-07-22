@@ -20,8 +20,7 @@
 #define INTERPRETER_HH
 
 #include <llvm/ExecutionEngine/ExecutionEngine.h>
-#include <llvm/ExecutionEngine/JIT.h>
-#include <llvm/PassManager.h>
+#include <llvm/IR/LegacyPassManager.h>
 #include <llvm/Target/TargetOptions.h>
 #include <llvm/Transforms/Scalar.h>
 
@@ -99,13 +98,7 @@
 #endif
 #endif
 
-#if LLVM26
-#if LLVM33
-#include "llvm/IR/LLVMContext.h"
-#else
-#include "llvm/LLVMContext.h"
-#endif
-#endif
+#include <llvm/IR/LLVMContext.h>
 
 #include "parserdefs.hh"
 // Get rid of silly warnings in bison-generated position.hh.
@@ -198,6 +191,8 @@
 #define TEXMACS_END_COMMAND (interpreter::g_interp->texmacs?COMMAND_END:"")
 
 using namespace std;
+
+llvm::LLVMContext& pure_llvm_context();
 
 /* The Pure interpreter. */
 
@@ -401,19 +396,15 @@ public:
   Env()
     : tag(0), key(0), descr(0), n(0), m(0), f(0), h(0),
       args(0), envs(0), rp(0), b(false), local(false),
-#ifdef LLVM26
-      builder(llvm::getGlobalContext()),
-#endif
+      builder(pure_llvm_context()),
       parent(0), refc(0), refp(new uint32_t)
   { *refp = 0; add_key(getkey(), refp); }
   // environment for an anonymous closure with given body x
   Env(int32_t _tag, const char *_descr, uint32_t _n, expr x,
-      bool _b, bool _local = false)
-    : tag(_tag), key(0), descr(_descr), n(_n), m(0), f(0), h(0),
-      args(n), envs(0), rp(0), b(_b), local(_local),
-#ifdef LLVM26
-      builder(llvm::getGlobalContext()),
-#endif
+        bool _b, bool _local = false)
+      : tag(_tag), key(0), descr(_descr), n(_n), m(0), f(0), h(0),
+        args(n), envs(0), rp(0), b(_b), local(_local),
+        builder(pure_llvm_context()),
       parent(0), refc(0), refp(new uint32_t)
   {
     *refp = 0; add_key(getkey(), refp);
@@ -429,11 +420,9 @@ public:
   }
   // environment for a named closure with given definition info
   Env(int32_t _tag, const env_info& info, bool _b, bool _local = false)
-    : tag(_tag), key(0), descr(0), n(info.argc), m(0), f(0), h(0),
-      args(n), envs(0), rp(0), b(_b), local(_local),
-#ifdef LLVM26
-      builder(llvm::getGlobalContext()),
-#endif
+      : tag(_tag), key(0), descr(0), n(info.argc), m(0), f(0), h(0),
+        args(n), envs(0), rp(0), b(_b), local(_local),
+        builder(pure_llvm_context()),
       parent(0), refc(0), refp(new uint32_t)
   {
     *refp = 0; add_key(getkey(), refp);
@@ -449,11 +438,9 @@ public:
   }
   // dummy environment for an external
   Env(int32_t _tag, uint32_t _n, bool _local = false)
-    : tag(_tag), key(0), descr(0), n(_n), m(0), f(0), h(0),
-      args(n), envs(0), rp(0), b(false), local(false),
-#ifdef LLVM26
-      builder(llvm::getGlobalContext()),
-#endif
+      : tag(_tag), key(0), descr(0), n(_n), m(0), f(0), h(0),
+        args(n), envs(0), rp(0), b(false), local(false),
+        builder(pure_llvm_context()),
       parent(0), refc(0), refp(new uint32_t)
   { *refp = 0; add_key(getkey(), refp); }
   // assignment -- this is only allowed if the lvalue is an uninitialized
@@ -628,6 +615,7 @@ public:
 	      int32_t *arities, void **externs,
 	      pure_expr ***sstk, void **fptr);
   virtual ~interpreter();
+  llvm::LLVMContext& llvm_context() { return context; }
   // Populate the global environment with some useful variables.
   void init_sys_vars(const string& version = "",
 		     const string& host = "",
@@ -1040,12 +1028,13 @@ public:
 
   // LLVM code generation and execution.
 
+  llvm::LLVMContext context;
   llvm::Module *module;
 #ifdef HAVE_LLVM_MODULEPROVIDER_H
   llvm::ModuleProvider *MP;
 #endif
   llvm::ExecutionEngine *JIT;
-  llvm::FunctionPassManager *FPM;
+  llvm::legacy::FunctionPassManager *FPM;
   llvm::StructType  *ExprTy, *IntExprTy, *DblExprTy, *StrExprTy, *PtrExprTy;
   llvm::StructType  *ComplexTy, *GSLMatrixTy, *GSLDoubleMatrixTy,
     *GSLComplexMatrixTy, *GSLIntMatrixTy;
