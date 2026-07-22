@@ -110,6 +110,17 @@ types that LLVM no longer stores.
 
 ## Progress Log
 
+- 2026-07-23: Replaced all typed `PointerType::get(Type*, ...)` construction
+  with LLVM 22 opaque pointers created from the interpreter context.
+  - Legacy aliases such as `ExprPtrTy`, matrix pointers, and numeric pointers
+    intentionally share one address-space-zero LLVM type; semantic distinctions
+    remain in structure layouts, explicit GEP types, and `CAbiType`.
+  - Removed the obsolete dummy `void` pointee structure.
+  - Validation:
+    - `cmake --preset llvm22-debug` configured successfully.
+    - `cmake --build --preset llvm22-debug -- -j1` removed all 18 typed-pointer
+      deprecation warnings, reducing warnings from 20 to two unrelated Clang
+      warning-option diagnostics; the same 12 unrelated errors remain.
 - 2026-07-23: Replaced the final deprecated instruction insertion positions
   with `BasicBlock::iterator` positions.
   - Argument cleanup calls remain immediately before the selected tail call or

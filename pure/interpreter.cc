@@ -300,29 +300,20 @@ void interpreter::init()
   // systems which do not allow the program to dlopen itself.
   JIT->InstallLazyFunctionCreator(resolve_external);
 
-  // Generic pointer type. LLVM doesn't like void*, so we use a pointer to a
-  // dummy struct instead. (This is a bit of a kludge. We'd rather use char*,
-  // as suggested in the LLVM documentation, but we need to keep char* and
-  // void* apart.)
-  {
-    std::vector<llvm_const_Type*> elts;
-    Type *VoidTy = struct_type("void", elts);
-    VoidPtrTy = PointerType::get(VoidTy, 0);
-  }
-
-  // Char pointer type.
-  CharPtrTy = PointerType::get(int8_type(), 0);
-
-  // int and double pointers.
-  IntPtrTy = PointerType::get(int32_type(), 0);
-  DoublePtrTy = PointerType::get(double_type(), 0);
+  // LLVM 22 uses one opaque pointer type per address space. Semantic C pointer
+  // distinctions are tracked separately by CAbiType.
+  PointerType *OpaquePtrTy = PointerType::get(context, 0);
+  VoidPtrTy = OpaquePtrTy;
+  CharPtrTy = OpaquePtrTy;
+  IntPtrTy = OpaquePtrTy;
+  DoublePtrTy = OpaquePtrTy;
 
   // Complex numbers (complex double).
   {
     std::vector<llvm_const_Type*> elts;
     elts.push_back(ArrayType::get(double_type(), 2));
     ComplexTy = struct_type(elts);
-    ComplexPtrTy = PointerType::get(ComplexTy, 0);
+    ComplexPtrTy = OpaquePtrTy;
   }
 
   // GSL-compatible matrix types. These are used to marshall GSL matrices in
@@ -336,7 +327,7 @@ void interpreter::init()
     elts.push_back(VoidPtrTy);		// block
     elts.push_back(int32_type());	// owner
     GSLMatrixTy = struct_type("struct.__gsl__matrix", elts);
-    GSLMatrixPtrTy = PointerType::get(GSLMatrixTy, 0);
+    GSLMatrixPtrTy = OpaquePtrTy;
   }
   {
     std::vector<llvm_const_Type*> elts;
@@ -347,7 +338,7 @@ void interpreter::init()
     elts.push_back(VoidPtrTy);		// block
     elts.push_back(int32_type());	// owner
     GSLDoubleMatrixTy = struct_type("struct.__gsl__matrix_double", elts);
-    GSLDoubleMatrixPtrTy = PointerType::get(GSLDoubleMatrixTy, 0);
+    GSLDoubleMatrixPtrTy = OpaquePtrTy;
   }
   {
     std::vector<llvm_const_Type*> elts;
@@ -358,7 +349,7 @@ void interpreter::init()
     elts.push_back(VoidPtrTy);		// block
     elts.push_back(int32_type());	// owner
     GSLComplexMatrixTy = struct_type("struct.__gsl__matrix_complex", elts);
-    GSLComplexMatrixPtrTy = PointerType::get(GSLComplexMatrixTy, 0);
+    GSLComplexMatrixPtrTy = OpaquePtrTy;
   }
   {
     std::vector<llvm_const_Type*> elts;
@@ -369,7 +360,7 @@ void interpreter::init()
     elts.push_back(VoidPtrTy);		// block
     elts.push_back(int32_type());	// owner
     GSLIntMatrixTy = struct_type("struct.__gsl__matrix_int", elts);
-    GSLIntMatrixPtrTy = PointerType::get(GSLIntMatrixTy, 0);
+    GSLIntMatrixPtrTy = OpaquePtrTy;
   }
 
   // Create the expr struct type.
@@ -406,8 +397,8 @@ void interpreter::init()
     std::vector<llvm::Type*> elts;
     elts.push_back(int32_type());
     elts.push_back(int32_type());
-    elts.push_back(PointerType::get(ExprTy, 0));
-    elts.push_back(PointerType::get(ExprTy, 0));
+    elts.push_back(OpaquePtrTy);
+    elts.push_back(OpaquePtrTy);
     ExprTy->setBody(elts);
   }
   {
@@ -441,12 +432,12 @@ void interpreter::init()
 
   // Corresponding pointer types.
 
-  ExprPtrTy = PointerType::get(ExprTy, 0);
-  ExprPtrPtrTy = PointerType::get(ExprPtrTy, 0);
-  IntExprPtrTy = PointerType::get(IntExprTy, 0);
-  DblExprPtrTy = PointerType::get(DblExprTy, 0);
-  StrExprPtrTy = PointerType::get(StrExprTy, 0);
-  PtrExprPtrTy = PointerType::get(PtrExprTy, 0);
+  ExprPtrTy = OpaquePtrTy;
+  ExprPtrPtrTy = OpaquePtrTy;
+  IntExprPtrTy = OpaquePtrTy;
+  DblExprPtrTy = OpaquePtrTy;
+  StrExprPtrTy = OpaquePtrTy;
+  PtrExprPtrTy = OpaquePtrTy;
 
   sstkvar = global_variable
     (module, ExprPtrPtrTy, false, GlobalVariable::InternalLinkage,
@@ -12795,7 +12786,7 @@ Function *interpreter::declare_extern(int priv, string name, string restype,
     /* We do an indirect call here, so that it can be patched up later when a
        Faust dsp gets reloaded. (This works similar to global Pure functions
        which are also invoked indirectly through global variables.) */
-    PointerType *fptype = PointerType::get(gt, 0);
+    PointerType *fptype = PointerType::get(context, 0);
     GlobalVariable *v = global_variable
       (module, fptype, false, GlobalVariable::InternalLinkage,
        ConstantPointerNull::get(fptype),
