@@ -110,6 +110,14 @@ types that LLVM no longer stores.
 
 ## Progress Log
 
+- 2026-07-23: Restored the LLVM 22 legacy function-pass pipeline declarations.
+  - Added the dedicated LLVM headers for mem2reg, instruction combining, and
+    legacy GVN; pass order and behavior remain unchanged.
+  - Validation:
+    - `cmake --preset llvm22-debug` configured successfully.
+    - `cmake --build --preset llvm22-debug -- -j1` removed all three pass
+      factory errors and reduced the build from 15 to 12 errors, leaving only
+      legacy JIT APIs and the separate `<cmath>` compatibility issue.
 - 2026-07-23: Replaced Faust pointer-type inference with an explicit exported
   function ABI classifier.
   - DSP instances, `compute` sample buffers, JSON strings, Pure `info`/`meta`
