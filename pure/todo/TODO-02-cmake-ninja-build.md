@@ -1,6 +1,6 @@
 # TODO-02 - CMake and Ninja Build
 
-Status: Open
+Status: Closed on 2026-07-22
 Branch: todo/02-cmake-ninja-build
 
 ## Purpose
@@ -24,7 +24,7 @@ tests are represented without relying on Autoconf for the new build.
 3. [x] Define runtime, interpreter, executable, and generated-source dependencies.
 4. [x] Add install rules and CTest integration for `run-tests`.
 5. [x] Add CMake presets for `llvm22-debug`, `llvm22-release`, and `llvm22-asan`.
-6. [ ] Configure with Ninja and document expected LLVM-related compile failures.
+6. [x] Configure with Ninja and document expected LLVM-related compile failures.
 
 ## Bootstrap Findings
 
@@ -69,6 +69,10 @@ tests are represented without relying on Autoconf for the new build.
   C, C++, executable linking, and shared-library linking, preserves frame pointers,
   and enables leak detection for CTest.
 - `build/` is ignored locally so preset output cannot pollute Git status.
+- A serial Debug build completes configuration and generated-source steps, then
+  stops at the first C++ source because LLVM 22 no longer provides
+  `llvm/ExecutionEngine/JIT.h`. This is the intended handoff to TODO-03 rather
+  than a CMake dependency or target-graph failure.
 
 ## Guardrails
 
@@ -83,12 +87,26 @@ tests are represented without relying on Autoconf for the new build.
 - `cmake --build --preset llvm22-debug` as far as the current LLVM API permits.
 - `ctest --preset llvm22-debug --show-only` to verify test registration.
 
-## Open Questions
+## Compatibility Note
 
-- Which installation layouts beyond Linux must remain supported initially?
+- This TODO validates the initial CMake implementation on Linux/WSL only.
+  Windows and macOS installation layouts require explicit follow-up validation
+  before they can be declared supported.
 
 ## Progress Log
 
+- 2026-07-22: Closed TODO-02 after verifying the expected LLVM source-port
+  boundary.
+  - Validation:
+    - `cmake --preset llvm22-debug` configured and generated Ninja files.
+    - `cmake --build --preset llvm22-debug -- -j1` completed generated-source
+      steps, then failed while compiling `expr.cc` through `interpreter.hh`:
+      `fatal error: 'llvm/ExecutionEngine/JIT.h' file not found`.
+    - The failure is owned by TODO-03; no CMake target, dependency, or generated
+      source error preceded it.
+    - All six checklist milestones are complete; full build, install, and CTest
+      execution remain downstream LLVM port validation.
+    - Removed the temporary Debug preset build directory after validation.
 - 2026-07-22: Added Debug, Release, and ASan/UBSan CMake presets.
   - Validation:
     - `cmake --list-presets=all` listed all three configure, build, and test presets.
