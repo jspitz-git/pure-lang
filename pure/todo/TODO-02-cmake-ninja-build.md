@@ -19,12 +19,26 @@ tests are represented without relying on Autoconf for the new build.
 
 ## Task List
 
-1. [ ] Add `CMakeLists.txt`, helper modules, and LLVM 22 version checks.
+1. [x] Add `CMakeLists.txt`, helper modules, and LLVM 22 version checks.
 2. [ ] Generate `config.h` and model required platform feature checks.
 3. [ ] Define runtime, interpreter, executable, and generated-source dependencies.
 4. [ ] Add install rules and CTest integration for `run-tests`.
 5. [ ] Add CMake presets for `llvm22-debug`, `llvm22-release`, and `llvm22-asan`.
 6. [ ] Configure with Ninja and document expected LLVM-related compile failures.
+
+## Bootstrap Findings
+
+- The reference configuration requires Clang 22.x and LLVM 22.x by default;
+  `PURE_STRICT_TOOLCHAIN=OFF` can later support exploratory compiler builds.
+- LLVM is found through its exported CMake package, followed by an explicit 22.x
+  range check. LLVM's package version file rejects a major-only request despite
+  reporting 22.1.8, so the range check cannot be delegated to `find_package`.
+- Required dependencies are Bison, Flex, Iconv, pkg-config, threads, GMP, MPFR,
+  readline, and PCRE POSIX.
+- GSL, Faust, Flang, GFortran, and Sphinx are detected as optional tools for
+  examples, integration fixtures, and documentation.
+- LLVM's package reported missing optional LibEdit, Zlib, zstd, and Curl
+  development files, but bootstrap configuration completed successfully.
 
 ## Guardrails
 
@@ -46,6 +60,17 @@ tests are represented without relying on Autoconf for the new build.
 
 ## Progress Log
 
+- 2026-07-22: Added the CMake bootstrap, toolchain validation, and dependency
+  discovery modules.
+  - Validation:
+    - `cmake -S . -B build/cmake-bootstrap -G Ninja
+      -DCMAKE_BUILD_TYPE=Debug -DCMAKE_C_COMPILER=clang-22
+      -DCMAKE_CXX_COMPILER=clang++-22
+      -DLLVM_DIR=/usr/lib/llvm-22/lib/cmake/llvm` completed successfully.
+    - Detected Clang/LLVM 22.1.8, Bison 3.8.2, Flex 2.6.4, GMP 6.3.0,
+      MPFR 4.2.1, readline 8.2, PCRE POSIX 8.39, GSL 2.7.1, Faust,
+      Flang 22, GFortran, and Sphinx.
+    - Removed the temporary bootstrap build directory after validation.
 - 2026-07-22: Initial CMake migration plan created.
   - Validation:
     - Not run; this update creates planning documentation only.
