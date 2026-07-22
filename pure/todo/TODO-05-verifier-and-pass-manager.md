@@ -19,7 +19,7 @@ fails with an actionable diagnostic before entering ORC.
 ## Task List
 
 1. [x] Introduce reusable new-pass-manager analysis state.
-2. [ ] Select an initial interactive pipeline, preferably standard `O1`.
+2. [x] Select an initial interactive pipeline, preferably standard `O1`.
 3. [ ] Run function or module optimization at a clearly defined ownership boundary.
 4. [ ] Add verification before and after optimization in debug builds.
 5. [ ] Surface verifier and pass errors through Pure diagnostics.
@@ -44,6 +44,19 @@ fails with an actionable diagnostic before entering ORC.
 
 ## Progress Log
 
+- 2026-07-23: Selected LLVM's standard correctness-oriented O1 pipelines.
+  - Interactive optimization will use the repeatable O1 function-simplification
+    pipeline for newly completed functions.
+  - Finalized batch or ORC modules will use a fresh per-module default O1
+    pipeline once at a defined ownership boundary; it will not be repeatedly
+    applied to the long-lived mutable interpreter module.
+  - Pipeline factories are now part of `NewPassManagerState`; execution and
+    analysis invalidation remain task 3.
+  - Validation:
+    - `cmake --preset llvm22-debug` configured successfully.
+    - `cmake --build --preset llvm22-debug -- -j1` compiled both LLVM 22 O1
+      pipeline factories with zero warnings and no new errors; only the nine
+      known legacy JIT errors remain.
 - 2026-07-23: Added interpreter-owned LLVM 22 new-pass-manager analysis state.
   - `NewPassManagerState` owns `PassBuilder` plus loop, function, CGSCC, and
     module analysis managers and cross-registers their proxies once.

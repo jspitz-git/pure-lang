@@ -63,6 +63,7 @@ char *alloca ();
 #include <llvm/Support/FileSystem.h>
 #include <llvm/Support/MemoryBuffer.h>
 #include <llvm/Support/raw_ostream.h>
+#include <llvm/Passes/OptimizationLevel.h>
 #include <llvm/Passes/PassBuilder.h>
 #include <llvm/TargetParser/Triple.h>
 #include <llvm/Transforms/InstCombine/InstCombine.h>
@@ -112,6 +113,17 @@ struct NewPassManagerState {
     builder.registerCGSCCAnalyses(cgscc);
     builder.registerModuleAnalyses(modules);
     builder.crossRegisterProxies(loops, functions, cgscc, modules);
+  }
+
+  llvm::FunctionPassManager build_interactive_pipeline()
+  {
+    return builder.buildFunctionSimplificationPipeline(
+      llvm::OptimizationLevel::O1, llvm::ThinOrFullLTOPhase::None);
+  }
+
+  llvm::ModulePassManager build_module_pipeline()
+  {
+    return builder.buildPerModuleDefaultPipeline(llvm::OptimizationLevel::O1);
   }
 };
 
