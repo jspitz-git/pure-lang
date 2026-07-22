@@ -108,6 +108,14 @@ types that LLVM no longer stores.
 
 ## Progress Log
 
+- 2026-07-23: Ported the final 15 GEP call sites in list and matrix constant
+  generation.
+  - Fourteen global-array addresses use `GlobalVariable::getValueType()`; the
+    malloc-backed expression array uses `ExprPtrTy` as its element type.
+  - Validation:
+    - `cmake --preset llvm22-debug` configured successfully.
+    - `cmake --build --preset llvm22-debug -- -j1` reports no obsolete
+      `CreateGEP` signature and advances to the removed `CreateCall3` helpers.
 - 2026-07-23: Ported all 11 remaining standalone loads to explicit global value
   types and supplied the stored `FunctionType` for the indirect Faust call.
   - Validation:

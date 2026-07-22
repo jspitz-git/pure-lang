@@ -14410,14 +14410,14 @@ Value *interpreter::list_codegen(expr x, bool quote)
 	GlobalVariable *w = global_variable
 	  (module, ArrayType::get(int32_type(), n), true,
 	   GlobalVariable::InternalLinkage, a, "$$intv");
-	p = act_env().CreateGEP(w, Zero, Zero);
+	p = act_env().CreateGEP(w->getValueType(), w, Zero, Zero);
       } else {
 	Constant *a = ConstantArray::get
 	  (ArrayType::get(double_type(), n), c);
 	GlobalVariable *w = global_variable
 	  (module, ArrayType::get(double_type(), n), true,
 	   GlobalVariable::InternalLinkage, a, "$$doublev");
-	p = act_env().CreateGEP(w, Zero, Zero);
+	p = act_env().CreateGEP(w->getValueType(), w, Zero, Zero);
       }
       Value *u = 0;
       if (!x.is_pair() && tl.tag() != symtab.nil_sym().f)
@@ -14474,9 +14474,9 @@ Value *interpreter::list_codegen(expr x, bool quote)
       GlobalVariable *sz_w = global_variable
 	(module, ArrayType::get(int32_type(), n), true,
 	 GlobalVariable::InternalLinkage, sz_a, "$$bigintv_sz");
-      Value *p = act_env().CreateGEP(w, Zero, Zero);
-      Value *offs_p = act_env().CreateGEP(offs_w, Zero, Zero);
-      Value *sz_p = act_env().CreateGEP(sz_w, Zero, Zero);
+      Value *p = act_env().CreateGEP(w->getValueType(), w, Zero, Zero);
+      Value *offs_p = act_env().CreateGEP(offs_w->getValueType(), offs_w, Zero, Zero);
+      Value *sz_p = act_env().CreateGEP(sz_w->getValueType(), sz_w, Zero, Zero);
       Value *u = 0;
       if (!x.is_pair() && tl.tag() != symtab.nil_sym().f)
 	u = codegen(tl, quote);
@@ -14522,8 +14522,8 @@ Value *interpreter::list_codegen(expr x, bool quote)
       GlobalVariable *offs_w = global_variable
 	(module, ArrayType::get(int32_type(), n), true,
 	 GlobalVariable::InternalLinkage, offs_a, "$$strv_offs");
-      Value *p = act_env().CreateGEP(w, Zero, Zero);
-      Value *offs_p = act_env().CreateGEP(offs_w, Zero, Zero);
+      Value *p = act_env().CreateGEP(w->getValueType(), w, Zero, Zero);
+      Value *offs_p = act_env().CreateGEP(offs_w->getValueType(), offs_w, Zero, Zero);
       Value *u = 0;
       if (!x.is_pair() && tl.tag() != symtab.nil_sym().f)
 	u = codegen(tl, quote);
@@ -14549,7 +14549,7 @@ Value *interpreter::list_codegen(expr x, bool quote)
       Value *idx[1];
       idx[0] = UInt(i++);
       act_builder().CreateStore
-	(v, act_builder().CreateGEP(a, mkidxs(idx, idx+1)));
+	(v, act_builder().CreateGEP(ExprPtrTy, a, mkidxs(idx, idx+1)));
     }
     Value *u = 0;
     if (!x.is_pair() && tl.tag() != symtab.nil_sym().f)
@@ -14707,14 +14707,14 @@ Value *interpreter::matrix_codegen(expr x)
 	GlobalVariable *w = global_variable
 	  (module, ArrayType::get(int32_type(), N), true,
 	   GlobalVariable::InternalLinkage, a, "$$intv");
-	p = act_env().CreateGEP(w, Zero, Zero);
+	p = act_env().CreateGEP(w->getValueType(), w, Zero, Zero);
       } else {
 	Constant *a = ConstantArray::get
 	  (ArrayType::get(double_type(), N), c);
 	GlobalVariable *w = global_variable
 	  (module, ArrayType::get(double_type(), N), true,
 	   GlobalVariable::InternalLinkage, a, "$$doublev");
-	p = act_env().CreateGEP(w, Zero, Zero);
+	p = act_env().CreateGEP(w->getValueType(), w, Zero, Zero);
       }
       vector<Value*> args;
       args.push_back(SInt(n));
@@ -14761,9 +14761,9 @@ Value *interpreter::matrix_codegen(expr x)
       GlobalVariable *sz_w = global_variable
 	(module, ArrayType::get(int32_type(), N), true,
 	 GlobalVariable::InternalLinkage, sz_a, "$$bigintv_sz");
-      Value *p = act_env().CreateGEP(w, Zero, Zero);
-      Value *offs_p = act_env().CreateGEP(offs_w, Zero, Zero);
-      Value *sz_p = act_env().CreateGEP(sz_w, Zero, Zero);
+      Value *p = act_env().CreateGEP(w->getValueType(), w, Zero, Zero);
+      Value *offs_p = act_env().CreateGEP(offs_w->getValueType(), offs_w, Zero, Zero);
+      Value *sz_p = act_env().CreateGEP(sz_w->getValueType(), sz_w, Zero, Zero);
       vector<Value*> args;
       args.push_back(SizeInt(n));
       args.push_back(SizeInt(m));
@@ -14801,8 +14801,8 @@ Value *interpreter::matrix_codegen(expr x)
       GlobalVariable *offs_w = global_variable
 	(module, ArrayType::get(int32_type(), N), true,
 	 GlobalVariable::InternalLinkage, offs_a, "$$strv_offs");
-      Value *p = act_env().CreateGEP(w, Zero, Zero);
-      Value *offs_p = act_env().CreateGEP(offs_w, Zero, Zero);
+      Value *p = act_env().CreateGEP(w->getValueType(), w, Zero, Zero);
+      Value *offs_p = act_env().CreateGEP(offs_w->getValueType(), offs_w, Zero, Zero);
       vector<Value*> args;
       args.push_back(SizeInt(n));
       args.push_back(SizeInt(m));
