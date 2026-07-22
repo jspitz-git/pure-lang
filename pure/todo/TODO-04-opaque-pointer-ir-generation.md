@@ -82,6 +82,15 @@ types that LLVM no longer stores.
 
 ## Progress Log
 
+- 2026-07-23: Added explicit global array types to the seven GEPs that build
+  the compiled interpreter and RTTI initialization tables.
+  - Validation:
+    - `cmake --preset llvm22-debug` configured successfully.
+    - The regular Debug build remains capped by earlier legacy JIT/linker
+      diagnostics.
+    - An unlimited `clang++-22 -fsyntax-only` check reported no GEP error in
+      the converted `compiler` range; its only error there is the later
+      `StringRef` argument passed to `is_init`.
 - 2026-07-23: Ported the first direct Faust GEP and load operations to explicit
   `GlobalVariable::getValueType()` source types.
   - Validation:

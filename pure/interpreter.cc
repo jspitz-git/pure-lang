@@ -10816,14 +10816,22 @@ int interpreter::compiler(string out, list<string> libnames, string llcopts)
   args.push_back(a++);
   args.push_back(a++);
   args.push_back(SInt(n));
-  args.push_back(b.CreateGEP(syms, mkidxs(idx, idx+2)));
-  args.push_back(b.CreateBitCast(b.CreateGEP(vvars, mkidxs(idx, idx+2)),
-				 VoidPtrTy));
-  args.push_back(b.CreateBitCast(b.CreateGEP(vvals, mkidxs(idx, idx+2)),
-				 VoidPtrTy));
-  args.push_back(b.CreateGEP(varity, mkidxs(idx, idx+2)));
-  args.push_back(b.CreateBitCast(b.CreateGEP(vexterns, mkidxs(idx, idx+2)),
-				 VoidPtrTy));
+  args.push_back
+    (b.CreateGEP(syms->getValueType(), syms, mkidxs(idx, idx+2)));
+  args.push_back
+    (b.CreateBitCast
+     (b.CreateGEP(vvars->getValueType(), vvars, mkidxs(idx, idx+2)),
+      VoidPtrTy));
+  args.push_back
+    (b.CreateBitCast
+     (b.CreateGEP(vvals->getValueType(), vvals, mkidxs(idx, idx+2)),
+      VoidPtrTy));
+  args.push_back
+    (b.CreateGEP(varity->getValueType(), varity, mkidxs(idx, idx+2)));
+  args.push_back
+    (b.CreateBitCast
+     (b.CreateGEP(vexterns->getValueType(), vexterns, mkidxs(idx, idx+2)),
+      VoidPtrTy));
   args.push_back(b.CreateBitCast(sstkvar, VoidPtrTy));
   args.push_back(b.CreateBitCast(fptrvar, VoidPtrTy));
   b.CreateCall(initfun, mkargs(args));
@@ -10853,7 +10861,7 @@ int interpreter::compiler(string out, list<string> libnames, string llcopts)
        "$$str");
     // "cast" the char array to a char*
     Value *idx[2] = { Zero, Zero };
-    Value *p = b.CreateGEP(v, mkidxs(idx, idx+2));
+    Value *p = b.CreateGEP(v->getValueType(), v, mkidxs(idx, idx+2));
     argv[0] = p;
     argv[1] = SInt(tag);
     b.CreateCall(pure_rttifun, mkargs(argv));
@@ -10871,7 +10879,7 @@ int interpreter::compiler(string out, list<string> libnames, string llcopts)
        "$$faust_str");
     // "cast" the char array to a char*
     Value *idx[2] = { Zero, Zero };
-    Value *p = b.CreateGEP(v, mkidxs(idx, idx+2));
+    Value *p = b.CreateGEP(v->getValueType(), v, mkidxs(idx, idx+2));
     argv[0] = p;
     argv[1] = SInt(info.tag);
     argv[2] = Bool(info.dbl);
