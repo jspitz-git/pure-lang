@@ -1,6 +1,6 @@
 # TODO-05 - Verifier and New Pass Manager
 
-Status: Open
+Status: Complete
 Branch: todo/05-verifier-and-pass-manager
 
 ## Purpose
@@ -23,7 +23,7 @@ fails with an actionable diagnostic before entering ORC.
 3. [x] Run function or module optimization at a clearly defined ownership boundary.
 4. [x] Add verification before and after optimization in debug builds.
 5. [x] Surface verifier and pass errors through Pure diagnostics.
-6. [ ] Compare representative optimized IR with unoptimized output for ABI changes.
+6. [x] Compare representative optimized IR with unoptimized output for ABI changes.
 
 ## Guardrails
 
@@ -44,6 +44,19 @@ fails with an actionable diagnostic before entering ORC.
 
 ## Progress Log
 
+- 2026-07-23: Compared representative Pure-style opaque-pointer IR before and
+  after LLVM 22 `default<O1>` optimization.
+  - Both the input and optimized modules passed
+    `opt-22 -passes=verify -disable-output`.
+  - O1 preserved symbol names, pointer parameter/result types, address space
+    zero, `fastcc`, parameter counts, and the existing tail-call marker.
+  - Mem2reg removed the test alloca, an ordinary call was safely promoted to a
+    tail call, and the `%expr` field GEP was canonically lowered to the
+    equivalent byte offset. Added `readonly`, `captures(none)`, and
+    `local_unnamed_addr` properties do not change the function ABI.
+  - Temporary comparison files were removed after validation.
+  - This completes TODO-05. Executing Pure smoke tests at O0/O1 remains blocked
+    until TODO-06 replaces the legacy JIT and produces a runnable interpreter.
 - 2026-07-23: Confirmed actionable diagnostics across all verifier boundaries.
   - Function failures throw Pure `err` values with the phase, symbol name, and
     complete LLVM diagnostic.
