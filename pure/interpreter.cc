@@ -58,6 +58,7 @@ char *alloca ();
 #include <llvm/Support/Error.h>
 #include <llvm/Support/MemoryBuffer.h>
 #include <llvm/Support/raw_ostream.h>
+#include <llvm/TargetParser/Triple.h>
 #include <llvm/Transforms/Utils/BasicBlockUtils.h>
 
 #include "config.h"
@@ -1958,9 +1959,9 @@ bool interpreter::LoadFaustDSP(bool priv, const char *name, string *msg,
   // Fix up the target layout and triple set by the Faust compiler, in case
   // the dsp module was created on a different platform. (FIXME: We assume
   // that the Faust code itself is platform-agnostic.)
-  string layout = JIT->getTargetData()->getStringRepresentation(),
-    triple = HOST;
-  M->setDataLayout(layout); M->setTargetTriple(triple);
+  const DataLayout& target_layout = module->getDataLayout();
+  M->setDataLayout(target_layout);
+  M->setTargetTriple(Triple(HOST));
   // Mangle the global names of the Faust module since they are usually the
   // same for every module. XXXFIXME: Currently we leave the type names alone
   // and rely on the linker to make them unique instead. This works, but may
@@ -2368,8 +2369,9 @@ bool interpreter::LoadBitcode(bool priv, const char *name, string *msg)
   // mismatches in the target triple and just assume that bitcode files are ok
   // if the data layouts match. Not sure whether this assumption is always
   // valid.
-  string layout = JIT->getTargetData()->getStringRepresentation(),
-    triple = HOST;
+  const DataLayout& target_layout = module->getDataLayout();
+  const string layout = target_layout.getStringRepresentation();
+  const Triple target_triple(HOST);
   // We only give diagnostics on first load, to prevent a cascade of error
   // messages.
 #if 0
@@ -2381,30 +2383,21 @@ bool interpreter::LoadBitcode(bool priv, const char *name, string *msg)
     return false;
   }
 #endif
-#if LLVM35
-  if (!loaded && !M->getDataLayoutStr().empty() && M->getDataLayoutStr() != layout) {
-#else
-  if (!loaded && !M->getDataLayout().empty() && M->getDataLayout() != layout) {
-#endif
-    // Clang 2.9 has some minor mismatches with the JIT data layout (bug?),
-    // which are irrelevant for our purposes, so for the time being we just
-    // check endianness and pointer sizes here.
-    const TargetData &jit_dl = *JIT->getTargetData(), mod_dl = TargetData(M);
-    if (jit_dl.isLittleEndian() != mod_dl.isLittleEndian() ||
-	jit_dl.getPointerSize() != mod_dl.getPointerSize()) {
+  if (!loaded && !M->getDataLayoutStr().empty() &&
+      M->getDataLayoutStr() != layout) {
+    // Some producers have minor layout string differences which are irrelevant
+    // here, so compare endianness and pointer size before rejecting the module.
+    const DataLayout& module_layout = M->getDataLayout();
+    if (target_layout.isLittleEndian() != module_layout.isLittleEndian() ||
+	target_layout.getPointerSize() != module_layout.getPointerSize()) {
       if (msg)
-	*msg = "Mismatch in data layout '"+
-#if LLVM35
-	  M->getDataLayoutStr()
-#else
-	  M->getDataLayout()
-#endif
-	  +"'";
+	*msg = "Mismatch in data layout '"+M->getDataLayoutStr()+"'";
       bc_errmsg(name, msg);
       return false;
     }
   }
-  M->setDataLayout(layout); M->setTargetTriple(triple);
+  M->setDataLayout(target_layout);
+  M->setTargetTriple(target_triple);
   // Build a list of the external functions of the module so that we can wrap
   // them later.
   list<string> funs;
@@ -10607,13 +10600,9 @@ int interpreter::compiler(string out, list<string> libnames, string llcopts)
     std::cerr << "Error opening " << target << '\n';
     exit(1);
   }
-  // Set the module data layout and triple for the target. FIXME: Maybe we
-  // should allow overriding these, but the user can also use the LLVM
-  // toolchain to cross-compile for different architectures.
-  string layout = JIT->getTargetData()->getStringRepresentation(),
-    triple = HOST;
-  module->setDataLayout(layout);
-  module->setTargetTriple(triple);
+  // The module already carries the JIT data layout established during
+  // initialization. Set the native target triple for batch output.
+  module->setTargetTriple(Triple(HOST));
   Function *initfun = module->getFunction("pure_interp_main");
   Function *freefun = module->getFunction("pure_freenew");
   // Eliminate unused functions.

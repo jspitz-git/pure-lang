@@ -59,6 +59,10 @@ types that LLVM no longer stores.
 - LLVM 22 keeps `Function::getBasicBlockList()` private. All 126 append-only
   uses now attach detached blocks through `BasicBlock::insertInto`, preserving
   their original construction order without accessing container internals.
+- Bitcode and Faust module metadata now uses `DataLayout` from the interpreter's
+  main module and explicit `Triple(HOST)`. Layout compatibility still checks
+  endianness and pointer size, but no longer depends on legacy JIT target-data
+  accessors.
 - The highest-risk typed-pointer hotspots are `named_type`, `type_name`,
   `dsptype_name`, `declare_extern`, and Faust sample-type detection. These need
   separate semantic ABI metadata rather than reconstructed pointer nesting.
@@ -82,6 +86,15 @@ types that LLVM no longer stores.
 
 ## Progress Log
 
+- 2026-07-23: Modernized target metadata handling in Faust loading, generic
+  bitcode loading, and batch compilation.
+  - Validation:
+    - `cmake --preset llvm22-debug` configured successfully.
+    - `cmake --build --preset llvm22-debug -- -j1` no longer reports
+      `getTargetData`, `DataLayout(Module*)`, or `std::string` to `Triple`
+      errors.
+    - Compilation advances to linker, output stream, bitcode writer, and legacy
+      JIT compatibility APIs.
 - 2026-07-23: Modernized LLVM value-name handling for `StringRef`.
   - `is_init`, `is_faust`, and `is_faust_internal` now consume `StringRef`
     directly; owned strings are created with `.str()` only where names are
