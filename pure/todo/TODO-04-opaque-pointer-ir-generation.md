@@ -108,6 +108,13 @@ types that LLVM no longer stores.
 
 ## Progress Log
 
+- 2026-07-23: Ported all 11 remaining standalone loads to explicit global value
+  types and supplied the stored `FunctionType` for the indirect Faust call.
+  - Validation:
+    - `cmake --preset llvm22-debug` configured successfully.
+    - `cmake --build --preset llvm22-debug -- -j1` reports no untyped
+      `CreateLoad` or indirect `CreateCall` diagnostics and advances to later
+      `Env::CreateGEP` call sites.
 - 2026-07-23: Ported all 30 combined GEP/load operations in `declare_extern`
   to explicit expression structure layouts.
   - Validation:

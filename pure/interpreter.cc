@@ -12906,7 +12906,8 @@ Function *interpreter::declare_extern(int priv, string name, string restype,
     assert(fp);
     *fp = JIT->getPointerToFunction(g);
     JIT->addGlobalMapping(v, fp);
-    u = b.CreateCall(b.CreateLoad(v), mkargs(unboxed));
+    Value *callee = b.CreateLoad(v->getValueType(), v);
+    u = b.CreateCall(gt, callee, mkargs(unboxed));
   } else
     u = b.CreateCall(g, mkargs(unboxed));
   // box the result
@@ -12997,7 +12998,7 @@ Function *interpreter::declare_extern(int priv, string name, string restype,
 	  Function *f = module->getFunction("pure_sentry");
 	  assert(f);
 	  vector<Value*> args;
-	  args.push_back(b.CreateLoad(v.v));
+	  args.push_back(b.CreateLoad(v.v->getValueType(), v.v));
 	  args.push_back(u);
 	  b.CreateCall(f, mkargs(args));
 	}
@@ -13073,7 +13074,7 @@ Function *interpreter::declare_extern(int priv, string name, string restype,
     JIT->addGlobalMapping(v.v, &v.x);
   }
   if (v.x) pure_free(v.x); v.x = cv;
-  Value *defaultv = b.CreateLoad(v.v);
+  Value *defaultv = b.CreateLoad(v.v->getValueType(), v.v);
   // We first check for NULL values.
   BasicBlock *goodbb = basic_block("good"), *badbb = basic_block("bad");
   b.CreateCondBr(b.CreateICmpNE(defaultv, NullExprPtr), goodbb, badbb);
@@ -13114,7 +13115,8 @@ Function *interpreter::declare_extern(int priv, string name, string restype,
       JIT->addGlobalMapping(v.v, &v.x);
     }
     if (v.x) pure_free(v.x); v.x = pure_new(cv);
-    b.CreateCall(module->getFunction("pure_throw"), b.CreateLoad(v.v));
+    b.CreateCall(module->getFunction("pure_throw"),
+		 b.CreateLoad(v.v->getValueType(), v.v));
   }
   b.CreateRet(defaultv);
   verifyFunction(*f);
@@ -13132,7 +13134,7 @@ Value *interpreter::envptr(bool local)
   if (!fptr || !local)
     return NullPtr;
   else
-    return act_builder().CreateLoad(fptrvar);
+    return act_builder().CreateLoad(fptrvar->getValueType(), fptrvar);
 }
 
 Value *interpreter::constptr(const void *p)
@@ -14858,9 +14860,10 @@ Value *interpreter::codegen(expr x, bool quote)
       // global function, its cbox must exist already)
       map<int32_t,GlobalVar>::iterator v2 = globalvars.find(v->x->tag);
       if (v2 != globalvars.end())
-	return act_builder().CreateLoad(v2->second.v);
+	return act_builder().CreateLoad
+	  (v2->second.v->getValueType(), v2->second.v);
     }
-    return act_builder().CreateLoad(v->v);
+    return act_builder().CreateLoad(v->v->getValueType(), v->v);
   }
   // matrix:
   case EXPR::MATRIX: {
@@ -15142,7 +15145,8 @@ Value *interpreter::codegen(expr x, bool quote)
     // check for an existing global variable
     map<int32_t,GlobalVar>::iterator v = globalvars.find(x.tag());
     if (v != globalvars.end()) {
-      Value *u = act_builder().CreateLoad(v->second.v);
+      Value *u = act_builder().CreateLoad
+	(v->second.v->getValueType(), v->second.v);
 #if DEBUG>2
       string msg = "codegen: global "+symtab.sym(x.tag()).s+" -> %p -> %p";
       debug(msg.c_str(), v->second.v, u);
@@ -15207,7 +15211,7 @@ Value *interpreter::cbox(int32_t tag)
     JIT->addGlobalMapping(v.v, &v.x);
   }
   if (v.x) pure_free(v.x); v.x = pure_new(cv);
-  return act_builder().CreateLoad(v.v);
+  return act_builder().CreateLoad(v.v->getValueType(), v.v);
 }
 
 // Execute a parameterless function.
@@ -15227,7 +15231,8 @@ Value *interpreter::call(int32_t f, Value *x, Value *y)
   // If we already have a definition then use it, otherwise create a cbox
   // which can be patched up later.
   if (v != globalvars.end())
-    retv = act_builder().CreateLoad(v->second.v);
+    retv = act_builder().CreateLoad
+      (v->second.v->getValueType(), v->second.v);
   else
     retv = cbox(f);
   retv = apply(retv, x);
@@ -15460,7 +15465,7 @@ Value *interpreter::vref(int32_t tag, uint32_t v)
 {
   // environment proxy
   Env &e = act_env();
-  Value *sstkptr = e.builder.CreateLoad(sstkvar);
+  Value *sstkptr = e.builder.CreateLoad(sstkvar->getValueType(), sstkvar);
   return e.CreateLoadGEP
     (ExprPtrTy, sstkptr, e.builder.CreateAdd(e.envs, UInt(v)));
 }
@@ -16022,7 +16027,7 @@ void interpreter::fun_body(matcher *pm, matcher *mxs, bool nodefault)
     // failed match is non-fatal, instead we return a "thunk" (literal fbox)
     // of ourself applied to our arguments as the result
     vector<Value*> x(f.m);
-    Value *sstkptr = f.builder.CreateLoad(sstkvar);
+    Value *sstkptr = f.builder.CreateLoad(sstkvar->getValueType(), sstkvar);
     for (size_t i = 0; i < f.m; i++) {
       x[i] = f.CreateLoadGEP
 	(ExprPtrTy, sstkptr, f.builder.CreateAdd(f.envs, UInt(i)));
