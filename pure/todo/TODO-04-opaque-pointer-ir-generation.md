@@ -110,6 +110,17 @@ types that LLVM no longer stores.
 
 ## Progress Log
 
+- 2026-07-23: Switched external wrapper argument and result dispatch from LLVM
+  pointer identity to semantic `CAbiType` descriptors.
+  - String, numeric vector, pointer-vector, matrix, `expr*`, Faust DSP, `void*`,
+    and custom tagged pointer paths now remain distinct with opaque pointers.
+  - Pointer tags are derived from preserved ABI names rather than `type_name`
+    guesses made from LLVM `ptr` values.
+  - Validation:
+    - `cmake --preset llvm22-debug` configured successfully.
+    - `cmake --build --preset llvm22-debug -- -j1` reported no errors in the
+      changed `CAbiType` or `declare_extern` code and retained the same 15
+      unrelated legacy JIT, pass declaration, and `<cmath>` build errors.
 - 2026-07-23: Added a semantic `CAbiType` descriptor independent of
   `llvm::Type*` and stored return/argument descriptors in `ExternInfo`.
   - ABI names are normalized and retain pointer depth, including custom tagged

@@ -12378,8 +12378,9 @@ Function *interpreter::declare_extern(int priv, string name, string restype,
   for (size_t i = 0; i < n; i++) {
     Value *x = args[i];
     llvm_const_Type *type = (i<m)?gt->getParamType(i):argt[i];
+    const CAbiType& abi = abi_argtypes[i];
     // check for thunks which must be forced
-    if (argt[i] != ExprPtrTy) {
+    if (!abi.is(CAbiType::expression, 1)) {
       // do a quick check on the tag value
       Value *idx[2] = { Zero, Zero };
       Value *tagv = create_load_gep(b, ExprTy, x, mkidxs(idx, idx+2), "tag");
@@ -12536,7 +12537,7 @@ Function *interpreter::declare_extern(int priv, string name, string restype,
       idx[1] = ValFldIndex;
       Value *dv = create_load_gep(b, DblExprTy, pv, mkidxs(idx, idx+2), "dblval");
       unboxed[i] = dv;
-    } else if (argt[i] == CharPtrTy) {
+    } else if (abi.is(CAbiType::character, 1)) {
       /* String conversion. As of Pure 0.45, we also allow real char* pointers
 	 and int matrices as byte* inputs here. */
       BasicBlock *ptrbb = basic_block("ptr");
@@ -12551,7 +12552,7 @@ Function *interpreter::declare_extern(int priv, string name, string restype,
       sw->addCase(SInt(EXPR::IMATRIX), matrixbb);
       ptrbb->insertInto(f);
       b.SetInsertPoint(ptrbb);
-      int tag = pointer_type_tag(CharPtrTy);
+      int tag = pointer_type_tag(abi.name);
       if (tag) {
 	// We must check the pointer tag here.
 	BasicBlock *checkedbb = basic_block("checked");
@@ -12590,18 +12591,19 @@ Function *interpreter::declare_extern(int priv, string name, string restype,
       unboxed[i] = phi; temps = true; vtemps = true;
       if (type != CharPtrTy)
 	unboxed[i] = b.CreateBitCast(unboxed[i], type);
-    } else if (argt[i] == PointerType::get(int16_type(), 0) ||
-	       argt[i] == PointerType::get(int32_type(), 0) ||
-	       argt[i] == PointerType::get(int64_type(), 0) ||
-	       argt[i] == PointerType::get(double_type(), 0) ||
-	       argt[i] == PointerType::get(float_type(), 0)) {
+    } else if (abi.pointer_depth == 1 &&
+               (abi.base == CAbiType::short_integer ||
+                abi.base == CAbiType::integer ||
+                abi.base == CAbiType::integer64 ||
+                abi.base == CAbiType::single ||
+                abi.base == CAbiType::double_)) {
       /* These get special treatment, because we also allow numeric matrices
 	 to be passed as an integer or floating point vector here. */
-      bool is_short = argt[i] == PointerType::get(int16_type(), 0);
-      bool is_int = argt[i] == PointerType::get(int32_type(), 0);
-      bool is_int64 = argt[i] == PointerType::get(int64_type(), 0);
-      bool is_float = argt[i] == PointerType::get(float_type(), 0);
-      bool is_double = argt[i] == PointerType::get(double_type(), 0);
+      bool is_short = abi.base == CAbiType::short_integer;
+      bool is_int = abi.base == CAbiType::integer;
+      bool is_int64 = abi.base == CAbiType::integer64;
+      bool is_float = abi.base == CAbiType::single;
+      bool is_double = abi.base == CAbiType::double_;
       BasicBlock *ptrbb = basic_block("ptr");
       BasicBlock *matrixbb = basic_block("matrix");
       BasicBlock *okbb = basic_block("ok");
@@ -12625,7 +12627,7 @@ Function *interpreter::declare_extern(int priv, string name, string restype,
       }
       ptrbb->insertInto(f);
       b.SetInsertPoint(ptrbb);
-      int tag = pointer_type_tag(argt[i]);
+      int tag = pointer_type_tag(abi.name);
       if (tag) {
 	// We must check the pointer tag here.
 	BasicBlock *checkedbb = basic_block("checked");
@@ -12654,10 +12656,11 @@ Function *interpreter::declare_extern(int priv, string name, string restype,
       phi->addIncoming(ptrv, ptrbb);
       phi->addIncoming(matrixv, matrixbb);
       unboxed[i] = b.CreateBitCast(phi, type); vtemps = true;
-    } else if (argt[i] == PointerType::get(VoidPtrTy, 0) ||
-	       argt[i] == PointerType::get(CharPtrTy, 0)) {
+    } else if (abi.pointer_depth == 2 &&
+               (abi.base == CAbiType::void_ ||
+                abi.base == CAbiType::character)) {
       /* Conversion of symbolic vectors to void** and char**. */
-      bool is_char = argt[i] == PointerType::get(CharPtrTy, 0);
+      bool is_char = abi.base == CAbiType::character;
       BasicBlock *ptrbb = basic_block("ptr");
       BasicBlock *matrixbb = basic_block("matrix");
       BasicBlock *smatrixbb = basic_block("smatrix");
@@ -12675,7 +12678,7 @@ Function *interpreter::declare_extern(int priv, string name, string restype,
       sw->addCase(SInt(EXPR::MATRIX), smatrixbb);
       ptrbb->insertInto(f);
       b.SetInsertPoint(ptrbb);
-      int tag = pointer_type_tag(argt[i]);
+      int tag = pointer_type_tag(abi.name);
       if (tag) {
 	// We must check the pointer tag here.
 	BasicBlock *checkedbb = basic_block("checked");
@@ -12712,28 +12715,19 @@ Function *interpreter::declare_extern(int priv, string name, string restype,
       if (is_char) phi->addIncoming(matrixv, matrixbb);
       phi->addIncoming(smatrixv, smatrixbb);
       unboxed[i] = b.CreateBitCast(phi, type); vtemps = true;
-    } else if (argt[i] ==
-	       PointerType::get(PointerType::get(int16_type(), 0), 0) ||
-	       argt[i] ==
-	       PointerType::get(PointerType::get(int32_type(), 0), 0) ||
-	       argt[i] ==
-	       PointerType::get(PointerType::get(int64_type(), 0), 0) ||
-	       argt[i] ==
-	       PointerType::get(PointerType::get(double_type(), 0), 0) ||
-	       argt[i] ==
-	       PointerType::get(PointerType::get(float_type(), 0), 0)) {
+    } else if (abi.pointer_depth == 2 &&
+               (abi.base == CAbiType::short_integer ||
+                abi.base == CAbiType::integer ||
+                abi.base == CAbiType::integer64 ||
+                abi.base == CAbiType::single ||
+                abi.base == CAbiType::double_)) {
       /* Conversion of matrices to vectors of pointers pointing to the rows of
 	 the matrix. These allow a matrix to be modified in-place. */
-      bool is_short = argt[i] ==
-	PointerType::get(PointerType::get(int16_type(), 0), 0);
-      bool is_int = argt[i] ==
-	PointerType::get(PointerType::get(int32_type(), 0), 0);
-      bool is_int64 = argt[i] ==
-	PointerType::get(PointerType::get(int64_type(), 0), 0);
-      bool is_float = argt[i] ==
-	PointerType::get(PointerType::get(float_type(), 0), 0);
-      bool is_double = argt[i] ==
-	PointerType::get(PointerType::get(double_type(), 0), 0);
+      bool is_short = abi.base == CAbiType::short_integer;
+      bool is_int = abi.base == CAbiType::integer;
+      bool is_int64 = abi.base == CAbiType::integer64;
+      bool is_float = abi.base == CAbiType::single;
+      bool is_double = abi.base == CAbiType::double_;
       BasicBlock *ptrbb = basic_block("ptr");
       BasicBlock *matrixbb = basic_block("matrix");
       BasicBlock *okbb = basic_block("ok");
@@ -12757,7 +12751,7 @@ Function *interpreter::declare_extern(int priv, string name, string restype,
       }
       ptrbb->insertInto(f);
       b.SetInsertPoint(ptrbb);
-      int tag = pointer_type_tag(argt[i]);
+      int tag = pointer_type_tag(abi.name);
       if (tag) {
 	// We must check the pointer tag here.
 	BasicBlock *checkedbb = basic_block("checked");
@@ -12786,21 +12780,22 @@ Function *interpreter::declare_extern(int priv, string name, string restype,
       phi->addIncoming(ptrv, ptrbb);
       phi->addIncoming(matrixv, matrixbb);
       unboxed[i] = b.CreateBitCast(phi, type); vtemps = true;
-    } else if (argt[i] == GSLMatrixPtrTy ||
-	       argt[i] == GSLDoubleMatrixPtrTy ||
-	       argt[i] == GSLComplexMatrixPtrTy ||
-	       argt[i] == GSLIntMatrixPtrTy) {
+    } else if (abi.pointer_depth == 1 &&
+               (abi.base == CAbiType::matrix ||
+                abi.base == CAbiType::double_matrix ||
+                abi.base == CAbiType::complex_matrix ||
+                abi.base == CAbiType::integer_matrix)) {
       BasicBlock *okbb = basic_block("ok");
       Value *idx[2] = { Zero, Zero };
       Value *tagv = create_load_gep(b, ExprTy, x, mkidxs(idx, idx+2), "tag");
       int32_t ttag = -99;
-      if (argt[i] == GSLMatrixPtrTy)
+      if (abi.base == CAbiType::matrix)
 	ttag = EXPR::MATRIX;
-      else if (argt[i] == GSLDoubleMatrixPtrTy)
+      else if (abi.base == CAbiType::double_matrix)
 	ttag = EXPR::DMATRIX;
-      else if (argt[i] == GSLComplexMatrixPtrTy)
+      else if (abi.base == CAbiType::complex_matrix)
 	ttag = EXPR::CMATRIX;
-      else if (argt[i] == GSLIntMatrixPtrTy)
+      else if (abi.base == CAbiType::integer_matrix)
 	ttag = EXPR::IMATRIX;
       b.CreateCondBr
 	(b.CreateICmpEQ(tagv, SInt(ttag), "cmp"), okbb, failedbb);
@@ -12808,7 +12803,7 @@ Function *interpreter::declare_extern(int priv, string name, string restype,
       b.SetInsertPoint(okbb);
       Value *matv = b.CreateCall(module->getFunction("pure_get_matrix"), x);
       unboxed[i] = b.CreateBitCast(matv, type);
-    } else if (argt[i] == ExprPtrTy) {
+    } else if (abi.is(CAbiType::expression, 1)) {
       // passed through
       unboxed[i] = x;
       // Cast the pointer to the proper target type if necessary. This is only
@@ -12816,7 +12811,7 @@ Function *interpreter::declare_extern(int priv, string name, string restype,
       // its own internal representation of the expression data type.
       if (type != ExprPtrTy)
 	unboxed[i] = b.CreateBitCast(unboxed[i], type);
-    } else if (i == 0 && is_pointer_type(argt[i]) && is_faust_fun) {
+    } else if (i == 0 && abi.is_pointer() && is_faust_fun) {
       /* The first argument in a Faust call, if it is a pointer, is always the
 	 dsp. Check the pointer against the module tag. */
       BasicBlock *ptrbb = basic_block("ptr");
@@ -12854,7 +12849,7 @@ Function *interpreter::declare_extern(int priv, string name, string restype,
 	args.push_back(x);
 	b.CreateCall(f, mkargs(args));
       }
-    } else if (argt[i] == VoidPtrTy) {
+    } else if (abi.is(CAbiType::void_, 1)) {
       BasicBlock *ptrbb = basic_block("ptr");
       BasicBlock *mpzbb = basic_block("mpz");
       BasicBlock *matrixbb = basic_block("matrix");
@@ -12905,7 +12900,7 @@ Function *interpreter::declare_extern(int priv, string name, string restype,
       // Cast the pointer to the proper target type if necessary.
       if (type != VoidPtrTy)
 	unboxed[i] = b.CreateBitCast(unboxed[i], type);
-    } else if (is_pointer_type(argt[i])) {
+    } else if (abi.is_pointer()) {
       /* Generic pointer type. Only a proper pointer is allowed here, and we
 	 may have to check its tag. */
       BasicBlock *okbb = basic_block("ok");
@@ -12915,7 +12910,7 @@ Function *interpreter::declare_extern(int priv, string name, string restype,
 	(b.CreateICmpEQ(tagv, SInt(EXPR::PTR), "cmp"), okbb, failedbb);
       okbb->insertInto(f);
       b.SetInsertPoint(okbb);
-      int tag = pointer_type_tag(argt[i]);
+      int tag = pointer_type_tag(abi.name);
       if (tag) {
 	// We must check the pointer tag here.
 	BasicBlock *checkedbb = basic_block("checked");
@@ -12992,14 +12987,13 @@ Function *interpreter::declare_extern(int priv, string name, string restype,
 		     b.CreateFPExt(u, double_type()));
   else if (type == double_type())
     u = b.CreateCall(module->getFunction("pure_double"), u);
-  else if (type == CharPtrTy)
+  else if (abi_type.is(CAbiType::character, 1))
     u = b.CreateCall(module->getFunction("pure_cstring_dup"), u);
-  else if (is_pointer_type(type) &&
-	   is_pointer_type(type->getContainedType(0))) {
+  else if (abi_type.pointer_depth > 1) {
     u = b.CreateCall(module->getFunction("pure_pointer"),
 		     b.CreateBitCast(u, VoidPtrTy));
     // We may have to set the proper pointer tag here.
-    int tag = pointer_type_tag(type);
+    int tag = pointer_type_tag(abi_type.name);
     if (tag) {
       Function *f = module->getFunction("pure_tag");
       assert(f);
@@ -13008,19 +13002,19 @@ Function *interpreter::declare_extern(int priv, string name, string restype,
       args.push_back(u);
       b.CreateCall(f, mkargs(args));
     }
-  } else if (type == GSLMatrixPtrTy)
+  } else if (abi_type.is(CAbiType::matrix, 1))
     u = b.CreateCall(module->getFunction("pure_symbolic_matrix"),
 		     b.CreateBitCast(u, VoidPtrTy));
-  else if (type == GSLDoubleMatrixPtrTy)
+  else if (abi_type.is(CAbiType::double_matrix, 1))
     u = b.CreateCall(module->getFunction("pure_double_matrix"),
 		     b.CreateBitCast(u, VoidPtrTy));
-  else if (type == GSLComplexMatrixPtrTy)
+  else if (abi_type.is(CAbiType::complex_matrix, 1))
     u = b.CreateCall(module->getFunction("pure_complex_matrix"),
 		     b.CreateBitCast(u, VoidPtrTy));
-  else if (type == GSLIntMatrixPtrTy)
+  else if (abi_type.is(CAbiType::integer_matrix, 1))
     u = b.CreateCall(module->getFunction("pure_int_matrix"),
 		     b.CreateBitCast(u, VoidPtrTy));
-  else if (type == ExprPtrTy) {
+  else if (abi_type.is(CAbiType::expression, 1)) {
     if (gt->getReturnType() != ExprPtrTy)
       // bitcast the result to an expr*
       u = b.CreateBitCast(u, ExprPtrTy);
@@ -13031,7 +13025,7 @@ Function *interpreter::declare_extern(int priv, string name, string restype,
     okbb->insertInto(f);
     b.SetInsertPoint(okbb);
     // value is passed through
-  } else if (is_pointer_type(type)) {
+  } else if (abi_type.is_pointer()) {
     if (gt->getReturnType() != VoidPtrTy)
       // bitcast the pointer result to a void*
       u = b.CreateBitCast(u, VoidPtrTy);
@@ -13065,7 +13059,7 @@ Function *interpreter::declare_extern(int priv, string name, string restype,
       }
     } else {
       // We may have to set the proper pointer tag here.
-      int tag = pointer_type_tag(type);
+      int tag = pointer_type_tag(abi_type.name);
       if (tag) {
 	Function *f = module->getFunction("pure_tag");
 	assert(f);

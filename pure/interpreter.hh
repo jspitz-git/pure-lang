@@ -433,6 +433,8 @@ struct CAbiType {
   CAbiType() : base(unknown), pointer_depth(0) {}
   explicit CAbiType(const string& type_name);
   bool is_pointer() const { return pointer_depth > 0; }
+  bool is(Base expected_base, unsigned expected_depth) const
+  { return base == expected_base && pointer_depth == expected_depth; }
   bool operator==(const CAbiType& other) const
   { return base == other.base && pointer_depth == other.pointer_depth &&
       name == other.name; }
