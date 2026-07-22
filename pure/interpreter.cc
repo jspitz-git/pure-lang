@@ -1851,6 +1851,14 @@ ParseBitcodeFile(const llvm::MemoryBuffer& Buffer,
   return std::move(*ModuleOrErr);
 }
 
+static bool verify_module(const llvm::Module& module, string& message)
+{
+  llvm::raw_string_ostream out(message);
+  bool invalid = llvm::verifyModule(module, &out);
+  out.flush();
+  return !invalid;
+}
+
 bool interpreter::LoadFaustDSP(bool priv, const char *name, string *msg,
 			       const char *modnm)
 {
@@ -2015,6 +2023,12 @@ bool interpreter::LoadFaustDSP(bool priv, const char *name, string *msg,
   // if the module was modified.
   if (modified && Linker::linkModules(*module, std::move(M))) {
     if (msg && msg->empty()) *msg = "Error linking dsp module";
+    dsp_errmsg(name, msg);
+    return false;
+  }
+  string verification_error;
+  if (modified && !verify_module(*module, verification_error)) {
+    if (msg) *msg = "Invalid linked dsp module: "+verification_error;
     dsp_errmsg(name, msg);
     return false;
   }
@@ -2393,6 +2407,12 @@ bool interpreter::LoadBitcode(bool priv, const char *name, string *msg)
   // if the module wasnd't loaded before.
   if (!loaded && Linker::linkModules(*module, std::move(M))) {
     if (msg && msg->empty()) *msg = "Error linking bitcode module";
+    bc_errmsg(name, msg);
+    return false;
+  }
+  string verification_error;
+  if (!loaded && !verify_module(*module, verification_error)) {
+    if (msg) *msg = "Invalid linked bitcode module: "+verification_error;
     bc_errmsg(name, msg);
     return false;
   }
@@ -10830,6 +10850,9 @@ int interpreter::compiler(string out, list<string> libnames, string llcopts)
   }
   b.CreateRet(0);
   verifyFunction(*main);
+  string verification_error;
+  if (!verify_module(*module, verification_error))
+    throw err("invalid LLVM module: "+verification_error);
   // Emit output code (either LLVM assembler or bitcode).
   if (bc_target) {
     WriteBitcodeToFile(*module, code);

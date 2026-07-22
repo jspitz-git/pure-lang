@@ -110,6 +110,18 @@ types that LLVM no longer stores.
 
 ## Progress Log
 
+- 2026-07-23: Added whole-module LLVM verification at module boundaries.
+  - Faust and generic bitcode loads verify the linked module and report LLVM's
+    diagnostic through their existing error-message paths.
+  - Batch compilation verifies the completed module before emitting LLVM IR or
+    bitcode and raises a Pure compiler error on failure.
+  - Existing generated-function paths continue to call `verifyFunction`.
+  - Validation:
+    - `cmake --preset llvm22-debug` configured successfully.
+    - `cmake --build --preset llvm22-debug -- -j1` compiled the verifier helper
+      and all three call sites with zero warnings and no new errors; execution
+      of representative verification remains blocked by the nine legacy JIT
+      compile errors.
 - 2026-07-23: Removed GCC-only string truncation diagnostic pragmas from the
   dragonegg command-line rewrite.
   - The fixed-width in-place replacement now uses `memcpy`, which matches the
