@@ -20,9 +20,9 @@
 #define INTERPRETER_HH
 
 #include <llvm/ExecutionEngine/ExecutionEngine.h>
-#include <llvm/IR/LegacyPassManager.h>
+
 #include <llvm/Target/TargetOptions.h>
-#include <llvm/Transforms/Scalar.h>
+
 
 #include <time.h>
 #include <set>
@@ -1012,7 +1012,6 @@ public:
   llvm::LLVMContext context;
   llvm::Module *module;
   llvm::ExecutionEngine *JIT;
-  llvm::legacy::FunctionPassManager *FPM;
   NewPassManagerState *pass_state;
   llvm::StructType  *ExprTy, *IntExprTy, *DblExprTy, *StrExprTy, *PtrExprTy;
   llvm::StructType  *ComplexTy, *GSLMatrixTy, *GSLDoubleMatrixTy,

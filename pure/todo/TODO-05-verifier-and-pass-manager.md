@@ -20,7 +20,7 @@ fails with an actionable diagnostic before entering ORC.
 
 1. [x] Introduce reusable new-pass-manager analysis state.
 2. [x] Select an initial interactive pipeline, preferably standard `O1`.
-3. [ ] Run function or module optimization at a clearly defined ownership boundary.
+3. [x] Run function or module optimization at a clearly defined ownership boundary.
 4. [ ] Add verification before and after optimization in debug builds.
 5. [ ] Surface verifier and pass errors through Pure diagnostics.
 6. [ ] Compare representative optimized IR with unoptimized output for ABI changes.
@@ -44,6 +44,22 @@ fails with an actionable diagnostic before entering ORC.
 
 ## Progress Log
 
+- 2026-07-23: Replaced the legacy function pass manager with the LLVM 22 O1
+  function-simplification pipeline.
+  - Optimization runs only after a generated or imported function body is
+    complete, at the five existing function-finalization boundaries.
+  - Cached function analyses are explicitly invalidated before each fresh
+    pipeline run, protecting the long-lived mutable interpreter module from
+    stale analysis results.
+  - Removed the legacy pass manager member, headers, manual pass sequence, and
+    initialization/finalization lifecycle.
+  - The full module O1 pipeline remains reserved for a future one-shot module
+    ownership boundary before ORC submission or batch output.
+  - Validation:
+    - `cmake --preset llvm22-debug` configured successfully.
+    - `cmake --build --preset llvm22-debug -- -j1` compiled all five new
+      optimization call sites with zero warnings and no new errors; only the
+      nine known legacy JIT errors remain.
 - 2026-07-23: Selected LLVM's standard correctness-oriented O1 pipelines.
   - Interactive optimization will use the repeatable O1 function-simplification
     pipeline for newly completed functions.
