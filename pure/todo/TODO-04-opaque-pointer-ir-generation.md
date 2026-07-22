@@ -1,6 +1,6 @@
 # TODO-04 - Opaque-Pointer IR Generation
 
-Status: Open
+Status: Blocked on TODO-06 runtime validation
 Branch: todo/04-opaque-pointer-ir-generation
 
 ## Purpose
@@ -23,7 +23,8 @@ types that LLVM no longer stores.
 3. [x] Replace pointer nesting comparisons in external and Faust ABI detection.
 4. [x] Modernize function, basic block, attribute, and calling-convention APIs.
 5. [ ] Run `verifyFunction` and `verifyModule` over representative generated IR.
-6. [ ] Compile all IR generation code without deprecated compatibility wrappers.
+   Blocked until TODO-06 provides a runnable ORC-backed interpreter.
+6. [x] Compile all IR generation code without deprecated compatibility wrappers.
 
 ## Inventory Findings
 
@@ -110,6 +111,20 @@ types that LLVM no longer stores.
 
 ## Progress Log
 
+- 2026-07-23: Reached the TODO-04 compilation boundary and recorded the runtime
+  validation dependency.
+  - Clang 22 reports zero warnings and no errors in IR generation, opaque-pointer
+    ABI handling, function construction, pass setup, or verifier integration.
+  - The only nine compiler errors are two legacy `EngineBuilder` operations and
+    seven removed `ExecutionEngine::freeMachineCodeForFunction` calls, all owned
+    by TODO-06 or its resource-lifetime follow-ups.
+  - TODO-04 task 6 is complete. Task 5 remains deliberately open rather than
+    claiming unexecuted validation; TODO-05 owns the full verifier boundary and
+    TODO-06 must first make the interpreter runnable.
+  - Validation:
+    - `cmake --preset llvm22-debug` configured successfully.
+    - `cmake --build --preset llvm22-debug -- -j1` reached only the nine listed
+      legacy JIT errors with zero warnings.
 - 2026-07-23: Removed the remaining pre-LLVM-3 compatibility branches from
   function-pass setup and floating-point IR generation.
   - LLVM 22 now directly uses the module-based legacy function pass manager,
