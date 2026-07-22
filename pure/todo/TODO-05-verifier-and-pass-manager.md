@@ -22,7 +22,7 @@ fails with an actionable diagnostic before entering ORC.
 2. [x] Select an initial interactive pipeline, preferably standard `O1`.
 3. [x] Run function or module optimization at a clearly defined ownership boundary.
 4. [x] Add verification before and after optimization in debug builds.
-5. [ ] Surface verifier and pass errors through Pure diagnostics.
+5. [x] Surface verifier and pass errors through Pure diagnostics.
 6. [ ] Compare representative optimized IR with unoptimized output for ABI changes.
 
 ## Guardrails
@@ -44,6 +44,15 @@ fails with an actionable diagnostic before entering ORC.
 
 ## Progress Log
 
+- 2026-07-23: Confirmed actionable diagnostics across all verifier boundaries.
+  - Function failures throw Pure `err` values with the phase, symbol name, and
+    complete LLVM diagnostic.
+  - Linked Faust and generic bitcode modules return diagnostics through their
+    existing `msg` results; batch compilation raises a Pure compiler error.
+  - LLVM's new transformation pass managers return `PreservedAnalyses`, not
+    `Error`; malformed pass output is therefore surfaced by the debug
+    post-optimization verifier rather than a separate pass error channel.
+  - This completes task 5 without introducing a process-aborting LLVM handler.
 - 2026-07-23: Added debug-only function verification before and after O1
   optimization.
   - Verification failures now throw a Pure `err` containing the phase, function
