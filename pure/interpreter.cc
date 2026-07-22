@@ -11397,7 +11397,7 @@ ReturnInst *Env::CreateRet(Value *v, const rule *rp)
       myargs.push_back(v);
     else
       myargs.push_back(ConstantPointerNull::get(interp.ExprPtrTy));
-    CallInst::Create(free1_fun, mkargs(myargs), "", pi);
+    CallInst::Create(free1_fun, mkargs(myargs), "", pi->getIterator());
   } else if (n+m != 0 || !interp.debugging) {
     vector<Value*> myargs;
     if (pi == ret)
@@ -11406,7 +11406,7 @@ ReturnInst *Env::CreateRet(Value *v, const rule *rp)
       myargs.push_back(ConstantPointerNull::get(interp.ExprPtrTy));
     myargs.push_back(UInt(n));
     myargs.push_back(UInt(m));
-    CallInst::Create(free_fun, mkargs(myargs), "", pi);
+    CallInst::Create(free_fun, mkargs(myargs), "", pi->getIterator());
   }
   return ret;
 }

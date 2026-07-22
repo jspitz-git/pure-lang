@@ -110,6 +110,15 @@ types that LLVM no longer stores.
 
 ## Progress Log
 
+- 2026-07-23: Replaced the final deprecated instruction insertion positions
+  with `BasicBlock::iterator` positions.
+  - Argument cleanup calls remain immediately before the selected tail call or
+    return instruction.
+  - Validation:
+    - `cmake --preset llvm22-debug` configured successfully.
+    - `cmake --build --preset llvm22-debug -- -j1` removed both
+      `Instruction::InsertPosition` warnings, reducing warnings from 22 to 20;
+      the same 12 unrelated errors remain.
 - 2026-07-23: Restored the LLVM 22 legacy function-pass pipeline declarations.
   - Added the dedicated LLVM headers for mem2reg, instruction combining, and
     legacy GVN; pass order and behavior remain unchanged.
