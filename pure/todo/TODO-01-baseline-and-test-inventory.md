@@ -1,6 +1,6 @@
 # TODO-01 - Baseline and Test Inventory
 
-Status: Open
+Status: Paused
 Branch: todo/01-baseline-and-test-inventory
 
 ## Purpose
@@ -170,6 +170,19 @@ smoke subset.
 
 ## Progress Log
 
+- 2026-07-22: Paused TODO-01 until an LLVM 22 interpreter can execute the
+  extended `test052` regression.
+  - Branch state:
+    - Last implementation commit before pause: `89d72dcb`.
+    - Blocker: no generated runner or compatible `pure` executable exists.
+    - Next safe action: resume after TODO-06 produces a minimal runnable ORC JIT,
+      execute `./run-tests test/test052.pure`, correct the golden transcript if
+      required, then complete item 3 and the TODO closure checks.
+  - Validation:
+    - Working tree was clean on `todo/01-baseline-and-test-inventory` before this
+      documentation-only pause update.
+    - Static source/log command counts for the added regression matched; no
+      behavioral test was claimed as passed.
 - 2026-07-22: Updated optional integration-tool availability after installation.
   - Validation:
     - `faust --version` reported Faust 2.70.3 with an LLVM 17.0.6 backend.
