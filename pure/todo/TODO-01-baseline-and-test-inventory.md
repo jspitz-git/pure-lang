@@ -23,7 +23,7 @@ changes can be evaluated against a clear, runnable set of expectations.
 3. [ ] Add focused tests for function redefinition and closure code lifetime.
    - `test052` now covers three simultaneous generations and out-of-order closure
      release; execution remains pending until the LLVM 22 interpreter is runnable.
-4. [ ] Define the initial smoke subset that each later TODO must run.
+4. [x] Define the initial smoke subset that each later TODO must run.
 5. [ ] Validate the test inventory and record any tests that cannot run before the port.
 
 ## Baseline Findings
@@ -88,6 +88,44 @@ Actual bitcode and Faust examples live under `examples/bitcode/`; they require
 modern fixture generation and dedicated automated coverage rather than inclusion
 as opaque historical `.bc` files.
 
+### Required smoke subsets
+
+Every implementation TODO that produces a runnable interpreter must first run the
+core subset:
+
+```sh
+./run-tests \
+  test/test001.pure \
+  test/test004.pure \
+  test/test013.pure \
+  test/test016.pure \
+  test/test029.pure \
+  test/test036.pure \
+  test/test052.pure
+```
+
+This set covers basic generated code, recursion, captured environments, external
+symbol lookup, global value replacement, local closures, and function generations
+surviving `clear` and redefinition.
+
+Changes affecting calls, data layout, exceptions, thunks, globals, or resource
+lifetime must additionally run the extended JIT subset:
+
+```sh
+./run-tests \
+  test/test018.pure \
+  test/test023.pure \
+  test/test030.pure \
+  test/test041.pure \
+  test/test042.pure \
+  test/test054.pure \
+  test/test056.pure
+```
+
+The full numbered corpus remains the final check for a completed implementation
+TODO. Bitcode and Faust TODOs must add and run their own integration tests because
+neither feature is exercised by these subsets.
+
 ## Guardrails
 
 - Treat existing expected results as the behavioral specification unless clearly broken.
@@ -107,6 +145,12 @@ as opaque historical `.bc` files.
 
 ## Progress Log
 
+- 2026-07-22: Defined a seven-test core smoke subset and a seven-test extended
+  JIT subset, with full-corpus and feature-specific escalation rules.
+  - Validation:
+    - Confirmed that every listed source has a matching golden `.log` file.
+    - Execution remains deferred until a compatible `pure` binary and generated
+      runner are available.
 - 2026-07-22: Extended `test052` with three live function generations and
   out-of-order release of newer closures before invoking the oldest closure.
   - Validation:
