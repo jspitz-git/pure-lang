@@ -1917,11 +1917,17 @@ bool interpreter::LoadFaustDSP(bool priv, const char *name, string *msg,
   }
   // Check whether getSampleRate is available.
   bool have_getSampleRate = M->getFunction("getSampleRate"+classname) != 0;
-  // Figure out whether our dsp uses float or double values.
-  Function *compute = M->getFunction("compute"+classname);
-  llvm_const_Type *type = compute->getFunctionType()->getParamType(2);
-  bool is_double = type ==
-    PointerType::get(PointerType::get(double_type(), 0), 0);
+  // Faust records the sample format in its compile options. Pointer parameter
+  // types cannot carry this information under LLVM's opaque-pointer model.
+  StringRef source = M->getSourceFileName();
+  bool has_single = source.contains("-single");
+  bool has_double = source.contains("-double");
+  if (has_single == has_double) {
+    if (msg) *msg = "Missing or ambiguous Faust sample format";
+    dsp_errmsg(name, msg);
+    return false;
+  }
+  bool is_double = has_double;
   if (loaded && modified) {
     // Do some more checking to make sure that the programmer didn't suddenly
     // change his mind about the precision of floating point data (-double

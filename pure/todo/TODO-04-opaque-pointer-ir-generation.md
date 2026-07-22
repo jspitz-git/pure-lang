@@ -85,6 +85,9 @@ types that LLVM no longer stores.
   former pointee type. Consequently, pointer-bearing external bitcode functions
   are temporarily unavailable until an explicit Pure ABI metadata format is
   implemented; scalar-only functions remain classifiable.
+- Faust 2.70.3 embeds `-single` or `-double` in the module source filename and
+  JSON compile options. Sample precision now uses that explicit compile metadata
+  instead of comparing the opaque `compute` parameter type.
 
 ## Guardrails
 
@@ -102,12 +105,20 @@ types that LLVM no longer stores.
 
 - What module/function metadata format should carry Pure C ABI names for opaque
   pointer parameters and results in externally produced bitcode?
-- Should Faust precision be detected from function metadata or from non-pointer
-  parameters?
+
 - Which indirect call sites need explicit stored `FunctionType` metadata?
 
 ## Progress Log
 
+- 2026-07-23: Replaced Faust sample precision detection based on pointer nesting
+  with explicit Faust compile options.
+  - Validation:
+    - Faust 2.70.3 generated both single- and double-precision LLVM 17 bitcode;
+      `llvm-dis-22` showed `-single` and `-double` respectively in
+      `source_filename`, with matching typed GEP/load instructions.
+    - `cmake --preset llvm22-debug` configured successfully.
+    - `cmake --build --preset llvm22-debug -- -j1` accepts the new detection
+      code and retains only the existing 15 unrelated build errors.
 - 2026-07-23: Replaced all seven removed `CreateCall3` sites with regular
   `CreateCall` and explicit argument lists.
   - Validation:
