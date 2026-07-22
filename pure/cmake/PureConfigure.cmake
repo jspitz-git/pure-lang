@@ -79,9 +79,8 @@ set(USE_PCRE TRUE)
 set(USE_READLINE TRUE)
 set(HAVE_BISON3 TRUE)
 
-# Temporary API compatibility definitions retained until the related source
-# paths are migrated in later LLVM porting steps.
-set(NEW_BUILDER TRUE)
+# Temporary stream compatibility definitions retained until the related output
+# paths are migrated in a later LLVM porting step.
 set(NEW_OSTREAM TRUE)
 set(NEW_OSTREAM34 TRUE)
 set(NEW_USER_ITERATOR TRUE)

@@ -52,6 +52,10 @@ types that LLVM no longer stores.
 - The shared `Env` helpers now require that source type. `CreateLoadGEP` derives
   its load type with `GetElementPtrInst::getIndexedType`, keeping GEP and load
   types consistent without querying the opaque pointer.
+- The historical `Builder` macro expanded inside LLVM's own
+  `BasicBlockUtils.h`, corrupting an `IRBuilderBase &Builder` parameter. It is
+  now a C++ type alias, and the obsolete `NEW_BUILDER` configuration switch has
+  been removed.
 - The highest-risk typed-pointer hotspots are `named_type`, `type_name`,
   `dsptype_name`, `declare_extern`, and Faust sample-type detection. These need
   separate semantic ABI metadata rather than reconstructed pointer nesting.
@@ -75,6 +79,15 @@ types that LLVM no longer stores.
 
 ## Progress Log
 
+- 2026-07-23: Replaced the preprocessor `Builder` alias with
+  `using Builder = llvm::IRBuilder<>` and selected modern `BinaryOperator`
+  construction directly.
+  - Validation:
+    - `cmake --preset llvm22-debug` regenerated configuration without
+      `NEW_BUILDER`.
+    - `cmake --build --preset llvm22-debug -- -j1` no longer reports macro
+      expansion errors in LLVM's `BasicBlockUtils.h` and proceeds to Pure's
+      `StringRef`, linker, basic-block ownership, and legacy JIT APIs.
 - 2026-07-23: Ported the shared `Env::CreateGEP` and `Env::CreateLoadGEP`
   helpers and all 44 call sites to explicit source types.
   - Expression nodes use `ExprTy`, `IntExprTy`, or `DblExprTy`; shadow-stack

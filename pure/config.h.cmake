@@ -39,7 +39,6 @@
 #cmakedefine HAVE_FASTCC 1
 #cmakedefine HAVE_BISON3 1
 
-#cmakedefine NEW_BUILDER 1
 #cmakedefine NEW_OSTREAM 1
 #cmakedefine NEW_OSTREAM34 1
 #cmakedefine NEW_USER_ITERATOR 1

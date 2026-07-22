@@ -178,13 +178,7 @@ struct VarInfo {
     : v(_v), vtag(_vtag), idx(_idx), p(_p) {}
 };
 
-#ifdef NEW_BUILDER
-/* LLVM 2.4 has a new IRBuilder class which takes some optional template
-   parameters. */
-#define Builder llvm::IRBuilder<>
-#else
-#define Builder llvm::IRBuilder
-#endif
+using Builder = llvm::IRBuilder<>;
 
 #ifdef NEW_USER_ITERATOR
 /* Workarounds for LLVM 3.5 API breakage. */
