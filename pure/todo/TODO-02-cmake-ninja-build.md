@@ -22,7 +22,7 @@ tests are represented without relying on Autoconf for the new build.
 1. [x] Add `CMakeLists.txt`, helper modules, and LLVM 22 version checks.
 2. [x] Generate `config.h` and model required platform feature checks.
 3. [x] Define runtime, interpreter, executable, and generated-source dependencies.
-4. [ ] Add install rules and CTest integration for `run-tests`.
+4. [x] Add install rules and CTest integration for `run-tests`.
 5. [ ] Add CMake presets for `llvm22-debug`, `llvm22-release`, and `llvm22-asan`.
 6. [ ] Configure with Ninja and document expected LLVM-related compile failures.
 
@@ -56,6 +56,13 @@ tests are represented without relying on Autoconf for the new build.
   `libm`; the executable adds readline. The `strptime.c` fallback is conditional.
 - Generated `parser.cc`, `parser.hh`, `location.hh`, `position.hh`, `stack.hh`,
   and `lexer.cc` remain build artifacts and are not written into the source tree.
+- CMake configures executable `run-test` and `run-tests` scripts in the build tree
+  with the source path, runtime library path, `PURELIB`, `PURE_INCLUDE`, and C locale.
+- CTest registers the existing golden corpus as `pure-regression` without changing
+  the runner's output comparison semantics.
+- Install rules cover `pure`, versioned `libpure`, `runtime.h`, `pure_main.c`, the
+  embedding object renamed to `pure_main.o`, `lib/*.pure`, `pure.pc`, and `pure.1`.
+  Emacs, TeXmacs, and downloaded documentation installation remain out of scope.
 
 ## Guardrails
 
@@ -76,6 +83,17 @@ tests are represented without relying on Autoconf for the new build.
 
 ## Progress Log
 
+- 2026-07-22: Added CTest runner generation and baseline install rules.
+  - Validation:
+    - CMake configuration generated executable `run-test` and `run-tests` scripts
+      with the expected source and environment paths.
+    - `ctest --test-dir build/llvm22-install --show-only` reported exactly one
+      test, `pure-regression`.
+    - Inspected `cmake_install.cmake`; it includes `runtime.h`, `pure_main.o`,
+      `pure.pc`, and `pure.1` at their planned destinations.
+    - Full `cmake --install` remains blocked until the LLVM 22 source port builds
+      `pure-runtime` and `pure`.
+    - Removed the temporary `build/llvm22-install` directory after validation.
 - 2026-07-22: Added generated-source, runtime library, interpreter executable,
   and embedding object targets.
   - Validation:

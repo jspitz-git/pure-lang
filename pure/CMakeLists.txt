@@ -18,5 +18,6 @@ include(PureToolchain)
 include(PureDependencies)
 include(PureConfigure)
 include(PureTargets)
+include(PureInstallAndTests)
 
 message(STATUS "Pure ${PROJECT_VERSION} configured")
