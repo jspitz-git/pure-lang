@@ -1090,9 +1090,6 @@ public:
   string bctype_name(llvm_const_Type *type);
   string dsptype_name(llvm_const_Type *type);
   bool compatible_types(llvm_const_Type *type1, llvm_const_Type *type2);
-  llvm_const_Type *gslmatrix_type(llvm_const_Type *elem_ty,
-				  llvm_const_Type *block_ty,
-				  size_t padding = 0);
   set<llvm::Function*> always_used;
   map<int32_t,GlobalVar> globalvars;
   map<int32_t,Env> globalfuns, globaltypes;

@@ -78,6 +78,10 @@ types that LLVM no longer stores.
 - The highest-risk typed-pointer hotspots are `named_type`, `type_name`,
   `dsptype_name`, `declare_extern`, and Faust sample-type detection. These need
   separate semantic ABI metadata rather than reconstructed pointer nesting.
+- `bctype_name` now rejects opaque pointer signatures instead of guessing their
+  former pointee type. Consequently, pointer-bearing external bitcode functions
+  are temporarily unavailable until an explicit Pure ABI metadata format is
+  implemented; scalar-only functions remain classifiable.
 
 ## Guardrails
 
@@ -93,11 +97,24 @@ types that LLVM no longer stores.
 
 ## Open Questions
 
-- Should Faust precision be detected from function metadata or from non-pointer parameters?
+- What module/function metadata format should carry Pure C ABI names for opaque
+  pointer parameters and results in externally produced bitcode?
+- Should Faust precision be detected from function metadata or from non-pointer
+  parameters?
 - Which indirect call sites need explicit stored `FunctionType` metadata?
 
 ## Progress Log
 
+- 2026-07-23: Removed invalid pointee introspection from external bitcode ABI
+  classification.
+  - Pointer signatures now return `<unknown C type>` and are rejected rather
+    than being silently assigned the wrong conversion wrapper.
+  - Removed the obsolete pointee-layout comparison helpers and
+    `Module::getTypeByName` calls.
+  - Validation:
+    - `cmake --preset llvm22-debug` configured successfully.
+    - `cmake --build --preset llvm22-debug -- -j1` advances past
+      `bctype_name` to direct opaque-pointer GEP/load errors in `declare_extern`.
 - 2026-07-23: Modernized parsed-module ownership and linker calls.
   - Validation:
     - `cmake --preset llvm22-debug` configured successfully.
