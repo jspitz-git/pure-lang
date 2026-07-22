@@ -24,7 +24,7 @@ changes can be evaluated against a clear, runnable set of expectations.
    - `test052` now covers three simultaneous generations and out-of-order closure
      release; execution remains pending until the LLVM 22 interpreter is runnable.
 4. [x] Define the initial smoke subset that each later TODO must run.
-5. [ ] Validate the test inventory and record any tests that cannot run before the port.
+5. [x] Validate the test inventory and record any tests that cannot run before the port.
 
 ## Baseline Findings
 
@@ -126,6 +126,27 @@ The full numbered corpus remains the final check for a completed implementation
 TODO. Bitcode and Faust TODOs must add and run their own integration tests because
 neither feature is exercised by these subsets.
 
+### Pre-port validation status
+
+Static inventory checks are complete, but no behavioral Pure test can run before
+the port in the current checkout:
+
+- `run-tests` and `run-test` have not been generated from their `.in` templates.
+- There is no build-tree `./pure` executable and no system `pure` executable.
+- All 95 numbered tests and the prelude test execute through the JIT-enabled
+  interpreter, so none form an LLVM-independent executable subset.
+- `special.pure` is outside the default runner, but it also requires the interpreter.
+- The blob fixtures are data inputs for `test042`, not standalone validation tools.
+- Generic bitcode examples cannot provide a baseline run: GFortran and GSL are
+  unavailable, while the existing Makefile targets obsolete compiler workflows.
+- Faust DSP examples cannot provide a baseline because the Faust compiler is
+  unavailable. Sphinx 7.2.6 is installed, but documentation generation does not
+  validate interpreter or JIT behavior.
+
+These are expected migration constraints, not test failures. The first behavioral
+baseline will be produced by the earliest LLVM 22 build capable of running the core
+smoke subset.
+
 ## Guardrails
 
 - Treat existing expected results as the behavioral specification unless clearly broken.
@@ -140,11 +161,19 @@ neither feature is exercised by these subsets.
 
 ## Open Questions
 
-- Is a previously built Pure executable available as an optional behavioral oracle?
-- Which Faust tests require external tools not currently installed?
+- Should GFortran, GSL, and a compatible Faust release be installed during their
+  feature-specific TODOs, or should those integration tests remain optional?
 
 ## Progress Log
 
+- 2026-07-22: Completed static inventory validation and recorded all current
+  blockers to a pre-port behavioral run.
+  - Validation:
+    - `run-tests`, build-tree `pure`, and system `pure` were all unavailable.
+    - Faust, GFortran, and GSL were unavailable; `sphinx-build --version`
+      reported Sphinx 7.2.6.
+    - Corpus counts and smoke input/log pairs had already been verified; no
+      executable test was reported as passed.
 - 2026-07-22: Defined a seven-test core smoke subset and a seven-test extended
   JIT subset, with full-corpus and feature-specific escalation rules.
   - Validation:
