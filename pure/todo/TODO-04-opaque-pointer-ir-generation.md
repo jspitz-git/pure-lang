@@ -82,6 +82,16 @@ types that LLVM no longer stores.
 
 ## Progress Log
 
+- 2026-07-23: Modernized LLVM value-name handling for `StringRef`.
+  - `is_init`, `is_faust`, and `is_faust_internal` now consume `StringRef`
+    directly; owned strings are created with `.str()` only where names are
+    stored or modified.
+  - Validation:
+    - `cmake --preset llvm22-debug` configured successfully.
+    - `cmake --build --preset llvm22-debug -- -j1` no longer reports implicit
+      `StringRef` to `std::string` conversions or the `is_init(getName())` error.
+    - Compilation advances to `Triple`, `DataLayout`, linker, stream flag, and
+      legacy JIT compatibility errors.
 - 2026-07-23: Added explicit global array types to the seven GEPs that build
   the compiled interpreter and RTTI initialization tables.
   - Validation:

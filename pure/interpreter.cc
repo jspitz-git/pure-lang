@@ -1919,7 +1919,7 @@ bool interpreter::LoadFaustDSP(bool priv, const char *name, string *msg,
   bool found = false;
   for (Module::iterator it = M->begin(), end = M->end(); it != end; ) {
     Function &f = *(it++);
-    string name = f.getName();
+    string name = f.getName().str();
     if (name.compare(0, len, buildui) == 0) {
       classname = name.substr(len);
       found = true;
@@ -1971,7 +1971,7 @@ bool interpreter::LoadFaustDSP(bool priv, const char *name, string *msg,
   // Mangle the function names.
   for (Module::iterator it = M->begin(), end = M->end(); it != end; ++it) {
     Function &f = *it;
-    string name = f.getName();
+    string name = f.getName().str();
     // We always force external linkage here in order to avoid the automatic
     // renaming that the linker does for internal symbols.
     f.setLinkage(Function::ExternalLinkage);
@@ -1994,7 +1994,7 @@ bool interpreter::LoadFaustDSP(bool priv, const char *name, string *msg,
        it != end; ++it) {
     GlobalVariable &v = *it;
     if (!v.hasName()) continue;
-    string name = v.getName();
+    string name = v.getName().str();
     string vname = "$$__faust__$"+modname+"$"+name;
     v.setLinkage(GlobalVariable::ExternalLinkage);
     vars.push_back(name);
@@ -2007,13 +2007,13 @@ bool interpreter::LoadFaustDSP(bool priv, const char *name, string *msg,
     list<GlobalVariable*>& varptrs = data.varptrs;
     for (list<Function*>::iterator f = funptrs.begin();
 	 f != funptrs.end(); ++f) {
-      string fname = (*f)->getName();
+      string fname = (*f)->getName().str();
       (*f)->dropAllReferences();
       JIT->freeMachineCodeForFunction(*f);
     }
     for (list<GlobalVariable*>::iterator v = varptrs.begin();
 	 v != varptrs.end(); ++v) {
-      string vname = (*v)->getName();
+      string vname = (*v)->getName().str();
       (*v)->dropAllReferences();
       // XXXFIXME: Do we have to free the pointer returned by
       // updateGlobalMapping() here?
@@ -2412,7 +2412,7 @@ bool interpreter::LoadBitcode(bool priv, const char *name, string *msg)
     Function &f = *(it++);
     if (!f.isDeclaration() &&
 	f.getLinkage() == Function::ExternalLinkage) {
-      funs.push_back(f.getName());
+      funs.push_back(f.getName().str());
     }
   }
   // Link the bitcode module into the Pure module. This only needs to be done
@@ -10236,10 +10236,10 @@ static string mkvarsym(const string& name)
     return name;
 }
 
-static inline bool is_init(const string& name)
+static inline bool is_init(llvm::StringRef name)
 {
-  return name.compare(0, 6, "$$init") == 0 &&
-    name.find_first_not_of("0123456789", 6) == string::npos;
+  return name.starts_with("$$init") &&
+    name.find_first_not_of("0123456789", 6) == llvm::StringRef::npos;
 }
 
 static inline bool is_type(const string& name)
@@ -10247,14 +10247,14 @@ static inline bool is_type(const string& name)
   return name.compare(0, 7, "$$type.") == 0;
 }
 
-static inline bool is_faust(const string& name)
+static inline bool is_faust(llvm::StringRef name)
 {
-  return name.compare(0, 8, "$$faust$") == 0;
+  return name.starts_with("$$faust$");
 }
 
-static inline bool is_faust_internal(const string& name)
+static inline bool is_faust_internal(llvm::StringRef name)
 {
-  return name.compare(0, 12, "$$__faust__$") == 0;
+  return name.starts_with("$$__faust__$");
 }
 
 static inline string faust_basename(const string& name)
@@ -10661,7 +10661,7 @@ int interpreter::compiler(string out, list<string> libnames, string llcopts)
       v.setLinkage(GlobalVariable::InternalLinkage);
     // While we're at it, also check for variables pointing to Faust functions
     // and update their initializations.
-    string name = v.getName();
+    string name = v.getName().str();
     if (is_faust_var(name)) {
       Function *f = module->getFunction(name.substr(1));
       assert(f);
