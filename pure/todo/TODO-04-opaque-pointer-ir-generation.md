@@ -110,6 +110,14 @@ types that LLVM no longer stores.
 
 ## Progress Log
 
+- 2026-07-23: Updated complex-number constant conversion to the C++17 `<cmath>`
+  interface.
+  - Polar coordinates now use `std::cos` and `std::sin` explicitly.
+  - Validation:
+    - `cmake --preset llvm22-debug` configured successfully.
+    - `cmake --build --preset llvm22-debug -- -j1` removed all three math
+      diagnostics and reduced the build from 12 to nine errors; every remaining
+      error is now an obsolete legacy `ExecutionEngine` operation.
 - 2026-07-23: Replaced all typed `PointerType::get(Type*, ...)` construction
   with LLVM 22 opaque pointers created from the interpreter context.
   - Legacy aliases such as `ExprPtrTy`, matrix pointers, and numeric pointers

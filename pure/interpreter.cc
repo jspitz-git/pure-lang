@@ -36,6 +36,7 @@ char *alloca ();
 
 #include "interpreter.hh"
 #include "util.hh"
+#include <cmath>
 #include <memory>
 #include <sstream>
 #include <system_error>
@@ -14498,7 +14499,7 @@ static bool is_complex(interpreter& interp, expr x, double& a, double& b)
     }
     if (f.tag() == polar.f) {
       double r = a, t = b;
-      a = r*cos(t); b = r*sin(t);
+      a = r*std::cos(t); b = r*std::sin(t);
     }
     return true;
   } else
