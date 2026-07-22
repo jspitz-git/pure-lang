@@ -63,6 +63,9 @@ types that LLVM no longer stores.
   main module and explicit `Triple(HOST)`. Layout compatibility still checks
   endianness and pointer size, but no longer depends on legacy JIT target-data
   accessors.
+- Batch output now uses LLVM 22 `raw_fd_ostream`, `std::error_code`, modern
+  `OpenFlags`, and `WriteBitcodeToFile(Module&, raw_ostream&)`. The
+  `RAW_STREAM` and `NEW_OSTREAM*` compatibility matrix has been removed.
 - The highest-risk typed-pointer hotspots are `named_type`, `type_name`,
   `dsptype_name`, `declare_extern`, and Faust sample-type detection. These need
   separate semantic ABI metadata rather than reconstructed pointer nesting.
@@ -86,6 +89,16 @@ types that LLVM no longer stores.
 
 ## Progress Log
 
+- 2026-07-23: Replaced historical stream and bitcode output compatibility with
+  the LLVM 22 APIs.
+  - Validation:
+    - `cmake --preset llvm22-debug` regenerated configuration without
+      `NEW_OSTREAM` or `NEW_OSTREAM34`.
+    - `cmake --build --preset llvm22-debug -- -j1` no longer reports removed
+      `F_None`/`F_Text`, `raw_fd_ostream` constructor, or
+      `WriteBitcodeToFile` errors.
+    - Compilation advances to writable memory-buffer, linker, instruction-list,
+      and legacy JIT APIs.
 - 2026-07-23: Modernized target metadata handling in Faust loading, generic
   bitcode loading, and batch compilation.
   - Validation:

@@ -37,6 +37,7 @@ char *alloca ();
 #include "interpreter.hh"
 #include "util.hh"
 #include <sstream>
+#include <system_error>
 #include <stdarg.h>
 #include <errno.h>
 #include <sys/types.h>
@@ -52,10 +53,12 @@ char *alloca ();
 #include <glob.h>
 
 #include <llvm/Bitcode/BitcodeReader.h>
+#include <llvm/Bitcode/BitcodeWriter.h>
 #include <llvm/IR/CallingConv.h>
 #include <llvm/Linker/Linker.h>
 #include <llvm/Support/DynamicLibrary.h>
 #include <llvm/Support/Error.h>
+#include <llvm/Support/FileSystem.h>
 #include <llvm/Support/MemoryBuffer.h>
 #include <llvm/Support/raw_ostream.h>
 #include <llvm/TargetParser/Triple.h>
@@ -10317,51 +10320,7 @@ static string& quote(string& s)
 #define DEBUG_USED 0
 #define DEBUG_UNUSED 0
 
-/* LLVM >= 2.6 raw_ostream compatibility. This is a mess. */
 
-// Use this to force the raw_ostream interface with LLVM <= 2.5.
-//#define RAW_STREAM 1
-#if !RAW_STREAM
-#define RAW_STREAM LLVM26
-#endif
-
-#if RAW_STREAM
-#if LLVM26
-#define ostream_error(os) os.has_error()
-#define ostream_clear_error(os) os.clear_error()
-#else
-// LLVM <= 2.5 doesn't have these methods.
-#define ostream_error(os) (0)
-#define ostream_clear_error(os) 
-#endif
-#else
-// !RAW_STREAM: Use the simple old std::ostream interface.
-#define ostream_error(os) os.fail()
-#define ostream_clear_error(os) os.clear()
-#endif
-
-#if NEW_OSTREAM34 && LLVM35
-#define NEW_OSTREAM35 1
-#endif
-
-#if NEW_OSTREAM35 // LLVM 3.5 cosmetic changes
-#include <llvm/Support/FileSystem.h>
-#define new_raw_fd_ostream(s,binary,msg) new llvm::raw_fd_ostream(s,msg,(binary)?llvm::sys::fs::F_None:llvm::sys::fs::F_Text)
-#else
-#if NEW_OSTREAM34 // LLVM 3.4 cosmetic changes
-#define new_raw_fd_ostream(s,binary,msg) new llvm::raw_fd_ostream(s,msg,(binary)?llvm::sys::fs::F_Binary:llvm::sys::fs::F_None)
-#else
-#if NEW_OSTREAM // LLVM >= 2.7 takes an enumeration as the last parameter
-#define new_raw_fd_ostream(s,binary,msg) new llvm::raw_fd_ostream(s,msg,(binary)?llvm::raw_fd_ostream::F_Binary:0)
-#else
-#if LLVM26 // LLVM 2.6 takes two flags (Binary, Force)
-#define new_raw_fd_ostream(s,binary,msg) new llvm::raw_fd_ostream(s,binary,1,msg)
-#else // LLVM 2.5 and earlier only have the Binary flag
-#define new_raw_fd_ostream(s,binary,msg) new llvm::raw_fd_ostream(s,binary,msg)
-#endif
-#endif
-#endif
-#endif
 
 void interpreter::check_used(set<Function*>& used,
 			     map<GlobalVariable*,Function*>& varmap)
@@ -10575,28 +10534,19 @@ int interpreter::compiler(string out, list<string> libnames, string llcopts)
      between different batch-compiled modules, but hopefully isn't too much of
      an obstacle in cases where the --main option is needed. */
   setlocale(LC_ALL, "C");
-#if RAW_STREAM
-  // As of LLVM 2.7 (svn), these need to be wrapped up in a raw_ostream.
-  string error;
-  // Note: raw_fd_ostream already handles "-".
+  std::error_code error;
+  llvm::sys::fs::OpenFlags flags =
+    bc_target ? llvm::sys::fs::OF_None : llvm::sys::fs::OF_Text;
+  // raw_fd_ostream handles "-" as standard output.
   llvm::raw_fd_ostream *codep =
-    new_raw_fd_ostream(target.c_str(),bc_target,error);
-  if (!error.empty()) {
-    std::cerr << "Error opening " << target << '\n';
+    new llvm::raw_fd_ostream(target, error, flags);
+  if (error) {
+    std::cerr << "Error opening " << target << ": " << error.message() << '\n';
     exit(1);
   }
   llvm::raw_fd_ostream &code = *codep;
-#else
-  std::ostream *codep =
-    bc_target?
-    new std::ofstream(target.c_str(), ios_base::out | ios_base::binary):
-    file_target?
-    new std::ofstream(target.c_str(), ios_base::out):
-    &std::cout;
-  std::ostream &code = *codep;
-#endif
   if (!file_target) out = target = "<stdout>";
-  if (ostream_error(code)) {
+  if (code.has_error()) {
     std::cerr << "Error opening " << target << '\n';
     exit(1);
   }
@@ -10895,7 +10845,7 @@ int interpreter::compiler(string out, list<string> libnames, string llcopts)
   verifyFunction(*main);
   // Emit output code (either LLVM assembler or bitcode).
   if (bc_target) {
-    WriteBitcodeToFile(module, code);
+    WriteBitcodeToFile(*module, code);
   } else {
     // Print a module header showing some useful information.
     time_t t; time(&t);
@@ -10903,16 +10853,12 @@ int interpreter::compiler(string out, list<string> libnames, string llcopts)
 	 << LLVM_VERSION << ") " << ctime(&t);
     module->print(code, 0);
   }
-  if (ostream_error(code)) {
+  if (code.has_error()) {
     std::cerr << "Error writing " << target << '\n';
     exit(1);
   }
-  ostream_clear_error(code);
-#if RAW_STREAM
+  code.clear_error();
   delete codep;
-#else
-  if (codep != &std::cout) delete codep;
-#endif
   // Compile and link, if requested.
   if (target != out) {
     assert(bc_target);
@@ -13282,11 +13228,7 @@ Function *interpreter::declare_extern(int priv, string name, string restype,
   verifyFunction(*f);
   if (FPM) FPM->run(*f);
   if (verbose&verbosity::dump) {
-#if RAW_STREAM
     raw_ostream& out = outs();
-#else
-    ostream& out = std::cout;
-#endif
     f->print(out);
   }
   externals[sym.f] = ExternInfo(sym.f, name, type, argt, f, varargs);
@@ -16122,11 +16064,7 @@ Function *interpreter::fun_prolog(string name)
       if (FPM) FPM->run(*f.h);
       // show output code, if requested
       if (verbose&verbosity::dump) {
-#if RAW_STREAM
 	raw_ostream& out = outs();
-#else
-	ostream& out = std::cout;
-#endif
 	f.h->print(out);
       }
     }
@@ -16240,11 +16178,7 @@ void interpreter::fun_finish()
   if (FPM) FPM->run(*f.f);
   // show output code, if requested
   if (verbose&verbosity::dump)  {
-#if RAW_STREAM
     raw_ostream& out = outs();
-#else
-    ostream& out = std::cout;
-#endif
     f.f->print(out);
   }
 #if DEBUG>1
