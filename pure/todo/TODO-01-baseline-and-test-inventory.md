@@ -19,7 +19,7 @@ changes can be evaluated against a clear, runnable set of expectations.
 ## Task List
 
 1. [x] Document how the current test runner discovers inputs and expected results.
-2. [ ] Map tests to the migration areas and record important coverage gaps.
+2. [x] Map tests to the migration areas and record important coverage gaps.
 3. [ ] Add focused tests for function redefinition and closure code lifetime.
 4. [ ] Define the initial smoke subset that each later TODO must run.
 5. [ ] Validate the test inventory and record any tests that cannot run before the port.
@@ -49,27 +49,41 @@ changes can be evaluated against a clear, runnable set of expectations.
 - `run-tests -v` prints failure diffs, `run-tests -f` reruns prior failures, and
   `run-tests file...` runs a targeted subset.
 
-### Preliminary migration coverage
+### Migration coverage map
 
-- `test001.pure`: core definitions, globals, recursion, lambdas, local `with`
-  environments, integers, and big integers.
-- `test004.pure`: local environment capture and local/global tail recursion;
-  deep proper-tail-call cases are present but commented out.
-- `test013.pure`: external C symbol resolution and a constant initialized from
-  an external call.
-- `test016.pure`: nested local environments.
-- `test018.pure`: signed and unsigned integer marshalling through the C interface.
-- `test023.pure`: thunks and delayed infinite-list evaluation.
-- `test029.pure`: lifetime regression when replacing a global value.
-- `test030.pure`: thunks, `catch`, lambdas, and generated-code equivalence.
-- `test036.pure`: local function/operator definitions and local closures.
-- `test052.pure`: stale function-pointer regression; old global and local
-  closures are invoked after their functions are extended, cleared, and redefined.
+| Migration area | Existing coverage | Assessment |
+| --- | --- | --- |
+| Basic JIT and IR generation | `test001`, `test002` | Definitions, guards, recursion, lambdas, local functions, integers, and big integers provide a useful initial execution baseline. |
+| Local environments and closures | `test004`, `test016`, `test036` | Covers nested environments, captured values, local operators, and unevaluated local closures. |
+| Function lifetime and redefinition | `test029`, `test052`, `test056` | Covers replacement of a live global value, stale global/local function pointers, `clear`, and dynamic defined/undefined behavior. |
+| Tail calls | `test002`, `test004` | Shallow local/global cases run by default; stack-independent deep cases exist but are commented out. |
+| External symbols and C ABI | `test013`, `test018`, `test037`, `test042`, `test045`, `test054`, `test068` | Covers math/process symbols, private externals, constant folding, integer marshalling, lazy function-pointer lookup, temporary lifetimes, C strings, and `getenv`. |
+| Exceptions and unwind paths | `test017`, `test030`, `test063`, `test072`, `test075`, `test085`, `test092` | Covers `throw`/`catch` in language and library paths, but not failures during ORC materialization or resource removal. |
+| Thunks and delayed code | `test023`, `test030` | Exercises delayed infinite lists and thunked/caught generated code. |
+| Data layout and host ABI | `test018`, `test025`, `test041`, `test042` | Exercises numeric C marshalling, matrices, serialization, and four cross-architecture blob fixtures. |
+| Generic bitcode loading | none in default corpus | Examples exist under `examples/bitcode/`, but no golden regression invokes `LoadBitcode`. |
+| Faust DSP loading and reload | none in default corpus | `test089` is only a Faust-like language DSL; it does not compile or load a DSP module. |
 
-The default numbered corpus has no direct test of `LoadBitcode` or
-`LoadFaustDSP`. `test089.pure` contains an abridged Faust language DSL, not a
-compiled DSP module. Actual bitcode and Faust examples live under
-`examples/bitcode/` and require separate fixture generation and test coverage.
+### Important coverage gaps
+
+- No minimal test repeatedly compiles and removes anonymous evaluation functions,
+  so ORC `ResourceTracker` cleanup and memory growth are not covered.
+- `test052` detects stale pointers after redefinition, but there is no focused
+  stress case with several generations and closures released in different orders.
+- Proper tail-call behavior is not asserted at a depth that would overflow the C
+  stack without tail-call elimination; the deep cases in `test004` are commented.
+- Unresolved external symbols and ORC lookup/materialization errors have no golden
+  diagnostic test.
+- Generic bitcode load, duplicate symbols, incompatible target/data layout, unload,
+  and malformed bitcode are absent from the default suite.
+- Faust initial load, ABI rejection, successful hot reload, failed hot reload, and
+  old-wrapper lifetime are absent.
+- No sanitizer-oriented stress test checks code/global lifetime after exceptions or
+  failed compilation.
+
+Actual bitcode and Faust examples live under `examples/bitcode/`; they require
+modern fixture generation and dedicated automated coverage rather than inclusion
+as opaque historical `.bc` files.
 
 ## Guardrails
 
@@ -90,6 +104,14 @@ compiled DSP module. Actual bitcode and Faust examples live under
 
 ## Progress Log
 
+- 2026-07-22: Mapped migration areas to focused regression tests and recorded
+  gaps in resource cleanup, deep tail calls, symbol failures, bitcode, Faust,
+  and sanitizer stress coverage.
+  - Validation:
+    - Inspected focused tests `001`, `002`, `004`, `013`, `016`, `018`, `023`,
+      `029`, `030`, `036`, `037`, `042`, `045`, `052`, `054`, `056`, and `068`.
+    - Confirmed that the default numbered corpus contains no direct
+      `LoadBitcode` or `LoadFaustDSP` integration test.
 - 2026-07-22: Documented the test runner, corpus layout, first migration-critical
   tests, and the missing bitcode/Faust integration coverage.
   - Validation:
