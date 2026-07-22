@@ -23,7 +23,7 @@ tests are represented without relying on Autoconf for the new build.
 2. [x] Generate `config.h` and model required platform feature checks.
 3. [x] Define runtime, interpreter, executable, and generated-source dependencies.
 4. [x] Add install rules and CTest integration for `run-tests`.
-5. [ ] Add CMake presets for `llvm22-debug`, `llvm22-release`, and `llvm22-asan`.
+5. [x] Add CMake presets for `llvm22-debug`, `llvm22-release`, and `llvm22-asan`.
 6. [ ] Configure with Ninja and document expected LLVM-related compile failures.
 
 ## Bootstrap Findings
@@ -63,6 +63,12 @@ tests are represented without relying on Autoconf for the new build.
 - Install rules cover `pure`, versioned `libpure`, `runtime.h`, `pure_main.c`, the
   embedding object renamed to `pure_main.o`, `lib/*.pure`, `pure.pc`, and `pure.1`.
   Emacs, TeXmacs, and downloaded documentation installation remain out of scope.
+- `CMakePresets.json` provides matching configure, build, and test presets for
+  Debug, Release, and ASan/UBSan builds. All select Ninja, Clang 22, and LLVM 22.
+- The sanitizer preset applies AddressSanitizer and UndefinedBehaviorSanitizer to
+  C, C++, executable linking, and shared-library linking, preserves frame pointers,
+  and enables leak detection for CTest.
+- `build/` is ignored locally so preset output cannot pollute Git status.
 
 ## Guardrails
 
@@ -83,6 +89,14 @@ tests are represented without relying on Autoconf for the new build.
 
 ## Progress Log
 
+- 2026-07-22: Added Debug, Release, and ASan/UBSan CMake presets.
+  - Validation:
+    - `cmake --list-presets=all` listed all three configure, build, and test presets.
+    - `cmake --preset llvm22-debug`, `cmake --preset llvm22-release`, and
+      `cmake --preset llvm22-asan` all configured and generated Ninja files.
+    - The ASan cache contained `-fsanitize=address,undefined` for C, C++,
+      executable linking, and shared-library linking, plus frame pointers.
+    - Removed all preset build directories after validation.
 - 2026-07-22: Added CTest runner generation and baseline install rules.
   - Validation:
     - CMake configuration generated executable `run-test` and `run-tests` scripts

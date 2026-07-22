@@ -1,0 +1,104 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 25,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "llvm22-base",
+      "hidden": true,
+      "generator": "Ninja",
+      "cacheVariables": {
+        "CMAKE_C_COMPILER": "clang-22",
+        "CMAKE_CXX_COMPILER": "clang++-22",
+        "LLVM_DIR": "/usr/lib/llvm-22/lib/cmake/llvm",
+        "PURE_STRICT_TOOLCHAIN": "ON"
+      }
+    },
+    {
+      "name": "llvm22-debug",
+      "displayName": "LLVM 22 Debug",
+      "description": "Clang/LLVM 22 debug build",
+      "inherits": "llvm22-base",
+      "binaryDir": "${sourceDir}/build/llvm22-debug",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug"
+      }
+    },
+    {
+      "name": "llvm22-release",
+      "displayName": "LLVM 22 Release",
+      "description": "Clang/LLVM 22 optimized release build",
+      "inherits": "llvm22-base",
+      "binaryDir": "${sourceDir}/build/llvm22-release",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release"
+      }
+    },
+    {
+      "name": "llvm22-asan",
+      "displayName": "LLVM 22 ASan and UBSan",
+      "description": "Clang/LLVM 22 sanitizer build",
+      "inherits": "llvm22-base",
+      "binaryDir": "${sourceDir}/build/llvm22-asan",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_C_FLAGS": "-fsanitize=address,undefined -fno-omit-frame-pointer",
+        "CMAKE_CXX_FLAGS": "-fsanitize=address,undefined -fno-omit-frame-pointer",
+        "CMAKE_EXE_LINKER_FLAGS": "-fsanitize=address,undefined",
+        "CMAKE_SHARED_LINKER_FLAGS": "-fsanitize=address,undefined"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "llvm22-debug",
+      "configurePreset": "llvm22-debug"
+    },
+    {
+      "name": "llvm22-release",
+      "configurePreset": "llvm22-release"
+    },
+    {
+      "name": "llvm22-asan",
+      "configurePreset": "llvm22-asan"
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "llvm22-debug",
+      "configurePreset": "llvm22-debug",
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "noTestsAction": "error"
+      }
+    },
+    {
+      "name": "llvm22-release",
+      "configurePreset": "llvm22-release",
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "noTestsAction": "error"
+      }
+    },
+    {
+      "name": "llvm22-asan",
+      "configurePreset": "llvm22-asan",
+      "environment": {
+        "ASAN_OPTIONS": "detect_leaks=1"
+      },
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "noTestsAction": "error"
+      }
+    }
+  ]
+}
