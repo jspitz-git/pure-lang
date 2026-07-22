@@ -2132,7 +2132,7 @@ bool interpreter::LoadFaustDSP(bool priv, const char *name, string *msg,
       // "cast" the char array to a char*
       Value *idx[2] = { ConstantInt::get(interpreter::int32_type(), 0),
 			ConstantInt::get(interpreter::int32_type(), 0) };
-      Value *p = b.CreateGEP(w, mkidxs(idx, idx+2));
+      Value *p = b.CreateGEP(w->getValueType(), w, mkidxs(idx, idx+2));
       args.clear();
       args.push_back(n_in);
       args.push_back(n_out);
@@ -2206,7 +2206,7 @@ bool interpreter::LoadFaustDSP(bool priv, const char *name, string *msg,
       BasicBlock *bb = basic_block("entry", f);
       Builder b(context);
       b.SetInsertPoint(bb);
-      Value *v = b.CreateLoad(sr);
+      Value *v = b.CreateLoad(sr->getValueType(), sr);
       b.CreateRet(v);
     }
   }

@@ -82,6 +82,13 @@ types that LLVM no longer stores.
 
 ## Progress Log
 
+- 2026-07-23: Ported the first direct Faust GEP and load operations to explicit
+  `GlobalVariable::getValueType()` source types.
+  - Validation:
+    - `cmake --preset llvm22-debug` configured successfully.
+    - `cmake --build --preset llvm22-debug -- -j1` no longer reports the former
+      Faust errors at `interpreter.cc:2135` and `:2209`; compilation advances
+      through this code to the later bitcode/JIT compatibility layer.
 - 2026-07-23: Replaced all 126 direct basic-block list appends with the public
   `BasicBlock::insertInto` API.
   - Validation:
