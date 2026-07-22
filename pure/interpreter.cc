@@ -51,39 +51,16 @@ char *alloca ();
 #include <fnmatch.h>
 #include <glob.h>
 
-#if LLVM33
+#include <llvm/Bitcode/BitcodeReader.h>
 #include <llvm/IR/CallingConv.h>
-#else
-#include <llvm/CallingConv.h>
-#endif
-#include <llvm/PassManager.h>
+#include <llvm/Linker/Linker.h>
+#include <llvm/Support/DynamicLibrary.h>
+#include <llvm/Support/Error.h>
+#include <llvm/Support/MemoryBuffer.h>
+#include <llvm/Support/raw_ostream.h>
 #include <llvm/Transforms/Utils/BasicBlockUtils.h>
 
-#include <llvm/ExecutionEngine/JIT.h>
-#include <llvm/Bitcode/ReaderWriter.h>
-#include <llvm/Support/MemoryBuffer.h>
-
 #include "config.h"
-
-#ifdef HAVE_LLVM_SUPPORT_DYNAMICLIBRARY_H
-#include <llvm/Support/DynamicLibrary.h>
-#else
-#include <llvm/System/DynamicLibrary.h>
-#endif
-#ifdef HAVE_LLVM_SUPPORT_RAW_OSTREAM_H
-#include <llvm/Support/raw_ostream.h>
-#endif
-// LLVM 3.5
-#ifdef HAVE_LLVM_IR_CALLSITE_H
-#include <llvm/IR/CallSite.h>
-#else
-#include <llvm/Support/CallSite.h>
-#endif
-#ifdef HAVE_LLVM_LINKER_LINKER_H
-#include <llvm/Linker/Linker.h>
-#else
-#include <llvm/Linker.h>
-#endif
 
 #ifndef PIC
 #define PIC ""
@@ -1876,9 +1853,6 @@ static llvm::MemoryBuffer *get_membuf(const char *name, string *msg)
   return buf;
 }
 
-#if HAVE_DECL_LLVM__PARSEBITCODEFILE
-// We have parseBitcodeFile(), this is in LLVM 3.5 and later. Must emulate
-// ParseBitcodeFile.
 static llvm::Module *ParseBitcodeFile(llvm::MemoryBuffer *Buffer,
 				      llvm::LLVMContext& Context,
 				      std::string *ErrMsg)
@@ -1892,7 +1866,6 @@ static llvm::Module *ParseBitcodeFile(llvm::MemoryBuffer *Buffer,
   }
   return ModuleOrErr->release();
 }
-#endif
 
 bool interpreter::LoadFaustDSP(bool priv, const char *name, string *msg,
 			       const char *modnm)
@@ -10248,9 +10221,6 @@ using namespace llvm;
 #include <fstream>
 #include <sstream>
 #include <time.h>
-#ifdef HAVE_LLVM_TYPESYMBOLTABLE_H
-#include <llvm/TypeSymbolTable.h>
-#endif
 
 static inline bool is_c_sym(const string& name)
 {
@@ -10360,11 +10330,6 @@ static string& quote(string& s)
 //#define RAW_STREAM 1
 #if !RAW_STREAM
 #define RAW_STREAM LLVM26
-#else
-#ifndef HAVE_LLVM_SUPPORT_RAW_OSTREAM_H
-// Only use raw_ostream if we have it.
-#undef RAW_STREAM
-#endif
 #endif
 
 #if RAW_STREAM
@@ -17200,12 +17165,7 @@ void interpreter::try_rules(matcher *pm, state *s, BasicBlock *failedbb,
    settings! */
 
 #if LLVM26
-#ifdef HAVE_LLVM_SUPPORT_TARGETSELECT_H
-// LLVM 3.0 or later
 #include <llvm/Support/TargetSelect.h>
-#else
-#include <llvm/Target/TargetSelect.h>
-#endif
 
 void interpreter::init_llvm_target()
 {

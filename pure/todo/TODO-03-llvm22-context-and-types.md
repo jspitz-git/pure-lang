@@ -1,6 +1,6 @@
 # TODO-03 - LLVM 22 Context and Types
 
-Status: Open
+Status: Done
 Branch: todo/03-llvm22-context-and-types
 
 ## Purpose
@@ -22,8 +22,8 @@ modern LLVM ownership and type APIs without historical preprocessor branches.
 1. [x] Add explicit context ownership to the interpreter-facing LLVM state.
 2. [x] Replace `getGlobalContext()` and context-free builders and modules.
 3. [x] Modernize primitive, structure, function, and constant type helpers.
-4. [ ] Replace obsolete includes and remove corresponding configure feature macros.
-5. [ ] Compile the affected translation units and categorize remaining API failures.
+4. [x] Replace obsolete includes and remove corresponding configure feature macros.
+5. [x] Compile the affected translation units and categorize remaining API failures.
 
 ## Migration Findings
 
@@ -41,6 +41,12 @@ modern LLVM ownership and type APIs without historical preprocessor branches.
   the interpreter-owned context; `getGlobalContext()` is no longer referenced.
 - Primitive, recursive structure, function, string-constant, and global-variable
   helpers now use the LLVM 22 APIs without LLVM 2.x/3.x alternatives.
+- LLVM headers now use their LLVM 22 paths directly. Nine CMake feature macros
+  that selected obsolete header locations or bitcode-reader APIs were removed.
+- The `LLVM26` through `LLVM35` execution-path gates remain temporarily because
+  they also control the legacy JIT, linker, and output paths addressed by later
+  TODOs; they no longer select context or type helper implementations.
+- No generated header required an LLVM type migration in this step.
 - Compilation now stops first at the mandatory opaque-pointer `CreateGEP` and
   `CreateLoad` signatures in `Env`; that instruction-level migration belongs to
   TODO-04.
@@ -59,10 +65,19 @@ modern LLVM ownership and type APIs without historical preprocessor branches.
 
 ## Open Questions
 
-- Which generated headers expose LLVM types and need migration at the same time?
+- None.
 
 ## Progress Log
 
+- 2026-07-22: Replaced historical LLVM header selection with direct LLVM 22
+  includes and removed the corresponding CMake compatibility definitions.
+  - Validation:
+    - `cmake --preset llvm22-debug` configured successfully.
+    - `cmake --build --preset llvm22-debug -- -j1` reached only the six known
+      opaque-pointer errors in the `Env` GEP/load helpers.
+    - Preprocessing `interpreter.cc` and `runtime.cc` with `clang++-22` succeeded;
+      Clang emitted only two existing warnings for the GCC-specific
+      `-Wstringop-truncation` warning group.
 - 2026-07-22: Removed global-context use and modernized the shared LLVM type and
   constant helper layer.
   - Bitcode parsing now consumes a `MemoryBufferRef` and unwraps LLVM 22's

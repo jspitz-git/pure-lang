@@ -32,73 +32,22 @@
 #include "symtable.hh"
 #include "runtime.h"
 
-#if HAVE_LLVM_IR_VERIFIER_H
-// LLVM 3.5 and later has this header in a different directory.
-#include <llvm/IR/Verifier.h>
-#define LLVM35 1
-#else
-#include <llvm/Analysis/Verifier.h>
-#endif
-
-#ifdef HAVE_LLVM_DERIVEDTYPES_H
-// LLVM 3.3 and later have these headers in a different directory.
-#include <llvm/DerivedTypes.h>
-#include <llvm/Module.h>
-#include <llvm/GlobalValue.h>
-#else
-#include <llvm/IR/DerivedTypes.h>
-#include <llvm/IR/Module.h>
-#include <llvm/IR/GlobalValue.h>
-#endif
-
-#ifdef HAVE_LLVM_DATALAYOUT_H
-// This class has been renamed and moved to LLVMCore in LLVM 3.2.
-#include <llvm/DataLayout.h>
-#define LLVM32 1
-#else
-#ifdef HAVE_LLVM_IR_DATALAYOUT_H
 #include <llvm/IR/DataLayout.h>
+#include <llvm/IR/DerivedTypes.h>
+#include <llvm/IR/GlobalValue.h>
+#include <llvm/IR/IRBuilder.h>
+#include <llvm/IR/LLVMContext.h>
+#include <llvm/IR/Module.h>
+#include <llvm/IR/Verifier.h>
+
+// Transitional feature gates used by code removed in the ORC migration.
+#define LLVM26 1
+#define LLVM27 1
+#define LLVM30 1
+#define LLVM31 1
 #define LLVM32 1
 #define LLVM33 1
-#else
-#include <llvm/Target/TargetData.h>
-#endif
-#endif
-
-#ifdef HAVE_LLVM_IRBUILDER_H
-// LLVM 3.2 and later have this header in a different directory.
-#include <llvm/IRBuilder.h>
-#else
-#ifdef HAVE_LLVM_IR_IRBUILDER_H
-#include <llvm/IR/IRBuilder.h>
-#else
-#include <llvm/Support/IRBuilder.h>
-#endif
-#endif
-
-#ifdef HAVE_LLVM_MODULEPROVIDER_H
-#include <llvm/ModuleProvider.h>
-#else
-// LLVM 2.7 and later don't have this header any more.
-#define LLVM27 1
-#endif
-
-#ifndef HAVE_LLVM_TYPESYMBOLTABLE_H
-// LLVM 3.0 and later don't have this header any more.
-#define LLVM30 1
-#endif
-
-#if !HAVE_DECL_LLVM__GUARANTEEDTAILCALLOPT
-#if HAVE_DECL_LLVM__PERFORMTAILCALLOPT
-// API breakage in LLVM 2.7.
-#define GuaranteedTailCallOpt PerformTailCallOpt
-#else
-// LLVM 3.1 and later have the target options in a separate class
-#define LLVM31 1
-#endif
-#endif
-
-#include <llvm/IR/LLVMContext.h>
+#define LLVM35 1
 
 #include "parserdefs.hh"
 // Get rid of silly warnings in bison-generated position.hh.
@@ -1022,9 +971,6 @@ public:
 
   llvm::LLVMContext context;
   llvm::Module *module;
-#ifdef HAVE_LLVM_MODULEPROVIDER_H
-  llvm::ModuleProvider *MP;
-#endif
   llvm::ExecutionEngine *JIT;
   llvm::legacy::FunctionPassManager *FPM;
   llvm::StructType  *ExprTy, *IntExprTy, *DblExprTy, *StrExprTy, *PtrExprTy;

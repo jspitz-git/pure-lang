@@ -79,17 +79,8 @@ set(USE_PCRE TRUE)
 set(USE_READLINE TRUE)
 set(HAVE_BISON3 TRUE)
 
-# Temporary compatibility definitions for the LLVM 2.x/3.x source layer.
-# TODO-03 removes these together with the historical conditional includes.
-set(HAVE_LLVM_IR_VERIFIER_H TRUE)
-set(HAVE_LLVM_IR_DATALAYOUT_H TRUE)
-set(HAVE_LLVM_IR_IRBUILDER_H TRUE)
-set(HAVE_LLVM_SUPPORT_DYNAMICLIBRARY_H TRUE)
-set(HAVE_LLVM_SUPPORT_RAW_OSTREAM_H TRUE)
-set(HAVE_LLVM_SUPPORT_RAW_OS_OSTREAM_H TRUE)
-set(HAVE_LLVM_LINKER_LINKER_H TRUE)
-set(HAVE_LLVM_SUPPORT_TARGETSELECT_H TRUE)
-set(HAVE_DECL_LLVM__PARSEBITCODEFILE TRUE)
+# Temporary API compatibility definitions retained until the related source
+# paths are migrated in later LLVM porting steps.
 set(NEW_BUILDER TRUE)
 set(NEW_OSTREAM TRUE)
 set(NEW_OSTREAM34 TRUE)

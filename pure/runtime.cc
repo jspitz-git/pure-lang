@@ -13975,11 +13975,7 @@ static int (*myregexec)(const regex_t *, const char *, size_t, regmatch_t *, int
 static size_t (*myregerror)(int, const regex_t *, char *, size_t);
 static void (*myregfree)(regex_t *);
 
-#ifdef HAVE_LLVM_SUPPORT_DYNAMICLIBRARY_H
 #include <llvm/Support/DynamicLibrary.h>
-#else
-#include <llvm/System/DynamicLibrary.h>
-#endif
 
 static bool init_regex()
 {
