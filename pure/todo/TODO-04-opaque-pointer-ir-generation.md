@@ -19,7 +19,7 @@ types that LLVM no longer stores.
 ## Task List
 
 1. [x] Inventory obsolete `IRBuilder` signatures and typed-pointer assumptions.
-2. [ ] Port loads, stores, GEPs, calls, and indirect calls with explicit types.
+2. [x] Port loads, stores, GEPs, calls, and indirect calls with explicit types.
 3. [ ] Replace pointer nesting comparisons in external and Faust ABI detection.
 4. [ ] Modernize function, basic block, attribute, and calling-convention APIs.
 5. [ ] Run `verifyFunction` and `verifyModule` over representative generated IR.
@@ -108,6 +108,14 @@ types that LLVM no longer stores.
 
 ## Progress Log
 
+- 2026-07-23: Replaced all seven removed `CreateCall3` sites with regular
+  `CreateCall` and explicit argument lists.
+  - Validation:
+    - `cmake --preset llvm22-debug` configured successfully.
+    - `cmake --build --preset llvm22-debug -- -j1` reports no obsolete GEP,
+      load, direct-call, numbered-call, or indirect-call signature errors.
+    - TODO-04 task 2 is complete; the remaining 15 build errors are outside
+      this instruction-signature layer.
 - 2026-07-23: Ported the final 15 GEP call sites in list and matrix constant
   generation.
   - Fourteen global-array addresses use `GlobalVariable::getValueType()`; the

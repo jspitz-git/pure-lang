@@ -15408,7 +15408,7 @@ Value *interpreter::vref(Value *x, path p)
       // matrix path
       uint32_t r = argidx(p, i), c = argidx(p, i);
       Function *f = module->getFunction("matrix_elem_at2");
-      x = b.CreateCall3(f, x, UInt(r), UInt(c));
+      x = b.CreateCall(f, {x, UInt(r), UInt(c)});
       if (i < n) tmp = x;
     } else {
       x = e.CreateLoadGEP
@@ -15444,7 +15444,7 @@ Value *interpreter::vref(int32_t tag, path p)
       // matrix path
       uint32_t r = argidx(p, i), c = argidx(p, i);
       Function *f = module->getFunction("matrix_elem_at2");
-      v = b.CreateCall3(f, v, UInt(r), UInt(c));
+      v = b.CreateCall(f, {v, UInt(r), UInt(c)});
       if (i < n) tmp = v;
     } else {
       v = e.CreateLoadGEP
@@ -16262,8 +16262,8 @@ void interpreter::simple_match(Value *x, state*& s,
     okbb->insertInto(f.f);
     f.builder.SetInsertPoint(okbb);
     okbb = basic_block("check");
-    Value *ok = f.builder.CreateCall3(module->getFunction("matrix_check"),
-				      x, UInt(t.n), UInt(t.m));
+    Value *ok = f.builder.CreateCall
+      (module->getFunction("matrix_check"), {x, UInt(t.n), UInt(t.m)});
     f.builder.CreateCondBr(ok, okbb, failedbb);
     // finally match the elements
     s = t.st;
@@ -16280,8 +16280,8 @@ void interpreter::simple_match(Value *x, state*& s,
 	okbb->insertInto(f.f);
 	f.builder.SetInsertPoint(okbb);
 	okbb = basic_block("check");
-	Value *y = f.builder.CreateCall3
-	  (module->getFunction("matrix_elem_at2"), x, UInt(i), UInt(j));
+	Value *y = f.builder.CreateCall
+	  (module->getFunction("matrix_elem_at2"), {x, UInt(i), UInt(j)});
 	BasicBlock *elem_okbb = basic_block("elem_ok");
 	BasicBlock *elem_nokbb = basic_block("elem_failed");
 	simple_match(y, s, elem_okbb, elem_nokbb);
@@ -16492,8 +16492,8 @@ void interpreter::complex_match(matcher *pm, matcher *mxs,
     list<Value*> tmps1 = tmps;					\
     for (uint32_t i = 0; i < t->n; i++)				\
       for (uint32_t j = 0; j < t->m; j++) {			\
-        Value *y = f.builder.CreateCall3			\
-	  (module->getFunction("matrix_elem_at2"), x, UInt(i), UInt(j)); \
+	Value *y = f.builder.CreateCall				\
+	  (module->getFunction("matrix_elem_at2"), {x, UInt(i), UInt(j)}); \
 	zs.push_back(y);					\
 	tmps1.push_front(y);					\
       }								\
@@ -16651,8 +16651,9 @@ void interpreter::complex_match(matcher *pm, const list<Value*>& xs, state *s,
 	  BasicBlock *okbb = l->bb;
 	  BasicBlock *trynextbb =
 	    basic_block(mklabel("next.state", s->s, l->t->n, l->t->m));
-	  Value *ok = f.builder.CreateCall3(module->getFunction("matrix_check"),
-					    x, UInt(l->t->n), UInt(l->t->m));
+	  Value *ok = f.builder.CreateCall
+	    (module->getFunction("matrix_check"),
+	     {x, UInt(l->t->n), UInt(l->t->m)});
 	  f.builder.CreateCondBr(ok, okbb, trynextbb);
 	  okbb->insertInto(f.f);
 	  f.builder.SetInsertPoint(okbb);
@@ -16968,7 +16969,7 @@ void interpreter::try_rules(matcher *pm, state *s, BasicBlock *failedbb,
       if (f.n+f.m != 0 || !debugging) {
 	// do cleanup
 	Function *free_fun = module->getFunction("pure_pop_args");
-	f.builder.CreateCall3(free_fun, retv, UInt(f.n), UInt(f.m));
+	f.builder.CreateCall(free_fun, {retv, UInt(f.n), UInt(f.m)});
       }
       f.builder.CreateRet(retv);
     } else if (tail) {
