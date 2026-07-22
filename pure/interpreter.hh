@@ -419,22 +419,51 @@ public:
   { if (key==0) key = ++act_key; return key; }
 };
 
+struct CAbiType {
+  enum Base {
+    unknown, void_, boolean, character, short_integer, integer, integer64,
+    long_integer, size, single, double_, expression, matrix, double_matrix,
+    complex_matrix, integer_matrix, custom
+  };
+
+  Base base;
+  unsigned pointer_depth;
+  string name;
+
+  CAbiType() : base(unknown), pointer_depth(0) {}
+  explicit CAbiType(const string& type_name);
+  bool is_pointer() const { return pointer_depth > 0; }
+  bool operator==(const CAbiType& other) const
+  { return base == other.base && pointer_depth == other.pointer_depth &&
+      name == other.name; }
+  bool operator!=(const CAbiType& other) const { return !(*this == other); }
+};
+
 struct ExternInfo {
   // info about extern (C) functions callable from the Pure script
   int32_t tag;				// function symbol
   string name;				// real function name
   bool varargs;				// varargs function
-  llvm_const_Type* type;		// return type
-  vector<llvm_const_Type*> argtypes;	// argument types
+  llvm_const_Type* type;		// LLVM return type
+  vector<llvm_const_Type*> argtypes;	// LLVM argument types
+  CAbiType abi_type;			// semantic C ABI return type
+  vector<CAbiType> abi_argtypes;		// semantic C ABI argument types
   llvm::Function *f;			// Pure wrapper for the external
   ExternInfo()
-    : tag(0), varargs(false), type(0), argtypes(0), f(0)
+    : tag(0), varargs(false), type(0), argtypes(0), abi_argtypes(0), f(0)
   {}
   ExternInfo(int32_t _tag, const string&_name, llvm_const_Type *_type,
 	     vector<llvm_const_Type*> _argtypes, llvm::Function *_f,
 	     bool _varargs = false)
     : tag(_tag), name(_name), varargs(_varargs),
       type(_type), argtypes(_argtypes), f(_f)
+  {}
+  ExternInfo(int32_t _tag, const string&_name, llvm_const_Type *_type,
+	     vector<llvm_const_Type*> _argtypes, const CAbiType& _abi_type,
+	     const vector<CAbiType>& _abi_argtypes, llvm::Function *_f,
+	     bool _varargs = false)
+    : tag(_tag), name(_name), varargs(_varargs), type(_type),
+      argtypes(_argtypes), abi_type(_abi_type), abi_argtypes(_abi_argtypes), f(_f)
   {}
 };
 

@@ -831,14 +831,19 @@ interpreter::interpreter(int32_t nsyms, char *syms,
   while (1) {
     sin >> f >> s_name >> s_type >> n_args;
     if (sin.fail()) break;
+    CAbiType abi_type(s_type);
     llvm_const_Type* rettype = named_type(s_type);
     vector<llvm_const_Type*> argtypes(n_args);
+    vector<CAbiType> abi_argtypes;
+    abi_argtypes.reserve(n_args);
     for (size_t i = 0; i < n_args; i++) {
       sin >> s_type;
+      abi_argtypes.push_back(CAbiType(s_type));
       argtypes[i] = named_type(s_type);
     }
     if (sin.fail() || sin.eof()) break;
-    externals[f] = ExternInfo(f, s_name, rettype, argtypes, 0);
+    externals[f] = ExternInfo(f, s_name, rettype, argtypes, abi_type,
+                              abi_argtypes, 0);
   }
   for (int32_t f = 1; f <= nsyms; f++) {
     symbol& sym = symtab.sym(f);
@@ -10675,10 +10680,16 @@ int interpreter::compiler(string out, list<string> libnames, string llcopts)
 	    ExternInfo& info = kt->second;
 	    if (!strip || used.find(info.f) != used.end()) {
 	      externs[f] = ConstantExpr::getPointerCast(info.f, VoidPtrTy);
-	      sout << info.tag << " " << info.name << " " << type_name(info.type)
+	      sout << info.tag << " " << info.name << " "
+                   << (info.abi_type.name.empty() ? type_name(info.type)
+                                                  : info.abi_type.name)
 		   << " " << info.argtypes.size();
 	      for (size_t i = 0; i < info.argtypes.size(); i++)
-		sout << " " << type_name(info.argtypes[i]);
+		sout << " "
+                     << (i < info.abi_argtypes.size() &&
+                         !info.abi_argtypes[i].name.empty()
+                         ? info.abi_argtypes[i].name
+                         : type_name(info.argtypes[i]));
 	      sout << '\n';
 	      vars[f] = v.v;
 	    }
@@ -11018,15 +11029,53 @@ void interpreter::defn(int32_t tag, pure_expr *x, bool deprecated)
   restore_globals(g);
 }
 
+CAbiType::CAbiType(const string& type_name)
+  : base(unknown), pointer_depth(0)
+{
+  string base_name = type_name;
+  while (!base_name.empty() && base_name[base_name.size()-1] == '*') {
+    ++pointer_depth;
+    base_name.erase(base_name.size()-1);
+  }
+
+  if (base_name == "int8") base_name = "char";
+  else if (base_name == "int16") base_name = "short";
+  else if (base_name == "int32") base_name = "int";
+
+  if (base_name == "void") base = void_;
+  else if (base_name == "bool") base = boolean;
+  else if (base_name == "char") base = character;
+  else if (base_name == "short") base = short_integer;
+  else if (base_name == "int") base = integer;
+  else if (base_name == "int64") base = integer64;
+  else if (base_name == "long") base = long_integer;
+  else if (base_name == "size_t") base = size;
+  else if (base_name == "float") base = single;
+  else if (base_name == "double") base = double_;
+  else if (base_name == "expr") base = expression;
+  else if (base_name == "matrix") base = matrix;
+  else if (base_name == "dmatrix") base = double_matrix;
+  else if (base_name == "cmatrix") base = complex_matrix;
+  else if (base_name == "imatrix") base = integer_matrix;
+  else base = custom;
+
+  name = base_name;
+  name.append(pointer_depth, '*');
+}
+
 ostream &operator<< (ostream& os, const ExternInfo& info)
 {
   interpreter& interp = *interpreter::g_interp;
   string name = faust_basename(info.name);
-  os << "extern " << interp.type_name(info.type) << " " << name << "(";
+  const string& result_name = info.abi_type.name;
+  os << "extern "
+     << (result_name.empty() ? interp.type_name(info.type) : result_name)
+     << " " << name << "(";
   size_t n = info.argtypes.size();
   for (size_t i = 0; i < n; i++) {
     if (i > 0) os << ", ";
-    os << interp.type_name(info.argtypes[i]);
+    os << (i < info.abi_argtypes.size() && !info.abi_argtypes[i].name.empty()
+           ? info.abi_argtypes[i].name : interp.type_name(info.argtypes[i]));
   }
   if (info.varargs) os << ((n>0)?", ...":"...");
   os << ")";
@@ -12127,12 +12176,16 @@ Function *interpreter::declare_extern(int priv, string name, string restype,
 				      bool varargs, void *fp,
 				      string asname, bool dll_check)
 {
-  // translate type names to LLVM types
+  // Keep semantic C ABI types separate from LLVM's opaque pointer types.
   size_t n = argtypes.size();
+  CAbiType abi_type(restype);
+  vector<CAbiType> abi_argtypes;
+  abi_argtypes.reserve(n);
   llvm_const_Type* type = named_type(restype);
   vector<llvm_const_Type*> argt(n);
   list<string>::const_iterator atype = argtypes.begin();
   for (size_t i = 0; i < n; i++, atype++) {
+    abi_argtypes.push_back(CAbiType(*atype));
     argt[i] = named_type(*atype);
     // sanity check
     if (argt[i] == void_type())
@@ -12258,7 +12311,8 @@ Function *interpreter::declare_extern(int priv, string name, string restype,
     // Already declared under the same name, check that declarations
     // match. Here we require the types to be literally the same.
     const ExternInfo& info = it->second;
-    if (type != info.type || argt != info.argtypes) {
+    if (type != info.type || argt != info.argtypes ||
+        abi_type != info.abi_type || abi_argtypes != info.abi_argtypes) {
       ostringstream msg;
       msg << "declaration of extern function '" << name
 	  << "' does not match previous declaration: " << info;
@@ -13131,7 +13185,8 @@ Function *interpreter::declare_extern(int priv, string name, string restype,
     raw_ostream& out = outs();
     f->print(out);
   }
-  externals[sym.f] = ExternInfo(sym.f, name, type, argt, f, varargs);
+  externals[sym.f] = ExternInfo(sym.f, name, type, argt, abi_type,
+                                abi_argtypes, f, varargs);
   return f;
 }
 

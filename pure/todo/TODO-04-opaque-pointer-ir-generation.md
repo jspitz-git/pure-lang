@@ -110,6 +110,16 @@ types that LLVM no longer stores.
 
 ## Progress Log
 
+- 2026-07-23: Added a semantic `CAbiType` descriptor independent of
+  `llvm::Type*` and stored return/argument descriptors in `ExternInfo`.
+  - ABI names are normalized and retain pointer depth, including custom tagged
+    pointer types, while LLVM types continue to describe only generated IR.
+  - Batch extern serialization and diagnostics now prefer the stored ABI names,
+    so opaque `ptr` values no longer erase declaration spelling.
+  - Repeated declarations compare both LLVM IR types and semantic ABI types.
+  - Validation pending: the terminal tool currently rejects the configured
+    project directory before running commands, and Zed diagnostics cannot find
+    the configured LLVM include directory.
 - 2026-07-23: Replaced Faust sample precision detection based on pointer nesting
   with explicit Faust compile options.
   - Validation:
