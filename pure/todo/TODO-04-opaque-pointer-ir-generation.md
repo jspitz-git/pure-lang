@@ -110,6 +110,14 @@ types that LLVM no longer stores.
 
 ## Progress Log
 
+- 2026-07-23: Removed GCC-only string truncation diagnostic pragmas from the
+  dragonegg command-line rewrite.
+  - The fixed-width in-place replacement now uses `memcpy`, which matches the
+    intent of preserving the existing string terminator.
+  - Validation:
+    - `cmake --preset llvm22-debug` configured successfully.
+    - `cmake --build --preset llvm22-debug -- -j1` now emits zero warnings and
+      only the same nine obsolete legacy JIT errors.
 - 2026-07-23: Updated complex-number constant conversion to the C++17 `<cmath>`
   interface.
   - Polar coordinates now use `std::cos` and `std::sin` explicitly.

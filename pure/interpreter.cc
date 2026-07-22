@@ -2686,9 +2686,7 @@ void interpreter::inline_code(bool priv, string &code)
       asmargs = strdup(args);
       const char *t = "-emit-llvm -c";
       char *s = strstr(asmargs, t);
-#pragma GCC diagnostic ignored "-Wstringop-truncation"
-      if (s) strncpy(s, "-flto      -S", strlen(t));
-#pragma GCC diagnostic warning "-Wstringop-truncation"
+      if (s) memcpy(s, "-flto      -S", strlen(t));
       args = asmargs;
     }
     string fname = nm, bcname = string(fnm)+ext, bcname2 = string(fnm)+".bc",
