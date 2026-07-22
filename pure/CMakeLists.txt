@@ -16,6 +16,7 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 include(PureToolchain)
 include(PureDependencies)
+include(PureConfigure)
 
 message(STATUS "Pure ${PROJECT_VERSION} CMake bootstrap configured")
-message(STATUS "Source targets and generated config.h are added in later TODO-02 milestones")
+message(STATUS "Source targets are added in later TODO-02 milestones")

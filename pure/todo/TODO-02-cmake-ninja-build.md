@@ -20,7 +20,7 @@ tests are represented without relying on Autoconf for the new build.
 ## Task List
 
 1. [x] Add `CMakeLists.txt`, helper modules, and LLVM 22 version checks.
-2. [ ] Generate `config.h` and model required platform feature checks.
+2. [x] Generate `config.h` and model required platform feature checks.
 3. [ ] Define runtime, interpreter, executable, and generated-source dependencies.
 4. [ ] Add install rules and CTest integration for `run-tests`.
 5. [ ] Add CMake presets for `llvm22-debug`, `llvm22-release`, and `llvm22-asan`.
@@ -39,6 +39,16 @@ tests are represented without relying on Autoconf for the new build.
   examples, integration fixtures, and documentation.
 - LLVM's package reported missing optional LibEdit, Zlib, zstd, and Curl
   development files, but bootstrap configuration completed successfully.
+- `PureConfigure.cmake` now derives the target triple from Clang, detects ABI
+  sizes and endianness, checks required headers/functions, and generates
+  `config.h` from `config.h.cmake`.
+- On the reference host, `long`, `size_t`, and pointers are 8 bytes and the host
+  triple is `x86_64-pc-linux-gnu`.
+- `strptime` is not visible with the current feature-test macros, so the source
+  target must include the existing `strptime.c` fallback. This can be revisited
+  after target compile definitions are finalized.
+- A small set of historical LLVM feature defines remains as a documented bridge
+  for the unported sources; TODO-03 removes these compatibility branches.
 
 ## Guardrails
 
@@ -60,6 +70,14 @@ tests are represented without relying on Autoconf for the new build.
 
 ## Progress Log
 
+- 2026-07-22: Added platform checks and generated CMake `config.h` support.
+  - Validation:
+    - Reconfigured with Clang/LLVM 22 and Ninja successfully.
+    - Generated values included host `x86_64-pc-linux-gnu`, LLVM 22.1.8,
+      `SIZEOF_LONG=8`, `SIZEOF_SIZE_T=8`, and `SIZEOF_VOID_P=8`.
+    - Header, complex-number, `_setjmp`/`_longjmp`, readline history, and GNU
+      linker checks passed; `strptime` was absent and retains its fallback path.
+    - Removed the temporary `build/cmake-config` directory after inspection.
 - 2026-07-22: Added the CMake bootstrap, toolchain validation, and dependency
   discovery modules.
   - Validation:
