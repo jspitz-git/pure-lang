@@ -2263,9 +2263,10 @@ bool interpreter::LoadFaustDSP(bool priv, const char *name, string *msg,
     size_t n = ft->getNumParams();
     vector<llvm_const_Type*> argt(n);
     for (size_t i = 0; i < n; i++) argt[i] = ft->getParamType(i);
-    string restype = dsptype_name(rest);
+    string restype = dsptype_name(*it, rest, 0, true, is_double);
     list<string> argtypes;
-    for (size_t i = 0; i < n; i++) argtypes.push_back(dsptype_name(argt[i]));
+    for (size_t i = 0; i < n; i++)
+      argtypes.push_back(dsptype_name(*it, argt[i], i, false, is_double));
     if (loaded && modified) {
       /* There's no need to actually regenerate the wrapper, we only have to
          patch up the function pointer here. */
@@ -11954,16 +11955,34 @@ string interpreter::bctype_name(llvm_const_Type *type)
   return type_name(type);
 }
 
-string interpreter::dsptype_name(llvm_const_Type *type)
+string interpreter::dsptype_name(const string& function_name,
+                                  llvm_const_Type *type, size_t argument,
+                                  bool result, bool is_double)
 {
-  /* Special version of bctype_name for Faust modules. This doesn't have the
-     Pure expression and GSL matrix types, but instead we map i8* to void*. */
-  if (type == CharPtrTy)
+  if (!is_pointer_type(type)) return type_name(type);
+
+  // LLVM opaque pointers do not encode Faust's C ABI. Derive pointer meaning
+  // from the stable exported interface and the explicit sample precision.
+  if (result) {
+    if (function_name == "info" || function_name == "meta") return "expr*";
+    if (function_name == "getJSON") return "char*";
+    if (function_name == "new" || function_name == "newinit" ||
+        function_name == "clone") return "faust_dsp*";
     return "void*";
-  else if (type == PointerType::get(CharPtrTy, 0))
-    return "void**";
-  else
-    return type_name(type);
+  }
+  if (function_name == "compute" && argument >= 2)
+    return is_double ? "double**" : "float**";
+  bool dsp_argument =
+    function_name == "allocate" || function_name == "buildUserInterface" ||
+    function_name == "clone" || function_name == "compute" ||
+    function_name == "delete" || function_name == "destroy" ||
+    function_name == "getNumInputs" || function_name == "getNumOutputs" ||
+    function_name == "getSampleRate" || function_name == "info" ||
+    function_name == "init" || function_name == "instanceClear" ||
+    function_name == "instanceConstants" || function_name == "instanceInit" ||
+    function_name == "instanceResetUserInterface";
+  if (argument == 0 && dsp_argument) return "faust_dsp*";
+  return "void*";
 }
 
 bool interpreter::compatible_types(llvm_const_Type *type1, llvm_const_Type *type2)
@@ -12632,7 +12651,7 @@ Function *interpreter::declare_extern(int priv, string name, string restype,
       // its own internal representation of the expression data type.
       if (type != ExprPtrTy)
 	unboxed[i] = b.CreateBitCast(unboxed[i], type);
-    } else if (i == 0 && abi.is_pointer() && is_faust_fun) {
+    } else if (i == 0 && abi.name == "faust_dsp*" && is_faust_fun) {
       /* The first argument in a Faust call, if it is a pointer, is always the
 	 dsp. Check the pointer against the module tag. */
       BasicBlock *ptrbb = basic_block("ptr");

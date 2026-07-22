@@ -1111,7 +1111,8 @@ public:
   llvm_const_Type *named_type(string name);
   string type_name(llvm_const_Type *type);
   string bctype_name(llvm_const_Type *type);
-  string dsptype_name(llvm_const_Type *type);
+  string dsptype_name(const string& function_name, llvm_const_Type *type,
+                      size_t argument, bool result, bool is_double);
   bool compatible_types(llvm_const_Type *type1, llvm_const_Type *type2);
   set<llvm::Function*> always_used;
   map<int32_t,GlobalVar> globalvars;

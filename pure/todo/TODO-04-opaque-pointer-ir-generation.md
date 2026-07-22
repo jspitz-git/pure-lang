@@ -20,7 +20,7 @@ types that LLVM no longer stores.
 
 1. [x] Inventory obsolete `IRBuilder` signatures and typed-pointer assumptions.
 2. [x] Port loads, stores, GEPs, calls, and indirect calls with explicit types.
-3. [ ] Replace pointer nesting comparisons in external and Faust ABI detection.
+3. [x] Replace pointer nesting comparisons in external and Faust ABI detection.
 4. [ ] Modernize function, basic block, attribute, and calling-convention APIs.
 5. [ ] Run `verifyFunction` and `verifyModule` over representative generated IR.
 6. [ ] Compile all IR generation code without deprecated compatibility wrappers.
@@ -110,6 +110,22 @@ types that LLVM no longer stores.
 
 ## Progress Log
 
+- 2026-07-23: Replaced Faust pointer-type inference with an explicit exported
+  function ABI classifier.
+  - DSP instances, `compute` sample buffers, JSON strings, Pure `info`/`meta`
+    results, and generic UI/metadata pointers are classified by function name,
+    argument position, and the validated `-single`/`-double` module option.
+  - Only arguments explicitly classified as `faust_dsp*` receive the module DSP
+    tag check; a first metadata/UI pointer is no longer assumed to be a DSP.
+  - A Faust 2.70.3 probe confirmed opaque `ptr` signatures and
+    `float**`/`double**` `compute` semantics. It also exposed a separate loader
+    compatibility issue: current Faust exports `allocate`, `destroy`, and
+    `getJSON`, but no `buildUserInterface`, which the legacy loader currently
+    requires during module recognition.
+  - Validation:
+    - `cmake --preset llvm22-debug` configured successfully.
+    - `cmake --build --preset llvm22-debug -- -j1` introduced no errors, reduced
+      warnings from 23 to 22, and retained the same 15 unrelated errors.
 - 2026-07-23: Removed the legacy typed-pointer name registry and all LLVM
   pointee introspection from general C type conversion.
   - `named_type` now maps every semantic C pointer to LLVM's context-owned
