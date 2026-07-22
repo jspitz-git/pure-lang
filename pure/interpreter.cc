@@ -123,11 +123,30 @@ struct NewPassManagerState {
     return builder.buildPerModuleDefaultPipeline(llvm::OptimizationLevel::O1);
   }
 
+  void verify(const llvm::Function& function, const char *stage)
+  {
+    string message;
+    llvm::raw_string_ostream out(message);
+    if (llvm::verifyFunction(function, &out)) {
+      out.flush();
+      string name = function.hasName() ? function.getName().str()
+                                       : "<anonymous>";
+      throw err("LLVM verifier failed "+string(stage)+" optimization of '"+
+                name+"':\n"+message);
+    }
+  }
+
   void optimize(llvm::Function& function)
   {
+#ifndef NDEBUG
+    verify(function, "before");
+#endif
     functions.invalidate(function, llvm::PreservedAnalyses::none());
     llvm::FunctionPassManager pipeline = build_interactive_pipeline();
     pipeline.run(function, functions);
+#ifndef NDEBUG
+    verify(function, "after");
+#endif
   }
 };
 
@@ -2265,7 +2284,6 @@ bool interpreter::LoadFaustDSP(bool priv, const char *name, string *msg,
     string fname = "$$faust$"+modname+"$"+*it;
     Function *f = module->getFunction(fname);
     assert(f);
-    verifyFunction(*f);
     pass_state->optimize(*f);
     // The name under which the function is accessible in Pure.
     string asname = modname+"::"+*it;
@@ -2425,7 +2443,6 @@ bool interpreter::LoadBitcode(bool priv, const char *name, string *msg)
     string fname = *it;
     Function *f = module->getFunction(fname);
     assert(f);
-    verifyFunction(*f);
     pass_state->optimize(*f);
     // The name under which the function is accessible in Pure.
     string asname = fname;
@@ -10852,7 +10869,6 @@ int interpreter::compiler(string out, list<string> libnames, string llcopts)
     }
   }
   b.CreateRet(0);
-  verifyFunction(*main);
   string verification_error;
   if (!verify_module(*module, verification_error))
     throw err("invalid LLVM module: "+verification_error);
@@ -13032,7 +13048,6 @@ Function *interpreter::declare_extern(int priv, string name, string restype,
 		 b.CreateLoad(v.v->getValueType(), v.v));
   }
   b.CreateRet(defaultv);
-  verifyFunction(*f);
   pass_state->optimize(*f);
   if (verbose&verbosity::dump) {
     raw_ostream& out = outs();
@@ -15857,7 +15872,6 @@ Function *interpreter::fun_prolog(string name)
       if (cc == CallingConv::Fast) v->setTailCall();
       f.builder.CreateRet(v);
       // validate the generated code, checking for consistency
-      verifyFunction(*f.h);
       // optimize
       pass_state->optimize(*f.h);
       // show output code, if requested
@@ -15970,9 +15984,7 @@ void interpreter::fun_finish()
 {
   Env& f = act_env();
   assert(f.f!=0);
-  // validate the generated code, checking for consistency
-  verifyFunction(*f.f);
-  // optimize
+  // optimize and validate the generated code
   pass_state->optimize(*f.f);
   // show output code, if requested
   if (verbose&verbosity::dump)  {

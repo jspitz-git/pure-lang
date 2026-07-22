@@ -21,7 +21,7 @@ fails with an actionable diagnostic before entering ORC.
 1. [x] Introduce reusable new-pass-manager analysis state.
 2. [x] Select an initial interactive pipeline, preferably standard `O1`.
 3. [x] Run function or module optimization at a clearly defined ownership boundary.
-4. [ ] Add verification before and after optimization in debug builds.
+4. [x] Add verification before and after optimization in debug builds.
 5. [ ] Surface verifier and pass errors through Pure diagnostics.
 6. [ ] Compare representative optimized IR with unoptimized output for ABI changes.
 
@@ -44,6 +44,18 @@ fails with an actionable diagnostic before entering ORC.
 
 ## Progress Log
 
+- 2026-07-23: Added debug-only function verification before and after O1
+  optimization.
+  - Verification failures now throw a Pure `err` containing the phase, function
+    name, and complete LLVM verifier diagnostic.
+  - Removed five unchecked `verifyFunction` calls; batch `main` remains covered
+    by the actionable whole-module verifier immediately before output.
+  - Validation:
+    - Both `llvm22-debug` and `llvm22-release` configured successfully.
+    - Both builds compiled the new verifier path with zero warnings and no new
+      errors, retaining only the nine known legacy JIT errors.
+    - Release uses `-DNDEBUG`, confirming that pre/post verification is omitted
+      there as intended.
 - 2026-07-23: Replaced the legacy function pass manager with the LLVM 22 O1
   function-simplification pipeline.
   - Optimization runs only after a generated or imported function body is
