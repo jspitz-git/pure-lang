@@ -1,0 +1,151 @@
+when_owner = x/*0:*/ when x/*0:*/ = __func__ {
+  rule #0: x = __func__
+  state 0: #0
+	<var> state 1
+  state 1: #0
+} end;
+{
+  rule #0: when_owner = x when x = __func__ end
+  state 0: #0
+}
+when_owner===when_owner;
+1
+case_owner = case 0 of 0 = __func__ {
+  rule #0: 0 = __func__
+  state 0: #0
+	0::int state 1
+  state 1: #0
+} end;
+{
+  rule #0: case_owner = case 0 of 0 = __func__ end
+  state 0: #0
+}
+case_owner===case_owner;
+1
+maker n/*0:1*/ = f/*0*/ with f x/*0:1*/ = n/*1:1*/+x/*0:1*/ {
+  rule #0: f x = n+x
+  state 0: #0
+	<var> state 1
+  state 1: #0
+} end;
+{
+  rule #0: maker n = f with f x = n+x end
+  state 0: #0
+	<var> state 1
+  state 1: #0
+}
+{
+  rule #0: old_nested = maker 10
+  state 0: #0
+	<var> state 1
+  state 1: #0
+}
+let old_nested = maker 10;
+evalcmd "clear maker";
+""
+maker n/*0:1*/ = f/*0*/ with f x/*0:1*/ = n/*1:1*/-x/*0:1*/ {
+  rule #0: f x = n-x
+  state 0: #0
+	<var> state 1
+  state 1: #0
+} end;
+{
+  rule #0: maker n = f with f x = n-x end
+  state 0: #0
+	<var> state 1
+  state 1: #0
+}
+old_nested 3;
+13
+maker 10 3;
+7
+walk 0 = 0;
+walk n/*0:1*/ :: int = 1+walk (n/*0:1*/-1);
+{
+  rule #0: walk 0 = 0
+  rule #1: walk n::int = 1+walk (n-1)
+  state 0: #0 #1
+	<var>::int state 1
+	0::int state 2
+  state 1: #1
+  state 2: #0 #1
+}
+let old_walk = walk;
+old_walk 2;
+2
+evalcmd "clear walk";
+""
+walk n/*0:1*/ :: int = 100;
+{
+  rule #0: walk n::int = 100
+  state 0: #0
+	<var>::int state 1
+  state 1: #0
+}
+old_walk 3;
+3
+walk 3;
+100
+even 0 = 1;
+even n/*0:1*/ :: int = odd (n/*0:1*/-1);
+odd 0 = 0;
+odd n/*0:1*/ :: int = even (n/*0:1*/-1);
+{
+  rule #0: even 0 = 1
+  rule #1: even n::int = odd (n-1)
+  state 0: #0 #1
+	<var>::int state 1
+	0::int state 2
+  state 1: #1
+  state 2: #0 #1
+}
+{
+  rule #0: odd 0 = 0
+  rule #1: odd n::int = even (n-1)
+  state 0: #0 #1
+	<var>::int state 1
+	0::int state 2
+  state 1: #1
+  state 2: #0 #1
+}
+let old_even = even;
+let old_odd = odd;
+old_even 2;
+1
+old_odd 2;
+0
+evalcmd "clear even";
+""
+evalcmd "clear odd";
+""
+even n/*0:1*/ :: int = 20;
+odd n/*0:1*/ :: int = 30;
+{
+  rule #0: even n::int = 20
+  state 0: #0
+	<var>::int state 1
+  state 1: #0
+}
+{
+  rule #0: odd n::int = 30
+  state 0: #0
+	<var>::int state 1
+  state 1: #0
+}
+old_even 2;
+30
+old_odd 2;
+20
+even 2;
+20
+odd 2;
+30
+active = evalcmd "clear active"$$42;
+{
+  rule #0: active = evalcmd "clear active"$$42
+  state 0: #0
+}
+active;
+42
+active;
+active

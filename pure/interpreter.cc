@@ -117,9 +117,33 @@ struct CompilationUnitResources {
       : address(address), tracker(std::move(tracker)) {}
   };
 
+  struct FunctionGeneration {
+    int32_t tag;
+    uint64_t generation;
+    uint32_t key;
+    uint32_t *refp;
+    void *address;
+    llvm::orc::ResourceTrackerSP tracker;
+    map<uint32_t, uint32_t*> closure_refs;
+    bool current;
+
+    FunctionGeneration(int32_t tag, uint64_t generation, uint32_t key,
+                       uint32_t *refp, void *address,
+                       llvm::orc::ResourceTrackerSP tracker,
+                       const map<uint32_t, uint32_t*>& closure_refs)
+      : tag(tag), generation(generation), key(key), refp(refp),
+        address(address), tracker(std::move(tracker)),
+        closure_refs(closure_refs), current(false) {}
+  };
+
   map<const Env*, llvm::orc::ResourceTrackerSP> trackers;
   map<const llvm::Function*, CompiledFunction> functions;
   map<string, HostSymbol> host_symbols;
+  map<uint32_t, FunctionGeneration> implementations;
+  map<uint32_t, set<uint32_t> > key_implementations;
+  set<uint32_t> pending_implementations;
+  map<int32_t, uint32_t> current_implementations;
+  map<int32_t, uint64_t> next_generations;
 
   llvm::Error retain_host_symbol
   (PureJit& jit, llvm::StringRef name, void *address,
@@ -194,6 +218,110 @@ struct CompilationUnitResources {
     return it == functions.end() ? 0 : it->second.address;
   }
 
+  uint64_t next_generation(int32_t tag)
+  {
+    return ++next_generations[tag];
+  }
+
+  void retain_generation(int32_t tag, uint64_t generation, uint32_t key,
+                         uint32_t *refp, void *address,
+                         llvm::orc::ResourceTrackerSP tracker,
+                         const map<uint32_t, uint32_t*>& closure_refs)
+  {
+    assert(tag > 0 && key && refp && address && tracker &&
+           implementations.find(key) == implementations.end() &&
+           closure_refs.find(key) != closure_refs.end());
+    implementations.emplace
+      (key, FunctionGeneration(tag, generation, key, refp, address,
+                               std::move(tracker), closure_refs));
+    for (map<uint32_t, uint32_t*>::const_iterator it = closure_refs.begin();
+         it != closure_refs.end(); ++it)
+      key_implementations[it->first].insert(key);
+  }
+
+  bool unused(const FunctionGeneration& implementation) const
+  {
+    for (map<uint32_t, uint32_t*>::const_iterator
+           it = implementation.closure_refs.begin();
+         it != implementation.closure_refs.end(); ++it)
+      if (*it->second != 0) return false;
+    return true;
+  }
+
+  void collect_generation(uint32_t root_key) noexcept
+  {
+    map<uint32_t, FunctionGeneration>::iterator implementation =
+      implementations.find(root_key);
+    if (implementation == implementations.end() ||
+        implementation->second.current || !unused(implementation->second))
+      return;
+    if (llvm::Error error = implementation->second.tracker->remove()) {
+      llvm::logAllUnhandledErrors(std::move(error), llvm::errs(),
+                                  "failed to collect ORC function generation: ");
+      return;
+    }
+    for (map<uint32_t, uint32_t*>::const_iterator
+           it = implementation->second.closure_refs.begin();
+         it != implementation->second.closure_refs.end(); ++it) {
+      map<uint32_t, set<uint32_t> >::iterator owners =
+        key_implementations.find(it->first);
+      if (owners == key_implementations.end()) continue;
+      owners->second.erase(root_key);
+      if (owners->second.empty()) key_implementations.erase(owners);
+    }
+    implementations.erase(implementation);
+  }
+
+  void release_closure_implementation(uint32_t key) noexcept
+  {
+    map<uint32_t, set<uint32_t> >::const_iterator owners =
+      key_implementations.find(key);
+    if (owners != key_implementations.end())
+      pending_implementations.insert(owners->second.begin(),
+                                     owners->second.end());
+  }
+
+  void collect_pending_generations() noexcept
+  {
+    set<uint32_t> candidates;
+    candidates.swap(pending_implementations);
+    for (set<uint32_t>::const_iterator it = candidates.begin();
+         it != candidates.end(); ++it)
+      collect_generation(*it);
+  }
+
+  void publish_generation(int32_t tag, uint32_t key)
+  {
+    map<int32_t, uint32_t>::iterator current =
+      current_implementations.find(tag);
+    if (current != current_implementations.end()) {
+      map<uint32_t, FunctionGeneration>::iterator previous =
+        implementations.find(current->second);
+      if (previous != implementations.end()) previous->second.current = false;
+    }
+    if (!key) {
+      current_implementations.erase(tag);
+      return;
+    }
+    map<uint32_t, FunctionGeneration>::iterator implementation =
+      implementations.find(key);
+    assert(implementation != implementations.end() &&
+           implementation->second.tag == tag);
+    implementation->second.current = true;
+    current_implementations[tag] = key;
+  }
+
+  FunctionGeneration *current_generation(int32_t tag)
+  {
+    map<int32_t, uint32_t>::const_iterator current =
+      current_implementations.find(tag);
+    if (current == current_implementations.end()) return 0;
+    map<uint32_t, FunctionGeneration>::iterator implementation =
+      implementations.find(current->second);
+    assert(implementation != implementations.end());
+    return &implementation->second;
+  }
+
   void retain(const Env *environment, llvm::orc::ResourceTrackerSP tracker)
   {
     assert(environment && tracker && trackers.find(environment) == trackers.end());
@@ -231,6 +359,15 @@ struct CompilationUnitResources {
       functions.erase(it);
       errors = llvm::joinErrors(std::move(errors), tracker->remove());
     }
+    current_implementations.clear();
+    pending_implementations.clear();
+    key_implementations.clear();
+    while (!implementations.empty()) {
+      map<uint32_t, FunctionGeneration>::iterator it = implementations.begin();
+      llvm::orc::ResourceTrackerSP tracker = std::move(it->second.tracker);
+      implementations.erase(it);
+      errors = llvm::joinErrors(std::move(errors), tracker->remove());
+    }
     while (!host_symbols.empty()) {
       string name = host_symbols.begin()->first;
       errors = llvm::joinErrors(std::move(errors), remove_host_symbol(name));
@@ -238,6 +375,17 @@ struct CompilationUnitResources {
     return errors;
   }
 };
+
+static void collect_generation_closure_refs
+(Env *environment, map<uint32_t, uint32_t*>& refs, set<const Env*>& visited)
+{
+  if (!environment || !visited.insert(environment).second) return;
+  refs[environment->getkey()] = environment->refp;
+  for (size_t i = 0; i < environment->fmap.m.size(); ++i)
+    for (EnvMap::const_iterator it = environment->fmap.m[i]->begin();
+         it != environment->fmap.m[i]->end(); ++it)
+      collect_generation_closure_refs(it->second, refs, visited);
+}
 
 static bool verify_module(const llvm::Module& module, string& message);
 
@@ -1003,6 +1151,100 @@ void *interpreter::host_global_address
   return compilation_units->host_symbol_address(variable->getName());
 }
 
+void interpreter::publish_global_closure
+(int32_t tag, GlobalVar& binding, pure_expr *closure,
+ list<pure_expr*> *retired)
+{
+  pure_expr *replacement = closure ? pure_new(closure) : 0;
+  uint32_t key = closure && closure->data.clos ? closure->data.clos->key : 0;
+  pure_expr *previous = binding.x;
+  compilation_units->publish_generation(tag, key);
+  binding.x = replacement;
+  if (previous) {
+    if (retired)
+      retired->push_back(previous);
+    else
+      pure_free(previous);
+  }
+}
+
+void *interpreter::compile_global_generation(Env& environment)
+{
+  assert(environment.tag > 0 && environment.h &&
+         !environment.h->isDeclaration());
+  uint64_t generation =
+    compilation_units->next_generation(environment.tag);
+  llvm::orc::ResourceTrackerSP tracker = ORC->create_resource_tracker();
+  string entry_name = environment.h->getName().str();
+  string exported_name = "$$orc.fun."+to_string(environment.tag)+"."+
+    to_string(generation);
+  if (llvm::Error error = ORC->add_module_copy
+        (tracker, *module, entry_name, exported_name)) {
+    if (llvm::Error cleanup_error = tracker->remove())
+      error = llvm::joinErrors(std::move(error), std::move(cleanup_error));
+    throw err("failed to add ORC global function module: "+
+              llvm::toString(std::move(error)));
+  }
+  llvm::Expected<llvm::orc::ExecutorAddr> entry = ORC->lookup(exported_name);
+  if (!entry) {
+    llvm::Error error = entry.takeError();
+    if (llvm::Error cleanup_error = tracker->remove())
+      error = llvm::joinErrors(std::move(error), std::move(cleanup_error));
+    throw err("failed to resolve ORC global function: "+
+              llvm::toString(std::move(error)));
+  }
+  void *address = reinterpret_cast<void*>
+    (static_cast<uintptr_t>(entry->getValue()));
+  map<uint32_t, uint32_t*> closure_refs;
+  set<const Env*> visited;
+  collect_generation_closure_refs(&environment, closure_refs, visited);
+  compilation_units->retain_generation
+    (environment.tag, generation, environment.getkey(), environment.refp,
+     address, std::move(tracker), closure_refs);
+  return address;
+}
+
+void *interpreter::resolve_global_closure(pure_expr *closure)
+{
+  assert(closure && closure->data.clos && closure->tag > 0);
+  pure_closure *clos = closure->data.clos;
+  if (clos->fp) return clos->fp;
+  CompilationUnitResources::FunctionGeneration *generation =
+    compilation_units->current_generation(closure->tag);
+  if (!generation) return 0;
+
+  if (clos->key != generation->key) {
+    assert(generation->refp);
+    ++*generation->refp;
+    if (clos->refp) {
+      uint32_t *previous = static_cast<uint32_t*>(clos->refp);
+      assert(*previous > 0);
+      if (--*previous == 0 && clos->owner)
+        static_cast<interpreter*>(clos->owner)->
+          release_closure_implementation(clos->key);
+    }
+    clos->key = generation->key;
+    clos->refp = generation->refp;
+    clos->owner = this;
+  }
+  clos->fp = generation->address;
+  return clos->fp;
+}
+
+void interpreter::release_closure_implementation(uint32_t key) noexcept
+{
+  if (compilation_units) {
+    compilation_units->release_closure_implementation(key);
+    collect_pending_generations();
+  }
+}
+
+void interpreter::collect_pending_generations() noexcept
+{
+  if (compilation_units && !astk && active_jit_calls == 0)
+    compilation_units->collect_pending_generations();
+}
+
 void *interpreter::compile_orc_function(llvm::Function *function,
                                         llvm::StringRef category)
 {
@@ -1010,10 +1252,6 @@ void *interpreter::compile_orc_function(llvm::Function *function,
   if (void *address = compilation_units->function_address(function))
     return address;
 
-  string verification_error;
-  if (!verify_module(*module, verification_error))
-    throw err("invalid LLVM module before ORC "+category.str()+": "+
-              verification_error);
   llvm::orc::ResourceTrackerSP tracker = ORC->create_resource_tracker();
   string entry_name = function->getName().str();
   string exported_name = "$$orc."+category.str()+"."+
@@ -1054,8 +1292,8 @@ interpreter::interpreter(int _argc, char **_argv)
     nerrs(0), modno(-1), modctr(0), source_s(0), output(0),
     result(0), lastres(0), mem(0), exps(0), tmps(0), freectr(0),
     orc_unit_counter(0), specials_only(false), module(0),
-    JIT(0), ORC(0), compilation_units(0), pass_state(0), astk(0),
-    sstk(__sstk),
+    JIT(0), ORC(0), compilation_units(0), pass_state(0),
+    active_jit_calls(0), astk(0), sstk(__sstk),
     stoplevel(0), tracelevel(-1), debug_skip(false), trace_skip(false),
     fptr(__fptr), tags(0), line(0), column(0), tags_init(false),
     declare_op(false)
@@ -1085,8 +1323,8 @@ interpreter::interpreter(int32_t nsyms, char *syms,
     nerrs(0), modno(-1), modctr(0), source_s(0), output(0),
     result(0), lastres(0), mem(0), exps(0), tmps(0), freectr(0),
     orc_unit_counter(0), specials_only(false), module(0),
-    JIT(0), ORC(0), compilation_units(0), pass_state(0), astk(0),
-    sstk(*_sstk),
+    JIT(0), ORC(0), compilation_units(0), pass_state(0),
+    active_jit_calls(0), astk(0), sstk(*_sstk),
     stoplevel(0), tracelevel(-1), debug_skip(false), trace_skip(false),
     fptr(*(Env**)_fptr), tags(0), line(0), column(0), tags_init(false),
     declare_op(false)
@@ -4252,9 +4490,7 @@ void interpreter::compile()
         env_info& info = e->second;
         if (!info.m && !info.mxs) continue;
         Env& type_function = globaltypes[ftag];
-        if (type_function.f != type_function.h)
-          JIT->getPointerToFunction(type_function.f);
-        void *fp = JIT->getPointerToFunction(type_function.h);
+        void *fp = compile_orc_function(type_function.h, "type");
         pure_add_rtty(ftag, type_function.n, fp);
 #if DEBUG>1
         std::cerr << "JIT " << type_function.f->getName().str()
@@ -4291,16 +4527,18 @@ void interpreter::compile()
 	pop(&f);
 	if (eager.find(ftag) != eager.end())
 	  to_be_jited.insert(ftag);
+	// Materialize an immutable ORC generation before publishing it. The
+	// closure address remains deferred when requested, so an uncalled closure
+	// still resolves through the latest public generation.
+	void *generation_fp = compile_global_generation(f);
 #if DEFER_GLOBALS
-	// defer JIT until the function is called somewhere
 	void *fp = 0;
 #else
-	// run the JIT now (always use the C-callable stub here)
-	if (f.f != f.h) JIT->getPointerToFunction(f.f);
-	void *fp = JIT->getPointerToFunction(f.h);
-#if DEBUG>1
-	std::cerr << "JIT " << f.f->getName().str() << " -> " << fp << '\n';
+	void *fp = generation_fp;
 #endif
+#if DEBUG>1
+	std::cerr << "JIT " << f.f->getName().str() << " -> "
+	          << generation_fp << '\n';
 #endif
 	// do a direct call to the runtime to create the fbox and cache it in
 	// a global variable
@@ -4315,8 +4553,9 @@ void interpreter::compile()
 	}
 	/* It's not safe to free any old value v.x right here, as it might
 	   have a sentry to execute which in turn might cause the compiler to
-	   be invoked recursively. So we defer this until we're finished. */
-	if (v.x) to_be_freed.push_back(v.x); v.x = pure_new(fv);
+	   be invoked recursively. Publish the retained replacement first and
+	   defer releasing the previous closure until compilation is finished. */
+	publish_global_closure(f.tag, v, fv, &to_be_freed);
 #if DEBUG>1
 	std::cerr << "global " << &v.x << " (== "
 		  << JIT->getPointerToGlobal(v.v) << ") -> "
@@ -4885,9 +5124,8 @@ void interpreter::clearsym(int32_t f)
        function knows that we want an exception rather than a normal form. */
     bool defined_external = externals.find(f) != externals.end() &&
       set_defined_sym(f);
-    pure_expr *cv = defined_external? 0 : pure_new(pure_const(f));
-    if (v->second.x) pure_free(v->second.x);
-    v->second.x = cv;
+    pure_expr *cv = defined_external ? 0 : pure_const(f);
+    publish_global_closure(f, v->second, cv);
   }
   map<int32_t,Env>::iterator g = globalfuns.find(f);
   if (g != globalfuns.end()) {
@@ -13402,22 +13640,27 @@ pure_expr *interpreter::const_value_invoke(expr x, pure_expr*& e, bool quote)
 {
   // Wrapper around const_value which catches possible exceptions while
   // evaluating lists and tuples.
+  uint32_t old_jit_calls = active_jit_calls;
   pure_aframe *ex = push_aframe(sstk_sz);
   if (setjmp(ex->jmp)) {
     // caught an exception
     size_t sz = ex->sz;
     e = ex->e;
     pop_aframe();
+    active_jit_calls = old_jit_calls;
     if (e) pure_new(e);
     for (size_t i = sstk_sz; i-- > sz; )
       if (sstk[i] && sstk[i]->refc > 0)
 	pure_free(sstk[i]);
     sstk_sz = sz;
+    collect_pending_generations();
     return 0;
   } else {
     pure_expr *res = const_value(x, quote);
     // normal return
     pop_aframe();
+    active_jit_calls = old_jit_calls;
+    collect_pending_generations();
     return res;
   }
 }

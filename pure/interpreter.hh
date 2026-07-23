@@ -1106,6 +1106,13 @@ public:
   void *host_global_address(const llvm::GlobalVariable *variable) const;
   void *compile_orc_function(llvm::Function *function,
                              llvm::StringRef category);
+  void publish_global_closure(int32_t tag, GlobalVar& binding,
+                              pure_expr *closure,
+                              list<pure_expr*> *retired = 0);
+  void *compile_global_generation(Env& environment);
+  void *resolve_global_closure(pure_expr *closure);
+  void release_closure_implementation(uint32_t key) noexcept;
+  void collect_pending_generations() noexcept;
 
   llvm::BasicBlock *basic_block(const char *name, llvm::Function* f = 0)
   { return llvm::BasicBlock::Create(context, name, f); }
@@ -1134,6 +1141,7 @@ public:
   set<llvm::Function*> always_used;
   map<int32_t,GlobalVar> globalvars;
   map<int32_t,Env> globalfuns, globaltypes;
+  uint32_t active_jit_calls;
   pure_aframe *astk;
   pure_expr **__sstk, ***__sstk_save;
   pure_expr **&sstk;

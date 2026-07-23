@@ -1,0 +1,48 @@
+// ORC closure generation tests
+
+// Nested __func__ references keep the identity of the enclosing function.
+when_owner = x when x = __func__ end;
+when_owner===when_owner;
+case_owner = case 0 of 0 = __func__ end;
+case_owner===case_owner;
+
+// Escaped local closures retain their old compilation unit.
+maker n = f with f x = n+x end;
+let old_nested = maker 10;
+evalcmd "clear maker";
+maker n = f with f x = n-x end;
+old_nested 3;
+(maker 10) 3;
+
+// Self-recursive calls stay within the concrete old generation.
+walk 0 = 0;
+walk n::int = 1+walk (n-1);
+let old_walk = walk;
+old_walk 2;
+evalcmd "clear walk";
+walk n::int = 100;
+old_walk 3;
+walk 3;
+
+// Calls to another global continue through its current public binding.
+even 0 = 1;
+even n::int = odd (n-1);
+odd 0 = 0;
+odd n::int = even (n-1);
+let old_even = even;
+let old_odd = odd;
+old_even 2;
+old_odd 2;
+evalcmd "clear even";
+evalcmd "clear odd";
+even n::int = 20;
+odd n::int = 30;
+old_even 2;
+old_odd 2;
+even 2;
+odd 2;
+
+// Reentrant clearing cannot collect an active zero-arity generation.
+active = evalcmd "clear active" $$ 42;
+active;
+active;
