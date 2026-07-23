@@ -44,6 +44,17 @@ without exposing ORC details throughout the interpreter.
 
 ## Progress Log
 
+- 2026-07-23: Added an ORC-safe snapshot path for the mutable interpreter module.
+  - `PureJit::add_module_copy` serializes a module to bitcode, reparses it in a
+    fresh owned `LLVMContext`, and submits the resulting `ThreadSafeModule`
+    under an explicit resource tracker.
+  - The original module and interpreter context remain untouched, avoiding
+    ownership conflicts while the interpreter still mutates its legacy module.
+  - Validation:
+    - The smoke test now uses the snapshot path and still resolves/invokes the
+      constant function and removes its tracker successfully.
+    - The isolated CTest and complete Debug build both pass with zero warnings
+      and errors.
 - 2026-07-23: Corrected the type-function compilation boundary for whole-module
   MCJIT behavior.
   - All dirty type function bodies are now completed before any

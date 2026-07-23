@@ -40,10 +40,7 @@ int main()
   builder.CreateRet(llvm::ConstantInt::get(llvm::Type::getInt32Ty(*context), 42));
 
   llvm::orc::ResourceTrackerSP tracker = (*jit)->create_resource_tracker();
-  llvm::orc::ThreadSafeModule thread_safe_module
-    (std::move(module), std::move(context));
-  if (llvm::Error error =
-        (*jit)->add_module(tracker, std::move(thread_safe_module)))
+  if (llvm::Error error = (*jit)->add_module_copy(tracker, *module))
     return report_error(std::move(error));
 
   llvm::Expected<std::int32_t (*)()> value =

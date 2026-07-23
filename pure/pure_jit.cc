@@ -9,9 +9,16 @@
 
 #include "pure_jit.hh"
 
+#include <llvm/ADT/SmallVector.h>
+#include <llvm/Bitcode/BitcodeReader.h>
+#include <llvm/Bitcode/BitcodeWriter.h>
 #include <llvm/ExecutionEngine/Orc/LLJIT.h>
 #include <llvm/IR/DataLayout.h>
+#include <llvm/IR/LLVMContext.h>
+#include <llvm/IR/Module.h>
+#include <llvm/Support/MemoryBuffer.h>
 #include <llvm/Support/TargetSelect.h>
+#include <llvm/Support/raw_ostream.h>
 
 #include <utility>
 
@@ -62,6 +69,25 @@ llvm::Error PureJit::add_module(llvm::orc::ResourceTrackerSP tracker,
                                 llvm::orc::ThreadSafeModule module)
 {
   return jit_->addIRModule(std::move(tracker), std::move(module));
+}
+
+llvm::Error PureJit::add_module_copy(llvm::orc::ResourceTrackerSP tracker,
+                                     const llvm::Module& module)
+{
+  llvm::SmallVector<char, 0> bitcode;
+  llvm::raw_svector_ostream out(bitcode);
+  llvm::WriteBitcodeToFile(module, out);
+
+  std::unique_ptr<llvm::LLVMContext> context(new llvm::LLVMContext);
+  llvm::MemoryBufferRef buffer
+    (llvm::StringRef(bitcode.data(), bitcode.size()), module.getName());
+  llvm::Expected<std::unique_ptr<llvm::Module> > copy =
+    llvm::parseBitcodeFile(buffer, *context);
+  if (!copy) return copy.takeError();
+
+  llvm::orc::ThreadSafeModule thread_safe_module
+    (std::move(*copy), std::move(context));
+  return add_module(std::move(tracker), std::move(thread_safe_module));
 }
 
 llvm::Expected<llvm::orc::ExecutorAddr> PureJit::lookup(llvm::StringRef name)
