@@ -19,7 +19,7 @@ updates new calls without invalidating closures that still reference earlier cod
 ## Task List
 
 1. [x] Document exact current semantics for global, local, and anonymous functions.
-2. [ ] Design stable binding and concrete implementation data structures.
+2. [x] Design stable binding and concrete implementation data structures.
 3. [ ] Redirect public bindings atomically when a definition changes.
 4. [ ] Keep old `ResourceTracker`s alive while referenced by closures.
 5. [ ] Release obsolete implementations after the last reference disappears.
@@ -91,6 +91,99 @@ updates new calls without invalidating closures that still reference earlier cod
 - Remove a generation only after its closure references, nested environments, and
   dependent compilation units are gone.
 
+## Generation and Binding Design
+
+### `FunctionBinding`
+
+One interpreter-owned entry per global Pure symbol tag:
+
+```text
+FunctionBinding
+  tag                    Pure symbol id
+  slot                   existing stable GlobalVar / pure_expr ** address
+  next_generation        monotonic generation number
+  current                current FunctionGeneration, or none after clear
+```
+
+- `slot` is already registered as an ORC absolute data symbol and remains stable.
+  First-class symbol lookup and unsaturated/dynamic calls continue loading the
+  current closure from this slot.
+- Publishing a definition changes the slot contents and `current`, never the slot
+  address. The interpreter is single-threaded today, so publication requires an
+  ordered retain/swap/release sequence rather than a lock-free stub update.
+- Clearing a name publishes its cbox/undefined value and sets `current` to none;
+  old generations remain independently owned.
+
+### `FunctionGeneration`
+
+One immutable record for each successfully materialized global implementation:
+
+```text
+FunctionGeneration
+  tag, generation        logical identity
+  key, refp              runtime closure identity and implementation references
+  tracker                all ORC code/data owned by this implementation
+  fast_symbol/address    internal fastcc entry when distinct
+  c_symbol/address       C-callable closure entry
+  state                  building, current, superseded, removable
+```
+
+- Symbols use generation-qualified names such as `$$orc.fun.<tag>.<generation>`;
+  redefining source IR cannot collide with an older live generation.
+- A generation is immutable after submission. Its `Env::f`/`h` source IR may be
+  cleared or rebuilt only after addresses, symbols, and ownership have been copied
+  into the generation record.
+- The public cached closure contributes to `refp`. Replacing that cache can make a
+  superseded generation removable, but only after closure and dependent-unit
+  references also reach zero.
+
+### Ownership registry
+
+Extend the interpreter compilation-resource registry with:
+
+```text
+bindings[tag]                 stable FunctionBinding
+implementations[key]          FunctionGeneration owning that closure key
+```
+
+- `pure_clos` and closure copies already increment `*refp`. When `pure_free_clos`
+  decrements it to zero, it must notify the interpreter by `key`; the registry can
+  then remove a superseded generation tracker and erase the key mapping.
+- Anonymous and local environments keep their existing `Env *` tracker ownership.
+  A global generation uses the key callback because global closures currently have
+  no `ep` and the mutable `globalfuns[tag]` environment is reused.
+- If one ORC unit references a separately owned generation rather than cloning its
+  implementation, that dependency must hold an explicit generation reference.
+  Initially cloning concrete reachable generation bodies per unit avoids an
+  implicit cross-tracker dependency.
+
+### Call and publication policy
+
+- Direct saturated calls emitted while compiling a unit bind to the concrete
+  generation selected at that compilation boundary. Old caller units therefore
+  keep coherent old dependency code; newly compiled callers select current
+  generations.
+- First-class/global calls continue through the stable closure slot and observe the
+  newly published generation.
+- A deferred closure stores tag/key but no address reference. On first invocation it
+  resolves `bindings[tag].current`, stores that generation's callable address, and
+  acquires its implementation reference. This preserves test 053 semantics.
+- Build and verify a new generation completely before publication. On failure,
+  remove its tracker and leave both `current` and the host slot unchanged.
+- Publish by retaining the new closure, swapping the host slot/current pointer, then
+  releasing the old cached closure. Mark the previous generation superseded and
+  collect it immediately only if its implementation references are zero.
+
+### Why no ORC indirect stub initially
+
+- The existing stable `GlobalVar` slot already provides language-level indirection
+  for first-class values and dynamic calls.
+- Concrete generation calls preserve old-closure/caller semantics more naturally
+  than retargeting every call through one mutable native stub.
+- ORC indirect stubs remain an option only if native extension clients require a
+  stable callable address for an interactively redefinable Pure name. Batch-export
+  ABI stability is separate from interactive closure semantics.
+
 ## Guardrails
 
 - Never leave a closure with a pointer to removed ORC resources.
@@ -110,6 +203,17 @@ updates new calls without invalidating closures that still reference earlier cod
 
 ## Progress Log
 
+- 2026-07-23: Designed stable bindings and immutable implementation generations.
+  - Selected the existing ORC-bound `GlobalVar` closure slot as the stable public
+    binding instead of adding an LLVM indirect stub to every Pure function.
+  - Defined concrete `FunctionBinding` and `FunctionGeneration` fields, registry
+    indexes, generation-qualified symbols, two-phase publication, rollback, and
+    zero-reference collection through the existing closure key/refp mechanism.
+  - Specified concrete-generation direct calls, slot-based first-class calls, and
+    latest-generation resolution for deferred closures.
+  - Validation:
+    - Architecture/source review only; no runtime behavior changed and no build or
+      test process was started.
 - 2026-07-23: Documented current closure ownership and redefinition semantics.
   - Traced `Env::refc`, shared implementation `refp`, closure copies, captured
     values, public `GlobalVar` bindings, and the existing `Env::clear` cleanup path.
