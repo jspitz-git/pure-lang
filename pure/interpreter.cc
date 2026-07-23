@@ -2404,6 +2404,9 @@ static bool verify_module(const llvm::Module& module, string& message)
   return !invalid;
 }
 
+static const char *incompatible_triple_component
+(const llvm::Triple& module_triple, const llvm::Triple& target_triple);
+
 bool interpreter::LoadFaustDSP(bool priv, const char *name, string *msg,
 			       const char *modnm)
 {
@@ -2447,60 +2450,159 @@ bool interpreter::LoadFaustDSP(bool priv, const char *name, string *msg,
     dsp_errmsg(name, msg);
     return false;
   }
-  // Determine the Faust module classname suffix (this used to be 'llvm', but
-  // is now 'mydsp' by default and can be set with the -cn option).
-  string classname = "_llvm";
-  string buildui = "buildUserInterface";
-  size_t len = buildui.length();
-  bool found = false;
-  for (Module::iterator it = M->begin(), end = M->end(); it != end; ) {
-    Function &f = *(it++);
-    string name = f.getName().str();
-    if (name.compare(0, len, buildui) == 0) {
-      classname = name.substr(len);
-      found = true;
-      break;
-    }
+  auto fail = [&](const string& message) {
+    if (msg) *msg = message;
+    dsp_errmsg(name, msg);
+    return false;
+  };
+  // Faust bitcode follows the same target ABI rules as generic bitcode.
+  // Assigning target metadata only canonicalizes compatible or unspecified
+  // input; it must never disguise an incompatible module.
+  const DataLayout& target_layout = ORC->data_layout();
+  const Triple& target_triple = ORC->target_triple();
+  if (!M->getTargetTriple().empty()) {
+    Triple module_triple(M->getTargetTriple().normalize());
+    if (const char *component =
+          incompatible_triple_component(module_triple, target_triple))
+      return fail("Incompatible target triple ("+string(component)+
+                  "): module '"+module_triple.str()+"', JIT '"+
+                  target_triple.str()+"'");
   }
-  if (!found) {
-    // This doesn't look like a valid Faust bitcode module, bail out.
-    if (msg) *msg = "Not a valid dsp file";
+  if (!M->getDataLayoutStr().empty() && M->getDataLayout() != target_layout)
+    return fail("Incompatible data layout: module '"+M->getDataLayoutStr()+
+                "', JIT '"+target_layout.getStringRepresentation()+"'");
+  M->setDataLayout(target_layout);
+  M->setTargetTriple(target_triple);
+  string verification_error;
+  if (!verify_module(*M, verification_error))
+    return fail("Invalid dsp module: "+verification_error);
+
+  if (modname.empty() || modname.find('$') != string::npos)
+    return fail("Invalid Faust module name '"+modname+"'");
+
+  // Determine the class suffix from a unique buildUserInterface definition.
+  // The suffix is 'mydsp' by default, but Faust's -cn option can change it.
+  const string buildui = "buildUserInterface";
+  set<string> classnames;
+  for (Module::iterator it = M->begin(), end = M->end(); it != end; ++it) {
+    Function &f = *it;
+    StringRef fname = f.getName();
+    if (!f.isDeclaration() && fname.starts_with(buildui))
+      classnames.insert(fname.drop_front(buildui.size()).str());
+  }
+  if (classnames.empty() || classnames.count(""))
+    return fail("Not a valid dsp file: missing Faust class suffix");
+  if (classnames.size() != 1)
+    return fail("Ambiguous Faust class suffixes");
+  const string classname = *classnames.begin();
+
+  Type *void_type = Type::getVoidTy(context);
+  Type *int_type = Type::getInt32Ty(context);
+  Type *ptr_type = PointerType::get(context, 0);
+  map<string, Function*> faust_exports;
+  auto type_string = [](Function *f) {
+    string text;
+    raw_string_ostream out(text);
+    f->getFunctionType()->print(out);
+    out.flush();
+    return text;
+  };
+  auto validate = [&](const string& operation, Type *result,
+                      const vector<Type*>& arguments, bool required,
+                      bool allow_parameterless = false) {
+    string symbol = operation+classname;
+    Function *f = M->getFunction(symbol);
+    if (!f) {
+      if (required && msg) *msg = "Missing required Faust definition '"+symbol+"'";
+      return !required;
+    }
+    if (f->isDeclaration()) {
+      if (msg) *msg = "Faust interface symbol '"+symbol+"' is not a definition";
+      return false;
+    }
+    FunctionType *ft = f->getFunctionType();
+    bool parameters_match = ft->getNumParams() == arguments.size();
+    if (parameters_match)
+      for (size_t i = 0; i < arguments.size(); ++i)
+        if (ft->getParamType(i) != arguments[i]) {
+          parameters_match = false;
+          break;
+        }
+    if (allow_parameterless && ft->getNumParams() == 0)
+      parameters_match = true;
+    if (f->getCallingConv() != CallingConv::C || ft->isVarArg() ||
+        ft->getReturnType() != result || !parameters_match ||
+        f->getLinkage() != Function::ExternalLinkage) {
+      if (msg)
+        *msg = "Invalid Faust signature for '"+symbol+"': "+type_string(f);
+      return false;
+    }
+    faust_exports[operation] = f;
+    return true;
+  };
+  vector<Type*> noargs, dsp_arg(1, ptr_type), rate_arg(1, int_type);
+  vector<Type*> dsp_rate_args;
+  dsp_rate_args.push_back(ptr_type);
+  dsp_rate_args.push_back(int_type);
+  vector<Type*> ui_args(2, ptr_type);
+  vector<Type*> compute_args;
+  compute_args.push_back(ptr_type);
+  compute_args.push_back(int_type);
+  compute_args.push_back(ptr_type);
+  compute_args.push_back(ptr_type);
+  if (!validate("new", ptr_type, noargs, true) ||
+      !validate("delete", void_type, dsp_arg, true) ||
+      !validate("init", void_type, dsp_rate_args, true) ||
+      !validate("buildUserInterface", void_type, ui_args, true) ||
+      !validate("getNumInputs", int_type, dsp_arg, true, true) ||
+      !validate("getNumOutputs", int_type, dsp_arg, true, true) ||
+      !validate("compute", void_type, compute_args, true) ||
+      !validate("metadata", void_type, dsp_arg, false) ||
+      !validate("getSampleRate", int_type, dsp_arg, false) ||
+      !validate("classInit", void_type, rate_arg, false) ||
+      !validate("instanceResetUserInterface", void_type, dsp_arg, false) ||
+      !validate("instanceClear", void_type, dsp_arg, false) ||
+      !validate("instanceConstants", void_type, dsp_rate_args, false) ||
+      !validate("instanceInit", void_type, dsp_rate_args, false) ||
+      !validate("allocate", void_type, dsp_arg, false) ||
+      !validate("destroy", void_type, dsp_arg, false) ||
+      !validate("clone", ptr_type, dsp_arg, false) ||
+      !validate("getJSON", ptr_type, noargs, false)) {
     dsp_errmsg(name, msg);
     return false;
   }
-  // Check whether getSampleRate is available.
-  bool have_getSampleRate = M->getFunction("getSampleRate"+classname) != 0;
-  // Faust records the sample format in its compile options. Pointer parameter
-  // types cannot carry this information under LLVM's opaque-pointer model.
+  // Reject unknown opaque-pointer operations instead of guessing their ABI.
+  for (Module::iterator it = M->begin(), end = M->end(); it != end; ++it) {
+    Function &f = *it;
+    StringRef fname = f.getName();
+    if (f.isDeclaration() || !fname.ends_with(classname)) continue;
+    string operation = fname.drop_back(classname.size()).str();
+    if (faust_exports.count(operation)) continue;
+    FunctionType *ft = f.getFunctionType();
+    bool unsupported_type = ft->getReturnType()->isPointerTy() ||
+      type_name(ft->getReturnType()) == "<unknown C type>";
+    for (Type *type : ft->params())
+      unsupported_type |= type->isPointerTy() ||
+        type_name(type) == "<unknown C type>";
+    if (f.getCallingConv() != CallingConv::C || ft->isVarArg() ||
+        f.getLinkage() != Function::ExternalLinkage || unsupported_type)
+      return fail("Unsupported Faust interface operation '"+fname.str()+"'");
+    faust_exports[operation] = &f;
+  }
+  bool have_getSampleRate = faust_exports.count("getSampleRate") != 0;
+
+  // Precision detection is hardened separately in task 3. Keep the existing
+  // explicit marker requirement while the rest of the module ABI is ported.
   StringRef source = M->getSourceFileName();
   bool has_single = source.contains("-single");
   bool has_double = source.contains("-double");
-  if (has_single == has_double) {
-    if (msg) *msg = "Missing or ambiguous Faust sample format";
-    dsp_errmsg(name, msg);
-    return false;
-  }
+  if (has_single == has_double)
+    return fail("Missing or ambiguous Faust sample format");
   bool is_double = has_double;
-  if (loaded && modified) {
-    // Do some more checking to make sure that the programmer didn't suddenly
-    // change his mind about the precision of floating point data (-double
-    // vs. -single). Note that we can't allow sudden changes in the ABI since
-    // we only patch up function pointers when reloading a Faust module, which
-    // would render existing wrappers invalid if the ABI was changed on the fly.
-    if (loaded_dsps[modname].dbl != is_double) {
-      string prec = (!is_double)?"double":"single";
-      if (msg)
-	*msg = "Module was previously compiled for " + prec + " precision";
-      dsp_errmsg(name, msg);
-      return false;
-    }
+  if (loaded && modified && loaded_dsps[modname].dbl != is_double) {
+    string prec = (!is_double)?"double":"single";
+    return fail("Module was previously compiled for "+prec+" precision");
   }
-  // Fix up the target layout and triple set by the Faust compiler, in case
-  // the dsp module was created on a different platform. (FIXME: We assume
-  // that the Faust code itself is platform-agnostic.)
-  const DataLayout& target_layout = module->getDataLayout();
-  M->setDataLayout(target_layout);
-  M->setTargetTriple(Triple(HOST));
   // Mangle the global names of the Faust module since they are usually the
   // same for every module. XXXFIXME: Currently we leave the type names alone
   // and rely on the linker to make them unique instead. This works, but may
@@ -2508,37 +2610,65 @@ bool interpreter::LoadFaustDSP(bool priv, const char *name, string *msg,
   // compiler. In the future we may want to mangle those, too, if only for
   // cosmetic purposes.
   list<string> funs, aux_funs, vars;
-  // Mangle the function names.
+  map<Function*, string> export_names;
+  for (map<string, Function*>::iterator it = faust_exports.begin();
+       it != faust_exports.end(); ++it)
+    export_names[it->second] = it->first;
+  // Keep deletion ahead of DSP-producing operations so generated Pure
+  // wrappers can attach it as a sentry without depending on source order.
+  funs.push_back("delete");
+  for (map<string, Function*>::iterator it = faust_exports.begin();
+       it != faust_exports.end(); ++it)
+    if (it->first != "delete") funs.push_back(it->first);
+
+  vector<pair<GlobalValue*, string> > rename_plan;
   for (Module::iterator it = M->begin(), end = M->end(); it != end; ++it) {
     Function &f = *it;
-    string name = f.getName().str();
-    // We always force external linkage here in order to avoid the automatic
-    // renaming that the linker does for internal symbols.
-    f.setLinkage(Function::ExternalLinkage);
-    // Faust interface routines are stropped with the classname suffix.
-    size_t p = name.rfind(classname);
-    if (p != string::npos && p+classname.length() == name.length()) {
-      string fname = name.substr(0, p);
-      f.setName("$$faust$"+modname+"$"+fname);
-      funs.push_back(fname);
-    } else if (!f.isDeclaration()) {
-      // Internal Faust function. Mangle the names of these as well, so that
-      // the batch compiler recognizes them (and doesn't accidentally strip
-      // them).
-      f.setName("$$__faust__$"+modname+"$"+name);
-      aux_funs.push_back(name);
+    if (f.isDeclaration()) continue;
+    string source_name = f.getName().str();
+    map<Function*, string>::iterator exported = export_names.find(&f);
+    if (exported != export_names.end())
+      rename_plan.push_back(make_pair
+        (&f, "$$faust$"+modname+"$"+exported->second));
+    else {
+      rename_plan.push_back(make_pair
+        (&f, "$$__faust__$"+modname+"$"+source_name));
+      aux_funs.push_back(source_name);
     }
   }
-  // Mangle the variable names.
   for (Module::global_iterator it = M->global_begin(), end = M->global_end();
        it != end; ++it) {
     GlobalVariable &v = *it;
-    if (!v.hasName()) continue;
-    string name = v.getName().str();
-    string vname = "$$__faust__$"+modname+"$"+name;
-    v.setLinkage(GlobalVariable::ExternalLinkage);
-    vars.push_back(name);
-    v.setName(vname);
+    if (v.isDeclaration() || !v.hasName()) continue;
+    string source_name = v.getName().str();
+    rename_plan.push_back(make_pair
+      (&v, "$$__faust__$"+modname+"$"+source_name));
+    vars.push_back(source_name);
+  }
+  for (Module::alias_iterator it = M->alias_begin(), end = M->alias_end();
+       it != end; ++it)
+    if (!it->isDeclaration() && it->hasName())
+      rename_plan.push_back(make_pair
+        (&*it, "$$__faust__$"+modname+"$"+it->getName().str()));
+  for (Module::ifunc_iterator it = M->ifunc_begin(), end = M->ifunc_end();
+       it != end; ++it)
+    if (!it->isDeclaration() && it->hasName())
+      rename_plan.push_back(make_pair
+        (&*it, "$$__faust__$"+modname+"$"+it->getName().str()));
+
+  set<string> destination_names;
+  for (vector<pair<GlobalValue*, string> >::iterator it = rename_plan.begin();
+       it != rename_plan.end(); ++it) {
+    GlobalValue *existing = M->getNamedValue(it->second);
+    if (!destination_names.insert(it->second).second ||
+        (existing && existing != it->first))
+      return fail("Faust symbol mangling collision for '"+it->second+"'");
+  }
+  for (vector<pair<GlobalValue*, string> >::iterator it = rename_plan.begin();
+       it != rename_plan.end(); ++it) {
+    it->first->setName(it->second);
+    if (it->first->getName() != it->second)
+      return fail("Failed to mangle Faust symbol as '"+it->second+"'");
   }
   if (loaded && modified) {
     // Get rid of all globals of the old module.
@@ -2568,12 +2698,6 @@ bool interpreter::LoadFaustDSP(bool priv, const char *name, string *msg,
   // if the module was modified.
   if (modified && Linker::linkModules(*module, std::move(M))) {
     if (msg && msg->empty()) *msg = "Error linking dsp module";
-    dsp_errmsg(name, msg);
-    return false;
-  }
-  string verification_error;
-  if (modified && !verify_module(*module, verification_error)) {
-    if (msg) *msg = "Invalid linked dsp module: "+verification_error;
     dsp_errmsg(name, msg);
     return false;
   }
@@ -2624,11 +2748,9 @@ bool interpreter::LoadFaustDSP(bool priv, const char *name, string *msg,
       // This is the Faust function to initialize the UI data structure.
       Function *buildUserInterface = module->getFunction
 	("$$faust$"+modname+"$buildUserInterface");
-      // Type of the above; the first argument gives the dsp type, the second
-      // one the UI type.
+      // The first argument gives the validated opaque dsp pointer type.
       llvm_const_FunctionType *ht = buildUserInterface->getFunctionType();
       llvm_const_Type *dsp_type = ht->getParamType(0);
-      llvm_const_Type *ui_type = ht->getParamType(1);
       // Create the call interface of our convenience function.
       vector<llvm_const_Type*> argt(1, dsp_type);
       FunctionType *ft = func_type(ExprPtrTy, argt, false);
@@ -2645,23 +2767,22 @@ bool interpreter::LoadFaustDSP(bool priv, const char *name, string *msg,
 	module->getFunction("$$faust$"+modname+"$getNumOutputs");
       vector<Value*> args;
       Function::arg_iterator a = f->arg_begin();
-      llvm_const_FunctionType *gt = getNumInputs->getFunctionType();
-      // In some revisions getNumInputs and getNumOutputs are parameterless
-      // functions; avoid a failed assertion for these.
-      if (gt->getNumParams() > 0)
-	args.push_back(b.CreateBitCast(a, gt->getParamType(0)));
+      // Historical modules may independently define either channel-count
+      // function without a dsp parameter.
+      if (getNumInputs->arg_size() > 0) args.push_back(a);
       Value *n_in = b.CreateCall(getNumInputs, mkargs(args));
+      args.clear();
+      if (getNumOutputs->arg_size() > 0) args.push_back(a);
       Value *n_out = b.CreateCall(getNumOutputs, mkargs(args));
       // Call the runtime function to create the internal UI data structure.
       Function *uifun = module->getFunction
 	(is_double?"faust_double_ui":"faust_float_ui");
       args.clear();
       Value *v = b.CreateCall(uifun, mkargs(args));
-      // Call the Faust function to initialize the UI data structure. Note
-      // that we need to cast the second void* argument to the proper pointer
-      // type expected by the buildUserInterface routine.
+      // Pointer roles were validated before mangling; LLVM 22 represents both
+      // values as address-space-zero opaque pointers.
       args.push_back(a);
-      args.push_back(b.CreateBitCast(v, ui_type));
+      args.push_back(v);
       b.CreateCall(buildUserInterface, mkargs(args));
       // Construct the info tuple.
       Function *infofun = module->getFunction("faust_make_info");
@@ -2696,9 +2817,6 @@ bool interpreter::LoadFaustDSP(bool priv, const char *name, string *msg,
     Function *metadata = module->getFunction("$$faust$"+modname+"$metadata");
     if (metadata) {
       myfuns.push_back("meta");
-      // Type of the above; the first argument gives the metadata type.
-      llvm_const_FunctionType *ht = metadata->getFunctionType();
-      llvm_const_Type *meta_type = ht->getParamType(0);
       // Create the call interface of our convenience function.
       vector<llvm_const_Type*> argt;
       FunctionType *ft = func_type(ExprPtrTy, argt, false);
@@ -2711,10 +2829,8 @@ bool interpreter::LoadFaustDSP(bool priv, const char *name, string *msg,
       Function *newfun = module->getFunction("faust_new_metadata");
       vector<Value*> args;
       Value *v = b.CreateCall(newfun, mkargs(args));
-      // Call the Faust function to initialize the meta data structure. Note
-      // that we need to cast the void* argument to the proper pointer type
-      // expected by the metadata routine.
-      args.push_back(b.CreateBitCast(v, meta_type));
+      // The metadata pointer role was validated before mangling.
+      args.push_back(v);
       b.CreateCall(metadata, mkargs(args));
       // Construct the metadata list.
       Function *makefun = module->getFunction("faust_make_metadata");
@@ -2732,8 +2848,8 @@ bool interpreter::LoadFaustDSP(bool priv, const char *name, string *msg,
     // getSampleRate is already implemented in the latest faust2 versions.
     // On older faust2 versions we emulate it if possible.
     GlobalVariable *sr = have_getSampleRate?0:
-      module->getNamedGlobal("$$__faust__$"+modname+"fSamplingFreq");
-    if (sr) {
+      module->getNamedGlobal("$$__faust__$"+modname+"$fSamplingFreq");
+    if (sr && sr->getValueType() == int32_type()) {
       // The getSampleRate function takes a dsp as parameter and returns its
       // sample rate.
       myfuns.push_back("getSampleRate");
@@ -2750,6 +2866,11 @@ bool interpreter::LoadFaustDSP(bool priv, const char *name, string *msg,
       Value *v = b.CreateLoad(sr->getValueType(), sr);
       b.CreateRet(v);
     }
+  }
+  if (modified) {
+    string wrapper_verification_error;
+    if (!verify_module(*module, wrapper_verification_error))
+      return fail("Invalid linked dsp module: "+wrapper_verification_error);
   }
   funs.insert(funs.end(), myfuns.begin(), myfuns.end());
   // Record the newly created function and variable pointers. These are to be
@@ -2771,7 +2892,7 @@ bool interpreter::LoadFaustDSP(bool priv, const char *name, string *msg,
   }
   for (list<string>::iterator v = vars.begin(); v != vars.end(); ++v) {
     string vname = "$$__faust__$"+modname+"$"+*v;
-    GlobalVariable *u = module->getGlobalVariable(vname);
+    GlobalVariable *u = module->getGlobalVariable(vname, true);
     assert(u);
     varptrs.push_back(u);
   }
@@ -2845,7 +2966,8 @@ bool interpreter::LoadFaustDSP(bool priv, const char *name, string *msg,
     if (!declared) {
       // Manufacture an extern declaration for the function so that it can be
       // called in Pure land.
-      declare_extern(priv, fname, restype, argtypes, false, 0, asname, false);
+      declare_extern(priv, fname, restype, argtypes, false, 0, asname, false,
+                     false);
       // Always require this function, so that it can be called in
       // batch-compiled scripts.
       symbol *sym = symtab.sym(asname);
@@ -2861,6 +2983,24 @@ bool interpreter::LoadFaustDSP(bool priv, const char *name, string *msg,
     cerr << "\n" << info << ";\n";
     f->dump();
 #endif
+  }
+  // Materializing a Faust target while declare_extern is still constructing
+  // wrappers asks MCJIT to optimize an incomplete module. Bind dispatch slots
+  // only after every generated wrapper has a terminator and verifies.
+  if (!declared) {
+    string dispatch_verification_error;
+    if (!verify_module(*module, dispatch_verification_error))
+      return fail("Invalid Faust wrapper module: "+dispatch_verification_error);
+    for (list<string>::iterator it = funs.begin(), end = funs.end();
+         it != end; ++it) {
+      string fname = "$$faust$"+modname+"$"+*it;
+      Function *f = module->getFunction(fname);
+      GlobalVariable *v = module->getNamedGlobal("$"+fname);
+      void **fp = v ? (void**)host_global_address(v) : 0;
+      if (!f || !fp)
+        return fail("Missing Faust dispatch slot for '"+fname+"'");
+      *fp = JIT->getPointerToFunction(f);
+    }
   }
   return true;
 }
@@ -12698,7 +12838,8 @@ Function *interpreter::declare_extern(void *fp, string name, string restype,
 Function *interpreter::declare_extern(int priv, string name, string restype,
 				      const list<string>& argtypes,
 				      bool varargs, void *fp,
-				      string asname, bool dll_check)
+				      string asname, bool dll_check,
+                                      bool materialize)
 {
   // Keep semantic C ABI types separate from LLVM's opaque pointer types.
   size_t n = argtypes.size();
@@ -13484,7 +13625,7 @@ Function *interpreter::declare_extern(int priv, string name, string restype,
        "$"+name);
     void **fp = (void**)malloc(sizeof(void*));
     assert(fp);
-    *fp = JIT->getPointerToFunction(g);
+    *fp = materialize ? JIT->getPointerToFunction(g) : 0;
     try {
       register_host_global(v, fp);
     } catch (...) {

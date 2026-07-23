@@ -1172,7 +1172,8 @@ public:
   llvm::Function *declare_extern(int priv, string name, string restype,
 				 const list<string>& argtypes,
 				 bool varargs = false, void *fp = 0,
-				 string asname = "", bool dll_check = true);
+				 string asname = "", bool dll_check = true,
+                                 bool materialize = true);
   void check_used(set<llvm::Function*>& used,
 		  map<llvm::GlobalVariable*,llvm::Function*>& varmap);
   int compiler(string out, list<string> libnames, string llcopts = "");

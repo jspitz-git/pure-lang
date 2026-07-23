@@ -19,7 +19,7 @@ released without stale function or global pointers.
 ## Task List
 
 1. [x] Document the expected Faust-generated symbols and supported ABI variants.
-2. [ ] Port module validation, name mangling, and wrapper IR generation.
+2. [x] Port module validation, name mangling, and wrapper IR generation.
 3. [ ] Implement reliable single/double precision detection.
 4. [ ] Add Faust module resources and stable reload bindings.
 5. [ ] Retire old generations only after live wrappers no longer reference them.
@@ -117,6 +117,29 @@ Symbol order in the LLVM module is not ABI-significant.
 
 ## Progress Log
 
+- 2026-07-23: Ported Faust module validation, symbol mangling, and wrapper IR generation.
+  - Validate explicit target triples and data layouts against LLJIT instead of rewriting
+    incompatible metadata, and run LLVM's verifier before inspecting input definitions.
+  - Require one class suffix and exact non-variadic C signatures for all mandatory and
+    known optional operations; reject declarations, ambiguous classes, unknown pointer
+    roles, unsupported scalar types, and non-external interface definitions diagnostically.
+  - Preflight deterministic names for functions, globals, aliases, and ifuncs, rename only
+    definitions, preserve source linkage, and keep declarations available to the linker.
+  - Generate wrappers from validated opaque-pointer roles, handle both channel-count arities
+    independently, and verify the complete module again after convenience and Pure wrappers.
+  - Defer legacy MCJIT materialization until all generated wrappers are complete, preventing
+    optimization of unterminated functions during import. Executing Faust code still awaits
+    the separately tracked ORC provider and stable dispatch work in task 4.
+  - Validation:
+    - LLVM 22 debug build passed, as did `pure-jit-smoke` and all five `pure-bitcode-*` tests.
+    - A Faust 2.70.3 `pure.c` module compiled by Clang 22 imported successfully and returned
+      to the interactive loop after all generated wrapper IR passed verification.
+    - A parse-valid module with `deletebad: void (i32)` was rejected with its symbol and
+      actual LLVM type in the diagnostic, then the interpreter successfully evaluated `42`.
+    - GDB confirmed that the former import crash came from MCJIT optimizing an incomplete
+      wrapper; after deferred materialization the import no longer crashes.
+    - The ASan/UBSan build and `pure-jit-smoke` passed. The sanitizer Faust import printed
+      the expected `42` but its slow teardown exceeded a separate 300-second command limit.
 - 2026-07-23: Defined the supported Faust module symbol and ABI contract.
   - Selected Faust 2.70.3 with `pure.c` plus Clang 22 as the canonical fixture pipeline,
     keeping LLVM bitcode production under the project's selected toolchain.
