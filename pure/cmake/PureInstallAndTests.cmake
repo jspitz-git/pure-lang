@@ -37,6 +37,48 @@ file(
 )
 
 if(BUILD_TESTING)
+  find_program(
+    PURE_LLVM_DIS_EXECUTABLE
+    NAMES llvm-dis-22 llvm-dis
+    HINTS "${LLVM_TOOLS_BINARY_DIR}"
+    REQUIRED
+  )
+  find_program(
+    PURE_OPT_EXECUTABLE
+    NAMES opt-22 opt
+    HINTS "${LLVM_TOOLS_BINARY_DIR}"
+    REQUIRED
+  )
+
+  set(PURE_BITCODE_FIXTURE_OUTPUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/test/bitcode")
+  set(PURE_BITCODE_FIXTURE_OUTPUTS)
+  foreach(fixture basic duplicate-a duplicate-b unresolved)
+    set(source "${CMAKE_CURRENT_SOURCE_DIR}/test/bitcode/${fixture}.c")
+    set(output "${PURE_BITCODE_FIXTURE_OUTPUT_DIR}/${fixture}.bc")
+    set(disassembly "${PURE_BITCODE_FIXTURE_OUTPUT_DIR}/${fixture}.ll")
+    add_custom_command(
+      OUTPUT "${output}"
+      BYPRODUCTS "${disassembly}"
+      COMMAND
+        "${CMAKE_COMMAND}" -E make_directory
+        "${PURE_BITCODE_FIXTURE_OUTPUT_DIR}"
+      COMMAND
+        "${CMAKE_C_COMPILER}" -O0 -emit-llvm -c "${source}" -o "${output}"
+      COMMAND
+        "${PURE_LLVM_DIS_EXECUTABLE}" "${output}" -o "${disassembly}"
+      COMMAND
+        "${PURE_OPT_EXECUTABLE}" -passes=verify -disable-output "${output}"
+      DEPENDS "${source}"
+      COMMENT "Generating LLVM bitcode fixture ${fixture}.bc"
+      VERBATIM
+    )
+    list(APPEND PURE_BITCODE_FIXTURE_OUTPUTS "${output}")
+  endforeach()
+  add_custom_target(
+    pure-bitcode-fixtures ALL
+    DEPENDS ${PURE_BITCODE_FIXTURE_OUTPUTS}
+  )
+
   add_executable(
     pure-jit-smoke
     "${CMAKE_CURRENT_SOURCE_DIR}/pure_jit.cc"

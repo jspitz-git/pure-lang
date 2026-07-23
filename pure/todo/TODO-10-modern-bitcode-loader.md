@@ -23,7 +23,7 @@ linked, compiled, and unloaded predictably.
 2. [x] Port symbol inspection, renaming, and module linking.
 3. [x] Define compatible target triple and data-layout checks.
 4. [x] Submit loaded code as separately tracked ORC resources.
-5. [ ] Generate `.bc` test fixtures from source during the CMake build.
+5. [x] Generate `.bc` test fixtures from source during the CMake build.
 6. [ ] Test duplicate symbols, malformed input, ABI mismatch, and unload behavior.
 
 ## Guardrails
@@ -45,6 +45,21 @@ linked, compiled, and unloaded predictably.
 
 ## Progress Log
 
+- 2026-07-23: Generated LLVM 22 bitcode fixtures from canonical C sources.
+  - Added basic, duplicate-symbol, and unresolved-dependency fixture sources under
+    `test/bitcode`; no generated binary bitcode is stored in the repository.
+  - Added the `pure-bitcode-fixtures` CMake target, built by default when testing is
+    enabled, which invokes the configured Clang compiler with `-emit-llvm`.
+  - Generate readable `.ll` disassemblies and verify every fixture with LLVM `opt`
+    before considering each custom command complete.
+  - Keep fixture compilation independent of project sanitizer flags so test-provider
+    ABI and dependencies are identical in debug and sanitizer builds.
+  - Validation:
+    - Debug and ASan presets generated all four `.bc` and `.ll` outputs.
+    - `file` identified every binary output as LLVM IR bitcode; explicit `llvm-dis-22`
+      and `opt-22 -passes=verify` checks passed.
+    - A second Ninja build reported `no work to do`.
+    - ASan fixture disassemblies contain no ASan or UBSan instrumentation symbols.
 - 2026-07-23: Submitted generic bitcode as separately tracked ORC providers.
   - Added provider ownership to the compilation-resource registry and remove providers
     after their compiled wrapper consumers during interpreter teardown.
