@@ -37,6 +37,27 @@ file(
 )
 
 if(BUILD_TESTING)
+  add_executable(
+    pure-jit-smoke
+    "${CMAKE_CURRENT_SOURCE_DIR}/pure_jit.cc"
+    "${CMAKE_CURRENT_SOURCE_DIR}/test/pure-jit-smoke.cc"
+  )
+  target_include_directories(
+    pure-jit-smoke
+    PRIVATE
+      "${CMAKE_CURRENT_SOURCE_DIR}"
+      ${LLVM_INCLUDE_DIRS}
+  )
+  target_link_libraries(
+    pure-jit-smoke
+    PRIVATE
+      ${PURE_LLVM_LIBRARIES}
+      Threads::Threads
+      ${CMAKE_DL_LIBS}
+  )
+  add_test(NAME pure-jit-smoke COMMAND pure-jit-smoke)
+  set_tests_properties(pure-jit-smoke PROPERTIES LABELS "jit;smoke")
+
   add_test(
     NAME pure-regression
     COMMAND "${CMAKE_CURRENT_BINARY_DIR}/run-tests"

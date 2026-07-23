@@ -20,9 +20,9 @@ without exposing ORC details throughout the interpreter.
 
 1. [x] Define the narrow `PureJit` API and ownership model.
 2. [x] Create `LLJIT`, its main `JITDylib`, and process symbol generator.
-3. [ ] Add `ThreadSafeModule` submission and typed address lookup helpers.
+3. [x] Add `ThreadSafeModule` submission and typed address lookup helpers.
 4. [ ] Convert LLVM `Error` and `Expected` failures to actionable Pure messages.
-5. [ ] Compile and invoke a minimal constant-returning function.
+5. [x] Compile and invoke a minimal constant-returning function.
 6. [ ] Route initial interpreter evaluation through `PureJit`.
 
 ## Guardrails
@@ -44,6 +44,21 @@ without exposing ORC details throughout the interpreter.
 
 ## Progress Log
 
+- 2026-07-23: Added and executed an independent ORC module lifecycle smoke test.
+  - `lookup_function<FunctionType>` converts `Expected<ExecutorAddr>` to a
+    compile-time checked function pointer while preserving lookup errors.
+  - The test builds a `ThreadSafeModule` containing an `i32 ()` function,
+    submits it under a dedicated `ResourceTracker`, resolves and invokes it,
+    checks the result `42`, and removes all tracked resources.
+  - The CTest target links `pure_jit.cc` directly and is independent of the
+    still-blocked legacy interpreter runtime.
+  - Validation:
+    - `cmake --build --preset llvm22-debug --target pure-jit-smoke -- -j1`
+      completed with zero warnings and errors.
+    - `ctest --preset llvm22-debug -R '^pure-jit-smoke$' --output-on-failure`
+      passed 1/1 tests.
+    - The full build retains zero warnings and only the nine known legacy JIT
+      errors.
 - 2026-07-23: Completed native `LLJIT` and process-symbol initialization.
   - `PureJit::create` initializes the native target, assembly printer, and
     assembly parser before constructing ORC.

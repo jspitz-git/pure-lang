@@ -17,6 +17,7 @@
 #include <llvm/Support/Error.h>
 
 #include <memory>
+#include <type_traits>
 
 namespace llvm {
 
@@ -46,6 +47,16 @@ public:
                          llvm::orc::ThreadSafeModule module);
 
   llvm::Expected<llvm::orc::ExecutorAddr> lookup(llvm::StringRef name);
+
+  template<class FunctionType>
+  llvm::Expected<FunctionType*> lookup_function(llvm::StringRef name)
+  {
+    static_assert(std::is_function<FunctionType>::value,
+                  "lookup_function requires a function type");
+    llvm::Expected<llvm::orc::ExecutorAddr> address = lookup(name);
+    if (!address) return address.takeError();
+    return address->toPtr<FunctionType*>();
+  }
 
 private:
   explicit PureJit(std::unique_ptr<llvm::orc::LLJIT> jit) noexcept;
