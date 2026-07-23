@@ -1,6 +1,6 @@
 # TODO-09 - Closures and Redefinition
 
-Status: Open
+Status: Completed
 Branch: todo/09-closures-and-redefinition
 
 ## Purpose
@@ -23,7 +23,7 @@ updates new calls without invalidating closures that still reference earlier cod
 3. [x] Redirect public bindings atomically when a definition changes.
 4. [x] Keep old `ResourceTracker`s alive while referenced by closures.
 5. [x] Release obsolete implementations after the last reference disappears.
-6. [ ] Cover nested, recursive, and mutually recursive redefinition cases.
+6. [x] Cover nested, recursive, and mutually recursive redefinition cases.
 
 ## Current Closure and Redefinition Semantics
 
@@ -159,12 +159,14 @@ implementations[key]          FunctionGeneration owning that closure key
 
 ### Call and publication policy
 
-- Direct saturated calls emitted while compiling a unit bind to the concrete
-  generation selected at that compilation boundary. Old caller units therefore
-  keep coherent old dependency code; newly compiled callers select current
-  generations.
-- First-class/global calls continue through the stable closure slot and observe the
-  newly published generation.
+- Direct self-recursive calls bind to the concrete generation selected at that
+  compilation boundary, so an old recursive closure remains internally coherent.
+- Calls to a different global name, including mutually recursive peers, continue
+  through that name's stable closure slot. They intentionally observe its current
+  generation after redefinition or its symbolic value after clear, matching Pure's
+  existing dynamic global-binding semantics.
+- First-class/global calls likewise continue through the stable closure slot and
+  observe the newly published generation.
 - A deferred closure stores tag/key but no address reference. On first invocation it
   resolves `bindings[tag].current`, stores that generation's callable address, and
   acquires its implementation reference. This preserves test 053 semantics.
@@ -203,6 +205,20 @@ implementations[key]          FunctionGeneration owning that closure key
 
 ## Progress Log
 
+- 2026-07-23: Covered nested, recursive, and mutually recursive redefinition.
+  - Added regression test 096 for nested `when`/`case` `__func__`, escaped local
+    closures across redefinition, old self-recursive generations, mutual recursion
+    through redefined peer bindings, and reentrant clearing of active zero-arity code.
+  - Confirmed that self-recursion remains concrete-generation-local while calls to a
+    different global name retain Pure's dynamic stable-slot semantics.
+  - Kept test 096 independent of `system.printf`, whose external wrapper is currently
+    obscured by the repository's pre-existing CRLF pragma diagnostics.
+  - Validation:
+    - LLVM 22 debug build passed.
+    - Debug `pure-jit-smoke` passed; test 096's closure output matches its log, with
+      the runner still blocked by the existing startup pragma diagnostics.
+    - ASan test 096 exceeded the 240-second limit during library startup and produced
+      no final result.
 - 2026-07-23: Collected superseded ORC generations after their last closure.
   - Recorded all root and nested closure keys/refcounters owned by each generation,
     deduplicating shared `FMap` environments and indexing keys back to their units.
