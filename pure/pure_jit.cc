@@ -14,6 +14,7 @@
 #include <llvm/Bitcode/BitcodeReader.h>
 #include <llvm/Bitcode/BitcodeWriter.h>
 #include <llvm/ExecutionEngine/Orc/AbsoluteSymbols.h>
+#include <llvm/ExecutionEngine/Orc/JITTargetMachineBuilder.h>
 #include <llvm/ExecutionEngine/Orc/LLJIT.h>
 #include <llvm/ExecutionEngine/Orc/Mangling.h>
 #include <llvm/IR/DataLayout.h>
@@ -26,6 +27,7 @@
 #include <llvm/IR/Verifier.h>
 #include <llvm/Passes/OptimizationLevel.h>
 #include <llvm/Passes/PassBuilder.h>
+#include <llvm/Support/CodeGen.h>
 #include <llvm/Support/MemoryBuffer.h>
 #include <llvm/Support/TargetSelect.h>
 #include <llvm/Support/raw_ostream.h>
@@ -99,7 +101,8 @@ static llvm::Error optimize_module(llvm::Module& module)
 }
 
 static llvm::Error reduce_to_entry(llvm::Module& module,
-                                   llvm::StringRef entry_name)
+                                   llvm::StringRef entry_name,
+                                   llvm::StringRef exported_name)
 {
   llvm::Function *entry = module.getFunction(entry_name);
   if (!entry)
@@ -133,6 +136,7 @@ static llvm::Error reduce_to_entry(llvm::Module& module,
     if (!reachable.contains(&current)) current.eraseFromParent();
   }
 
+  if (!exported_name.empty()) entry->setName(exported_name);
   entry->setLinkage(llvm::GlobalValue::ExternalLinkage);
   return verify_module(module, "reduced");
 }
@@ -148,7 +152,14 @@ llvm::Expected<std::unique_ptr<PureJit> > PureJit::create()
     return llvm::createStringError
       ("failed to initialize the native LLVM assembly parser");
 
+  llvm::Expected<llvm::orc::JITTargetMachineBuilder> target =
+    llvm::orc::JITTargetMachineBuilder::detectHost();
+  if (!target) return target.takeError();
+  target->setCodeModel(llvm::CodeModel::Large);
+  target->setRelocationModel(llvm::Reloc::PIC_);
+
   llvm::orc::LLJITBuilder builder;
+  builder.setJITTargetMachineBuilder(std::move(*target));
   // Native LLJIT requires its process-symbol JITDylib during construction.
   // LLVM links that dylib into the main dylib's default search order.
   builder.setLinkProcessSymbolsByDefault(true);
@@ -193,6 +204,7 @@ llvm::Error PureJit::add_module(llvm::orc::ResourceTrackerSP tracker,
 
 llvm::Error PureJit::add_module_copy(llvm::orc::ResourceTrackerSP tracker,
                                      const llvm::Module& module,
+                                     llvm::StringRef entry_symbol,
                                      llvm::StringRef exported_symbol)
 {
   llvm::SmallVector<char, 0> bitcode;
@@ -205,8 +217,9 @@ llvm::Error PureJit::add_module_copy(llvm::orc::ResourceTrackerSP tracker,
   llvm::Expected<std::unique_ptr<llvm::Module> > copy =
     llvm::parseBitcodeFile(buffer, *context);
   if (!copy) return copy.takeError();
-  if (!exported_symbol.empty())
-    if (llvm::Error error = reduce_to_entry(**copy, exported_symbol))
+  if (!entry_symbol.empty())
+    if (llvm::Error error =
+          reduce_to_entry(**copy, entry_symbol, exported_symbol))
       return error;
   if (llvm::Error error = optimize_module(**copy)) return error;
 

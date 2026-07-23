@@ -694,6 +694,7 @@ public:
   pure_expr *exps;   // head of the free list (available expression nodes)
   pure_expr *tmps;   // temporaries list (to be collected after exceptions)
   size_t freectr;    // size of the free list
+  uint64_t orc_unit_counter; // unique ORC compilation unit names
   map<uint32_t,void*> locals; // interpreter-local storage for applications
 
   bool defined_sym(int fno) {

@@ -65,6 +65,7 @@ public:
                          llvm::orc::ThreadSafeModule module);
   llvm::Error add_module_copy(llvm::orc::ResourceTrackerSP tracker,
                               const llvm::Module& module,
+                              llvm::StringRef entry_symbol = "",
                               llvm::StringRef exported_symbol = "");
 
   llvm::Expected<llvm::orc::ExecutorAddr> lookup(llvm::StringRef name);

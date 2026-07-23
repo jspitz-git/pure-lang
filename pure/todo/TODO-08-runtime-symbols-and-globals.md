@@ -76,11 +76,36 @@ resolves the Pure runtime, external functions, and mutable host-backed globals.
 
 ## Open Questions
 
+- Why does LeakSanitizer's process-exit scan stall after an evaluated closure even
+  though the same ASan/UBSan run exits immediately with leak detection disabled?
 - Should mutable Pure globals remain absolute symbols or move to a runtime table API?
 - Which symbols must be exported from the main executable with linker options?
 
 ## Progress Log
 
+- 2026-07-23: Bound the core interpreter stack and environment globals in ORC.
+  - Registered `$$sstk$$` and `$$fptr$$` as absolute data symbols backed by the
+    interpreter member slots while retaining their transitional MCJIT mappings.
+    One interpreter-lifetime tracker is removed after all evaluation units and
+    before LLJIT destruction; partial registration failures roll it back.
+  - Configured LLJIT for the large PIC code model. This avoids x86-64 `Delta32`
+    relocation failures when JIT code and host slots, including stack-resident
+    interpreter objects, are more than 2 GiB apart.
+  - Gave each anonymous ORC snapshot a unique exported entry name. Escaped
+    closures can now retain old evaluation trackers without colliding with the
+    next source-level `$$init` function.
+  - Validation:
+    - Full Debug and sanitizer builds plus focused ORC smoke tests passed with
+      zero warnings, errors, or sanitizer diagnostics.
+    - A retained lambda followed by a lambda application produced a closure and
+      `42` without unresolved, relocation, duplicate-symbol, removal, or shutdown
+      diagnostics.
+    - Twenty scalar evaluations exited cleanly under ASan/LeakSanitizer/UBSan.
+      Five closure/application pairs passed under ASan/UBSan with leak detection
+      disabled.
+    - LeakSanitizer's exit scan stalls after even one successful closure pair;
+      this is recorded as an open sanitizer issue rather than suppressed.
+  - Task 3 remains open for Pure, constant, temporary, and Faust host slots.
 - 2026-07-23: Added tracker-owned mangled absolute-symbol registration.
   - `PureJit::register_absolute_symbol` mangles and interns names against LLJIT's
     target `DataLayout`, defines strong symbols in the main `JITDylib`, and assigns

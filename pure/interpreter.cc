@@ -100,6 +100,13 @@ map<uint32_t, void (*)(void*)> interpreter::locals_destroy_cb;
 
 struct CompilationUnitResources {
   map<const Env*, llvm::orc::ResourceTrackerSP> trackers;
+  llvm::orc::ResourceTrackerSP host_symbols;
+
+  void retain_host_symbols(llvm::orc::ResourceTrackerSP tracker)
+  {
+    assert(tracker && !host_symbols);
+    host_symbols = std::move(tracker);
+  }
 
   void retain(const Env *environment, llvm::orc::ResourceTrackerSP tracker)
   {
@@ -130,6 +137,10 @@ struct CompilationUnitResources {
     while (!trackers.empty()) {
       const Env *environment = trackers.begin()->first;
       errors = llvm::joinErrors(std::move(errors), remove(environment));
+    }
+    if (host_symbols) {
+      llvm::orc::ResourceTrackerSP tracker = std::move(host_symbols);
+      errors = llvm::joinErrors(std::move(errors), tracker->remove());
     }
     return errors;
   }
@@ -529,6 +540,23 @@ void interpreter::init()
      "$$fptr$$");
   JIT->addGlobalMapping(fptrvar, &fptr);
 
+  llvm::orc::ResourceTrackerSP host_symbols = ORC->create_resource_tracker();
+  if (llvm::Error error = ORC->register_absolute_symbol
+        (host_symbols, "$$sstk$$", &sstk)) {
+    llvm::Error cleanup_error = host_symbols->remove();
+    throw err("failed to register ORC host symbol '$$sstk$$': "+
+              llvm::toString(llvm::joinErrors(std::move(error),
+                                               std::move(cleanup_error))));
+  }
+  if (llvm::Error error = ORC->register_absolute_symbol
+        (host_symbols, "$$fptr$$", &fptr)) {
+    llvm::Error cleanup_error = host_symbols->remove();
+    throw err("failed to register ORC host symbol '$$fptr$$': "+
+              llvm::toString(llvm::joinErrors(std::move(error),
+                                               std::move(cleanup_error))));
+  }
+  compilation_units->retain_host_symbols(std::move(host_symbols));
+
   // Add prototypes for the runtime interface and enter the corresponding
   // function pointers into the runtime map.
 
@@ -846,7 +874,7 @@ interpreter::interpreter(int _argc, char **_argv)
     source_level(0), skip_level(0), last_tag(0), logging(false),
     nerrs(0), modno(-1), modctr(0), source_s(0), output(0),
     result(0), lastres(0), mem(0), exps(0), tmps(0), freectr(0),
-    specials_only(false), module(0),
+    orc_unit_counter(0), specials_only(false), module(0),
     JIT(0), ORC(0), compilation_units(0), pass_state(0), astk(0),
     sstk(__sstk),
     stoplevel(0), tracelevel(-1), debug_skip(false), trace_skip(false),
@@ -877,7 +905,7 @@ interpreter::interpreter(int32_t nsyms, char *syms,
     last_tag(0x7fffffff), logging(false),
     nerrs(0), modno(-1), modctr(0), source_s(0), output(0),
     result(0), lastres(0), mem(0), exps(0), tmps(0), freectr(0),
-    specials_only(false), module(0),
+    orc_unit_counter(0), specials_only(false), module(0),
     JIT(0), ORC(0), compilation_units(0), pass_state(0), astk(0),
     sstk(*_sstk),
     stoplevel(0), tracelevel(-1), debug_skip(false), trace_skip(false),
@@ -13411,16 +13439,17 @@ pure_expr *interpreter::doeval(expr x, pure_expr*& e, bool keep)
       throw err("invalid LLVM module before ORC evaluation: "+
                 verification_error);
     llvm::orc::ResourceTrackerSP tracker = ORC->create_resource_tracker();
-    llvm::StringRef entry_name = f.f->getName();
+    string entry_name = f.f->getName().str();
+    string exported_name = "$$orc.eval."+to_string(orc_unit_counter++);
     if (llvm::Error error =
-          ORC->add_module_copy(tracker, *module, entry_name)) {
+          ORC->add_module_copy(tracker, *module, entry_name, exported_name)) {
       if (llvm::Error cleanup_error = tracker->remove())
         error = llvm::joinErrors(std::move(error), std::move(cleanup_error));
       throw err("failed to add ORC evaluation module: "+
                 llvm::toString(std::move(error)));
     }
     llvm::Expected<pure_expr* (*)()> entry =
-      ORC->lookup_function<pure_expr*()>(entry_name);
+      ORC->lookup_function<pure_expr*()>(exported_name);
     if (!entry) {
       llvm::Error error = entry.takeError();
       if (llvm::Error cleanup_error = tracker->remove())
