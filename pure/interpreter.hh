@@ -1096,6 +1096,9 @@ public:
    llvm::Constant *Init = 0, string Name = "")
   { return new llvm::GlobalVariable(*M, Ty, isConstant, Linkage, Init, Name); }
 
+  void register_host_global(llvm::GlobalVariable *variable, void *address);
+  void remove_host_global(llvm::GlobalVariable *variable);
+
   llvm::BasicBlock *basic_block(const char *name, llvm::Function* f = 0)
   { return llvm::BasicBlock::Create(context, name, f); }
 

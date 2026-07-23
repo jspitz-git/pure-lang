@@ -100,12 +100,31 @@ map<uint32_t, void (*)(void*)> interpreter::locals_destroy_cb;
 
 struct CompilationUnitResources {
   map<const Env*, llvm::orc::ResourceTrackerSP> trackers;
-  llvm::orc::ResourceTrackerSP host_symbols;
+  map<string, llvm::orc::ResourceTrackerSP> host_symbols;
 
-  void retain_host_symbols(llvm::orc::ResourceTrackerSP tracker)
+  llvm::Error retain_host_symbol(PureJit& jit, llvm::StringRef name,
+                                 void *address)
   {
-    assert(tracker && !host_symbols);
-    host_symbols = std::move(tracker);
+    string symbol_name = name.str();
+    if (host_symbols.find(symbol_name) != host_symbols.end())
+      return llvm::createStringError("ORC host symbol '%s' already exists",
+                                     symbol_name.c_str());
+    llvm::orc::ResourceTrackerSP tracker = jit.create_resource_tracker();
+    if (llvm::Error error =
+          jit.register_absolute_symbol(tracker, name, address))
+      return error;
+    host_symbols[symbol_name] = std::move(tracker);
+    return llvm::Error::success();
+  }
+
+  llvm::Error remove_host_symbol(llvm::StringRef name)
+  {
+    map<string, llvm::orc::ResourceTrackerSP>::iterator it =
+      host_symbols.find(name.str());
+    if (it == host_symbols.end()) return llvm::Error::success();
+    llvm::orc::ResourceTrackerSP tracker = std::move(it->second);
+    host_symbols.erase(it);
+    return tracker->remove();
   }
 
   void retain(const Env *environment, llvm::orc::ResourceTrackerSP tracker)
@@ -138,9 +157,9 @@ struct CompilationUnitResources {
       const Env *environment = trackers.begin()->first;
       errors = llvm::joinErrors(std::move(errors), remove(environment));
     }
-    if (host_symbols) {
-      llvm::orc::ResourceTrackerSP tracker = std::move(host_symbols);
-      errors = llvm::joinErrors(std::move(errors), tracker->remove());
+    while (!host_symbols.empty()) {
+      string name = host_symbols.begin()->first;
+      errors = llvm::joinErrors(std::move(errors), remove_host_symbol(name));
     }
     return errors;
   }
@@ -540,22 +559,18 @@ void interpreter::init()
      "$$fptr$$");
   JIT->addGlobalMapping(fptrvar, &fptr);
 
-  llvm::orc::ResourceTrackerSP host_symbols = ORC->create_resource_tracker();
-  if (llvm::Error error = ORC->register_absolute_symbol
-        (host_symbols, "$$sstk$$", &sstk)) {
-    llvm::Error cleanup_error = host_symbols->remove();
+  if (llvm::Error error = compilation_units->retain_host_symbol
+        (*ORC, "$$sstk$$", &sstk))
     throw err("failed to register ORC host symbol '$$sstk$$': "+
-              llvm::toString(llvm::joinErrors(std::move(error),
-                                               std::move(cleanup_error))));
-  }
-  if (llvm::Error error = ORC->register_absolute_symbol
-        (host_symbols, "$$fptr$$", &fptr)) {
-    llvm::Error cleanup_error = host_symbols->remove();
+              llvm::toString(std::move(error)));
+  if (llvm::Error error = compilation_units->retain_host_symbol
+        (*ORC, "$$fptr$$", &fptr)) {
+    llvm::Error cleanup_error =
+      compilation_units->remove_host_symbol("$$sstk$$");
     throw err("failed to register ORC host symbol '$$fptr$$': "+
               llvm::toString(llvm::joinErrors(std::move(error),
                                                std::move(cleanup_error))));
   }
-  compilation_units->retain_host_symbols(std::move(host_symbols));
 
   // Add prototypes for the runtime interface and enter the corresponding
   // function pointers into the runtime map.
@@ -858,6 +873,28 @@ void interpreter::init()
 		 "faust_make_metadata","expr*", 1, "void*");
   declare_extern((void*)faust_add_rtti,
 		 "faust_add_rtti", "void",    3, "char*", "int", "bool");
+}
+
+void interpreter::register_host_global(llvm::GlobalVariable *variable,
+                                       void *address)
+{
+  assert(variable && variable->hasName() && address);
+  if (llvm::Error error = compilation_units->retain_host_symbol
+        (*ORC, variable->getName(), address))
+    throw err("failed to register ORC host global '"+
+              variable->getName().str()+"': "+
+              llvm::toString(std::move(error)));
+  JIT->addGlobalMapping(variable, address);
+}
+
+void interpreter::remove_host_global(llvm::GlobalVariable *variable)
+{
+  assert(variable && variable->hasName());
+  string name = variable->getName().str();
+  if (llvm::Error error = compilation_units->remove_host_symbol(name))
+    throw err("failed to remove ORC host global '"+name+"': "+
+              llvm::toString(std::move(error)));
+  JIT->updateGlobalMapping(variable, 0);
 }
 
 interpreter::interpreter(int _argc, char **_argv)
@@ -13548,7 +13585,7 @@ pure_expr *interpreter::dodefn(env vars, const vinfo& vi,
 	      v.v = global_variable
 		(module, ExprPtrTy, false, GlobalVariable::ExternalLinkage,
 		 NullExprPtr, mkvarsym(sym.s));
-	    JIT->addGlobalMapping(v.v, &v.x);
+	    register_host_global(v.v, &v.x);
 	  }
 	  pure_new(x);
 	  if (v.x) pure_free(v.x);
@@ -13639,7 +13676,7 @@ pure_expr *interpreter::dodefn(env vars, const vinfo& vi,
 	v.v = global_variable
 	  (module, ExprPtrTy, false, GlobalVariable::ExternalLinkage,
 	   NullExprPtr, mkvarsym(sym.s));
-      JIT->addGlobalMapping(v.v, &v.x);
+      register_host_global(v.v, &v.x);
     }
     /* Cache any old value so that we can free it later. Note that it is not
        safe to do so right away, because the value may be reused in one of the
@@ -13662,20 +13699,51 @@ pure_expr *interpreter::dodefn(env vars, const vinfo& vi,
   fun_finish();
   pop(&f);
   // JIT and execute the function.
-  void *fp = JIT->getPointerToFunction(f.f);
-  assert(fp);
-  begin_stats();
-  res = pure_invoke(fp, &e);
-  end_stats();
-  // The transitional execution engine retains anonymous machine code until
-  // shutdown; ORC will remove it through the compilation unit's tracker.
   if (!keep) {
+    string verification_error;
+    if (!verify_module(*module, verification_error))
+      throw err("invalid LLVM module before ORC definition: "+
+                verification_error);
+    llvm::orc::ResourceTrackerSP tracker = ORC->create_resource_tracker();
+    string entry_name = f.f->getName().str();
+    string exported_name = "$$orc.defn."+to_string(orc_unit_counter++);
+    if (llvm::Error error = ORC->add_module_copy
+          (tracker, *module, entry_name, exported_name)) {
+      if (llvm::Error cleanup_error = tracker->remove())
+        error = llvm::joinErrors(std::move(error), std::move(cleanup_error));
+      throw err("failed to add ORC definition module: "+
+                llvm::toString(std::move(error)));
+    }
+    llvm::Expected<pure_expr* (*)()> entry =
+      ORC->lookup_function<pure_expr*()>(exported_name);
+    if (!entry) {
+      llvm::Error error = entry.takeError();
+      if (llvm::Error cleanup_error = tracker->remove())
+        error = llvm::joinErrors(std::move(error), std::move(cleanup_error));
+      throw err("failed to resolve ORC definition function: "+
+                llvm::toString(std::move(error)));
+    }
+    void *fp = reinterpret_cast<void*>(*entry);
+    compilation_units->retain(fptr, tracker);
+    begin_stats();
+    res = pure_invoke(fp, &e);
+    end_stats();
     f.f->eraseFromParent();
-    // If there are no more references, we can get rid of the environment now.
-    if (fptr->refc == 1)
+    // If there are no more references, release the compilation unit and its
+    // environment. Escaped closures retain both until their Env is released.
+    if (fptr->refc == 1) {
+      if (llvm::Error error = compilation_units->remove(fptr))
+        throw err("failed to remove ORC definition module: "+
+                  llvm::toString(std::move(error)));
       delete fptr;
-    else
+    } else
       fptr->refc--;
+  } else {
+    void *fp = JIT->getPointerToFunction(f.f);
+    assert(fp);
+    begin_stats();
+    res = pure_invoke(fp, &e);
+    end_stats();
   }
   fptr = save_fptr;
   if (res) {
@@ -13689,7 +13757,7 @@ pure_expr *interpreter::dodefn(env vars, const vinfo& vi,
       int32_t tag = it->first;
       GlobalVar& v = globalvars[tag];
       if (!v.x) {
-	JIT->updateGlobalMapping(v.v, 0);
+	remove_host_global(v.v);
 	v.v->eraseFromParent();
 	globalvars.erase(tag);
       }

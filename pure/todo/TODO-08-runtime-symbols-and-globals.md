@@ -83,6 +83,26 @@ resolves the Pure runtime, external functions, and mutable host-backed globals.
 
 ## Progress Log
 
+- 2026-07-23: Routed interactive variable definitions through ORC host globals.
+  - Split the interpreter host-symbol registry into one tracker per symbol, so a
+    failed or temporary binding can be removed without invalidating unrelated
+    core globals.
+  - Added shared `register_host_global`/`remove_host_global` helpers that keep
+    transitional MCJIT mappings synchronized while definition call sites migrate.
+  - `dodefn` now registers newly created Pure variable slots, submits its anonymous
+    matcher/binder with a unique ORC entry name, retains escaped closure resources,
+    and removes both failed definition resources and unused host symbols in order.
+    Batch `keep` execution remains on the transitional engine.
+  - Validation:
+    - Full Debug and ASan builds and focused ORC smoke tests passed with zero
+      warnings, errors, leaks, or sanitizer diagnostics.
+    - `let y = \\x -> x; y 42;` returned `42` in Debug and under ASan/UBSan,
+      replacing the previous wild jump into non-executable MCJIT memory.
+    - A failed nonlinear pattern binding removed its `$y` symbol, after which the
+      same name was registered again and a closure application returned `7` with
+      no duplicate, unresolved, removal, or shutdown diagnostics.
+  - Task 3 remains open for the other Pure/global creation sites, cached constants,
+    temporary wrappers, and Faust dispatch slots.
 - 2026-07-23: Bound the core interpreter stack and environment globals in ORC.
   - Registered `$$sstk$$` and `$$fptr$$` as absolute data symbols backed by the
     interpreter member slots while retaining their transitional MCJIT mappings.
