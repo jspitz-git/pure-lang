@@ -44,6 +44,15 @@ without exposing ORC details throughout the interpreter.
 
 ## Progress Log
 
+- 2026-07-23: Modernized generated lexer source for C++17 and LLVM 22 streams.
+  - Removed the two obsolete `register` storage specifiers from `lexer.ll`.
+  - LLVM function dumps now unconditionally adapt `std::ostream` through
+    `llvm::raw_os_ostream`; removed feature branches selected by unset legacy
+    header macros.
+  - Validation:
+    - Flex regenerated `lexer.cc`, and `lexer.cc.o` compiled with zero warnings
+      and errors.
+    - The full build advanced to legacy C compatibility errors in `strptime.c`.
 - 2026-07-23: Fixed encoding portability exposed by the full C++17 build.
   - Encoding-name helpers and parameters now use `const char*`, eliminating 31
     writable-string warnings without casts.
