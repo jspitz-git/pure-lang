@@ -57,6 +57,7 @@ char *alloca ();
 
 #include <llvm/Bitcode/BitcodeReader.h>
 #include <llvm/Bitcode/BitcodeWriter.h>
+#include <llvm/Analysis/ValueTracking.h>
 #include <llvm/ExecutionEngine/MCJIT.h>
 #include <llvm/IR/CallingConv.h>
 #include <llvm/Linker/Linker.h>
@@ -2591,17 +2592,70 @@ bool interpreter::LoadFaustDSP(bool priv, const char *name, string *msg,
   }
   bool have_getSampleRate = faust_exports.count("getSampleRate") != 0;
 
-  // Precision detection is hardened separately in task 3. Keep the existing
-  // explicit marker requirement while the rest of the module ABI is ported.
-  StringRef source = M->getSourceFileName();
-  bool has_single = source.contains("-single");
-  bool has_double = source.contains("-double");
-  if (has_single == has_double)
-    return fail("Missing or ambiguous Faust sample format");
-  bool is_double = has_double;
+  // LLVM opaque pointers cannot distinguish float** from double**. Prefer an
+  // explicit public-ABI marker emitted by a compatible architecture:
+  //
+  //   const char pure_faust_sample_format[] = "float"; // or "double"
+  //
+  // The bundled pure.c architecture predates this marker but is also safe to
+  // identify: it records its architecture in compile_options and hardcodes
+  // FAUSTFLOAT as double regardless of Faust's internal precision option.
+  bool have_sample_format = false, is_double = false;
+  GlobalVariable *format = M->getNamedGlobal("pure_faust_sample_format");
+  if (format) {
+    ConstantDataArray *data = format->hasInitializer() ?
+      dyn_cast<ConstantDataArray>(format->getInitializer()) : 0;
+    if (format->isDeclaration() || !format->isConstant() || !data ||
+        !data->isCString())
+      return fail("Invalid Faust sample format marker");
+    StringRef value = data->getAsCString();
+    if (value == "float")
+      is_double = false;
+    else if (value == "double")
+      is_double = true;
+    else
+      return fail("Unsupported Faust sample format '"+value.str()+"'");
+    have_sample_format = true;
+  }
+  if (!have_sample_format) {
+    Function *metadata = faust_exports.count("metadata") ?
+      faust_exports["metadata"] : 0;
+    string compile_options;
+    if (metadata)
+      for (Function::iterator bb = metadata->begin(), bb_end = metadata->end();
+           bb != bb_end; ++bb)
+        for (BasicBlock::iterator it = bb->begin(), end = bb->end();
+             it != end; ++it)
+          if (CallBase *call = dyn_cast<CallBase>(&*it)) {
+            StringRef key, value;
+            if (call->arg_size() >= 3 &&
+                getConstantStringInfo(call->getArgOperand(1), key) &&
+                getConstantStringInfo(call->getArgOperand(2), value) &&
+                key == "compile_options") {
+              compile_options = value.str();
+              break;
+            }
+          }
+    vector<string> options;
+    string option;
+    istringstream option_stream(compile_options);
+    while (option_stream >> option) options.push_back(option);
+    for (size_t i = 0; i+1 < options.size(); ++i) {
+      StringRef architecture(options[i+1]);
+      if (options[i] == "-a" &&
+          (architecture == "pure.c" || architecture.ends_with("/pure.c") ||
+           architecture.ends_with("\\pure.c"))) {
+        is_double = true;
+        have_sample_format = true;
+        break;
+      }
+    }
+  }
+  if (!have_sample_format)
+    return fail("Missing Faust public sample format metadata");
   if (loaded && modified && loaded_dsps[modname].dbl != is_double) {
-    string prec = (!is_double)?"double":"single";
-    return fail("Module was previously compiled for "+prec+" precision");
+    string prec = (!is_double)?"double":"float";
+    return fail("Module was previously loaded with the "+prec+" sample ABI");
   }
   // Mangle the global names of the Faust module since they are usually the
   // same for every module. XXXFIXME: Currently we leave the type names alone

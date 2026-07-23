@@ -20,7 +20,7 @@ released without stale function or global pointers.
 
 1. [x] Document the expected Faust-generated symbols and supported ABI variants.
 2. [x] Port module validation, name mangling, and wrapper IR generation.
-3. [ ] Implement reliable single/double precision detection.
+3. [x] Implement reliable single/double precision detection.
 4. [ ] Add Faust module resources and stable reload bindings.
 5. [ ] Retire old generations only after live wrappers no longer reference them.
 6. [ ] Test initial load, unchanged reload, changed reload, and rejected ABI changes.
@@ -90,8 +90,14 @@ Symbol order in the LLVM module is not ABI-significant.
   modes expose double buffers and controls; it is the canonical double ABI. A single ABI
   requires a compatible architecture which exposes `FAUSTFLOAT` as `float` throughout.
 - Public precision must be explicit and unambiguous in loader-readable module metadata.
-  LLVM 22 opaque pointer types cannot distinguish `float **` from `double **`; a source
-  filename, Faust compilation flag, or guessed pointer type is not an ABI contract.
+  A compatible architecture exports the constant C definition
+  `const char pure_faust_sample_format[] = "float"` or `"double"`; any other value or a
+  nonconstant/declaration-only marker is rejected. LLVM 22 opaque pointer types cannot
+  distinguish `float **` from `double **`; a source filename, Faust compilation flag, or
+  guessed pointer type is not an ABI contract.
+- The bundled `pure.c` predates the explicit marker. The loader recognizes its
+  `compile_options` metadata and assigns the documented double public ABI; `-single` in
+  those options changes internal calculations but does not override `FAUSTFLOAT double`.
 - `-quad`, fixed-point, mixed control/sample precision, vectorized buffer layouts that
   change the public C signature, and non-C calling conventions are unsupported.
 - Reload may replace implementation code only when class suffix, precision, required
@@ -117,6 +123,23 @@ Symbol order in the LLVM module is not ABI-significant.
 
 ## Progress Log
 
+- 2026-07-23: Implemented opaque-pointer-safe Faust sample ABI detection.
+  - Replaced source-filename `-single`/`-double` inference with the explicit constant
+    `pure_faust_sample_format` marker, accepting only `float` and `double` public ABIs.
+  - Added a compatibility fallback which reads `metadata<class>` constant call arguments,
+    tokenizes `compile_options`, and recognizes the bundled `pure.c` architecture as double.
+  - Keep the marker authoritative over compiler options so compatible custom architectures
+    can expose a true float ABI independently of Faust's internal precision mode.
+  - Reject malformed, unsupported, or missing markers instead of guessing from opaque
+    `compute` buffer pointers; preserve the old module when reload precision differs.
+  - Validation:
+    - LLVM 22 debug build passed, as did `pure-jit-smoke` and all five `pure-bitcode-*` tests.
+    - A bundled `pure.c` module imported after recompilation from a filename containing no
+      precision hint, confirming detection through its embedded architecture metadata.
+    - Explicit float and double marker modules imported and `dsp_modules` reported them as
+      `faust_float=>0` and `faust_double=>1` respectively.
+    - `quad` and marker-less modules produced focused diagnostics before recovery to `42`.
+    - The ASan/UBSan build, `pure-jit-smoke`, and a no-prelude marker/rejection run passed.
 - 2026-07-23: Ported Faust module validation, symbol mangling, and wrapper IR generation.
   - Validate explicit target triples and data layouts against LLJIT instead of rewriting
     incompatible metadata, and run LLVM's verifier before inspecting input definitions.
