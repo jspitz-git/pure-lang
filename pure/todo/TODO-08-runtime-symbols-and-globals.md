@@ -1,6 +1,6 @@
 # TODO-08 - Runtime Symbols and Globals
 
-Status: Open
+Status: Complete
 Branch: todo/08-runtime-symbols-and-globals
 
 ## Purpose
@@ -23,7 +23,7 @@ resolves the Pure runtime, external functions, and mutable host-backed globals.
 3. [x] Convert activation stack, shadow stack, function pointer, and Pure globals.
 4. [x] Convert external C wrapper lookup and indirect calls.
 5. [x] Replace `resolve_external` with an ORC-compatible failure strategy.
-6. [ ] Test symbol visibility for executable, shared-library, and plugin builds.
+6. [x] Test symbol visibility for executable, shared-library, and plugin builds.
 
 ## Legacy Symbol Inventory
 
@@ -83,6 +83,27 @@ resolves the Pure runtime, external functions, and mutable host-backed globals.
 
 ## Progress Log
 
+- 2026-07-23: Completed executable, shared-runtime, and plugin visibility checks.
+  - The Debug `pure` artifact is a thin PIE linked to the build-tree
+    `libpure.so.8`; runtime APIs such as `pure_int`, `pure_apply`, and
+    `pure_symbol` are dynamically exported by the shared runtime rather than the
+    executable.
+  - Explicit absolute registration keeps ORC runtime calls independent of whether
+    the executable exports `main` or runtime implementation symbols. The process
+    generator remains responsible for libc and permanently loaded libraries.
+  - Built a temporary `clang-22 -shared -fPIC` plugin outside the repository,
+    loaded it through `lib:`, declared its C function in Pure, and invoked it from
+    an ORC wrapper in batch execution mode. The plugin printed the exact expected
+    result `42`.
+  - Validation:
+    - `file`, `ldd`, and `llvm-nm-22 -D` confirmed the executable/shared-library
+      linkage and export model.
+    - The plugin compile and Pure process exited zero with no unresolved,
+      duplicate, materialization, removal, or shutdown diagnostics.
+    - No project build or sanitizer process was needed for this visibility-only
+      milestone.
+  - Task 6 and TODO-08 are complete. Faust provider ABI work remains explicitly
+    scoped to TODO-11, and Pure redefinition lifetime remains in TODO-09.
 - 2026-07-23: Added actionable ORC missing-symbol diagnostics.
   - `PureJit` now captures `ExecutionSession` materialization errors under a mutex
     and attaches them to the synchronous lookup error. Pure callers receive both
