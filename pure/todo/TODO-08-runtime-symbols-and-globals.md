@@ -83,6 +83,23 @@ resolves the Pure runtime, external functions, and mutable host-backed globals.
 
 ## Progress Log
 
+- 2026-07-23: Added recoverable ORC host-symbol rebinding.
+  - Host registry entries now retain both address and individual tracker. Binding
+    the same name to a new stable slot removes the old lookup definition, registers
+    the replacement, and restores the old address if replacement registration
+    fails.
+  - Already materialized ORC code keeps its relocated old address; existing
+    constant cleanup preserves that old heap-backed storage while new modules
+    resolve the replacement address.
+  - Converted cached `$$const.*` creation, constant-to-cbox `clearsym` replacement,
+    and embedded-interpreter slot restoration to the shared rebind path.
+  - Validation:
+    - Debug and ASan builds and the focused ORC smoke test passed with zero
+      warnings, errors, or sanitizer diagnostics.
+    - Regression test 084 preserved `bar` across `clear foo`, rebound a new `foo`,
+      and created `baz` without unresolved, duplicate, removal, or shutdown
+      diagnostics in Debug and under ASan/UBSan.
+  - Task 3 remains open for temporary wrappers and Faust dispatch/storage.
 - 2026-07-23: Registered stable Pure symbol and cbox host slots with ORC.
   - Routed embedded-interpreter restoration, compiled global-function caches,
     ordinary `defn`, external fallback/failed-match cboxes, `cbox`, and runtime

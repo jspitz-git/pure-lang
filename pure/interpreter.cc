@@ -99,30 +99,60 @@ llvm::LLVMContext& pure_llvm_context()
 map<uint32_t, void (*)(void*)> interpreter::locals_destroy_cb;
 
 struct CompilationUnitResources {
+  struct HostSymbol {
+    void *address;
+    llvm::orc::ResourceTrackerSP tracker;
+
+    HostSymbol(void *address, llvm::orc::ResourceTrackerSP tracker)
+      : address(address), tracker(std::move(tracker)) {}
+  };
+
   map<const Env*, llvm::orc::ResourceTrackerSP> trackers;
-  map<string, llvm::orc::ResourceTrackerSP> host_symbols;
+  map<string, HostSymbol> host_symbols;
 
   llvm::Error retain_host_symbol(PureJit& jit, llvm::StringRef name,
                                  void *address)
   {
     string symbol_name = name.str();
-    if (host_symbols.find(symbol_name) != host_symbols.end())
-      return llvm::createStringError("ORC host symbol '%s' already exists",
-                                     symbol_name.c_str());
+    map<string, HostSymbol>::iterator old = host_symbols.find(symbol_name);
+    if (old != host_symbols.end()) {
+      if (old->second.address == address) return llvm::Error::success();
+      void *old_address = old->second.address;
+      if (llvm::Error error = old->second.tracker->remove()) return error;
+      host_symbols.erase(old);
+
+      llvm::orc::ResourceTrackerSP tracker = jit.create_resource_tracker();
+      if (llvm::Error error =
+            jit.register_absolute_symbol(tracker, name, address)) {
+        llvm::orc::ResourceTrackerSP rollback_tracker =
+          jit.create_resource_tracker();
+        if (llvm::Error rollback_error = jit.register_absolute_symbol
+              (rollback_tracker, name, old_address))
+          return llvm::joinErrors(std::move(error),
+                                  std::move(rollback_error));
+        host_symbols.emplace
+          (symbol_name, HostSymbol(old_address, std::move(rollback_tracker)));
+        return error;
+      }
+      host_symbols.emplace
+        (symbol_name, HostSymbol(address, std::move(tracker)));
+      return llvm::Error::success();
+    }
+
     llvm::orc::ResourceTrackerSP tracker = jit.create_resource_tracker();
     if (llvm::Error error =
           jit.register_absolute_symbol(tracker, name, address))
       return error;
-    host_symbols[symbol_name] = std::move(tracker);
+    host_symbols.emplace
+      (symbol_name, HostSymbol(address, std::move(tracker)));
     return llvm::Error::success();
   }
 
   llvm::Error remove_host_symbol(llvm::StringRef name)
   {
-    map<string, llvm::orc::ResourceTrackerSP>::iterator it =
-      host_symbols.find(name.str());
+    map<string, HostSymbol>::iterator it = host_symbols.find(name.str());
     if (it == host_symbols.end()) return llvm::Error::success();
-    llvm::orc::ResourceTrackerSP tracker = std::move(it->second);
+    llvm::orc::ResourceTrackerSP tracker = std::move(it->second.tracker);
     host_symbols.erase(it);
     return tracker->remove();
   }
@@ -1008,13 +1038,12 @@ interpreter::interpreter(int32_t nsyms, char *syms,
     assert(it != globalvars.end());
     GlobalVar& v = it->second;
     v.v = u;
-    if (!v.v) {
+    if (!v.v)
       v.v = global_variable
 	(module, ExprPtrTy, false, GlobalVariable::InternalLinkage,
 	 ConstantPointerNull::get(ExprPtrTy),
 	 mkvarlabel(f));
-      register_host_global(v.v, &v.x);
-    }
+    register_host_global(v.v, &v.x);
     if (v.x) pure_free(v.x); v.x = pure_new(x);
     if (externs[f]) {
       ExternInfo& info = externals[f];
@@ -3786,7 +3815,7 @@ pure_expr *interpreter::const_defn(expr pat, expr& x, pure_expr*& e)
 	gv.v = global_variable
 	  (module, ExprPtrTy, false, GlobalVariable::InternalLinkage,
 	   ConstantPointerNull::get(ExprPtrTy), "$$const."+sym.s);
-	JIT->addGlobalMapping(gv.v, &gv.x);
+	register_host_global(gv.v, &gv.x);
 	/* Also record the value in the globenv entry, so that the frontend
 	   knows that the value of this constant has been cached. */
 	globenv[f].cval_var = gv.x;
@@ -4734,7 +4763,7 @@ void interpreter::clearsym(int32_t f)
       v->second.v = global_variable
 	(module, ExprPtrTy, false, GlobalVariable::InternalLinkage,
 	 ConstantPointerNull::get(ExprPtrTy), mkvarsym(sym.s));
-      JIT->addGlobalMapping(v->second.v, &v->second.x);
+      register_host_global(v->second.v, &v->second.x);
     }
     /* Check whether this is actually an external which has the --defined
        pragma. In this case the cbox is reset to NULL so that the wrapper
