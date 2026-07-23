@@ -1100,6 +1100,7 @@ public:
   void remove_host_global(llvm::GlobalVariable *variable);
   bool remove_host_global_and_report
     (llvm::GlobalVariable *variable) noexcept;
+  void *host_global_address(const llvm::GlobalVariable *variable) const;
 
   llvm::BasicBlock *basic_block(const char *name, llvm::Function* f = 0)
   { return llvm::BasicBlock::Create(context, name, f); }

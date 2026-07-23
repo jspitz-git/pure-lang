@@ -157,6 +157,12 @@ struct CompilationUnitResources {
     return tracker->remove();
   }
 
+  void *host_symbol_address(llvm::StringRef name) const
+  {
+    map<string, HostSymbol>::const_iterator it = host_symbols.find(name.str());
+    return it == host_symbols.end() ? 0 : it->second.address;
+  }
+
   void retain(const Env *environment, llvm::orc::ResourceTrackerSP tracker)
   {
     assert(environment && tracker && trackers.find(environment) == trackers.end());
@@ -937,6 +943,13 @@ bool interpreter::remove_host_global_and_report
     llvm::errs() << error.what() << '\n';
     return false;
   }
+}
+
+void *interpreter::host_global_address
+(const llvm::GlobalVariable *variable) const
+{
+  assert(variable && variable->hasName());
+  return compilation_units->host_symbol_address(variable->getName());
 }
 
 interpreter::interpreter(int _argc, char **_argv)
@@ -2466,11 +2479,13 @@ bool interpreter::LoadFaustDSP(bool priv, const char *name, string *msg,
       /* There's no need to actually regenerate the wrapper, we only have to
          patch up the function pointer here. */
       GlobalVariable *v = module->getNamedGlobal("$"+fname);
-      if (v) {
-	void **fp = (void**)JIT->getPointerToGlobal(v);
-	assert(fp);
+      void **fp = v ? (void**)host_global_address(v) : 0;
+      if (!fp && v)
+	// A batch-compiled module may own the dispatch global itself.
+	fp = (void**)JIT->getPointerToGlobal(v);
+      if (fp)
 	*fp = JIT->getPointerToFunction(f);
-      } else {
+      else {
 	/* The variable may not actually exist in the JIT yet if we're being
 	   called in a batch-compiled program which has the same dsp module
 	   already linked into it. In this case we fix up the symbol table so
@@ -13018,7 +13033,13 @@ Function *interpreter::declare_extern(int priv, string name, string restype,
     void **fp = (void**)malloc(sizeof(void*));
     assert(fp);
     *fp = JIT->getPointerToFunction(g);
-    JIT->addGlobalMapping(v, fp);
+    try {
+      register_host_global(v, fp);
+    } catch (...) {
+      free(fp);
+      v->eraseFromParent();
+      throw;
+    }
     Value *callee = b.CreateLoad(v->getValueType(), v);
     u = b.CreateCall(gt, callee, mkargs(unboxed));
   } else

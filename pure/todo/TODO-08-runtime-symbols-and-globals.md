@@ -83,6 +83,23 @@ resolves the Pure runtime, external functions, and mutable host-backed globals.
 
 ## Progress Log
 
+- 2026-07-23: Moved Faust wrapper dispatch slots to the ORC host registry.
+  - Faust external wrappers now register their heap `void **` dispatch storage as
+    absolute data symbols and roll back both storage and IR if registration fails.
+  - Interactive reload patches the host address recorded by the registry instead
+    of asking MCJIT for a global address. A compatibility fallback remains for a
+    dispatch global owned by an already batch-compiled module.
+  - Provider-owned `$$__faust__$...` globals remain separate and are not registered
+    as host absolute symbols.
+  - Validation:
+    - Full Debug and ASan builds plus focused Debug and sanitizer ORC smoke tests
+      passed with zero warnings, errors, leaks, or sanitizer diagnostics.
+    - End-to-end DSP loading is blocked by the TODO-11 Faust ABI migration. Faust
+      2.70.3 emits `allocatemydsp`, `destroymydsp`, and `getJSONmydsp`, while the
+      current loader requires legacy `new`/`delete` and `buildUserInterface_llvm`;
+      the generated bitcode is therefore rejected before wrapper creation.
+  - Task 4 remains open for ORC lookup of external/provider functions and removal
+    of the batch/MCJIT compatibility fallback.
 - 2026-07-23: Completed temporary host-global lifecycle tracking.
   - `wrap_expr` now registers each uniquely named `$$tmpvar` through the shared
     ORC/MCJIT host-global path and rolls back its LLVM global, expression value,
