@@ -57,6 +57,7 @@ char *alloca ();
 
 #include <llvm/Bitcode/BitcodeReader.h>
 #include <llvm/Bitcode/BitcodeWriter.h>
+#include <llvm/ExecutionEngine/MCJIT.h>
 #include <llvm/IR/CallingConv.h>
 #include <llvm/Linker/Linker.h>
 #include <llvm/Support/DynamicLibrary.h>
@@ -275,9 +276,11 @@ void interpreter::init()
   MP = new ExistingModuleProvider(module);
 #endif
 #if LLVM31
+  string legacy_jit_error;
   std::unique_ptr<Module> owned_module(module);
   llvm::EngineBuilder factory(std::move(owned_module));
   factory.setEngineKind(llvm::EngineKind::JIT);
+  factory.setErrorStr(&legacy_jit_error);
 #if USE_FASTCC || FAST_JIT
   llvm::TargetOptions Opts;
 #if USE_FASTCC
@@ -327,7 +330,11 @@ void interpreter::init()
 #endif
 #endif // LLVM 2.5 and earlier
 #endif // LLVM 3.0 or earlier
-  assert(JIT);
+  if (!JIT) {
+    if (legacy_jit_error.empty()) legacy_jit_error = "unknown LLVM error";
+    throw err("failed to create transitional ExecutionEngine: "+
+              legacy_jit_error);
+  }
   module->setDataLayout(ORC->data_layout());
 
   // Install a fallback mechanism to resolve references to the runtime, on

@@ -44,6 +44,20 @@ without exposing ORC details throughout the interpreter.
 
 ## Progress Log
 
+- 2026-07-23: Restored a runnable transitional MCJIT baseline alongside ORC.
+  - CMake links the `MCJIT` component, and `interpreter.cc` includes the official
+    `MCJIT.h` force-link hook so static archive registration is retained.
+  - `EngineBuilder` failures use `setErrorStr`; a function-level `main` catch
+    now reports constructor-time Pure errors instead of aborting on an uncaught
+    `err`.
+  - Validation:
+    - The complete Debug build succeeds with zero warnings and errors.
+    - The linked runtime contains `LLVMLinkInMCJIT`, the MCJIT static initializer,
+      and `ExecutionEngine::MCJITCtor`.
+    - Minimal evaluations produced `1` for `1;` and `2` for `1+1;`, both with
+      exit code zero.
+    - `test007.pure` still segfaults while defining/applying a lambda; this is
+      the next execution-path issue and confirms task 6 is not yet complete.
 - 2026-07-23: Fixed CMake detection of the system `strptime` implementation.
   - The symbol check now uses `_XOPEN_SOURCE=700`, matching glibc's declaration
     requirements, and maps the result to the existing `HAVE_STRPTIME` feature.
