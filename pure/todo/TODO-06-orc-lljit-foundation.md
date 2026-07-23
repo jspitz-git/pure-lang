@@ -44,6 +44,16 @@ without exposing ORC details throughout the interpreter.
 
 ## Progress Log
 
+- 2026-07-23: Fixed platform declarations exposed after `interpreter.cc` began
+  compiling completely.
+  - `runtime.cc` now includes `<dirent.h>` under the generated `HAVE_READDIR`
+    feature used by `pure_readdir`, rather than an unset `HAVE_DIRENT_H` macro.
+  - Nanosleep fallback limits use the largest safely representable `double` not
+    exceeding `LONG_MAX`, avoiding a 64-bit rounding overflow warning.
+  - Validation:
+    - The full build compiled `runtime.cc` with zero warnings and errors and
+      advanced to pre-existing `util.cc` portability diagnostics (`CODESET`,
+      `ICONV_CONST`, and writable string literals).
 - 2026-07-23: Removed all seven calls to the deleted
   `ExecutionEngine::freeMachineCodeForFunction` API.
   - No one-for-one compatibility shim was added. The transitional engine keeps

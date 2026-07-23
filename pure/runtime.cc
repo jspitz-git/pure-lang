@@ -42,6 +42,7 @@ char *alloca ();
 #include <limits.h>
 #include <locale.h>
 #include <math.h>
+#include <cmath>
 #include <iostream>
 #include <sstream>
 
@@ -13086,12 +13087,15 @@ double pure_nanosleep(double t)
 {
   if (t > 0.0) {
     double ip, fp;
+    const double long_max = static_cast<double>(LONG_MAX);
+    const double max_secs = sizeof(long) > 4
+      ? std::nextafter(long_max, 0.0) : long_max;
     unsigned long secs;
 #ifdef HAVE_NANOSLEEP
     unsigned long nsecs;
     struct timespec req, rem;
     fp = modf(t, &ip);
-    if (ip > LONG_MAX) { ip = (double)LONG_MAX; fp = 0.0; }
+    if (ip > max_secs) { ip = max_secs; fp = 0.0; }
     secs = (unsigned long)ip;
     nsecs = (unsigned long)(fp*1e9);
     req.tv_sec = secs; req.tv_nsec = nsecs;
@@ -13102,7 +13106,7 @@ double pure_nanosleep(double t)
 #else
 #ifdef HAVE_USLEEP
     unsigned long usecs;
-    if (t > LONG_MAX) t = LONG_MAX;
+    if (t > max_secs) t = max_secs;
     fp = modf(t, &ip);
     secs = (unsigned long)ip;
     usecs = (unsigned long)(fp*1e6);
@@ -13110,7 +13114,7 @@ double pure_nanosleep(double t)
     return 0.0;
 #else
     fp = modf(t, &ip);
-    if (ip > LONG_MAX) ip = (double)LONG_MAX;
+    if (ip > max_secs) ip = max_secs;
     secs = (unsigned long)ip;
     return (double)sleep(secs);
 #endif
@@ -13784,7 +13788,7 @@ int pure_sscanf_mpz(const char *buf, const char *format, mpz_t x)
   return count;
 }
 
-#if HAVE_DIRENT_H
+#ifdef HAVE_READDIR
 #include <dirent.h>
 #endif
 #define N_ENT 1024 // buffer increment
