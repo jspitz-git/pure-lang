@@ -2863,22 +2863,31 @@ static void bc_errmsg(string name, string* msg)
 bool interpreter::LoadBitcode(bool priv, const char *name, string *msg)
 {
   using namespace llvm;
-  string modname = strip_modname(name);
-  bool loaded = loaded_bcs.find(modname) != loaded_bcs.end();
+  string module_key = name;
+  bcmap::iterator loaded_entry = loaded_bcs.find(module_key);
+  bool loaded = loaded_entry != loaded_bcs.end();
   bool declared = loaded &&
-    loaded_bcs[modname].declared(*symtab.current_namespace);
+    loaded_entry->second.declared(*symtab.current_namespace);
   if (loaded) {
     // Module already loaded. Do some consistency checks.
     if (declared &&
-	loaded_bcs[modname].priv[*symtab.current_namespace] != priv) {
+	loaded_entry->second.priv[*symtab.current_namespace] != priv) {
       string scope = (!priv)?"private":"public";
       if (msg)
 	*msg = "Module was previously '" + scope + "' in this namespace";
       bc_errmsg(name, msg);
       return false;
     }
-    // Check whether there's anything to do.
     if (declared) return true;
+    // The linked module is immutable. Recreate namespace declarations solely
+    // from the ABI metadata captured from the module that was actually linked.
+    for (list<bc_export_t>::const_iterator
+           it = loaded_entry->second.exports.begin();
+         it != loaded_entry->second.exports.end(); ++it)
+      declare_extern(priv, it->linked_name, it->restype, it->argtypes,
+                     it->varargs, 0, it->source_name, false);
+    loaded_entry->second.declare(*symtab.current_namespace, priv);
+    return true;
   }
   std::unique_ptr<MemoryBuffer> buf = get_membuf(name, msg);
   if (!buf) {
@@ -2924,91 +2933,129 @@ bool interpreter::LoadBitcode(bool priv, const char *name, string *msg)
   }
   M->setDataLayout(target_layout);
   M->setTargetTriple(target_triple);
-  // Build a list of the external functions of the module so that we can wrap
-  // them later.
-  list<string> funs;
-  for (Module::iterator it = M->begin(), end = M->end(); it != end; ) {
-    Function &f = *(it++);
-    if (!f.isDeclaration() &&
-	f.getLinkage() == Function::ExternalLinkage) {
-      funs.push_back(f.getName().str());
+  // Inspect and rename definitions before the linker consumes the source
+  // module. Owned ABI strings are cached for declarations in other namespaces.
+  bcdata_t bitcode;
+  list<string> function_symbols;
+  list<string> data_symbols;
+  list<string> alias_symbols;
+  list<string> ifunc_symbols;
+  string symbol_prefix = "$$bc."+to_string(orc_unit_counter++)+".";
+  for (Module::iterator it = M->begin(), end = M->end(); it != end; ++it) {
+    Function &f = *it;
+    if (f.isDeclaration() || f.getLinkage() != Function::ExternalLinkage)
+      continue;
+    string source_name = f.getName().str();
+    string linked_name = symbol_prefix+source_name;
+    f.setName(linked_name);
+    function_symbols.push_back(linked_name);
+    llvm_const_FunctionType *ft = f.getFunctionType();
+    string restype = bctype_name(ft->getReturnType());
+    list<string> argtypes;
+    bool wrappable = restype != "<unknown C type>";
+    for (size_t i = 0; i < ft->getNumParams(); ++i) {
+      string argtype = bctype_name(ft->getParamType(i));
+      if (argtype == "<unknown C type>") wrappable = false;
+      argtypes.push_back(argtype);
     }
+    if (!wrappable) {
+      warning(strip_filename(name)+": warning: extern function '"+
+              source_name+"' has an unsupported prototype");
+      continue;
+    }
+    bitcode.exports.push_back
+      (bc_export_t(source_name, linked_name, restype, argtypes,
+                   ft->isVarArg()));
   }
-  // Link the bitcode module into the Pure module. This only needs to be done
-  // if the module wasnd't loaded before.
-  if (!loaded && Linker::linkModules(*module, std::move(M))) {
+  // Non-function definitions are private implementation details of this load;
+  // qualify them as well so independent bitcode modules cannot interpose them.
+  for (Module::global_iterator it = M->global_begin(), end = M->global_end();
+       it != end; ++it)
+    if (!it->isDeclaration() &&
+        it->getLinkage() == GlobalVariable::ExternalLinkage) {
+      it->setName(symbol_prefix+it->getName().str());
+      data_symbols.push_back(it->getName().str());
+    }
+  for (Module::alias_iterator it = M->alias_begin(), end = M->alias_end();
+       it != end; ++it)
+    if (it->getLinkage() == GlobalAlias::ExternalLinkage) {
+      it->setName(symbol_prefix+it->getName().str());
+      alias_symbols.push_back(it->getName().str());
+    }
+  for (Module::ifunc_iterator it = M->ifunc_begin(), end = M->ifunc_end();
+       it != end; ++it)
+    if (it->getLinkage() == GlobalIFunc::ExternalLinkage) {
+      it->setName(symbol_prefix+it->getName().str());
+      ifunc_symbols.push_back(it->getName().str());
+    }
+
+  // LLVM 22 consumes the source module regardless of link success.
+  if (Linker::linkModules(*module, std::move(M))) {
     if (msg && msg->empty()) *msg = "Error linking bitcode module";
     bc_errmsg(name, msg);
     return false;
   }
   string verification_error;
-  if (!loaded && !verify_module(*module, verification_error)) {
+  if (!verify_module(*module, verification_error)) {
     if (msg) *msg = "Invalid linked bitcode module: "+verification_error;
     bc_errmsg(name, msg);
     return false;
   }
-  // Create wrappers.
-  for (list<string>::iterator it = funs.begin(), end = funs.end();
-       it != end; ++it) {
-    string fname = *it;
-    Function *f = module->getFunction(fname);
-    assert(f);
-    pass_state->optimize(*f);
-    // The name under which the function is accessible in Pure.
-    string asname = fname;
-    // The function type.
-    llvm_const_FunctionType *ft = f->getFunctionType();
-    llvm_const_Type* rest = ft->getReturnType();
-    const bool varargs = ft->isVarArg();
-    size_t n = ft->getNumParams();
-    vector<llvm_const_Type*> argt(n);
-    for (size_t i = 0; i < n; i++) argt[i] = ft->getParamType(i);
-    string restype = bctype_name(rest);
-    list<string> argtypes;
-    bool ok = true;
-    if (!loaded) {
-      // Check the result type for compatibility with Pure.
-      ok = restype != "<unknown C type>";
-      for (size_t i = 0; i < n; i++) {
-	string argtype = bctype_name(argt[i]);
-	// Check the argument type.
-	if (argtype == "<unknown C type>") {
-	  ok = false;
-	  break;
-	}
-	argtypes.push_back(argtype);
-      }
-    } else {
-      // Module has been loaded before, so assume that we're ok.
-      for (size_t i = 0; i < n; i++) {
-	string argtype = bctype_name(argt[i]);
-	argtypes.push_back(argtype);
-      }
+  for (list<string>::const_iterator it = function_symbols.begin();
+       it != function_symbols.end(); ++it) {
+    Function *function = module->getFunction(*it);
+    if (!function || function->isDeclaration()) {
+      if (msg) *msg = "Linked function symbol '"+*it+"' is missing";
+      bc_errmsg(name, msg);
+      return false;
     }
-    if (ok) {
-      // Manufacture an extern declaration for the function so that it can be
-      // called in Pure land.
-      declare_extern(priv, fname, restype, argtypes, varargs, 0, asname, false);
-#if 0 // debugging
-      symbol *sym = symtab.sym(asname);
-      if (!sym) continue;
-      ExternInfo info(sym->f, fname, rest, argt, f, varargs);
-      cerr << "\n" << info << ";\n";
-      f->dump();
-#endif
-    } else {
-      // Bad argument or result type (probably a struct-by-val). Print a
-      // warning in such cases.
-      symbol *sym = symtab.sym(asname);
-      if (!sym) continue;
-      ExternInfo info(sym->f, fname, rest, argt, f, varargs);
-      ostringstream msg;
-      msg << strip_filename(name) << ": warning: extern function '" << fname
-	  << "' with bad prototype: " << info;
-      warning(msg.str());
-    }
+    function->setLinkage(Function::InternalLinkage);
   }
-  loaded_bcs[modname].declare(*symtab.current_namespace, priv);
+  for (list<string>::const_iterator it = data_symbols.begin();
+       it != data_symbols.end(); ++it) {
+    GlobalVariable *variable = module->getGlobalVariable(*it);
+    if (!variable) {
+      if (msg) *msg = "Linked data symbol '"+*it+"' is missing";
+      bc_errmsg(name, msg);
+      return false;
+    }
+    variable->setLinkage(GlobalVariable::InternalLinkage);
+  }
+  for (list<string>::const_iterator it = alias_symbols.begin();
+       it != alias_symbols.end(); ++it) {
+    GlobalAlias *alias = module->getNamedAlias(*it);
+    if (!alias) {
+      if (msg) *msg = "Linked alias symbol '"+*it+"' is missing";
+      bc_errmsg(name, msg);
+      return false;
+    }
+    alias->setLinkage(GlobalAlias::InternalLinkage);
+  }
+  for (list<string>::const_iterator it = ifunc_symbols.begin();
+       it != ifunc_symbols.end(); ++it) {
+    GlobalIFunc *ifunc = module->getNamedIFunc(*it);
+    if (!ifunc) {
+      if (msg) *msg = "Linked ifunc symbol '"+*it+"' is missing";
+      bc_errmsg(name, msg);
+      return false;
+    }
+    ifunc->setLinkage(GlobalIFunc::InternalLinkage);
+  }
+  // Resolve only the names copied before the source module was consumed.
+  for (list<bc_export_t>::const_iterator it = bitcode.exports.begin();
+       it != bitcode.exports.end(); ++it) {
+    Function *f = module->getFunction(it->linked_name);
+    if (!f || f->isDeclaration()) {
+      if (msg) *msg = "Linked export '"+it->source_name+"' is missing";
+      bc_errmsg(name, msg);
+      return false;
+    }
+    pass_state->optimize(*f);
+    declare_extern(priv, it->linked_name, it->restype, it->argtypes,
+                   it->varargs, 0, it->source_name, false);
+  }
+  bitcode.declare(*symtab.current_namespace, priv);
+  loaded_bcs.emplace(module_key, std::move(bitcode));
   return true;
 }
 

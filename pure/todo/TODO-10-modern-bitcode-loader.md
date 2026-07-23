@@ -20,7 +20,7 @@ linked, compiled, and unloaded predictably.
 ## Task List
 
 1. [x] Modernize file loading and bitcode parse error reporting.
-2. [ ] Port symbol inspection, renaming, and module linking.
+2. [x] Port symbol inspection, renaming, and module linking.
 3. [ ] Define compatible target triple and data-layout checks.
 4. [ ] Submit loaded code as separately tracked ORC resources.
 5. [ ] Generate `.bc` test fixtures from source during the CMake build.
@@ -45,6 +45,21 @@ linked, compiled, and unloaded predictably.
 
 ## Progress Log
 
+- 2026-07-23: Ported generic bitcode symbol inspection and linking.
+  - Inspect exported functions and copy their complete Pure ABI metadata before LLVM
+    consumes the source module during linking.
+  - Give every defined function, global, alias, and ifunc a load-specific IR name,
+    then internalize linked definitions so separate ORC units cannot collide.
+  - Cache export metadata by loaded file path; imports into another namespace now
+    recreate wrappers without reopening or reparsing a potentially changed file.
+  - Replace post-link assertions with checked diagnostics for missing linked symbols.
+  - Validation:
+    - LLVM 22 debug build and `pure-jit-smoke` passed.
+    - Clang 22 fixtures passed `llvm-dis-22` and `opt-22 -passes=verify`.
+    - Two modules exporting the same function name remained independent and returned
+      distinct expected values through separate Pure namespaces.
+    - A second namespace import succeeded after the first import deleted its `.bc`
+      file, confirming that redeclaration uses cached linked metadata.
 - 2026-07-23: Completed modern bitcode file loading and parse diagnostics.
   - Confirmed file buffers and parsed modules already use `std::unique_ptr`, LLVM 22
     `MemoryBuffer::getFile`, and `parseBitcodeFile` returning `Expected`.

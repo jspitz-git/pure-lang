@@ -518,8 +518,22 @@ struct nsinfo {
     : priv(false), parent(ns), search_namespaces(nss) {}
 };
 
+struct bc_export_t {
+  string source_name;
+  string linked_name;
+  string restype;
+  list<string> argtypes;
+  bool varargs;
+  bc_export_t(const string& source_name, const string& linked_name,
+              const string& restype, const list<string>& argtypes,
+              bool varargs)
+    : source_name(source_name), linked_name(linked_name), restype(restype),
+      argtypes(argtypes), varargs(varargs) {}
+};
+
 struct bcdata_t {
   map<string,bool> priv; // private flag (per namespace)
+  list<bc_export_t> exports; // generic bitcode exports and owned ABI metadata
   bool dbl; // data representation (Faust dsp only)
   time_t t; // timestamp (Faust dsp only)
   int tag; // type tag (Faust dsp only)
