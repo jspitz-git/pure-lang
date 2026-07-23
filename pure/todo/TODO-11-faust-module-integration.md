@@ -1,6 +1,6 @@
 # TODO-11 - Faust Module Integration
 
-Status: Open
+Status: Completed
 Branch: todo/11-faust-module-integration
 
 ## Purpose
@@ -18,12 +18,95 @@ released without stale function or global pointers.
 
 ## Task List
 
-1. [ ] Document the expected Faust-generated symbols and supported ABI variants.
-2. [ ] Port module validation, name mangling, and wrapper IR generation.
-3. [ ] Implement reliable single/double precision detection.
-4. [ ] Add Faust module resources and stable reload bindings.
-5. [ ] Retire old generations only after live wrappers no longer reference them.
-6. [ ] Test initial load, unchanged reload, changed reload, and rejected ABI changes.
+1. [x] Document the expected Faust-generated symbols and supported ABI variants.
+2. [x] Port module validation, name mangling, and wrapper IR generation.
+3. [x] Implement reliable single/double precision detection.
+4. [x] Add Faust module resources and stable reload bindings.
+5. [x] Retire old generations only after live wrappers no longer reference them.
+6. [x] Test initial load, unchanged reload, changed reload, and rejected ABI changes.
+
+## Supported Faust Module ABI
+
+### Reference toolchain
+
+- The canonical input is C emitted by Faust 2.70.3 with the bundled `pure.c`
+  architecture, compiled to bitcode by the selected Clang 22 toolchain. The reference
+  double fixture uses `faust -a pure.c -lang c` followed by
+  `clang-22 -emit-llvm -c`.
+- The Faust frontend and architecture source define the DSP API, while Clang 22 defines
+  the accepted LLVM bitcode, target triple, data layout, and opaque-pointer IR. Bitcode
+  from an arbitrary Faust LLVM backend is not a supported compatibility promise.
+- In particular, the direct LLVM backend in the available Faust 2.70.3 build uses LLVM
+  17 and emits only its internal `allocate`, `compute`, `destroy`, and JSON-oriented API;
+  it does not emit `new`, `init`, or `buildUserInterface` and is not a valid Pure DSP
+  module.
+- A module must pass the same target-triple and exact data-layout checks as generic
+  bitcode before any symbols are published. Rewriting incompatible target metadata is
+  not part of the supported ABI.
+
+### Class suffix and required symbols
+
+`<class>` is the suffix selected by Faust's `-cn` option (`mydsp` by default). The
+loader discovers it from `buildUserInterface<class>`; it must be nonempty and consistent
+across the complete interface. The following non-variadic C ABI definitions are required:
+
+| Symbol | C-level signature | Purpose |
+| --- | --- | --- |
+| `new<class>` | `dsp *()` | Allocate a DSP instance. |
+| `delete<class>` | `void (dsp *)` | Destroy an instance and back Pure sentries. |
+| `init<class>` | `void (dsp *, int32_t)` | Initialize an instance for a sample rate. |
+| `buildUserInterface<class>` | `void (dsp *, UIGlue *)` | Enumerate controls through Pure's UI callbacks. |
+| `getNumInputs<class>` | `int32_t (dsp *)` | Report input channel count. |
+| `getNumOutputs<class>` | `int32_t (dsp *)` | Report output channel count. |
+| `compute<class>` | `void (dsp *, int32_t, sample **, sample **)` | Process one sample block. |
+
+Historical parameterless `getNumInputs<class>` and `getNumOutputs<class>` definitions may
+be accepted for old source-compatible modules. All `dsp *`, `UIGlue *`, and buffer
+parameters are LLVM opaque pointers, so their meanings must be established from the
+validated operation name and precision metadata rather than inferred from pointee types.
+Symbol order in the LLVM module is not ABI-significant.
+
+### Optional symbols and Pure additions
+
+- `metadata<class>(MetaGlue *)` enables the generated Pure `meta() -> expr *` wrapper.
+- `getSampleRate<class>(dsp *) -> int32_t` is exposed when present. New fixtures require
+  it; emulation through a historical sampling-frequency global is legacy-only.
+- `classInit`, `instanceInit`, `instanceConstants`, `instanceClear`, and
+  `instanceResetUserInterface`, with the class suffix, are valid `pure.c` lifecycle
+  operations and may be exposed using their generated scalar signatures.
+- Other class-suffixed operations are accepted only when every scalar type is representable
+  by Pure's C ABI mapping and every pointer role has an explicit operation mapping. Unknown
+  opaque-pointer signatures must be rejected rather than treated as `void *` by default.
+- Pure adds `newinit(int32_t) -> dsp *` and `info(dsp *) -> expr *`; these are not expected
+  in the input module. Pure adds `meta() -> expr *` only when `metadata<class>` exists.
+
+### Supported precision variants
+
+- Exactly two public sample ABIs are supported: `sample` may be `float` or `double`. The
+  choice governs compute buffers, UI control zones and values, and the runtime UI callback
+  table as one indivisible ABI property.
+- Faust's internal `-single` or `-double` mode does not by itself determine this public ABI.
+  The bundled `pure.c` architecture defines `FAUSTFLOAT` as `double`, so both compiler
+  modes expose double buffers and controls; it is the canonical double ABI. A single ABI
+  requires a compatible architecture which exposes `FAUSTFLOAT` as `float` throughout.
+- Public precision must be explicit and unambiguous in loader-readable module metadata.
+  A compatible architecture exports the constant C definition
+  `const char pure_faust_sample_format[] = "float"` or `"double"`; any other value or a
+  nonconstant/declaration-only marker is rejected. LLVM 22 opaque pointer types cannot
+  distinguish `float **` from `double **`; a source filename, Faust compilation flag, or
+  guessed pointer type is not an ABI contract.
+- The bundled `pure.c` predates the explicit marker. The loader recognizes its
+  `compile_options` metadata and assigns the documented double public ABI; `-single` in
+  those options changes internal calculations but does not override `FAUSTFLOAT double`.
+- `-quad`, fixed-point, mixed control/sample precision, vectorized buffer layouts that
+  change the public C signature, and non-C calling conventions are unsupported.
+- Reload may replace implementation code only when class suffix, precision, required
+  operation signatures, target ABI, and externally visible globals remain compatible.
+  An ABI change is rejected while the previous generation remains active.
+- Interactive reload is deliberately quiescent: it is rejected during an active JIT call
+  or while any DSP instance from the current generation remains live. Applications must
+  explicitly delete or otherwise release those instances before retrying the reload. This
+  prevents a stable wrapper or sentry from ever applying new code to an old object layout.
 
 ## Guardrails
 
@@ -37,13 +120,142 @@ released without stale function or global pointers.
 - Run load and reload tests under ASan and LLDB when failures involve code lifetime.
 - Verify wrapper modules with LLVM's verifier before ORC submission.
 
-## Open Questions
+## Decisions
 
-- Which Faust release will be the supported reference for LLVM 22 output?
-- Should Faust support be optional when the compiler is unavailable at configure time?
+- Faust 2.70.3 with its bundled `pure.c` architecture is the reference frontend; the
+  generated C is compiled to bitcode by the selected Clang 22 toolchain.
+- The Faust compiler remains optional at configure time. Runtime loading is always built,
+  while generated Faust fixtures and their lifecycle CTest are registered only when the
+  compiler is available.
 
 ## Progress Log
 
+- 2026-07-24: Completed automated Faust load, reload, rejection, and teardown coverage.
+  - Generate a canonical reference DSP with Faust 2.70.3 and bundled `pure.c`, then compile
+    it and four focused reload providers to bitcode with the configured Clang 22 compiler.
+  - Disassemble every fixture with `llvm-dis` and verify it with `opt -passes=verify`; keep
+    only DSP/C sources and the configured Pure lifecycle script in the repository.
+  - Added one `pure-faust-lifecycle` CTest covering initial reference wrappers, an unchanged
+    import, live-instance reload rejection, successful changed reload, float ABI rejection,
+    unresolved materialization rollback, stable current behavior, and explicit teardown.
+  - Restore the generation-A provider in the CMake driver before each test so prior failed or
+    interrupted runs cannot influence timestamps or initial behavior.
+  - Register fixtures and the lifecycle test only when Faust is available. Disable the slow
+    black-box lifecycle test in sanitizer presets, where its known prelude teardown exceeds
+    practical timeouts; task-5 manual ASan lifecycle validation remains recorded above.
+  - Validation:
+    - Debug configuration generated all five `.bc` and `.ll` fixture pairs; Faust-generated
+      C remained a build artifact, and a second Ninja build reported `no work to do`.
+    - `pure-faust-lifecycle` passed in 73.93 seconds with the complete expected diagnostic
+      and value sequence ending in `42`.
+    - All seven focused debug tests (`pure-jit-smoke`, five `pure-bitcode-*`, and the Faust
+      lifecycle test) passed in one CTest run.
+    - The ASan/UBSan build generated and verified the same fixtures, marked the lifecycle
+      test disabled as configured, and passed `pure-jit-smoke`.
+- 2026-07-24: Retired superseded Faust generations after live DSP users disappear.
+  - Replaced anonymous tracker lists with generation records carrying generation identity,
+    current state, live-instance counts, and their owning ORC tracker.
+  - Generated interactive constructor/clone wrappers retain the current generation for each
+    non-null DSP result; explicit or sentry-driven `delete` releases it and clears its tag.
+  - Reject reload while DSP instances or JIT calls are active, choosing safe quiescent reload
+    over generation-affine object dispatch and preventing new code from seeing old layouts.
+  - Publish the replacement generation only after task-4 validation/materialization, then
+    remove noncurrent zero-user trackers through the existing quiescent collection hook.
+  - Keep batch wrappers free of the new lifecycle hooks and force-remove any remaining
+    generation records only during interpreter teardown.
+  - Validation:
+    - LLVM 22 debug build passed, as did `pure-jit-smoke` and all five `pure-bitcode-*` tests.
+    - A live generation-1 object returned `11` and blocked reload; after explicit `delete`,
+      the same stable wrappers reloaded generation 2 and returned `22`.
+    - A subsequent unresolved provider was rolled back and the current generation continued
+      returning `22`; explicit delete invalidated its pointer tag without double release.
+    - Null DSP constructor results now take the wrapper failure path before tagging, retaining,
+      or attaching a sentry, preventing unbalanced lifecycle counts.
+    - The ASan/UBSan build and `pure-jit-smoke` passed. The full lifecycle run reached the
+      expected final `42` without sanitizer findings, then exceeded the known slow-teardown
+      limit after 480 seconds.
+- 2026-07-24: Added separately tracked Faust ORC generations and stable reload bindings.
+  - Keep interactive Faust definitions out of the long-lived interpreter module; generate
+    convenience wrappers in the staged provider and qualify every definition by generation.
+  - Submit each complete generation under one ORC tracker and resolve every Pure-visible
+    export before preparing or publishing any stable dispatch-slot update.
+  - Preserve stable logical declarations and Pure wrappers across reloads, while physical
+    provider symbols remain unique and old successful trackers stay retained for task 5.
+  - Compare the complete operation set and LLVM function types before reload submission;
+    failed validation or materialization leaves slots, timestamps, and precision unchanged.
+  - Reuse existing stable declarations and dispatch globals for unchanged imports into new
+    namespaces, and keep the link-into-output batch path separate from interactive ORC.
+  - Remove retained Faust trackers during interpreter teardown after compiled wrappers and
+    before host symbols; do not retire superseded generations in this step.
+  - Validation:
+    - LLVM 22 debug build passed, as did `pure-jit-smoke` and all five `pure-bitcode-*` tests.
+    - A Faust 2.70.3 `pure.c` provider executed `newinit`, channel queries, `info`, `meta`,
+      and `delete` through ORC-backed stable wrappers, then returned `42`.
+    - A reload scenario returned `11`, switched the same wrappers to generation 2 returning
+      `22`, rejected an unresolved generation and an operation-set change, and continued to
+      return `22` after both failures.
+    - The ASan/UBSan build and `pure-jit-smoke` passed; a no-prelude run loaded two Faust
+      providers, rejected unsupported formats, and tore down without sanitizer findings.
+    - Batch-specific execution could not be completed in the current tree because its
+      existing tool path invokes obsolete `opt -std-compile-opts` and expects installed
+      `/usr/local` Pure runtime artifacts; the retained batch branch compiles in both builds.
+- 2026-07-23: Implemented opaque-pointer-safe Faust sample ABI detection.
+  - Replaced source-filename `-single`/`-double` inference with the explicit constant
+    `pure_faust_sample_format` marker, accepting only `float` and `double` public ABIs.
+  - Added a compatibility fallback which reads `metadata<class>` constant call arguments,
+    tokenizes `compile_options`, and recognizes the bundled `pure.c` architecture as double.
+  - Keep the marker authoritative over compiler options so compatible custom architectures
+    can expose a true float ABI independently of Faust's internal precision mode.
+  - Reject malformed, unsupported, or missing markers instead of guessing from opaque
+    `compute` buffer pointers; preserve the old module when reload precision differs.
+  - Validation:
+    - LLVM 22 debug build passed, as did `pure-jit-smoke` and all five `pure-bitcode-*` tests.
+    - A bundled `pure.c` module imported after recompilation from a filename containing no
+      precision hint, confirming detection through its embedded architecture metadata.
+    - Explicit float and double marker modules imported and `dsp_modules` reported them as
+      `faust_float=>0` and `faust_double=>1` respectively.
+    - `quad` and marker-less modules produced focused diagnostics before recovery to `42`.
+    - The ASan/UBSan build, `pure-jit-smoke`, and a no-prelude marker/rejection run passed.
+- 2026-07-23: Ported Faust module validation, symbol mangling, and wrapper IR generation.
+  - Validate explicit target triples and data layouts against LLJIT instead of rewriting
+    incompatible metadata, and run LLVM's verifier before inspecting input definitions.
+  - Require one class suffix and exact non-variadic C signatures for all mandatory and
+    known optional operations; reject declarations, ambiguous classes, unknown pointer
+    roles, unsupported scalar types, and non-external interface definitions diagnostically.
+  - Preflight deterministic names for functions, globals, aliases, and ifuncs, rename only
+    definitions, preserve source linkage, and keep declarations available to the linker.
+  - Generate wrappers from validated opaque-pointer roles, handle both channel-count arities
+    independently, and verify the complete module again after convenience and Pure wrappers.
+  - Defer legacy MCJIT materialization until all generated wrappers are complete, preventing
+    optimization of unterminated functions during import. Executing Faust code still awaits
+    the separately tracked ORC provider and stable dispatch work in task 4.
+  - Validation:
+    - LLVM 22 debug build passed, as did `pure-jit-smoke` and all five `pure-bitcode-*` tests.
+    - A Faust 2.70.3 `pure.c` module compiled by Clang 22 imported successfully and returned
+      to the interactive loop after all generated wrapper IR passed verification.
+    - A parse-valid module with `deletebad: void (i32)` was rejected with its symbol and
+      actual LLVM type in the diagnostic, then the interpreter successfully evaluated `42`.
+    - GDB confirmed that the former import crash came from MCJIT optimizing an incomplete
+      wrapper; after deferred materialization the import no longer crashes.
+    - The ASan/UBSan build and `pure-jit-smoke` passed. The sanitizer Faust import printed
+      the expected `42` but its slow teardown exceeded a separate 300-second command limit.
+- 2026-07-23: Defined the supported Faust module symbol and ABI contract.
+  - Selected Faust 2.70.3 with `pure.c` plus Clang 22 as the canonical fixture pipeline,
+    keeping LLVM bitcode production under the project's selected toolchain.
+  - Classified required DSP allocation, lifecycle, UI, channel-count, and compute symbols;
+    documented optional metadata and lifecycle operations plus Pure-generated wrappers.
+  - Limited public sample formats to explicit float and double ABIs, distinguished these
+    from Faust's internal precision mode, and recorded the reload compatibility invariants.
+  - Declared the current direct Faust LLVM backend unsupported because its reduced API does
+    not provide the architecture symbols required by Pure.
+  - Validation:
+    - Faust 2.70.3 generated `-single` and `-double` `pure.c` sources from
+      `examples/bitcode/freeverb.dsp`; Clang 22 compiled both to opaque-pointer bitcode.
+    - Source and `llvm-dis-22` inspection confirmed the documented symbol families and that
+      bundled `pure.c` keeps the public sample ABI double in both internal precision modes.
+    - `opt-22 -passes=verify` accepted both generated modules.
+    - Direct `-lang llvm` output was inspected and confirmed to omit `new`, `init`, and
+      `buildUserInterface`, so it cannot satisfy the documented contract.
 - 2026-07-22: Initial Faust integration plan created.
   - Validation:
     - Not run; this update creates planning documentation only.

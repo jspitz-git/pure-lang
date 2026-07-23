@@ -1172,7 +1172,8 @@ public:
   llvm::Function *declare_extern(int priv, string name, string restype,
 				 const list<string>& argtypes,
 				 bool varargs = false, void *fp = 0,
-				 string asname = "", bool dll_check = true);
+				 string asname = "", bool dll_check = true,
+                                 bool materialize = true);
   void check_used(set<llvm::Function*>& used,
 		  map<llvm::GlobalVariable*,llvm::Function*>& varmap);
   int compiler(string out, list<string> libnames, string llcopts = "");
@@ -1221,6 +1222,8 @@ public:
   // Faust interface.
   bool LoadFaustDSP(bool priv, const char *name, string *msg,
 		    const char *modnm = 0);
+  void retain_faust_instance(int32_t tag, pure_expr *dsp);
+  void release_faust_instance(int32_t tag, pure_expr *dsp) noexcept;
   // Generic LLVM bitcode interface.
   bool LoadBitcode(bool priv, const char *name, string *msg);
   // Handle inline code.
