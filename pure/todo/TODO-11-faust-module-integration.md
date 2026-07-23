@@ -1,6 +1,6 @@
 # TODO-11 - Faust Module Integration
 
-Status: Open
+Status: Completed
 Branch: todo/11-faust-module-integration
 
 ## Purpose
@@ -23,7 +23,7 @@ released without stale function or global pointers.
 3. [x] Implement reliable single/double precision detection.
 4. [x] Add Faust module resources and stable reload bindings.
 5. [x] Retire old generations only after live wrappers no longer reference them.
-6. [ ] Test initial load, unchanged reload, changed reload, and rejected ABI changes.
+6. [x] Test initial load, unchanged reload, changed reload, and rejected ABI changes.
 
 ## Supported Faust Module ABI
 
@@ -120,13 +120,38 @@ Symbol order in the LLVM module is not ABI-significant.
 - Run load and reload tests under ASan and LLDB when failures involve code lifetime.
 - Verify wrapper modules with LLVM's verifier before ORC submission.
 
-## Open Questions
+## Decisions
 
-- Which Faust release will be the supported reference for LLVM 22 output?
-- Should Faust support be optional when the compiler is unavailable at configure time?
+- Faust 2.70.3 with its bundled `pure.c` architecture is the reference frontend; the
+  generated C is compiled to bitcode by the selected Clang 22 toolchain.
+- The Faust compiler remains optional at configure time. Runtime loading is always built,
+  while generated Faust fixtures and their lifecycle CTest are registered only when the
+  compiler is available.
 
 ## Progress Log
 
+- 2026-07-24: Completed automated Faust load, reload, rejection, and teardown coverage.
+  - Generate a canonical reference DSP with Faust 2.70.3 and bundled `pure.c`, then compile
+    it and four focused reload providers to bitcode with the configured Clang 22 compiler.
+  - Disassemble every fixture with `llvm-dis` and verify it with `opt -passes=verify`; keep
+    only DSP/C sources and the configured Pure lifecycle script in the repository.
+  - Added one `pure-faust-lifecycle` CTest covering initial reference wrappers, an unchanged
+    import, live-instance reload rejection, successful changed reload, float ABI rejection,
+    unresolved materialization rollback, stable current behavior, and explicit teardown.
+  - Restore the generation-A provider in the CMake driver before each test so prior failed or
+    interrupted runs cannot influence timestamps or initial behavior.
+  - Register fixtures and the lifecycle test only when Faust is available. Disable the slow
+    black-box lifecycle test in sanitizer presets, where its known prelude teardown exceeds
+    practical timeouts; task-5 manual ASan lifecycle validation remains recorded above.
+  - Validation:
+    - Debug configuration generated all five `.bc` and `.ll` fixture pairs; Faust-generated
+      C remained a build artifact, and a second Ninja build reported `no work to do`.
+    - `pure-faust-lifecycle` passed in 73.93 seconds with the complete expected diagnostic
+      and value sequence ending in `42`.
+    - All seven focused debug tests (`pure-jit-smoke`, five `pure-bitcode-*`, and the Faust
+      lifecycle test) passed in one CTest run.
+    - The ASan/UBSan build generated and verified the same fixtures, marked the lifecycle
+      test disabled as configured, and passed `pure-jit-smoke`.
 - 2026-07-24: Retired superseded Faust generations after live DSP users disappear.
   - Replaced anonymous tracker lists with generation records carrying generation identity,
     current state, live-instance counts, and their owning ORC tracker.

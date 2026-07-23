@@ -1,0 +1,37 @@
+extern int system(char *command);
+
+using "dsp:@PURE_FAUST_FIXTURE_OUTPUT_DIR@/reference";
+let reference_dsp = reference::newinit 48000;
+reference::getNumInputs reference_dsp;
+reference::getNumOutputs reference_dsp;
+reference::info reference_dsp;
+reference::meta;
+reference::delete reference_dsp;
+
+using "dsp:@PURE_FAUST_FIXTURE_OUTPUT_DIR@/reload";
+let first = reload::newinit 48000;
+reload::getNumInputs first;
+using "dsp:@PURE_FAUST_FIXTURE_OUTPUT_DIR@/reload";
+reload::getNumInputs first;
+
+system "sleep 1; cp @PURE_FAUST_FIXTURE_OUTPUT_DIR@/reload-b.bc @PURE_FAUST_FIXTURE_OUTPUT_DIR@/reload.bc";
+using "dsp:@PURE_FAUST_FIXTURE_OUTPUT_DIR@/reload";
+reload::getNumInputs first;
+reload::delete first;
+using "dsp:@PURE_FAUST_FIXTURE_OUTPUT_DIR@/reload";
+let second = reload::newinit 48000;
+reload::getNumInputs second;
+reload::delete second;
+
+system "sleep 1; cp @PURE_FAUST_FIXTURE_OUTPUT_DIR@/reload-float.bc @PURE_FAUST_FIXTURE_OUTPUT_DIR@/reload.bc";
+using "dsp:@PURE_FAUST_FIXTURE_OUTPUT_DIR@/reload";
+let after_float_rejection = reload::newinit 48000;
+reload::getNumInputs after_float_rejection;
+reload::delete after_float_rejection;
+
+system "sleep 1; cp @PURE_FAUST_FIXTURE_OUTPUT_DIR@/reload-unresolved.bc @PURE_FAUST_FIXTURE_OUTPUT_DIR@/reload.bc";
+using "dsp:@PURE_FAUST_FIXTURE_OUTPUT_DIR@/reload";
+let after_unresolved_rejection = reload::newinit 48000;
+reload::getNumInputs after_unresolved_rejection;
+reload::delete after_unresolved_rejection;
+42;

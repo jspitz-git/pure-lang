@@ -128,6 +128,105 @@ if(BUILD_TESTING)
     DEPENDS ${PURE_BITCODE_FIXTURE_OUTPUTS}
   )
 
+  if(PURE_FAUST_EXECUTABLE)
+    set(PURE_FAUST_FIXTURE_OUTPUT_DIR
+        "${CMAKE_CURRENT_BINARY_DIR}/test/faust")
+    set(PURE_FAUST_FIXTURE_OUTPUTS)
+
+    set(reference_c "${PURE_FAUST_FIXTURE_OUTPUT_DIR}/reference.c")
+    set(reference_bc "${PURE_FAUST_FIXTURE_OUTPUT_DIR}/reference.bc")
+    set(reference_ll "${PURE_FAUST_FIXTURE_OUTPUT_DIR}/reference.ll")
+    add_custom_command(
+      OUTPUT "${reference_bc}"
+      BYPRODUCTS "${reference_c}" "${reference_ll}"
+      COMMAND
+        "${CMAKE_COMMAND}" -E make_directory
+        "${PURE_FAUST_FIXTURE_OUTPUT_DIR}"
+      COMMAND
+        "${PURE_FAUST_EXECUTABLE}" -double -a pure.c -lang c
+        "${CMAKE_CURRENT_SOURCE_DIR}/test/faust/reference.dsp"
+        -o "${reference_c}"
+      COMMAND
+        "${CMAKE_C_COMPILER}" -O0 -emit-llvm -c
+        "${reference_c}" -o "${reference_bc}"
+      COMMAND
+        "${PURE_LLVM_DIS_EXECUTABLE}" "${reference_bc}"
+        -o "${reference_ll}"
+      COMMAND
+        "${PURE_OPT_EXECUTABLE}" -passes=verify -disable-output
+        "${reference_bc}"
+      DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/test/faust/reference.dsp"
+      COMMENT "Generating reference Faust LLVM bitcode fixture"
+      VERBATIM
+    )
+    list(APPEND PURE_FAUST_FIXTURE_OUTPUTS "${reference_bc}")
+
+    foreach(fixture reload-a reload-b)
+      if(fixture STREQUAL "reload-a")
+        set(version 11)
+      else()
+        set(version 22)
+      endif()
+      set(output "${PURE_FAUST_FIXTURE_OUTPUT_DIR}/${fixture}.bc")
+      set(disassembly "${PURE_FAUST_FIXTURE_OUTPUT_DIR}/${fixture}.ll")
+      add_custom_command(
+        OUTPUT "${output}"
+        BYPRODUCTS "${disassembly}"
+        COMMAND
+          "${CMAKE_COMMAND}" -E make_directory
+          "${PURE_FAUST_FIXTURE_OUTPUT_DIR}"
+        COMMAND
+          "${CMAKE_C_COMPILER}" -O0 -emit-llvm -c
+          -DFAUST_TEST_VERSION=${version}
+          "${CMAKE_CURRENT_SOURCE_DIR}/test/faust/reload.c"
+          -o "${output}"
+        COMMAND
+          "${PURE_LLVM_DIS_EXECUTABLE}" "${output}" -o "${disassembly}"
+        COMMAND
+          "${PURE_OPT_EXECUTABLE}" -passes=verify -disable-output "${output}"
+        DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/test/faust/reload.c"
+        COMMENT "Generating Faust reload fixture ${fixture}.bc"
+        VERBATIM
+      )
+      list(APPEND PURE_FAUST_FIXTURE_OUTPUTS "${output}")
+    endforeach()
+
+    foreach(fixture reload-float reload-unresolved)
+      set(source "${CMAKE_CURRENT_SOURCE_DIR}/test/faust/${fixture}.c")
+      set(output "${PURE_FAUST_FIXTURE_OUTPUT_DIR}/${fixture}.bc")
+      set(disassembly "${PURE_FAUST_FIXTURE_OUTPUT_DIR}/${fixture}.ll")
+      add_custom_command(
+        OUTPUT "${output}"
+        BYPRODUCTS "${disassembly}"
+        COMMAND
+          "${CMAKE_COMMAND}" -E make_directory
+          "${PURE_FAUST_FIXTURE_OUTPUT_DIR}"
+        COMMAND
+          "${CMAKE_C_COMPILER}" -O0 -emit-llvm -c
+          "${source}" -o "${output}"
+        COMMAND
+          "${PURE_LLVM_DIS_EXECUTABLE}" "${output}" -o "${disassembly}"
+        COMMAND
+          "${PURE_OPT_EXECUTABLE}" -passes=verify -disable-output "${output}"
+        DEPENDS "${source}"
+        COMMENT "Generating Faust reload fixture ${fixture}.bc"
+        VERBATIM
+      )
+      list(APPEND PURE_FAUST_FIXTURE_OUTPUTS "${output}")
+    endforeach()
+
+    add_custom_target(
+      pure-faust-fixtures ALL
+      DEPENDS ${PURE_FAUST_FIXTURE_OUTPUTS}
+    )
+
+    configure_file(
+      "${CMAKE_CURRENT_SOURCE_DIR}/test/faust/lifecycle.pure.in"
+      "${PURE_FAUST_FIXTURE_OUTPUT_DIR}/lifecycle.pure"
+      @ONLY
+    )
+  endif()
+
   add_executable(
     pure-jit-smoke
     "${CMAKE_CURRENT_SOURCE_DIR}/pure_jit.cc"
@@ -214,6 +313,34 @@ if(BUILD_TESTING)
       FAIL_REGULAR_EXPRESSION
         "failed to remove ORC compilation unit;AddressSanitizer;LeakSanitizer;runtime error:"
   )
+
+  if(PURE_FAUST_EXECUTABLE)
+    add_test(
+      NAME pure-faust-lifecycle
+      COMMAND
+        "${CMAKE_COMMAND}"
+        -DPURE_RUN_TEST=${CMAKE_CURRENT_BINARY_DIR}/run-test
+        -DPURE_FIXTURE_DIR=${PURE_FAUST_FIXTURE_OUTPUT_DIR}
+        -DPURE_SCRIPT=${PURE_FAUST_FIXTURE_OUTPUT_DIR}/lifecycle.pure
+        -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunPureFaustTest.cmake"
+    )
+    set_tests_properties(
+      pure-faust-lifecycle
+      PROPERTIES
+        LABELS "faust;bitcode;integration"
+        REQUIRED_FILES
+          "${reference_bc};${PURE_FAUST_FIXTURE_OUTPUT_DIR}/reload-a.bc;${PURE_FAUST_FIXTURE_OUTPUT_DIR}/reload-b.bc;${PURE_FAUST_FIXTURE_OUTPUT_DIR}/reload-float.bc;${PURE_FAUST_FIXTURE_OUTPUT_DIR}/reload-unresolved.bc;${PURE_FAUST_FIXTURE_OUTPUT_DIR}/lifecycle.pure"
+        TIMEOUT 180
+        PASS_REGULAR_EXPRESSION
+          "Cannot reload Faust module while DSP instances are live(.|\n)*11(.|\n)*22(.|\n)*Module was previously loaded with the double sample ABI(.|\n)*22(.|\n)*faust_missing_test_dependency(.|\n)*22(.|\n)*42"
+        FAIL_REGULAR_EXPRESSION
+          "failed to remove ORC compilation unit;AddressSanitizer;LeakSanitizer;runtime error:"
+    )
+    if(CMAKE_C_FLAGS MATCHES "-fsanitize" OR
+       CMAKE_CXX_FLAGS MATCHES "-fsanitize")
+      set_tests_properties(pure-faust-lifecycle PROPERTIES DISABLED TRUE)
+    endif()
+  endif()
 
   add_test(
     NAME pure-regression
