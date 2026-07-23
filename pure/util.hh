@@ -50,7 +50,7 @@ uint32_t cksum(size_t n, const unsigned char *buf);
 
 /* Determine the system's default encoding. */
 
-char *default_encoding();
+const char *default_encoding();
 
 /* Thread-safe, locale-independent routines to convert between double
    precision floating point numbers and strings. */
@@ -97,11 +97,11 @@ void my_strfree(char *s);
    caller. */
 
 char *toutf8(const char *s, const char *codeset = 0);
-char *fromutf8(const char *s, char *codeset = 0);
+char *fromutf8(const char *s, const char *codeset = 0);
 
 // These variants use my_strdup(). Result must be freed with my_strfree().
 char *my_toutf8(const char *s, const char *codeset = 0);
-char *my_fromutf8(const char *s, char *codeset = 0);
+char *my_fromutf8(const char *s, const char *codeset = 0);
 
 /* Determine the length of a string (i.e., the number of utf-8 chars it
    contains), or the number of utf-8 chars up to the given position in the

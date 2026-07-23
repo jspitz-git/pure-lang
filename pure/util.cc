@@ -121,7 +121,7 @@ typedef int nl_item;
 
 #define digit(x) ((x) >= '0' && (x) <= '9')
 
-static char *my_nl_langinfo(nl_item item)
+static const char *my_nl_langinfo(nl_item item)
 {
   static char buf[16];
   char *l, *p;
@@ -540,7 +540,7 @@ u8strind(const char *s, size_t i)
 
 /* conversion between UTF-8 and the system encoding */
 
-char *default_encoding()
+const char *default_encoding()
 {
 #ifdef HAVE_LANGINFO_CODESET
   /* use nl_langinfo() if it's available */
@@ -561,10 +561,14 @@ char *default_encoding()
   return buf;
 #else
   /* use our own emulation of nl_langinfo() */
-  return my_nl_langinfo(CODESET);
+  return my_nl_langinfo(MYCODESET);
 #endif /* _WIN32 */
 #endif /* HAVE_LANGINFO_CODESET */
 }
+
+#ifndef ICONV_CONST
+#define ICONV_CONST
+#endif
 
 #define myiconv(ic, inbuf, inbytes, outbuf, outbytes) \
   iconv(ic, (ICONV_CONST char**)inbuf, inbytes, outbuf, outbytes)
@@ -625,7 +629,7 @@ toutf8(const char *s, const char *codeset)
 }
 
 char *
-fromutf8(const char *s, char *codeset)
+fromutf8(const char *s, const char *codeset)
 {
   iconv_t ic;
   if (!codeset || !*codeset)
@@ -757,7 +761,7 @@ my_toutf8(const char *s, const char *codeset)
 }
 
 char *
-my_fromutf8(const char *s, char *codeset)
+my_fromutf8(const char *s, const char *codeset)
 {
   iconv_t ic;
   if (!codeset || !*codeset)

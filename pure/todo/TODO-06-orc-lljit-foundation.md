@@ -44,6 +44,16 @@ without exposing ORC details throughout the interpreter.
 
 ## Progress Log
 
+- 2026-07-23: Fixed encoding portability exposed by the full C++17 build.
+  - Encoding-name helpers and parameters now use `const char*`, eliminating 31
+    writable-string warnings without casts.
+  - The local `nl_langinfo` fallback uses its own `MYCODESET` token, and
+    `ICONV_CONST` defaults to the POSIX/glibc signature when configure does not
+    provide an override.
+  - Validation:
+    - `util.cc` compiled with zero warnings and errors.
+    - The full build advanced to six independent C++17/LLVM stream errors in
+      generated lexer code mapped to `lexer.ll`.
 - 2026-07-23: Fixed platform declarations exposed after `interpreter.cc` began
   compiling completely.
   - `runtime.cc` now includes `<dirent.h>` under the generated `HAVE_READDIR`
