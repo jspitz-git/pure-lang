@@ -1097,6 +1097,7 @@ public:
   { return new llvm::GlobalVariable(*M, Ty, isConstant, Linkage, Init, Name); }
 
   void register_host_global(llvm::GlobalVariable *variable, void *address);
+  void register_host_function(llvm::StringRef name, void *address);
   void remove_host_global(llvm::GlobalVariable *variable);
   bool remove_host_global_and_report
     (llvm::GlobalVariable *variable) noexcept;

@@ -101,50 +101,56 @@ map<uint32_t, void (*)(void*)> interpreter::locals_destroy_cb;
 struct CompilationUnitResources {
   struct HostSymbol {
     void *address;
+    llvm::JITSymbolFlags flags;
     llvm::orc::ResourceTrackerSP tracker;
 
-    HostSymbol(void *address, llvm::orc::ResourceTrackerSP tracker)
-      : address(address), tracker(std::move(tracker)) {}
+    HostSymbol(void *address, llvm::JITSymbolFlags flags,
+               llvm::orc::ResourceTrackerSP tracker)
+      : address(address), flags(flags), tracker(std::move(tracker)) {}
   };
 
   map<const Env*, llvm::orc::ResourceTrackerSP> trackers;
   map<string, HostSymbol> host_symbols;
 
-  llvm::Error retain_host_symbol(PureJit& jit, llvm::StringRef name,
-                                 void *address)
+  llvm::Error retain_host_symbol
+  (PureJit& jit, llvm::StringRef name, void *address,
+   llvm::JITSymbolFlags flags = llvm::JITSymbolFlags::Exported)
   {
     string symbol_name = name.str();
     map<string, HostSymbol>::iterator old = host_symbols.find(symbol_name);
     if (old != host_symbols.end()) {
-      if (old->second.address == address) return llvm::Error::success();
+      if (old->second.address == address && old->second.flags == flags)
+        return llvm::Error::success();
       void *old_address = old->second.address;
+      llvm::JITSymbolFlags old_flags = old->second.flags;
       if (llvm::Error error = old->second.tracker->remove()) return error;
       host_symbols.erase(old);
 
       llvm::orc::ResourceTrackerSP tracker = jit.create_resource_tracker();
       if (llvm::Error error =
-            jit.register_absolute_symbol(tracker, name, address)) {
+            jit.register_absolute_symbol(tracker, name, address, flags)) {
         llvm::orc::ResourceTrackerSP rollback_tracker =
           jit.create_resource_tracker();
         if (llvm::Error rollback_error = jit.register_absolute_symbol
-              (rollback_tracker, name, old_address))
+              (rollback_tracker, name, old_address, old_flags))
           return llvm::joinErrors(std::move(error),
                                   std::move(rollback_error));
         host_symbols.emplace
-          (symbol_name, HostSymbol(old_address, std::move(rollback_tracker)));
+          (symbol_name, HostSymbol(old_address, old_flags,
+                                   std::move(rollback_tracker)));
         return error;
       }
       host_symbols.emplace
-        (symbol_name, HostSymbol(address, std::move(tracker)));
+        (symbol_name, HostSymbol(address, flags, std::move(tracker)));
       return llvm::Error::success();
     }
 
     llvm::orc::ResourceTrackerSP tracker = jit.create_resource_tracker();
     if (llvm::Error error =
-          jit.register_absolute_symbol(tracker, name, address))
+          jit.register_absolute_symbol(tracker, name, address, flags))
       return error;
     host_symbols.emplace
-      (symbol_name, HostSymbol(address, std::move(tracker)));
+      (symbol_name, HostSymbol(address, flags, std::move(tracker)));
     return llvm::Error::success();
   }
 
@@ -921,6 +927,17 @@ void interpreter::register_host_global(llvm::GlobalVariable *variable,
               variable->getName().str()+"': "+
               llvm::toString(std::move(error)));
   JIT->addGlobalMapping(variable, address);
+}
+
+void interpreter::register_host_function(llvm::StringRef name, void *address)
+{
+  assert(!name.empty() && address);
+  llvm::JITSymbolFlags flags = llvm::JITSymbolFlags::Exported |
+    llvm::JITSymbolFlags::Callable;
+  if (llvm::Error error = compilation_units->retain_host_symbol
+        (*ORC, name, address, flags))
+    throw err("failed to register ORC host function '"+name.str()+"': "+
+              llvm::toString(std::move(error)));
 }
 
 void interpreter::remove_host_global(llvm::GlobalVariable *variable)
@@ -12279,6 +12296,7 @@ Function *interpreter::declare_extern(int priv, string name, string restype,
     // the interpreter executable (e.g., if the interpreter was linked
     // without -rdynamic), the interpreter will still find them.
     sys::DynamicLibrary::AddSymbol(name, fp);
+    register_host_function(name, fp);
     always_used.insert(f);
     return f;
   }

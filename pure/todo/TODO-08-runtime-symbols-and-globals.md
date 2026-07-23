@@ -83,6 +83,22 @@ resolves the Pure runtime, external functions, and mutable host-backed globals.
 
 ## Progress Log
 
+- 2026-07-23: Registered Pure runtime functions as callable ORC symbols.
+  - Host registry entries now preserve `JITSymbolFlags` across rebind and rollback.
+    Runtime addresses supplied to `declare_extern(fp, ...)` are defined strongly in
+    the main JITDylib as `Exported | Callable`, rather than relying on executable
+    symbol export or the legacy lazy resolver.
+  - Existing `DynamicLibrary::AddSymbol` registration remains for transitional
+    MCJIT code. User C externals from libc and loaded libraries continue through
+    LLJIT's process/library search order.
+  - Validation:
+    - Full Debug and ASan builds plus Debug and sanitizer ORC smoke tests passed
+      with zero warnings, errors, leaks, or sanitizer diagnostics.
+    - Twenty scalar ORC evaluations exercised registered runtime calls with exact
+      results and no unresolved, duplicate, callable, removal, or shutdown errors.
+    - Regression test 013 resolved and invoked libc `atan` in Debug and under
+      ASan/UBSan without ORC diagnostics.
+  - Task 4 remains open for direct external-wrapper/provider address consumers.
 - 2026-07-23: Moved Faust wrapper dispatch slots to the ORC host registry.
   - Faust external wrappers now register their heap `void **` dispatch storage as
     absolute data symbols and roll back both storage and IR if registration fails.
