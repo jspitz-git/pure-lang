@@ -9,14 +9,19 @@
 
 #include "pure_jit.hh"
 
+#include <llvm/ADT/SmallPtrSet.h>
 #include <llvm/ADT/SmallVector.h>
 #include <llvm/Bitcode/BitcodeReader.h>
 #include <llvm/Bitcode/BitcodeWriter.h>
 #include <llvm/ExecutionEngine/Orc/LLJIT.h>
 #include <llvm/IR/DataLayout.h>
 #include <llvm/IR/Function.h>
+#include <llvm/IR/GlobalAlias.h>
+#include <llvm/IR/GlobalIFunc.h>
+#include <llvm/IR/InstIterator.h>
 #include <llvm/IR/LLVMContext.h>
 #include <llvm/IR/Module.h>
+#include <llvm/IR/Verifier.h>
 #include <llvm/Support/MemoryBuffer.h>
 #include <llvm/Support/TargetSelect.h>
 #include <llvm/Support/raw_ostream.h>
@@ -29,6 +34,78 @@ PureJit::PureJit(std::unique_ptr<llvm::orc::LLJIT> jit) noexcept
 }
 
 PureJit::~PureJit() = default;
+
+static void collect_dependencies
+(llvm::Value *value, llvm::SmallPtrSetImpl<llvm::GlobalValue*>& reachable)
+{
+  if (!value) return;
+  if (llvm::GlobalValue *global = llvm::dyn_cast<llvm::GlobalValue>(value)) {
+    if (!reachable.insert(global).second) return;
+    if (llvm::Function *function = llvm::dyn_cast<llvm::Function>(global)) {
+      for (llvm::Instruction& instruction : llvm::instructions(function))
+        collect_dependencies(&instruction, reachable);
+    } else if (llvm::GlobalVariable *variable =
+                 llvm::dyn_cast<llvm::GlobalVariable>(global)) {
+      if (variable->hasInitializer())
+        collect_dependencies(variable->getInitializer(), reachable);
+    } else if (llvm::GlobalAlias *alias =
+                 llvm::dyn_cast<llvm::GlobalAlias>(global)) {
+      collect_dependencies(alias->getAliasee(), reachable);
+    } else if (llvm::GlobalIFunc *ifunc =
+                 llvm::dyn_cast<llvm::GlobalIFunc>(global)) {
+      collect_dependencies(ifunc->getResolver(), reachable);
+    }
+  }
+  if (llvm::User *user = llvm::dyn_cast<llvm::User>(value))
+    for (llvm::Value *operand : user->operand_values())
+      collect_dependencies(operand, reachable);
+}
+
+static llvm::Error reduce_to_entry(llvm::Module& module,
+                                   llvm::StringRef entry_name)
+{
+  llvm::Function *entry = module.getFunction(entry_name);
+  if (!entry)
+    return llvm::createStringError("ORC entry symbol '%s' is not a function",
+                                   entry_name.str().c_str());
+
+  llvm::SmallPtrSet<llvm::GlobalValue*, 32> reachable;
+  collect_dependencies(entry, reachable);
+
+  for (llvm::Function& function : module)
+    if (!function.isDeclaration() && !reachable.contains(&function)) {
+      function.deleteBody();
+      function.setLinkage(llvm::GlobalValue::ExternalLinkage);
+    }
+  for (llvm::GlobalVariable& variable : module.globals()) {
+    bool keep_definition = reachable.contains(&variable) &&
+      variable.isConstant() && variable.hasInitializer();
+    if (!keep_definition && variable.hasInitializer()) {
+      variable.setInitializer(0);
+      variable.setLinkage(llvm::GlobalValue::ExternalLinkage);
+    }
+  }
+  for (llvm::Module::alias_iterator alias = module.alias_begin();
+       alias != module.alias_end(); ) {
+    llvm::GlobalAlias& current = *alias++;
+    if (!reachable.contains(&current)) current.eraseFromParent();
+  }
+  for (llvm::Module::ifunc_iterator ifunc = module.ifunc_begin();
+       ifunc != module.ifunc_end(); ) {
+    llvm::GlobalIFunc& current = *ifunc++;
+    if (!reachable.contains(&current)) current.eraseFromParent();
+  }
+
+  entry->setLinkage(llvm::GlobalValue::ExternalLinkage);
+  std::string verification_error;
+  llvm::raw_string_ostream verification_out(verification_error);
+  if (llvm::verifyModule(module, &verification_out)) {
+    verification_out.flush();
+    return llvm::createStringError("invalid reduced ORC module: %s",
+                                   verification_error.c_str());
+  }
+  return llvm::Error::success();
+}
 
 llvm::Expected<std::unique_ptr<PureJit> > PureJit::create()
 {
@@ -86,13 +163,9 @@ llvm::Error PureJit::add_module_copy(llvm::orc::ResourceTrackerSP tracker,
   llvm::Expected<std::unique_ptr<llvm::Module> > copy =
     llvm::parseBitcodeFile(buffer, *context);
   if (!copy) return copy.takeError();
-  if (!exported_symbol.empty()) {
-    llvm::Function *entry = (*copy)->getFunction(exported_symbol);
-    if (!entry)
-      return llvm::createStringError("ORC entry symbol '%s' is not a function",
-                                     exported_symbol.str().c_str());
-    entry->setLinkage(llvm::GlobalValue::ExternalLinkage);
-  }
+  if (!exported_symbol.empty())
+    if (llvm::Error error = reduce_to_entry(**copy, exported_symbol))
+      return error;
 
   llvm::orc::ThreadSafeModule thread_safe_module
     (std::move(*copy), std::move(context));

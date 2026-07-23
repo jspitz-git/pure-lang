@@ -84,6 +84,21 @@ requirements, provider dependencies, and omitted values.
 
 ## Progress Log
 
+- 2026-07-23: Implemented entry-reachable reduced ORC snapshots.
+  - After the fresh-context bitcode roundtrip, `PureJit` traverses instruction
+    operands, constant initializers, aliases, and ifunc resolvers from one entry.
+  - Unreachable function bodies become declarations; only reachable immutable
+    constant globals retain definitions. Mutable globals become external
+    declarations, and unreachable aliases/ifuncs are omitted.
+  - The reduced module is verified before submission, and only its entry is
+    promoted for lookup. The source module remains unchanged.
+  - Validation:
+    - A clean full Debug build completed with zero warnings and errors.
+    - The isolated smoke test passed reduced-module verification, lookup,
+      execution, result `42`, and tracker removal.
+    - `test007.pure` no longer reports duplicate definitions. It now fails with
+      unresolved `$pointer`/`$pointer_tag` host-backed globals, the expected
+      TODO-08 absolute-symbol boundary.
 - 2026-07-23: Defined the working-module declaration and ownership policy.
   - Inventoried host-backed `$$sstk$$`, `$$fptr$$`, `GlobalVar`, cached constant,
     temporary expression, and Faust dispatch slots. They must become external
