@@ -19,7 +19,7 @@ linked, compiled, and unloaded predictably.
 
 ## Task List
 
-1. [ ] Modernize file loading and bitcode parse error reporting.
+1. [x] Modernize file loading and bitcode parse error reporting.
 2. [ ] Port symbol inspection, renaming, and module linking.
 3. [ ] Define compatible target triple and data-layout checks.
 4. [ ] Submit loaded code as separately tracked ORC resources.
@@ -45,6 +45,16 @@ linked, compiled, and unloaded predictably.
 
 ## Progress Log
 
+- 2026-07-23: Completed modern bitcode file loading and parse diagnostics.
+  - Confirmed file buffers and parsed modules already use `std::unique_ptr`, LLVM 22
+    `MemoryBuffer::getFile`, and `parseBitcodeFile` returning `Expected`.
+  - Hardened parse failure handling so the LLVM `Error` is always consumed, including
+    callers which intentionally omit a diagnostic string.
+  - Preserved filesystem diagnostics and LLVM's detailed malformed-bitcode messages.
+  - Validation:
+    - LLVM 22 debug build passed.
+    - `pure-jit-smoke` passed.
+    - Manual malformed and missing-file imports returned diagnostics without aborting.
 - 2026-07-22: Initial bitcode-loader migration plan created.
   - Validation:
     - Not run; this update creates planning documentation only.

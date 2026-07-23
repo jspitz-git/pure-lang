@@ -2371,7 +2371,11 @@ ParseBitcodeFile(const llvm::MemoryBuffer& Buffer,
   Expected<std::unique_ptr<Module> > ModuleOrErr =
     parseBitcodeFile(Buffer.getMemBufferRef(), Context);
   if (!ModuleOrErr) {
-    if (ErrMsg) *ErrMsg = toString(ModuleOrErr.takeError());
+    Error error = ModuleOrErr.takeError();
+    if (ErrMsg)
+      *ErrMsg = toString(std::move(error));
+    else
+      consumeError(std::move(error));
     return nullptr;
   }
   return std::move(*ModuleOrErr);
