@@ -99,7 +99,100 @@ llvm::LLVMContext& pure_llvm_context()
 map<uint32_t, void (*)(void*)> interpreter::locals_destroy_cb;
 
 struct CompilationUnitResources {
+  struct HostSymbol {
+    void *address;
+    llvm::JITSymbolFlags flags;
+    llvm::orc::ResourceTrackerSP tracker;
+
+    HostSymbol(void *address, llvm::JITSymbolFlags flags,
+               llvm::orc::ResourceTrackerSP tracker)
+      : address(address), flags(flags), tracker(std::move(tracker)) {}
+  };
+
+  struct CompiledFunction {
+    void *address;
+    llvm::orc::ResourceTrackerSP tracker;
+
+    CompiledFunction(void *address, llvm::orc::ResourceTrackerSP tracker)
+      : address(address), tracker(std::move(tracker)) {}
+  };
+
   map<const Env*, llvm::orc::ResourceTrackerSP> trackers;
+  map<const llvm::Function*, CompiledFunction> functions;
+  map<string, HostSymbol> host_symbols;
+
+  llvm::Error retain_host_symbol
+  (PureJit& jit, llvm::StringRef name, void *address,
+   llvm::JITSymbolFlags flags = llvm::JITSymbolFlags::Exported)
+  {
+    string symbol_name = name.str();
+    map<string, HostSymbol>::iterator old = host_symbols.find(symbol_name);
+    if (old != host_symbols.end()) {
+      if (old->second.address == address && old->second.flags == flags)
+        return llvm::Error::success();
+      void *old_address = old->second.address;
+      llvm::JITSymbolFlags old_flags = old->second.flags;
+      if (llvm::Error error = old->second.tracker->remove()) return error;
+      host_symbols.erase(old);
+
+      llvm::orc::ResourceTrackerSP tracker = jit.create_resource_tracker();
+      if (llvm::Error error =
+            jit.register_absolute_symbol(tracker, name, address, flags)) {
+        llvm::orc::ResourceTrackerSP rollback_tracker =
+          jit.create_resource_tracker();
+        if (llvm::Error rollback_error = jit.register_absolute_symbol
+              (rollback_tracker, name, old_address, old_flags))
+          return llvm::joinErrors(std::move(error),
+                                  std::move(rollback_error));
+        host_symbols.emplace
+          (symbol_name, HostSymbol(old_address, old_flags,
+                                   std::move(rollback_tracker)));
+        return error;
+      }
+      host_symbols.emplace
+        (symbol_name, HostSymbol(address, flags, std::move(tracker)));
+      return llvm::Error::success();
+    }
+
+    llvm::orc::ResourceTrackerSP tracker = jit.create_resource_tracker();
+    if (llvm::Error error =
+          jit.register_absolute_symbol(tracker, name, address, flags))
+      return error;
+    host_symbols.emplace
+      (symbol_name, HostSymbol(address, flags, std::move(tracker)));
+    return llvm::Error::success();
+  }
+
+  llvm::Error remove_host_symbol(llvm::StringRef name)
+  {
+    map<string, HostSymbol>::iterator it = host_symbols.find(name.str());
+    if (it == host_symbols.end()) return llvm::Error::success();
+    llvm::orc::ResourceTrackerSP tracker = std::move(it->second.tracker);
+    host_symbols.erase(it);
+    return tracker->remove();
+  }
+
+  void *host_symbol_address(llvm::StringRef name) const
+  {
+    map<string, HostSymbol>::const_iterator it = host_symbols.find(name.str());
+    return it == host_symbols.end() ? 0 : it->second.address;
+  }
+
+  void retain_function(const llvm::Function *function, void *address,
+                       llvm::orc::ResourceTrackerSP tracker)
+  {
+    assert(function && address && tracker &&
+           functions.find(function) == functions.end());
+    functions.emplace
+      (function, CompiledFunction(address, std::move(tracker)));
+  }
+
+  void *function_address(const llvm::Function *function) const
+  {
+    map<const llvm::Function*, CompiledFunction>::const_iterator it =
+      functions.find(function);
+    return it == functions.end() ? 0 : it->second.address;
+  }
 
   void retain(const Env *environment, llvm::orc::ResourceTrackerSP tracker)
   {
@@ -131,9 +224,22 @@ struct CompilationUnitResources {
       const Env *environment = trackers.begin()->first;
       errors = llvm::joinErrors(std::move(errors), remove(environment));
     }
+    while (!functions.empty()) {
+      map<const llvm::Function*, CompiledFunction>::iterator it =
+        functions.begin();
+      llvm::orc::ResourceTrackerSP tracker = std::move(it->second.tracker);
+      functions.erase(it);
+      errors = llvm::joinErrors(std::move(errors), tracker->remove());
+    }
+    while (!host_symbols.empty()) {
+      string name = host_symbols.begin()->first;
+      errors = llvm::joinErrors(std::move(errors), remove_host_symbol(name));
+    }
     return errors;
   }
 };
+
+static bool verify_module(const llvm::Module& module, string& message);
 
 struct NewPassManagerState {
   llvm::LoopAnalysisManager loops;
@@ -189,7 +295,7 @@ struct NewPassManagerState {
   }
 };
 
-static void* resolve_external(const std::string& name)
+static void* resolve_legacy_external(const std::string& name)
 {
   /* If we come here, the dynamic loader has already tried everything to
      resolve the function, so instead we just print an error message and
@@ -377,7 +483,7 @@ void interpreter::init()
 
   // Install a fallback mechanism to resolve references to the runtime, on
   // systems which do not allow the program to dlopen itself.
-  JIT->InstallLazyFunctionCreator(resolve_external);
+  JIT->InstallLazyFunctionCreator(resolve_legacy_external);
 
   // LLVM 22 uses one opaque pointer type per address space. Semantic C pointer
   // distinctions are tracked separately by CAbiType.
@@ -528,6 +634,19 @@ void interpreter::init()
      ConstantPointerNull::get(VoidPtrTy),
      "$$fptr$$");
   JIT->addGlobalMapping(fptrvar, &fptr);
+
+  if (llvm::Error error = compilation_units->retain_host_symbol
+        (*ORC, "$$sstk$$", &sstk))
+    throw err("failed to register ORC host symbol '$$sstk$$': "+
+              llvm::toString(std::move(error)));
+  if (llvm::Error error = compilation_units->retain_host_symbol
+        (*ORC, "$$fptr$$", &fptr)) {
+    llvm::Error cleanup_error =
+      compilation_units->remove_host_symbol("$$sstk$$");
+    throw err("failed to register ORC host symbol '$$fptr$$': "+
+              llvm::toString(llvm::joinErrors(std::move(error),
+                                               std::move(cleanup_error))));
+  }
 
   // Add prototypes for the runtime interface and enter the corresponding
   // function pointers into the runtime map.
@@ -832,6 +951,94 @@ void interpreter::init()
 		 "faust_add_rtti", "void",    3, "char*", "int", "bool");
 }
 
+void interpreter::register_host_global(llvm::GlobalVariable *variable,
+                                       void *address)
+{
+  assert(variable && variable->hasName() && address);
+  if (llvm::Error error = compilation_units->retain_host_symbol
+        (*ORC, variable->getName(), address))
+    throw err("failed to register ORC host global '"+
+              variable->getName().str()+"': "+
+              llvm::toString(std::move(error)));
+  JIT->addGlobalMapping(variable, address);
+}
+
+void interpreter::register_host_function(llvm::StringRef name, void *address)
+{
+  assert(!name.empty() && address);
+  llvm::JITSymbolFlags flags = llvm::JITSymbolFlags::Exported |
+    llvm::JITSymbolFlags::Callable;
+  if (llvm::Error error = compilation_units->retain_host_symbol
+        (*ORC, name, address, flags))
+    throw err("failed to register ORC host function '"+name.str()+"': "+
+              llvm::toString(std::move(error)));
+}
+
+void interpreter::remove_host_global(llvm::GlobalVariable *variable)
+{
+  assert(variable && variable->hasName());
+  string name = variable->getName().str();
+  if (llvm::Error error = compilation_units->remove_host_symbol(name))
+    throw err("failed to remove ORC host global '"+name+"': "+
+              llvm::toString(std::move(error)));
+  JIT->updateGlobalMapping(variable, 0);
+}
+
+bool interpreter::remove_host_global_and_report
+(llvm::GlobalVariable *variable) noexcept
+{
+  try {
+    remove_host_global(variable);
+    return true;
+  } catch (const err& error) {
+    llvm::errs() << error.what() << '\n';
+    return false;
+  }
+}
+
+void *interpreter::host_global_address
+(const llvm::GlobalVariable *variable) const
+{
+  assert(variable && variable->hasName());
+  return compilation_units->host_symbol_address(variable->getName());
+}
+
+void *interpreter::compile_orc_function(llvm::Function *function,
+                                        llvm::StringRef category)
+{
+  assert(function && !function->isDeclaration() && !category.empty());
+  if (void *address = compilation_units->function_address(function))
+    return address;
+
+  string verification_error;
+  if (!verify_module(*module, verification_error))
+    throw err("invalid LLVM module before ORC "+category.str()+": "+
+              verification_error);
+  llvm::orc::ResourceTrackerSP tracker = ORC->create_resource_tracker();
+  string entry_name = function->getName().str();
+  string exported_name = "$$orc."+category.str()+"."+
+    to_string(orc_unit_counter++);
+  if (llvm::Error error = ORC->add_module_copy
+        (tracker, *module, entry_name, exported_name)) {
+    if (llvm::Error cleanup_error = tracker->remove())
+      error = llvm::joinErrors(std::move(error), std::move(cleanup_error));
+    throw err("failed to add ORC "+category.str()+" module: "+
+              llvm::toString(std::move(error)));
+  }
+  llvm::Expected<llvm::orc::ExecutorAddr> entry = ORC->lookup(exported_name);
+  if (!entry) {
+    llvm::Error error = entry.takeError();
+    if (llvm::Error cleanup_error = tracker->remove())
+      error = llvm::joinErrors(std::move(error), std::move(cleanup_error));
+    throw err("failed to resolve ORC "+category.str()+" function: "+
+              llvm::toString(std::move(error)));
+  }
+  void *address = reinterpret_cast<void*>
+    (static_cast<uintptr_t>(entry->getValue()));
+  compilation_units->retain_function(function, address, std::move(tracker));
+  return address;
+}
+
 interpreter::interpreter(int _argc, char **_argv)
     : argc(_argc), argv(_argv),
     verbose(0), compat(false), compat2(false), compiling(false),
@@ -846,7 +1053,7 @@ interpreter::interpreter(int _argc, char **_argv)
     source_level(0), skip_level(0), last_tag(0), logging(false),
     nerrs(0), modno(-1), modctr(0), source_s(0), output(0),
     result(0), lastres(0), mem(0), exps(0), tmps(0), freectr(0),
-    specials_only(false), module(0),
+    orc_unit_counter(0), specials_only(false), module(0),
     JIT(0), ORC(0), compilation_units(0), pass_state(0), astk(0),
     sstk(__sstk),
     stoplevel(0), tracelevel(-1), debug_skip(false), trace_skip(false),
@@ -877,7 +1084,7 @@ interpreter::interpreter(int32_t nsyms, char *syms,
     last_tag(0x7fffffff), logging(false),
     nerrs(0), modno(-1), modctr(0), source_s(0), output(0),
     result(0), lastres(0), mem(0), exps(0), tmps(0), freectr(0),
-    specials_only(false), module(0),
+    orc_unit_counter(0), specials_only(false), module(0),
     JIT(0), ORC(0), compilation_units(0), pass_state(0), astk(0),
     sstk(*_sstk),
     stoplevel(0), tracelevel(-1), debug_skip(false), trace_skip(false),
@@ -943,13 +1150,12 @@ interpreter::interpreter(int32_t nsyms, char *syms,
     assert(it != globalvars.end());
     GlobalVar& v = it->second;
     v.v = u;
-    if (!v.v) {
+    if (!v.v)
       v.v = global_variable
 	(module, ExprPtrTy, false, GlobalVariable::InternalLinkage,
 	 ConstantPointerNull::get(ExprPtrTy),
 	 mkvarlabel(f));
-      JIT->addGlobalMapping(v.v, &v.x);
-    }
+    register_host_global(v.v, &v.x);
     if (v.x) pure_free(v.x); v.x = pure_new(x);
     if (externs[f]) {
       ExternInfo& info = externals[f];
@@ -959,6 +1165,7 @@ interpreter::interpreter(int32_t nsyms, char *syms,
 				      "$$wrap."+info.name, module);
       sys::DynamicLibrary::AddSymbol("$$wrap."+info.name, externs[f]);
       info.f = fp;
+      info.fp = externs[f];
     }
   }
 }
@@ -2360,11 +2567,13 @@ bool interpreter::LoadFaustDSP(bool priv, const char *name, string *msg,
       /* There's no need to actually regenerate the wrapper, we only have to
          patch up the function pointer here. */
       GlobalVariable *v = module->getNamedGlobal("$"+fname);
-      if (v) {
-	void **fp = (void**)JIT->getPointerToGlobal(v);
-	assert(fp);
+      void **fp = v ? (void**)host_global_address(v) : 0;
+      if (!fp && v)
+	// A batch-compiled module may own the dispatch global itself.
+	fp = (void**)JIT->getPointerToGlobal(v);
+      if (fp)
 	*fp = JIT->getPointerToFunction(f);
-      } else {
+      else {
 	/* The variable may not actually exist in the JIT yet if we're being
 	   called in a batch-compiled program which has the same dsp module
 	   already linked into it. In this case we fix up the symbol table so
@@ -3721,7 +3930,7 @@ pure_expr *interpreter::const_defn(expr pat, expr& x, pure_expr*& e)
 	gv.v = global_variable
 	  (module, ExprPtrTy, false, GlobalVariable::InternalLinkage,
 	   ConstantPointerNull::get(ExprPtrTy), "$$const."+sym.s);
-	JIT->addGlobalMapping(gv.v, &gv.x);
+	register_host_global(gv.v, &gv.x);
 	/* Also record the value in the globenv entry, so that the frontend
 	   knows that the value of this constant has been cached. */
 	globenv[f].cval_var = gv.x;
@@ -4102,7 +4311,7 @@ void interpreter::compile()
 	    (module, ExprPtrTy, false, GlobalVariable::InternalLinkage,
 	     ConstantPointerNull::get(ExprPtrTy),
 	     mkvarlabel(f.tag));
-	  JIT->addGlobalMapping(v.v, &v.x);
+	  register_host_global(v.v, &v.x);
 	}
 	/* It's not safe to free any old value v.x right here, as it might
 	   have a sentry to execute which in turn might cause the compiler to
@@ -4669,7 +4878,7 @@ void interpreter::clearsym(int32_t f)
       v->second.v = global_variable
 	(module, ExprPtrTy, false, GlobalVariable::InternalLinkage,
 	 ConstantPointerNull::get(ExprPtrTy), mkvarsym(sym.s));
-      JIT->addGlobalMapping(v->second.v, &v->second.x);
+      register_host_global(v->second.v, &v->second.x);
     }
     /* Check whether this is actually an external which has the --defined
        pragma. In this case the cbox is reset to NULL so that the wrapper
@@ -11133,7 +11342,7 @@ void interpreter::defn(int32_t tag, pure_expr *x, bool deprecated)
       v.v = global_variable
 	(module, ExprPtrTy, false, GlobalVariable::ExternalLinkage,
 	 NullExprPtr, mkvarsym(sym.s));
-    JIT->addGlobalMapping(v.v, &v.x);
+    register_host_global(v.v, &v.x);
   }
   if (v.x) pure_free(v.x); v.x = pure_new(x);
   globenv[tag] = env_info(&v.x, temp);
@@ -12158,6 +12367,7 @@ Function *interpreter::declare_extern(int priv, string name, string restype,
     // the interpreter executable (e.g., if the interpreter was linked
     // without -rdynamic), the interpreter will still find them.
     sys::DynamicLibrary::AddSymbol(name, fp);
+    register_host_function(name, fp);
     always_used.insert(f);
     return f;
   }
@@ -12912,7 +13122,13 @@ Function *interpreter::declare_extern(int priv, string name, string restype,
     void **fp = (void**)malloc(sizeof(void*));
     assert(fp);
     *fp = JIT->getPointerToFunction(g);
-    JIT->addGlobalMapping(v, fp);
+    try {
+      register_host_global(v, fp);
+    } catch (...) {
+      free(fp);
+      v->eraseFromParent();
+      throw;
+    }
     Value *callee = b.CreateLoad(v->getValueType(), v);
     u = b.CreateCall(gt, callee, mkargs(unboxed));
   } else
@@ -13077,7 +13293,7 @@ Function *interpreter::declare_extern(int priv, string name, string restype,
     v.v = global_variable
       (module, ExprPtrTy, false, GlobalVariable::InternalLinkage, NullExprPtr,
        mkvarlabel(sym.f));
-    JIT->addGlobalMapping(v.v, &v.x);
+    register_host_global(v.v, &v.x);
   }
   if (v.x) pure_free(v.x); v.x = cv;
   Value *defaultv = b.CreateLoad(v.v->getValueType(), v.v);
@@ -13118,7 +13334,7 @@ Function *interpreter::declare_extern(int priv, string name, string restype,
       v.v = global_variable
 	(module, ExprPtrTy, false, GlobalVariable::InternalLinkage,
 	 NullExprPtr, mkvarlabel(tag));
-      JIT->addGlobalMapping(v.v, &v.x);
+      register_host_global(v.v, &v.x);
     }
     if (v.x) pure_free(v.x); v.x = pure_new(cv);
     b.CreateCall(module->getFunction("pure_throw"),
@@ -13130,8 +13346,10 @@ Function *interpreter::declare_extern(int priv, string name, string restype,
     raw_ostream& out = outs();
     f->print(out);
   }
+  void *wrapper_address = compile_orc_function(f, "external");
   externals[sym.f] = ExternInfo(sym.f, name, type, argt, abi_type,
                                 abi_argtypes, f, varargs);
+  externals[sym.f].fp = wrapper_address;
   return f;
 }
 
@@ -13164,7 +13382,14 @@ expr interpreter::wrap_expr(pure_expr *x, bool check)
     (module, ExprPtrTy, false, llvm::GlobalVariable::InternalLinkage,
      llvm::ConstantPointerNull::get(ExprPtrTy), "$$tmpvar"+label.str());
   v->x = pure_new(x);
-  JIT->addGlobalMapping(v->v, &v->x);
+  try {
+    register_host_global(v->v, &v->x);
+  } catch (...) {
+    v->v->eraseFromParent();
+    pure_free(v->x);
+    delete v;
+    throw;
+  }
   if (check && (x->tag == EXPR::PTR ||
 		(x->tag >= 0 && x->data.clos && x->data.clos->local))) {
     /* These values need special treatment in a batch compilation. */
@@ -13411,16 +13636,17 @@ pure_expr *interpreter::doeval(expr x, pure_expr*& e, bool keep)
       throw err("invalid LLVM module before ORC evaluation: "+
                 verification_error);
     llvm::orc::ResourceTrackerSP tracker = ORC->create_resource_tracker();
-    llvm::StringRef entry_name = f.f->getName();
+    string entry_name = f.f->getName().str();
+    string exported_name = "$$orc.eval."+to_string(orc_unit_counter++);
     if (llvm::Error error =
-          ORC->add_module_copy(tracker, *module, entry_name)) {
+          ORC->add_module_copy(tracker, *module, entry_name, exported_name)) {
       if (llvm::Error cleanup_error = tracker->remove())
         error = llvm::joinErrors(std::move(error), std::move(cleanup_error));
       throw err("failed to add ORC evaluation module: "+
                 llvm::toString(std::move(error)));
     }
     llvm::Expected<pure_expr* (*)()> entry =
-      ORC->lookup_function<pure_expr*()>(entry_name);
+      ORC->lookup_function<pure_expr*()>(exported_name);
     if (!entry) {
       llvm::Error error = entry.takeError();
       if (llvm::Error cleanup_error = tracker->remove())
@@ -13519,7 +13745,7 @@ pure_expr *interpreter::dodefn(env vars, const vinfo& vi,
 	      v.v = global_variable
 		(module, ExprPtrTy, false, GlobalVariable::ExternalLinkage,
 		 NullExprPtr, mkvarsym(sym.s));
-	    JIT->addGlobalMapping(v.v, &v.x);
+	    register_host_global(v.v, &v.x);
 	  }
 	  pure_new(x);
 	  if (v.x) pure_free(v.x);
@@ -13610,7 +13836,7 @@ pure_expr *interpreter::dodefn(env vars, const vinfo& vi,
 	v.v = global_variable
 	  (module, ExprPtrTy, false, GlobalVariable::ExternalLinkage,
 	   NullExprPtr, mkvarsym(sym.s));
-      JIT->addGlobalMapping(v.v, &v.x);
+      register_host_global(v.v, &v.x);
     }
     /* Cache any old value so that we can free it later. Note that it is not
        safe to do so right away, because the value may be reused in one of the
@@ -13633,20 +13859,51 @@ pure_expr *interpreter::dodefn(env vars, const vinfo& vi,
   fun_finish();
   pop(&f);
   // JIT and execute the function.
-  void *fp = JIT->getPointerToFunction(f.f);
-  assert(fp);
-  begin_stats();
-  res = pure_invoke(fp, &e);
-  end_stats();
-  // The transitional execution engine retains anonymous machine code until
-  // shutdown; ORC will remove it through the compilation unit's tracker.
   if (!keep) {
+    string verification_error;
+    if (!verify_module(*module, verification_error))
+      throw err("invalid LLVM module before ORC definition: "+
+                verification_error);
+    llvm::orc::ResourceTrackerSP tracker = ORC->create_resource_tracker();
+    string entry_name = f.f->getName().str();
+    string exported_name = "$$orc.defn."+to_string(orc_unit_counter++);
+    if (llvm::Error error = ORC->add_module_copy
+          (tracker, *module, entry_name, exported_name)) {
+      if (llvm::Error cleanup_error = tracker->remove())
+        error = llvm::joinErrors(std::move(error), std::move(cleanup_error));
+      throw err("failed to add ORC definition module: "+
+                llvm::toString(std::move(error)));
+    }
+    llvm::Expected<pure_expr* (*)()> entry =
+      ORC->lookup_function<pure_expr*()>(exported_name);
+    if (!entry) {
+      llvm::Error error = entry.takeError();
+      if (llvm::Error cleanup_error = tracker->remove())
+        error = llvm::joinErrors(std::move(error), std::move(cleanup_error));
+      throw err("failed to resolve ORC definition function: "+
+                llvm::toString(std::move(error)));
+    }
+    void *fp = reinterpret_cast<void*>(*entry);
+    compilation_units->retain(fptr, tracker);
+    begin_stats();
+    res = pure_invoke(fp, &e);
+    end_stats();
     f.f->eraseFromParent();
-    // If there are no more references, we can get rid of the environment now.
-    if (fptr->refc == 1)
+    // If there are no more references, release the compilation unit and its
+    // environment. Escaped closures retain both until their Env is released.
+    if (fptr->refc == 1) {
+      if (llvm::Error error = compilation_units->remove(fptr))
+        throw err("failed to remove ORC definition module: "+
+                  llvm::toString(std::move(error)));
       delete fptr;
-    else
+    } else
       fptr->refc--;
+  } else {
+    void *fp = JIT->getPointerToFunction(f.f);
+    assert(fp);
+    begin_stats();
+    res = pure_invoke(fp, &e);
+    end_stats();
   }
   fptr = save_fptr;
   if (res) {
@@ -13660,7 +13917,7 @@ pure_expr *interpreter::dodefn(env vars, const vinfo& vi,
       int32_t tag = it->first;
       GlobalVar& v = globalvars[tag];
       if (!v.x) {
-	JIT->updateGlobalMapping(v.v, 0);
+	remove_host_global(v.v);
 	v.v->eraseFromParent();
 	globalvars.erase(tag);
       }
@@ -15225,7 +15482,7 @@ Value *interpreter::cbox(int32_t tag)
     v.v = global_variable
       (module, ExprPtrTy, false, GlobalVariable::InternalLinkage,
        NullExprPtr, mkvarlabel(tag));
-    JIT->addGlobalMapping(v.v, &v.x);
+    register_host_global(v.v, &v.x);
   }
   if (v.x) pure_free(v.x); v.x = pure_new(cv);
   return act_builder().CreateLoad(v.v->getValueType(), v.v);

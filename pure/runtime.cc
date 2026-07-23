@@ -1170,7 +1170,7 @@ pure_expr *pure_symbol(int32_t tag)
        llvm::GlobalVariable::InternalLinkage,
        llvm::ConstantPointerNull::get(interp.ExprPtrTy),
        lab.c_str());
-    interp.JIT->addGlobalMapping(v.v, &v.x);
+    interp.register_host_global(v.v, &v.x);
     v.x = pure_new_internal(pure_const(tag));
     // Since we just created this variable, it doesn't have any closure bound
     // to it yet, so it's safe to just return the symbol as is.
@@ -1185,7 +1185,7 @@ pure_expr *pure_symbol(int32_t tag)
       // external wrapper function itself.
       const ExternInfo& info = it->second;
       size_t n = info.argtypes.size();
-      void *f = interp.JIT->getPointerToFunction(info.f);
+      void *f = info.fp;
       if (f) {
 	if (n == 0) {
 	  // Parameterless external, do a direct call.

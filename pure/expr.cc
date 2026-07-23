@@ -46,7 +46,8 @@ EXPR::~EXPR()
   case WRAP:
     if (data.p) {
       GlobalVar *v = (GlobalVar*)data.p;
-      interpreter::g_interp->JIT->updateGlobalMapping(v->v, 0);
+      if (!interpreter::g_interp->remove_host_global_and_report(v->v))
+        return;
       v->v->eraseFromParent();
       pure_free(v->x);
       delete v;

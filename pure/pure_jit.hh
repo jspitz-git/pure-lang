@@ -11,13 +11,18 @@
 #define PURE_JIT_HH
 
 #include <llvm/ADT/StringRef.h>
+#include <llvm/ExecutionEngine/JITSymbol.h>
 #include <llvm/ExecutionEngine/Orc/Core.h>
 #include <llvm/ExecutionEngine/Orc/Shared/ExecutorAddress.h>
+#include <llvm/ExecutionEngine/Orc/Shared/ExecutorSymbolDef.h>
 #include <llvm/ExecutionEngine/Orc/ThreadSafeModule.h>
 #include <llvm/Support/Error.h>
 
 #include <memory>
+#include <mutex>
+#include <string>
 #include <type_traits>
+#include <utility>
 
 namespace llvm {
 
@@ -43,11 +48,26 @@ public:
 
   llvm::orc::ResourceTrackerSP create_resource_tracker();
 
+  llvm::Error register_absolute_symbol
+    (llvm::orc::ResourceTrackerSP tracker, llvm::StringRef name,
+     llvm::orc::ExecutorSymbolDef symbol);
+
+  template<class T>
+  llvm::Error register_absolute_symbol
+    (llvm::orc::ResourceTrackerSP tracker, llvm::StringRef name, T *address,
+     llvm::JITSymbolFlags flags = llvm::JITSymbolFlags::Exported)
+  {
+    return register_absolute_symbol
+      (std::move(tracker), name,
+       llvm::orc::ExecutorSymbolDef::fromPtr(address, flags));
+  }
+
   llvm::Error add_module(llvm::orc::ThreadSafeModule module);
   llvm::Error add_module(llvm::orc::ResourceTrackerSP tracker,
                          llvm::orc::ThreadSafeModule module);
   llvm::Error add_module_copy(llvm::orc::ResourceTrackerSP tracker,
                               const llvm::Module& module,
+                              llvm::StringRef entry_symbol = "",
                               llvm::StringRef exported_symbol = "");
 
   llvm::Expected<llvm::orc::ExecutorAddr> lookup(llvm::StringRef name);
@@ -65,6 +85,11 @@ public:
 private:
   explicit PureJit(std::unique_ptr<llvm::orc::LLJIT> jit) noexcept;
 
+  void record_session_error(llvm::Error error);
+  std::string take_session_error();
+
+  std::mutex session_error_mutex_;
+  std::string session_error_;
   std::unique_ptr<llvm::orc::LLJIT> jit_;
 };
 

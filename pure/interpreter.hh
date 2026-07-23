@@ -454,21 +454,23 @@ struct ExternInfo {
   CAbiType abi_type;			// semantic C ABI return type
   vector<CAbiType> abi_argtypes;		// semantic C ABI argument types
   llvm::Function *f;			// Pure wrapper for the external
+  void *fp;				// compiled ORC wrapper address
   ExternInfo()
-    : tag(0), varargs(false), type(0), argtypes(0), abi_argtypes(0), f(0)
+    : tag(0), varargs(false), type(0), argtypes(0), abi_argtypes(0), f(0), fp(0)
   {}
   ExternInfo(int32_t _tag, const string&_name, llvm_const_Type *_type,
 	     vector<llvm_const_Type*> _argtypes, llvm::Function *_f,
 	     bool _varargs = false)
     : tag(_tag), name(_name), varargs(_varargs),
-      type(_type), argtypes(_argtypes), f(_f)
+      type(_type), argtypes(_argtypes), f(_f), fp(0)
   {}
   ExternInfo(int32_t _tag, const string&_name, llvm_const_Type *_type,
 	     vector<llvm_const_Type*> _argtypes, const CAbiType& _abi_type,
 	     const vector<CAbiType>& _abi_argtypes, llvm::Function *_f,
 	     bool _varargs = false)
     : tag(_tag), name(_name), varargs(_varargs), type(_type),
-      argtypes(_argtypes), abi_type(_abi_type), abi_argtypes(_abi_argtypes), f(_f)
+      argtypes(_argtypes), abi_type(_abi_type), abi_argtypes(_abi_argtypes),
+      f(_f), fp(0)
   {}
 };
 
@@ -694,6 +696,7 @@ public:
   pure_expr *exps;   // head of the free list (available expression nodes)
   pure_expr *tmps;   // temporaries list (to be collected after exceptions)
   size_t freectr;    // size of the free list
+  uint64_t orc_unit_counter; // unique ORC compilation unit names
   map<uint32_t,void*> locals; // interpreter-local storage for applications
 
   bool defined_sym(int fno) {
@@ -1094,6 +1097,15 @@ public:
    llvm::GlobalValue::LinkageTypes Linkage,
    llvm::Constant *Init = 0, string Name = "")
   { return new llvm::GlobalVariable(*M, Ty, isConstant, Linkage, Init, Name); }
+
+  void register_host_global(llvm::GlobalVariable *variable, void *address);
+  void register_host_function(llvm::StringRef name, void *address);
+  void remove_host_global(llvm::GlobalVariable *variable);
+  bool remove_host_global_and_report
+    (llvm::GlobalVariable *variable) noexcept;
+  void *host_global_address(const llvm::GlobalVariable *variable) const;
+  void *compile_orc_function(llvm::Function *function,
+                             llvm::StringRef category);
 
   llvm::BasicBlock *basic_block(const char *name, llvm::Function* f = 0)
   { return llvm::BasicBlock::Create(context, name, f); }

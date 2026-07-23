@@ -13,7 +13,10 @@
 #include <llvm/ADT/SmallVector.h>
 #include <llvm/Bitcode/BitcodeReader.h>
 #include <llvm/Bitcode/BitcodeWriter.h>
+#include <llvm/ExecutionEngine/Orc/AbsoluteSymbols.h>
+#include <llvm/ExecutionEngine/Orc/JITTargetMachineBuilder.h>
 #include <llvm/ExecutionEngine/Orc/LLJIT.h>
+#include <llvm/ExecutionEngine/Orc/Mangling.h>
 #include <llvm/IR/DataLayout.h>
 #include <llvm/IR/Function.h>
 #include <llvm/IR/GlobalAlias.h>
@@ -24,6 +27,7 @@
 #include <llvm/IR/Verifier.h>
 #include <llvm/Passes/OptimizationLevel.h>
 #include <llvm/Passes/PassBuilder.h>
+#include <llvm/Support/CodeGen.h>
 #include <llvm/Support/MemoryBuffer.h>
 #include <llvm/Support/TargetSelect.h>
 #include <llvm/Support/raw_ostream.h>
@@ -33,9 +37,27 @@
 PureJit::PureJit(std::unique_ptr<llvm::orc::LLJIT> jit) noexcept
   : jit_(std::move(jit))
 {
+  jit_->getExecutionSession().setErrorReporter
+    ([this](llvm::Error error) { record_session_error(std::move(error)); });
 }
 
 PureJit::~PureJit() = default;
+
+void PureJit::record_session_error(llvm::Error error)
+{
+  std::lock_guard<std::mutex> lock(session_error_mutex_);
+  std::string message = llvm::toString(std::move(error));
+  if (!session_error_.empty()) session_error_ += "\n";
+  session_error_ += message;
+}
+
+std::string PureJit::take_session_error()
+{
+  std::lock_guard<std::mutex> lock(session_error_mutex_);
+  std::string message;
+  message.swap(session_error_);
+  return message;
+}
 
 static void collect_dependencies
 (llvm::Value *value, llvm::SmallPtrSetImpl<llvm::GlobalValue*>& reachable)
@@ -97,7 +119,8 @@ static llvm::Error optimize_module(llvm::Module& module)
 }
 
 static llvm::Error reduce_to_entry(llvm::Module& module,
-                                   llvm::StringRef entry_name)
+                                   llvm::StringRef entry_name,
+                                   llvm::StringRef exported_name)
 {
   llvm::Function *entry = module.getFunction(entry_name);
   if (!entry)
@@ -131,6 +154,7 @@ static llvm::Error reduce_to_entry(llvm::Module& module,
     if (!reachable.contains(&current)) current.eraseFromParent();
   }
 
+  if (!exported_name.empty()) entry->setName(exported_name);
   entry->setLinkage(llvm::GlobalValue::ExternalLinkage);
   return verify_module(module, "reduced");
 }
@@ -146,7 +170,14 @@ llvm::Expected<std::unique_ptr<PureJit> > PureJit::create()
     return llvm::createStringError
       ("failed to initialize the native LLVM assembly parser");
 
+  llvm::Expected<llvm::orc::JITTargetMachineBuilder> target =
+    llvm::orc::JITTargetMachineBuilder::detectHost();
+  if (!target) return target.takeError();
+  target->setCodeModel(llvm::CodeModel::Large);
+  target->setRelocationModel(llvm::Reloc::PIC_);
+
   llvm::orc::LLJITBuilder builder;
+  builder.setJITTargetMachineBuilder(std::move(*target));
   // Native LLJIT requires its process-symbol JITDylib during construction.
   // LLVM links that dylib into the main dylib's default search order.
   builder.setLinkProcessSymbolsByDefault(true);
@@ -166,6 +197,18 @@ llvm::orc::ResourceTrackerSP PureJit::create_resource_tracker()
   return jit_->getMainJITDylib().createResourceTracker();
 }
 
+llvm::Error PureJit::register_absolute_symbol
+(llvm::orc::ResourceTrackerSP tracker, llvm::StringRef name,
+ llvm::orc::ExecutorSymbolDef symbol)
+{
+  llvm::orc::MangleAndInterner mangle(jit_->getExecutionSession(),
+                                      jit_->getDataLayout());
+  llvm::orc::SymbolMap symbols;
+  symbols[mangle(name)] = symbol;
+  return jit_->getMainJITDylib().define
+    (llvm::orc::absoluteSymbols(std::move(symbols)), std::move(tracker));
+}
+
 llvm::Error PureJit::add_module(llvm::orc::ThreadSafeModule module)
 {
   return jit_->addIRModule(std::move(module));
@@ -179,6 +222,7 @@ llvm::Error PureJit::add_module(llvm::orc::ResourceTrackerSP tracker,
 
 llvm::Error PureJit::add_module_copy(llvm::orc::ResourceTrackerSP tracker,
                                      const llvm::Module& module,
+                                     llvm::StringRef entry_symbol,
                                      llvm::StringRef exported_symbol)
 {
   llvm::SmallVector<char, 0> bitcode;
@@ -191,8 +235,9 @@ llvm::Error PureJit::add_module_copy(llvm::orc::ResourceTrackerSP tracker,
   llvm::Expected<std::unique_ptr<llvm::Module> > copy =
     llvm::parseBitcodeFile(buffer, *context);
   if (!copy) return copy.takeError();
-  if (!exported_symbol.empty())
-    if (llvm::Error error = reduce_to_entry(**copy, exported_symbol))
+  if (!entry_symbol.empty())
+    if (llvm::Error error =
+          reduce_to_entry(**copy, entry_symbol, exported_symbol))
       return error;
   if (llvm::Error error = optimize_module(**copy)) return error;
 
@@ -203,5 +248,14 @@ llvm::Error PureJit::add_module_copy(llvm::orc::ResourceTrackerSP tracker,
 
 llvm::Expected<llvm::orc::ExecutorAddr> PureJit::lookup(llvm::StringRef name)
 {
-  return jit_->lookup(name);
+  take_session_error();
+  llvm::Expected<llvm::orc::ExecutorAddr> address = jit_->lookup(name);
+  if (!address) {
+    std::string detail = llvm::toString(address.takeError());
+    std::string session_error = take_session_error();
+    if (!session_error.empty()) detail += ": "+session_error;
+    return llvm::createStringError("failed to resolve ORC symbol '%s': %s",
+                                   name.str().c_str(), detail.c_str());
+  }
+  return address;
 }
