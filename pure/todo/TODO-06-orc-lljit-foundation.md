@@ -19,7 +19,7 @@ without exposing ORC details throughout the interpreter.
 ## Task List
 
 1. [x] Define the narrow `PureJit` API and ownership model.
-2. [ ] Create `LLJIT`, its main `JITDylib`, and process symbol generator.
+2. [x] Create `LLJIT`, its main `JITDylib`, and process symbol generator.
 3. [ ] Add `ThreadSafeModule` submission and typed address lookup helpers.
 4. [ ] Convert LLVM `Error` and `Expected` failures to actionable Pure messages.
 5. [ ] Compile and invoke a minimal constant-returning function.
@@ -44,6 +44,22 @@ without exposing ORC details throughout the interpreter.
 
 ## Progress Log
 
+- 2026-07-23: Completed native `LLJIT` and process-symbol initialization.
+  - `PureJit::create` initializes the native target, assembly printer, and
+    assembly parser before constructing ORC.
+  - `LLJITBuilder` explicitly enables LLVM 22's required process-symbol
+    `JITDylib`, which is placed in the main dylib's default search order.
+  - An attempted post-construction generator installation was rejected by LLVM
+    22 because native platforms require the process-symbol dylib during
+    `LLJITBuilder::create`; the final implementation follows that constraint and
+    avoids duplicate generators.
+  - Validation:
+    - `pure_jit.cc.o` compiled separately with zero warnings and errors.
+    - A temporary C++17 executable created and destroyed `PureJit`, observed a
+      nonempty native data layout, and exited successfully.
+    - Temporary smoke-test files were removed.
+    - The full build retains zero warnings and only the nine known legacy JIT
+      errors in `interpreter.cc`.
 - 2026-07-23: Added the initial `PureJit` ownership and error-preserving API.
   - `PureJit` exclusively owns `LLJIT` through `unique_ptr`; the incomplete ORC
     type remains hidden from callers and is destroyed out of line.

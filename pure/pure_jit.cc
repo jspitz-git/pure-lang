@@ -11,6 +11,7 @@
 
 #include <llvm/ExecutionEngine/Orc/LLJIT.h>
 #include <llvm/IR/DataLayout.h>
+#include <llvm/Support/TargetSelect.h>
 
 #include <utility>
 
@@ -23,8 +24,20 @@ PureJit::~PureJit() = default;
 
 llvm::Expected<std::unique_ptr<PureJit> > PureJit::create()
 {
-  llvm::Expected<std::unique_ptr<llvm::orc::LLJIT> > jit =
-    llvm::orc::LLJITBuilder().create();
+  if (llvm::InitializeNativeTarget())
+    return llvm::createStringError("failed to initialize the native LLVM target");
+  if (llvm::InitializeNativeTargetAsmPrinter())
+    return llvm::createStringError
+      ("failed to initialize the native LLVM assembly printer");
+  if (llvm::InitializeNativeTargetAsmParser())
+    return llvm::createStringError
+      ("failed to initialize the native LLVM assembly parser");
+
+  llvm::orc::LLJITBuilder builder;
+  // Native LLJIT requires its process-symbol JITDylib during construction.
+  // LLVM links that dylib into the main dylib's default search order.
+  builder.setLinkProcessSymbolsByDefault(true);
+  llvm::Expected<std::unique_ptr<llvm::orc::LLJIT> > jit = builder.create();
   if (!jit) return jit.takeError();
 
   return std::unique_ptr<PureJit>(new PureJit(std::move(*jit)));
