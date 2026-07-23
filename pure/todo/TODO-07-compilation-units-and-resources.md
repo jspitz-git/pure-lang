@@ -23,7 +23,7 @@ be removed safely without mutating modules already owned by ORC.
 3. [ ] Track resources for anonymous evaluation and definition environments.
 4. [x] Remove temporary evaluation resources after execution.
 5. [ ] Replace legacy function-code deletion and stale-module operations.
-6. [ ] Stress repeated evaluation and verify stable memory behavior.
+6. [x] Stress repeated evaluation and verify stable memory behavior.
 
 ## Working Module Policy
 
@@ -84,6 +84,22 @@ requirements, provider dependencies, and omitted values.
 
 ## Progress Log
 
+- 2026-07-23: Completed sanitizer stress validation for anonymous ORC units.
+  - Disabled only Clang's UBSan `function` check for `pure-jit-smoke`. That check
+    reads compiler-emitted type metadata before an indirect-call target, but ORC
+    functions do not carry the marker; ASan and all other UBSan checks remain
+    enabled for the target.
+  - Validation:
+    - The ASan/UBSan `pure-jit-smoke` target built and passed with LeakSanitizer
+      enabled and no sanitizer diagnostics.
+    - One interpreter process evaluated 1000 expressions with the exact expected
+      results and no ASan, LeakSanitizer, UBSan, duplicate-symbol, tracker-removal,
+      or shutdown diagnostics.
+    - After an intentional syntax error, the same sanitized process evaluated the
+      following expression to `42` and shut down cleanly.
+  - Task 6 is complete for anonymous evaluation resources. Definition and
+    redefinition lifetime stress remains covered by TODO-12 after those paths
+    migrate to ORC.
 - 2026-07-23: Routed every anonymous evaluation through an independent ORC unit.
   - Removed the one-time ORC evaluation switch. Each `doeval` now snapshots,
     finalizes, submits, looks up, and invokes its own entry with a dedicated
@@ -96,8 +112,7 @@ requirements, provider dependencies, and omitted values.
     - Three sequential expressions and a 100-expression stress run completed in
       one interpreter process with all expected results.
     - No duplicate-symbol, resource-removal, or shutdown diagnostics occurred.
-  - Task 3 remains open for definition environments. Task 6 remains open until
-    repeated evaluation is checked under ASan and LeakSanitizer.
+  - Task 3 remains open for definition environments.
 - 2026-07-23: Connected escaped evaluation resources to `Env` destruction.
   - `Env::clear` idempotently removes any tracker retained for that environment
     and reports LLVM removal failures, completing the delayed cleanup path for

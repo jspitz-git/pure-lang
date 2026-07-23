@@ -48,6 +48,13 @@ if(BUILD_TESTING)
       "${CMAKE_CURRENT_SOURCE_DIR}"
       ${LLVM_INCLUDE_DIRS}
   )
+  # Clang's UBSan function check expects compiler-emitted type metadata before
+  # an indirect-call target. ORC-generated functions do not carry that marker.
+  target_compile_options(
+    pure-jit-smoke
+    PRIVATE
+      $<$<COMPILE_LANG_AND_ID:CXX,Clang>:-fno-sanitize=function>
+  )
   target_link_libraries(
     pure-jit-smoke
     PRIVATE
