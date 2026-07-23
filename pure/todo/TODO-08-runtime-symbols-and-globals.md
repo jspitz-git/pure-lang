@@ -83,6 +83,24 @@ resolves the Pure runtime, external functions, and mutable host-backed globals.
 
 ## Progress Log
 
+- 2026-07-23: Registered stable Pure symbol and cbox host slots with ORC.
+  - Routed embedded-interpreter restoration, compiled global-function caches,
+    ordinary `defn`, external fallback/failed-match cboxes, `cbox`, and runtime
+    `pure_symbol` creation through the shared host-global registration path.
+  - These slots retain one stable `pure_expr **` address and update only its
+    contents, so generated ORC units can resolve them without rebinding.
+  - Deliberately deferred `clearsym`, cached constants, `$$tmpvar` wrappers, and
+    Faust dispatch slots because they replace or remove storage and require an
+    explicit rebind/lifetime policy.
+  - Validation:
+    - Full Debug and ASan builds plus Debug and sanitizer ORC smoke tests passed
+      with zero warnings, errors, leaks, or sanitizer diagnostics.
+    - The focused global-definition rollback/closure test still returned `42`
+      without unresolved, duplicate, removal, or shutdown diagnostics.
+    - Regression harness test 007 completed in Debug and under ASan/UBSan with no
+      ORC diagnostics. Its existing malformed `--endif` warnings are unrelated.
+  - Task 3 remains open for rebinding globals, constants, temporary wrappers, and
+    Faust dispatch storage.
 - 2026-07-23: Routed interactive variable definitions through ORC host globals.
   - Split the interpreter host-symbol registry into one tracker per symbol, so a
     failed or temporary binding can be removed without invalidating unrelated

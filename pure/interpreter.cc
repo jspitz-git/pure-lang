@@ -1013,7 +1013,7 @@ interpreter::interpreter(int32_t nsyms, char *syms,
 	(module, ExprPtrTy, false, GlobalVariable::InternalLinkage,
 	 ConstantPointerNull::get(ExprPtrTy),
 	 mkvarlabel(f));
-      JIT->addGlobalMapping(v.v, &v.x);
+      register_host_global(v.v, &v.x);
     }
     if (v.x) pure_free(v.x); v.x = pure_new(x);
     if (externs[f]) {
@@ -4167,7 +4167,7 @@ void interpreter::compile()
 	    (module, ExprPtrTy, false, GlobalVariable::InternalLinkage,
 	     ConstantPointerNull::get(ExprPtrTy),
 	     mkvarlabel(f.tag));
-	  JIT->addGlobalMapping(v.v, &v.x);
+	  register_host_global(v.v, &v.x);
 	}
 	/* It's not safe to free any old value v.x right here, as it might
 	   have a sentry to execute which in turn might cause the compiler to
@@ -11198,7 +11198,7 @@ void interpreter::defn(int32_t tag, pure_expr *x, bool deprecated)
       v.v = global_variable
 	(module, ExprPtrTy, false, GlobalVariable::ExternalLinkage,
 	 NullExprPtr, mkvarsym(sym.s));
-    JIT->addGlobalMapping(v.v, &v.x);
+    register_host_global(v.v, &v.x);
   }
   if (v.x) pure_free(v.x); v.x = pure_new(x);
   globenv[tag] = env_info(&v.x, temp);
@@ -13142,7 +13142,7 @@ Function *interpreter::declare_extern(int priv, string name, string restype,
     v.v = global_variable
       (module, ExprPtrTy, false, GlobalVariable::InternalLinkage, NullExprPtr,
        mkvarlabel(sym.f));
-    JIT->addGlobalMapping(v.v, &v.x);
+    register_host_global(v.v, &v.x);
   }
   if (v.x) pure_free(v.x); v.x = cv;
   Value *defaultv = b.CreateLoad(v.v->getValueType(), v.v);
@@ -13183,7 +13183,7 @@ Function *interpreter::declare_extern(int priv, string name, string restype,
       v.v = global_variable
 	(module, ExprPtrTy, false, GlobalVariable::InternalLinkage,
 	 NullExprPtr, mkvarlabel(tag));
-      JIT->addGlobalMapping(v.v, &v.x);
+      register_host_global(v.v, &v.x);
     }
     if (v.x) pure_free(v.x); v.x = pure_new(cv);
     b.CreateCall(module->getFunction("pure_throw"),
@@ -15322,7 +15322,7 @@ Value *interpreter::cbox(int32_t tag)
     v.v = global_variable
       (module, ExprPtrTy, false, GlobalVariable::InternalLinkage,
        NullExprPtr, mkvarlabel(tag));
-    JIT->addGlobalMapping(v.v, &v.x);
+    register_host_global(v.v, &v.x);
   }
   if (v.x) pure_free(v.x); v.x = pure_new(cv);
   return act_builder().CreateLoad(v.v->getValueType(), v.v);
