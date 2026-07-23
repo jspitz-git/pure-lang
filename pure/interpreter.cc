@@ -98,6 +98,36 @@ llvm::LLVMContext& pure_llvm_context()
 
 map<uint32_t, void (*)(void*)> interpreter::locals_destroy_cb;
 
+struct CompilationUnitResources {
+  map<const Env*, llvm::orc::ResourceTrackerSP> trackers;
+
+  void retain(const Env *environment, llvm::orc::ResourceTrackerSP tracker)
+  {
+    assert(environment && tracker && trackers.find(environment) == trackers.end());
+    trackers[environment] = std::move(tracker);
+  }
+
+  llvm::Error remove(const Env *environment)
+  {
+    map<const Env*, llvm::orc::ResourceTrackerSP>::iterator it =
+      trackers.find(environment);
+    if (it == trackers.end()) return llvm::Error::success();
+    llvm::orc::ResourceTrackerSP tracker = std::move(it->second);
+    trackers.erase(it);
+    return tracker->remove();
+  }
+
+  llvm::Error remove_all()
+  {
+    llvm::Error errors = llvm::Error::success();
+    while (!trackers.empty()) {
+      const Env *environment = trackers.begin()->first;
+      errors = llvm::joinErrors(std::move(errors), remove(environment));
+    }
+    return errors;
+  }
+};
+
 struct NewPassManagerState {
   llvm::LoopAnalysisManager loops;
   llvm::FunctionAnalysisManager functions;
@@ -270,6 +300,7 @@ void interpreter::init()
   if (!orc)
     throw err("failed to create ORC JIT: "+toString(orc.takeError()));
   ORC = orc->release();
+  compilation_units = new CompilationUnitResources;
   module = new Module(modname, context);
   pass_state = new NewPassManagerState;
 #if !LLVM27
@@ -809,8 +840,8 @@ interpreter::interpreter(int _argc, char **_argv)
     nerrs(0), modno(-1), modctr(0), source_s(0), output(0),
     result(0), lastres(0), mem(0), exps(0), tmps(0), freectr(0),
     specials_only(false), module(0),
-    JIT(0), ORC(0), orc_evaluation_started(false), pass_state(0), astk(0),
-    sstk(__sstk),
+    JIT(0), ORC(0), orc_evaluation_started(false), compilation_units(0),
+    pass_state(0), astk(0), sstk(__sstk),
     stoplevel(0), tracelevel(-1), debug_skip(false), trace_skip(false),
     fptr(__fptr), tags(0), line(0), column(0), tags_init(false),
     declare_op(false)
@@ -840,8 +871,8 @@ interpreter::interpreter(int32_t nsyms, char *syms,
     nerrs(0), modno(-1), modctr(0), source_s(0), output(0),
     result(0), lastres(0), mem(0), exps(0), tmps(0), freectr(0),
     specials_only(false), module(0),
-    JIT(0), ORC(0), orc_evaluation_started(false), pass_state(0), astk(0),
-    sstk(*_sstk),
+    JIT(0), ORC(0), orc_evaluation_started(false), compilation_units(0),
+    pass_state(0), astk(0), sstk(*_sstk),
     stoplevel(0), tracelevel(-1), debug_skip(false), trace_skip(false),
     fptr(*(Env**)_fptr), tags(0), line(0), column(0), tags_init(false),
     declare_op(false)
@@ -965,6 +996,12 @@ interpreter::~interpreter()
   if (JIT) delete JIT;
 #endif
   delete pass_state;
+  if (compilation_units) {
+    if (llvm::Error error = compilation_units->remove_all())
+      llvm::logAllUnhandledErrors(std::move(error), llvm::errs(),
+                                  "failed to remove ORC compilation unit: ");
+    delete compilation_units;
+  }
   delete ORC;
   // if this was the global interpreter, reset it now
   if (g_interp == this) g_interp = 0;
@@ -13388,6 +13425,7 @@ pure_expr *interpreter::doeval(expr x, pure_expr*& e, bool keep)
                   llvm::toString(std::move(error)));
       }
       fp = reinterpret_cast<void*>(*entry);
+      compilation_units->retain(fptr, tracker);
       orc_evaluation_started = true;
     } else {
       fp = JIT->getPointerToFunction(f.f);
@@ -13396,15 +13434,15 @@ pure_expr *interpreter::doeval(expr x, pure_expr*& e, bool keep)
     begin_stats();
     res = pure_invoke(fp, &e);
     end_stats();
-    if (tracker)
-      if (llvm::Error error = tracker->remove())
+    f.f->eraseFromParent();
+    // If there are no more references, release the compilation unit and its
+    // environment. Escaped closures retain both until their Env is released.
+    if (fptr->refc == 1) {
+      if (llvm::Error error = compilation_units->remove(fptr))
         throw err("failed to remove initial ORC evaluation module: "+
                   llvm::toString(std::move(error)));
-    f.f->eraseFromParent();
-    // If there are no more references, we can get rid of the environment now.
-    if (fptr->refc == 1)
       delete fptr;
-    else
+    } else
       fptr->refc--;
   }
   fptr = save_fptr;

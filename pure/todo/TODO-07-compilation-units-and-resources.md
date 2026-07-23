@@ -21,7 +21,7 @@ be removed safely without mutating modules already owned by ORC.
 1. [x] Define which declarations are recreated in each working module.
 2. [x] Finalize, verify, optimize, and submit modules without later mutation.
 3. [ ] Track resources for anonymous evaluation and definition environments.
-4. [ ] Remove temporary evaluation resources after execution.
+4. [x] Remove temporary evaluation resources after execution.
 5. [ ] Replace legacy function-code deletion and stale-module operations.
 6. [ ] Stress repeated evaluation and verify stable memory behavior.
 
@@ -84,6 +84,20 @@ requirements, provider dependencies, and omitted values.
 
 ## Progress Log
 
+- 2026-07-23: Added interpreter-owned compilation-unit resource tracking for
+  anonymous ORC evaluation.
+  - Trackers are registered by `Env` identity before invocation. A non-escaping
+    evaluation removes its tracker before deleting the environment; an escaped
+    closure retains both for later lifetime integration.
+  - Interpreter shutdown removes all remaining trackers before destroying
+    `LLJIT` and reports aggregated LLVM removal errors instead of ignoring them.
+  - Validation:
+    - A clean Debug build and isolated ORC smoke test passed with zero warnings
+      and errors.
+    - Single evaluations and a repeated `1; 2;` process returned expected
+      results with no resource-removal or shutdown diagnostics.
+  - Task 4 is complete for temporary evaluations. Task 3 remains open until
+    definition environments and escaped closure cleanup use the same registry.
 - 2026-07-23: Completed the immutable ORC module finalization pipeline.
   - Each reduced snapshot is verified, optimized with a fresh standard module
     O1 pipeline and local analysis managers, verified again, then moved into a
