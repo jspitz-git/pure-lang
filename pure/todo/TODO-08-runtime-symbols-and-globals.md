@@ -19,7 +19,7 @@ resolves the Pure runtime, external functions, and mutable host-backed globals.
 ## Task List
 
 1. [x] Inventory runtime functions and globals currently mapped through `ExecutionEngine`.
-2. [ ] Add mangled absolute-symbol registration to `PureJit`.
+2. [x] Add mangled absolute-symbol registration to `PureJit`.
 3. [ ] Convert activation stack, shadow stack, function pointer, and Pure globals.
 4. [ ] Convert external C wrapper lookup and indirect calls.
 5. [ ] Replace `resolve_external` with an ORC-compatible failure strategy.
@@ -81,6 +81,20 @@ resolves the Pure runtime, external functions, and mutable host-backed globals.
 
 ## Progress Log
 
+- 2026-07-23: Added tracker-owned mangled absolute-symbol registration.
+  - `PureJit::register_absolute_symbol` mangles and interns names against LLJIT's
+    target `DataLayout`, defines strong symbols in the main `JITDylib`, and assigns
+    them to an explicit `ResourceTracker`.
+  - Its typed pointer overload uses `ExecutorSymbolDef::fromPtr`, which preserves
+    data addresses and automatically marks function pointers as callable without
+    converting them through `void *`.
+  - The ORC smoke test now resolves an external host integer and host function,
+    executes JIT code that loads and calls them to produce `42`, removes module
+    resources before symbol resources, and verifies that the removed data symbol
+    can no longer be looked up.
+  - Validation:
+    - Focused Debug and ASan/LeakSanitizer/UBSan builds and smoke tests passed with
+      zero warnings, errors, leaks, or sanitizer diagnostics.
 - 2026-07-23: Completed the legacy runtime symbol and host-global inventory.
   - Classified process/runtime functions, dynamic C externals, interpreter stack
     pointers, Pure and constant slots, temporary wrappers, Faust dispatch storage,

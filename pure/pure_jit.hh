@@ -11,13 +11,16 @@
 #define PURE_JIT_HH
 
 #include <llvm/ADT/StringRef.h>
+#include <llvm/ExecutionEngine/JITSymbol.h>
 #include <llvm/ExecutionEngine/Orc/Core.h>
 #include <llvm/ExecutionEngine/Orc/Shared/ExecutorAddress.h>
+#include <llvm/ExecutionEngine/Orc/Shared/ExecutorSymbolDef.h>
 #include <llvm/ExecutionEngine/Orc/ThreadSafeModule.h>
 #include <llvm/Support/Error.h>
 
 #include <memory>
 #include <type_traits>
+#include <utility>
 
 namespace llvm {
 
@@ -42,6 +45,20 @@ public:
   const llvm::DataLayout& data_layout() const noexcept;
 
   llvm::orc::ResourceTrackerSP create_resource_tracker();
+
+  llvm::Error register_absolute_symbol
+    (llvm::orc::ResourceTrackerSP tracker, llvm::StringRef name,
+     llvm::orc::ExecutorSymbolDef symbol);
+
+  template<class T>
+  llvm::Error register_absolute_symbol
+    (llvm::orc::ResourceTrackerSP tracker, llvm::StringRef name, T *address,
+     llvm::JITSymbolFlags flags = llvm::JITSymbolFlags::Exported)
+  {
+    return register_absolute_symbol
+      (std::move(tracker), name,
+       llvm::orc::ExecutorSymbolDef::fromPtr(address, flags));
+  }
 
   llvm::Error add_module(llvm::orc::ThreadSafeModule module);
   llvm::Error add_module(llvm::orc::ResourceTrackerSP tracker,

@@ -13,7 +13,9 @@
 #include <llvm/ADT/SmallVector.h>
 #include <llvm/Bitcode/BitcodeReader.h>
 #include <llvm/Bitcode/BitcodeWriter.h>
+#include <llvm/ExecutionEngine/Orc/AbsoluteSymbols.h>
 #include <llvm/ExecutionEngine/Orc/LLJIT.h>
+#include <llvm/ExecutionEngine/Orc/Mangling.h>
 #include <llvm/IR/DataLayout.h>
 #include <llvm/IR/Function.h>
 #include <llvm/IR/GlobalAlias.h>
@@ -164,6 +166,18 @@ const llvm::DataLayout& PureJit::data_layout() const noexcept
 llvm::orc::ResourceTrackerSP PureJit::create_resource_tracker()
 {
   return jit_->getMainJITDylib().createResourceTracker();
+}
+
+llvm::Error PureJit::register_absolute_symbol
+(llvm::orc::ResourceTrackerSP tracker, llvm::StringRef name,
+ llvm::orc::ExecutorSymbolDef symbol)
+{
+  llvm::orc::MangleAndInterner mangle(jit_->getExecutionSession(),
+                                      jit_->getDataLayout());
+  llvm::orc::SymbolMap symbols;
+  symbols[mangle(name)] = symbol;
+  return jit_->getMainJITDylib().define
+    (llvm::orc::absoluteSymbols(std::move(symbols)), std::move(tracker));
 }
 
 llvm::Error PureJit::add_module(llvm::orc::ThreadSafeModule module)
