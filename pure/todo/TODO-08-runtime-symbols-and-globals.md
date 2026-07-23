@@ -20,7 +20,7 @@ resolves the Pure runtime, external functions, and mutable host-backed globals.
 
 1. [x] Inventory runtime functions and globals currently mapped through `ExecutionEngine`.
 2. [x] Add mangled absolute-symbol registration to `PureJit`.
-3. [ ] Convert activation stack, shadow stack, function pointer, and Pure globals.
+3. [x] Convert activation stack, shadow stack, function pointer, and Pure globals.
 4. [ ] Convert external C wrapper lookup and indirect calls.
 5. [ ] Replace `resolve_external` with an ORC-compatible failure strategy.
 6. [ ] Test symbol visibility for executable, shared-library, and plugin builds.
@@ -83,6 +83,22 @@ resolves the Pure runtime, external functions, and mutable host-backed globals.
 
 ## Progress Log
 
+- 2026-07-23: Completed temporary host-global lifecycle tracking.
+  - `wrap_expr` now registers each uniquely named `$$tmpvar` through the shared
+    ORC/MCJIT host-global path and rolls back its LLVM global, expression value,
+    and heap `GlobalVar` if registration fails.
+  - `EXPR::WRAP` removes the symbol tracker before erasing IR and releasing host
+    storage. Its destructor reports removal failure and deliberately preserves
+    the slot rather than leaving an ORC symbol with a dangling address.
+  - Validation:
+    - Debug and ASan builds and the focused ORC smoke test passed with zero build
+      warnings, errors, or sanitizer diagnostics.
+    - Regression test 044 exercised cached pointer and local-closure runtime data
+      in Debug and under ASan/UBSan without unresolved, duplicate, host-global
+      removal, or shutdown diagnostics.
+  - Task 3 is complete. Remaining direct data mapping is Faust dispatch storage,
+    which belongs to task 4; transitional MCJIT mappings remain until their code
+    paths migrate fully.
 - 2026-07-23: Added recoverable ORC host-symbol rebinding.
   - Host registry entries now retain both address and individual tracker. Binding
     the same name to a new stable slot removes the old lookup definition, registers

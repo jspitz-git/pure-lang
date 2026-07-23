@@ -927,6 +927,18 @@ void interpreter::remove_host_global(llvm::GlobalVariable *variable)
   JIT->updateGlobalMapping(variable, 0);
 }
 
+bool interpreter::remove_host_global_and_report
+(llvm::GlobalVariable *variable) noexcept
+{
+  try {
+    remove_host_global(variable);
+    return true;
+  } catch (const err& error) {
+    llvm::errs() << error.what() << '\n';
+    return false;
+  }
+}
+
 interpreter::interpreter(int _argc, char **_argv)
     : argc(_argc), argv(_argv),
     verbose(0), compat(false), compat2(false), compiling(false),
@@ -13258,7 +13270,14 @@ expr interpreter::wrap_expr(pure_expr *x, bool check)
     (module, ExprPtrTy, false, llvm::GlobalVariable::InternalLinkage,
      llvm::ConstantPointerNull::get(ExprPtrTy), "$$tmpvar"+label.str());
   v->x = pure_new(x);
-  JIT->addGlobalMapping(v->v, &v->x);
+  try {
+    register_host_global(v->v, &v->x);
+  } catch (...) {
+    v->v->eraseFromParent();
+    pure_free(v->x);
+    delete v;
+    throw;
+  }
   if (check && (x->tag == EXPR::PTR ||
 		(x->tag >= 0 && x->data.clos && x->data.clos->local))) {
     /* These values need special treatment in a batch compilation. */
