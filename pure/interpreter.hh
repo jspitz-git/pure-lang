@@ -1015,7 +1015,6 @@ public:
   llvm::Module *module;
   llvm::ExecutionEngine *JIT;
   PureJit *ORC;
-  bool orc_evaluation_started;
   CompilationUnitResources *compilation_units;
   NewPassManagerState *pass_state;
   llvm::StructType  *ExprTy, *IntExprTy, *DblExprTy, *StrExprTy, *PtrExprTy;

@@ -84,6 +84,20 @@ requirements, provider dependencies, and omitted values.
 
 ## Progress Log
 
+- 2026-07-23: Routed every anonymous evaluation through an independent ORC unit.
+  - Removed the one-time ORC evaluation switch. Each `doeval` now snapshots,
+    finalizes, submits, looks up, and invokes its own entry with a dedicated
+    `ResourceTracker`.
+  - Non-escaping evaluation resources are removed immediately, while escaped
+    closures retain their tracker through the existing `Env` registry lifetime.
+  - Validation:
+    - A clean full Debug build and isolated ORC smoke test passed with zero
+      warnings and errors.
+    - Three sequential expressions and a 100-expression stress run completed in
+      one interpreter process with all expected results.
+    - No duplicate-symbol, resource-removal, or shutdown diagnostics occurred.
+  - Task 3 remains open for definition environments. Task 6 remains open until
+    repeated evaluation is checked under ASan and LeakSanitizer.
 - 2026-07-23: Connected escaped evaluation resources to `Env` destruction.
   - `Env::clear` idempotently removes any tracker retained for that environment
     and reports LLVM removal failures, completing the delayed cleanup path for
