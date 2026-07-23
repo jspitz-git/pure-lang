@@ -628,6 +628,7 @@ void interpreter::init()
               legacy_jit_error);
   }
   module->setDataLayout(ORC->data_layout());
+  module->setTargetTriple(ORC->target_triple());
 
   // Install a fallback mechanism to resolve references to the runtime, on
   // systems which do not allow the program to dlopen itself.
@@ -2860,6 +2861,24 @@ static void bc_errmsg(string name, string* msg)
     *msg = name+": Error linking bitcode file";
 }
 
+static const char *incompatible_triple_component
+(const llvm::Triple& module_triple, const llvm::Triple& target_triple)
+{
+  using llvm::Triple;
+  if (module_triple.getArch() == Triple::UnknownArch ||
+      module_triple.getArch() != target_triple.getArch())
+    return "architecture";
+  if (module_triple.getSubArch() != target_triple.getSubArch())
+    return "subarchitecture";
+  if (module_triple.getOSName() != target_triple.getOSName())
+    return "operating system";
+  if (module_triple.getEnvironmentName() != target_triple.getEnvironmentName())
+    return "environment";
+  if (module_triple.getObjectFormat() != target_triple.getObjectFormat())
+    return "object format";
+  return 0;
+}
+
 bool interpreter::LoadBitcode(bool priv, const char *name, string *msg)
 {
   using namespace llvm;
@@ -2899,37 +2918,29 @@ bool interpreter::LoadBitcode(bool priv, const char *name, string *msg)
     bc_errmsg(name, msg);
     return false;
   }
-  // Check the target layout and triple of the module against our target and
-  // give diagnostics in case of a mismatch. NOTE: Currently we ignore
-  // mismatches in the target triple and just assume that bitcode files are ok
-  // if the data layouts match. Not sure whether this assumption is always
-  // valid.
-  const DataLayout& target_layout = module->getDataLayout();
-  const string layout = target_layout.getStringRepresentation();
-  const Triple target_triple(HOST);
-  // We only give diagnostics on first load, to prevent a cascade of error
-  // messages.
-#if 0
-  if (!loaded && !M->getTargetTriple().empty() &&
-      M->getTargetTriple() != triple) {
-    if (msg)
-      *msg = "Mismatch in target architecture '"+M->getTargetTriple()+"'";
-    bc_errmsg(name, msg);
-    return false;
-  }
-#endif
-  if (!loaded && !M->getDataLayoutStr().empty() &&
-      M->getDataLayoutStr() != layout) {
-    // Some producers have minor layout string differences which are irrelevant
-    // here, so compare endianness and pointer size before rejecting the module.
-    const DataLayout& module_layout = M->getDataLayout();
-    if (target_layout.isLittleEndian() != module_layout.isLittleEndian() ||
-	target_layout.getPointerSize() != module_layout.getPointerSize()) {
+  // Empty target metadata is unspecified and can be filled in. Explicit
+  // metadata must already describe the LLJIT ABI; assignment below only
+  // canonicalizes a compatible module and never converts an incompatible one.
+  const DataLayout& target_layout = ORC->data_layout();
+  const Triple& target_triple = ORC->target_triple();
+  if (!M->getTargetTriple().empty()) {
+    Triple module_triple(M->getTargetTriple().normalize());
+    if (const char *component =
+          incompatible_triple_component(module_triple, target_triple)) {
       if (msg)
-	*msg = "Mismatch in data layout '"+M->getDataLayoutStr()+"'";
+        *msg = "Incompatible target triple ("+string(component)+"): module '"+
+          module_triple.str()+"', JIT '"+target_triple.str()+"'";
       bc_errmsg(name, msg);
       return false;
     }
+  }
+  if (!M->getDataLayoutStr().empty() &&
+      M->getDataLayout() != target_layout) {
+    if (msg)
+      *msg = "Incompatible data layout: module '"+M->getDataLayoutStr()+
+        "', JIT '"+target_layout.getStringRepresentation()+"'";
+    bc_errmsg(name, msg);
+    return false;
   }
   M->setDataLayout(target_layout);
   M->setTargetTriple(target_triple);

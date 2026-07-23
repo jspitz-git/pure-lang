@@ -192,6 +192,11 @@ const llvm::DataLayout& PureJit::data_layout() const noexcept
   return jit_->getDataLayout();
 }
 
+const llvm::Triple& PureJit::target_triple() const noexcept
+{
+  return jit_->getTargetTriple();
+}
+
 llvm::orc::ResourceTrackerSP PureJit::create_resource_tracker()
 {
   return jit_->getMainJITDylib().createResourceTracker();

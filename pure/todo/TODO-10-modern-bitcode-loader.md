@@ -21,7 +21,7 @@ linked, compiled, and unloaded predictably.
 
 1. [x] Modernize file loading and bitcode parse error reporting.
 2. [x] Port symbol inspection, renaming, and module linking.
-3. [ ] Define compatible target triple and data-layout checks.
+3. [x] Define compatible target triple and data-layout checks.
 4. [ ] Submit loaded code as separately tracked ORC resources.
 5. [ ] Generate `.bc` test fixtures from source during the CMake build.
 6. [ ] Test duplicate symbols, malformed input, ABI mismatch, and unload behavior.
@@ -45,6 +45,22 @@ linked, compiled, and unloaded predictably.
 
 ## Progress Log
 
+- 2026-07-23: Defined conservative bitcode target compatibility checks.
+  - Exposed the actual LLJIT target triple alongside its authoritative data layout and
+    assigned both to the interpreter module during JIT initialization.
+  - Accept empty target metadata as unspecified and canonicalize it to the JIT target.
+  - For explicit triples, require matching architecture, subarchitecture, OS/version,
+    environment, and object format while allowing vendor-only spelling differences.
+  - Require semantic `DataLayout` equality instead of accepting modules which merely
+    share endianness and default pointer size.
+  - Validation:
+    - LLVM 22 debug build and `pure-jit-smoke` passed.
+    - Native Clang 22 bitcode loaded and executed successfully.
+    - Vendor-only and unspecified target metadata variants loaded successfully.
+    - AArch64 bitcode was rejected with an architecture diagnostic containing both
+      triples.
+    - A same-pointer-size layout with changed `i64` alignment was rejected with both
+      complete layouts in the diagnostic.
 - 2026-07-23: Ported generic bitcode symbol inspection and linking.
   - Inspect exported functions and copy their complete Pure ABI metadata before LLVM
     consumes the source module during linking.

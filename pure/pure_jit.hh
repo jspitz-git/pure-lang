@@ -28,6 +28,7 @@ namespace llvm {
 
 class DataLayout;
 class Module;
+class Triple;
 
 namespace orc {
 class LLJIT;
@@ -45,6 +46,7 @@ public:
   PureJit& operator=(const PureJit&) = delete;
 
   const llvm::DataLayout& data_layout() const noexcept;
+  const llvm::Triple& target_triple() const noexcept;
 
   llvm::orc::ResourceTrackerSP create_resource_tracker();
 
