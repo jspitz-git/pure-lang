@@ -1,0 +1,2 @@
+using "bc:basic";
+bc_call_helper 21;

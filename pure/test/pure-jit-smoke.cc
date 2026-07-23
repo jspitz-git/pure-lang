@@ -94,6 +94,65 @@ int main()
   }
   llvm::consumeError(removed_symbol.takeError());
 
+  std::unique_ptr<llvm::Module> provider
+    (new llvm::Module("pure-jit-provider", *context));
+  provider->setDataLayout((*jit)->data_layout());
+  provider->setTargetTriple((*jit)->target_triple());
+  llvm::Function *provider_function = llvm::Function::Create
+    (increment_type, llvm::Function::ExternalLinkage,
+     "pure_jit_smoke_provider", provider.get());
+  llvm::BasicBlock *provider_entry = llvm::BasicBlock::Create
+    (*context, "entry", provider_function);
+  llvm::IRBuilder<> provider_builder(provider_entry);
+  provider_builder.CreateRet(provider_builder.CreateAdd
+    (provider_function->getArg(0), llvm::ConstantInt::get(int32_type, 1)));
+
+  llvm::orc::ResourceTrackerSP provider_tracker =
+    (*jit)->create_resource_tracker();
+  if (llvm::Error error =
+        (*jit)->add_module_copy(provider_tracker, *provider))
+    return report_error(std::move(error));
+
+  std::unique_ptr<llvm::Module> consumer
+    (new llvm::Module("pure-jit-consumer", *context));
+  consumer->setDataLayout((*jit)->data_layout());
+  consumer->setTargetTriple((*jit)->target_triple());
+  llvm::Function *provider_declaration = llvm::Function::Create
+    (increment_type, llvm::Function::ExternalLinkage,
+     "pure_jit_smoke_provider", consumer.get());
+  llvm::Function *consumer_function = llvm::Function::Create
+    (function_type, llvm::Function::ExternalLinkage,
+     "pure_jit_smoke_consumer", consumer.get());
+  llvm::BasicBlock *consumer_entry = llvm::BasicBlock::Create
+    (*context, "entry", consumer_function);
+  llvm::IRBuilder<> consumer_builder(consumer_entry);
+  consumer_builder.CreateRet(consumer_builder.CreateCall
+    (provider_declaration, llvm::ConstantInt::get(int32_type, 41)));
+
+  llvm::orc::ResourceTrackerSP consumer_tracker =
+    (*jit)->create_resource_tracker();
+  if (llvm::Error error =
+        (*jit)->add_module_copy(consumer_tracker, *consumer))
+    return report_error(std::move(error));
+  llvm::Expected<std::int32_t (*)()> consumer_address =
+    (*jit)->lookup_function<std::int32_t()>("pure_jit_smoke_consumer");
+  if (!consumer_address) return report_error(consumer_address.takeError());
+  if ((*consumer_address)() != 42) {
+    llvm::errs() << "PureJit provider consumer returned the wrong value\n";
+    return 1;
+  }
+  if (llvm::Error error = consumer_tracker->remove())
+    return report_error(std::move(error));
+  if (llvm::Error error = provider_tracker->remove())
+    return report_error(std::move(error));
+  llvm::Expected<llvm::orc::ExecutorAddr> removed_provider =
+    (*jit)->lookup("pure_jit_smoke_provider");
+  if (removed_provider) {
+    llvm::errs() << "PureJit retained a removed provider symbol\n";
+    return 1;
+  }
+  llvm::consumeError(removed_provider.takeError());
+
   llvm::Function *missing_target = llvm::Function::Create
     (function_type, llvm::Function::ExternalLinkage,
      "pure_jit_smoke_missing_target", module.get());

@@ -1,6 +1,6 @@
 # TODO-10 - Modern Bitcode Loader
 
-Status: Open
+Status: Completed
 Branch: todo/10-modern-bitcode-loader
 
 ## Purpose
@@ -24,7 +24,7 @@ linked, compiled, and unloaded predictably.
 3. [x] Define compatible target triple and data-layout checks.
 4. [x] Submit loaded code as separately tracked ORC resources.
 5. [x] Generate `.bc` test fixtures from source during the CMake build.
-6. [ ] Test duplicate symbols, malformed input, ABI mismatch, and unload behavior.
+6. [x] Test duplicate symbols, malformed input, ABI mismatch, and unload behavior.
 
 ## Guardrails
 
@@ -45,6 +45,22 @@ linked, compiled, and unloaded predictably.
 
 ## Progress Log
 
+- 2026-07-23: Completed automated bitcode loader failure and lifecycle coverage.
+  - Added CTest integration cases for isolated duplicate exports, malformed bitcode,
+    incompatible target ABI, unresolved dependencies with rollback, and interpreter
+    teardown after loading a provider.
+  - Run scripts through the configured `run-test` environment on standard input so the
+    tests exercise interactive imports and preserve ordered diagnostics and recovery.
+  - Generate malformed and cross-target ABI fixtures during the build; canonical source
+    inputs remain in the repository instead of generated bitcode.
+  - Extended `pure-jit-smoke` with separate provider and consumer resource trackers,
+    removal in dependency order, and verification that the removed provider disappears.
+  - Validation:
+    - LLVM 22 debug build passed `pure-jit-smoke` and all five `pure-bitcode-*` tests.
+    - LLVM 22 ASan/UBSan build and `pure-jit-smoke` passed without sanitizer findings.
+    - The ASan black-box unload case was not used for lifecycle validation because its
+      prelude startup exceeded the 60-second integration-test timeout; the equivalent
+      tracker lifecycle is covered by the fast sanitizer smoke test.
 - 2026-07-23: Generated LLVM 22 bitcode fixtures from canonical C sources.
   - Added basic, duplicate-symbol, and unresolved-dependency fixture sources under
     `test/bitcode`; no generated binary bitcode is stored in the repository.
