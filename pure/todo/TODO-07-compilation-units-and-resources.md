@@ -19,7 +19,7 @@ be removed safely without mutating modules already owned by ORC.
 ## Task List
 
 1. [x] Define which declarations are recreated in each working module.
-2. [ ] Finalize, verify, optimize, and submit modules without later mutation.
+2. [x] Finalize, verify, optimize, and submit modules without later mutation.
 3. [ ] Track resources for anonymous evaluation and definition environments.
 4. [ ] Remove temporary evaluation resources after execution.
 5. [ ] Replace legacy function-code deletion and stale-module operations.
@@ -84,6 +84,16 @@ requirements, provider dependencies, and omitted values.
 
 ## Progress Log
 
+- 2026-07-23: Completed the immutable ORC module finalization pipeline.
+  - Each reduced snapshot is verified, optimized with a fresh standard module
+    O1 pipeline and local analysis managers, verified again, then moved into a
+    `ThreadSafeModule` and submitted without further mutation.
+  - The long-lived interpreter module remains const throughout snapshot creation.
+  - Validation:
+    - A clean full Debug build completed with zero warnings and errors.
+    - The ORC smoke test preserved its typed entry ABI, returned `42`, and
+      removed its tracker after O1 optimization.
+    - Isolated ORC evaluations still returned `1` and `2` for `1;` and `1+1;`.
 - 2026-07-23: Implemented entry-reachable reduced ORC snapshots.
   - After the fresh-context bitcode roundtrip, `PureJit` traverses instruction
     operands, constant initializers, aliases, and ifunc resolvers from one entry.

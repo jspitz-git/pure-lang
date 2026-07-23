@@ -22,6 +22,8 @@
 #include <llvm/IR/LLVMContext.h>
 #include <llvm/IR/Module.h>
 #include <llvm/IR/Verifier.h>
+#include <llvm/Passes/OptimizationLevel.h>
+#include <llvm/Passes/PassBuilder.h>
 #include <llvm/Support/MemoryBuffer.h>
 #include <llvm/Support/TargetSelect.h>
 #include <llvm/Support/raw_ostream.h>
@@ -61,6 +63,39 @@ static void collect_dependencies
       collect_dependencies(operand, reachable);
 }
 
+static llvm::Error verify_module(const llvm::Module& module,
+                                 llvm::StringRef stage)
+{
+  std::string verification_error;
+  llvm::raw_string_ostream verification_out(verification_error);
+  if (llvm::verifyModule(module, &verification_out)) {
+    verification_out.flush();
+    return llvm::createStringError("invalid %s ORC module: %s",
+                                   stage.str().c_str(),
+                                   verification_error.c_str());
+  }
+  return llvm::Error::success();
+}
+
+static llvm::Error optimize_module(llvm::Module& module)
+{
+  llvm::LoopAnalysisManager loops;
+  llvm::FunctionAnalysisManager functions;
+  llvm::CGSCCAnalysisManager cgscc;
+  llvm::ModuleAnalysisManager modules;
+  llvm::PassBuilder builder;
+  builder.registerLoopAnalyses(loops);
+  builder.registerFunctionAnalyses(functions);
+  builder.registerCGSCCAnalyses(cgscc);
+  builder.registerModuleAnalyses(modules);
+  builder.crossRegisterProxies(loops, functions, cgscc, modules);
+
+  llvm::ModulePassManager pipeline =
+    builder.buildPerModuleDefaultPipeline(llvm::OptimizationLevel::O1);
+  pipeline.run(module, modules);
+  return verify_module(module, "optimized");
+}
+
 static llvm::Error reduce_to_entry(llvm::Module& module,
                                    llvm::StringRef entry_name)
 {
@@ -97,14 +132,7 @@ static llvm::Error reduce_to_entry(llvm::Module& module,
   }
 
   entry->setLinkage(llvm::GlobalValue::ExternalLinkage);
-  std::string verification_error;
-  llvm::raw_string_ostream verification_out(verification_error);
-  if (llvm::verifyModule(module, &verification_out)) {
-    verification_out.flush();
-    return llvm::createStringError("invalid reduced ORC module: %s",
-                                   verification_error.c_str());
-  }
-  return llvm::Error::success();
+  return verify_module(module, "reduced");
 }
 
 llvm::Expected<std::unique_ptr<PureJit> > PureJit::create()
@@ -166,6 +194,7 @@ llvm::Error PureJit::add_module_copy(llvm::orc::ResourceTrackerSP tracker,
   if (!exported_symbol.empty())
     if (llvm::Error error = reduce_to_entry(**copy, exported_symbol))
       return error;
+  if (llvm::Error error = optimize_module(**copy)) return error;
 
   llvm::orc::ThreadSafeModule thread_safe_module
     (std::move(*copy), std::move(context));
