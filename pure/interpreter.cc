@@ -2032,7 +2032,7 @@ bool interpreter::LoadFaustDSP(bool priv, const char *name, string *msg,
 	 f != funptrs.end(); ++f) {
       string fname = (*f)->getName().str();
       (*f)->dropAllReferences();
-      JIT->freeMachineCodeForFunction(*f);
+      // ORC resource trackers will reclaim the corresponding machine code.
     }
     for (list<GlobalVariable*>::iterator v = varptrs.begin();
 	 v != varptrs.end(); ++v) {
@@ -11267,8 +11267,8 @@ void Env::clear()
     std::cerr << "clearing local '" << name << "'\n";
 #endif
     if (!refp || *refp == 0) {
-      if (h != f) interp.JIT->freeMachineCodeForFunction(h);
-      interp.JIT->freeMachineCodeForFunction(f);
+      // The transitional execution engine retains machine code until shutdown;
+      // ORC resource trackers will reclaim local compilation units.
     } else {
       /* The code for this function is still used in a closure somewhere. To
 	 avoid dangling function pointers, we just unmap the function pointer
@@ -11309,8 +11309,8 @@ void Env::clear()
 	}
       }
       if (dead) {
-	if (h != f) interp.JIT->freeMachineCodeForFunction(h);
-	interp.JIT->freeMachineCodeForFunction(f);
+	// The transitional execution engine retains machine code until shutdown;
+	// ORC resource trackers will reclaim superseded definitions.
       } else {
 	/* Keep the code for a function which is still bound by a closure.
 	   See the remarks above. */
@@ -13340,8 +13340,8 @@ pure_expr *interpreter::doeval(expr x, pure_expr*& e, bool keep)
     begin_stats();
     res = pure_invoke(fp, &e);
     end_stats();
-    // Get rid of our anonymous function.
-    JIT->freeMachineCodeForFunction(f.f);
+    // Get rid of our anonymous function IR. The transitional execution engine
+    // retains its machine code until shutdown; ORC will use a resource tracker.
     f.f->eraseFromParent();
     // If there are no more references, we can get rid of the environment now.
     if (fptr->refc == 1)
@@ -13543,8 +13543,8 @@ pure_expr *interpreter::dodefn(env vars, const vinfo& vi,
   begin_stats();
   res = pure_invoke(fp, &e);
   end_stats();
-  // Get rid of our anonymous function.
-  JIT->freeMachineCodeForFunction(f.f);
+  // The transitional execution engine retains anonymous machine code until
+  // shutdown; ORC will remove it through the compilation unit's tracker.
   if (!keep) {
     f.f->eraseFromParent();
     // If there are no more references, we can get rid of the environment now.

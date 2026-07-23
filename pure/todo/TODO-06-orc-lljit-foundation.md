@@ -44,6 +44,19 @@ without exposing ORC details throughout the interpreter.
 
 ## Progress Log
 
+- 2026-07-23: Removed all seven calls to the deleted
+  `ExecutionEngine::freeMachineCodeForFunction` API.
+  - No one-for-one compatibility shim was added. The transitional engine keeps
+    generated code until shutdown while IR cleanup remains unchanged.
+  - Comments identify the future ORC `ResourceTracker` boundaries for Faust
+    reloads, local/global definitions, and anonymous evaluation units; actual
+    fine-grained reclamation belongs to TODO-07 and TODO-09.
+  - Validation:
+    - `interpreter.cc` now compiles with zero warnings and errors.
+    - The full build advanced for the first time to `runtime.cc`, where it found
+      three unrelated missing directory-API declarations and one numeric
+      conversion warning.
+    - No `freeMachineCodeForFunction` call remains in the source tree.
 - 2026-07-23: Added the interpreter-side ORC creation and diagnostic boundary.
   - Each interpreter now owns a `PureJit`; creation failures are converted from
     LLVM `Expected` into a contextual Pure `err` only at this higher layer.
