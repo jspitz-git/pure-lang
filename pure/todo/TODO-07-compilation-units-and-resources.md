@@ -84,6 +84,18 @@ requirements, provider dependencies, and omitted values.
 
 ## Progress Log
 
+- 2026-07-23: Connected escaped evaluation resources to `Env` destruction.
+  - `Env::clear` idempotently removes any tracker retained for that environment
+    and reports LLVM removal failures, completing the delayed cleanup path for
+    escaped evaluation closures.
+  - Validation:
+    - Full Debug build and isolated ORC smoke test passed with zero warnings and
+      errors.
+    - Single and repeated scalar evaluations completed without environment or
+      shutdown removal diagnostics.
+    - A lambda evaluation now stops cleanly at unresolved `$$fptr$$`, confirming
+      that escaped-closure execution is blocked by TODO-08 host bindings rather
+      than resource registry lifetime.
 - 2026-07-23: Added interpreter-owned compilation-unit resource tracking for
   anonymous ORC evaluation.
   - Trackers are registered by `Env` identity before invocation. A non-escaping

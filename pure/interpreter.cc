@@ -117,6 +117,13 @@ struct CompilationUnitResources {
     return tracker->remove();
   }
 
+  void remove_and_report(const Env *environment)
+  {
+    if (llvm::Error error = remove(environment))
+      llvm::logAllUnhandledErrors(std::move(error), llvm::errs(),
+                                  "failed to remove ORC environment unit: ");
+  }
+
   llvm::Error remove_all()
   {
     llvm::Error errors = llvm::Error::success();
@@ -11320,9 +11327,11 @@ void Env::clear()
      shared by any number of different Env objects and runtime closures. That
      saves us an extra refcounter on the refcounter itself. Oh well. */
   static list<Function*> to_be_deleted;
+  interpreter& interp = *interpreter::g_interp;
+  if (interp.compilation_units)
+    interp.compilation_units->remove_and_report(this);
   if (!f) return; // not initialized
   if (rp) delete rp;
-  interpreter& interp = *interpreter::g_interp;
   if (local) {
     // purge local functions
 #if DEBUG>2
