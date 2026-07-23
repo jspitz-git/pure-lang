@@ -21,7 +21,7 @@ without exposing ORC details throughout the interpreter.
 1. [x] Define the narrow `PureJit` API and ownership model.
 2. [x] Create `LLJIT`, its main `JITDylib`, and process symbol generator.
 3. [x] Add `ThreadSafeModule` submission and typed address lookup helpers.
-4. [ ] Convert LLVM `Error` and `Expected` failures to actionable Pure messages.
+4. [x] Convert LLVM `Error` and `Expected` failures to actionable Pure messages.
 5. [x] Compile and invoke a minimal constant-returning function.
 6. [ ] Route initial interpreter evaluation through `PureJit`.
 
@@ -44,6 +44,18 @@ without exposing ORC details throughout the interpreter.
 
 ## Progress Log
 
+- 2026-07-23: Added the interpreter-side ORC creation and diagnostic boundary.
+  - Each interpreter now owns a `PureJit`; creation failures are converted from
+    LLVM `Expected` into a contextual Pure `err` only at this higher layer.
+  - The interpreter module takes its data layout from ORC.
+  - The temporary legacy `EngineBuilder` now receives explicit
+    `unique_ptr<Module>` ownership and no longer uses the removed
+    `setAllocateGVsWithCode` option. It remains only for operations not yet
+    routed through ORC.
+  - Validation:
+    - The isolated `pure-jit-smoke` CTest still passes.
+    - The full Debug build has zero warnings and dropped from nine to seven
+      errors, all of which are removed `freeMachineCodeForFunction` calls.
 - 2026-07-23: Added and executed an independent ORC module lifecycle smoke test.
   - `lookup_function<FunctionType>` converts `Expected<ExecutorAddr>` to a
     compile-time checked function pointer while preserving lookup errors.

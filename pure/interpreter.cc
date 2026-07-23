@@ -35,6 +35,7 @@ char *alloca ();
 #endif
 
 #include "interpreter.hh"
+#include "pure_jit.hh"
 #include "util.hh"
 #include <cmath>
 #include <memory>
@@ -264,15 +265,19 @@ void interpreter::init()
      horrible, maybe we should drop support for anything older than LLVM 2.6
      in the future. */
   init_llvm_target();
+  Expected<std::unique_ptr<PureJit> > orc = PureJit::create();
+  if (!orc)
+    throw err("failed to create ORC JIT: "+toString(orc.takeError()));
+  ORC = orc->release();
   module = new Module(modname, context);
   pass_state = new NewPassManagerState;
 #if !LLVM27
   MP = new ExistingModuleProvider(module);
 #endif
 #if LLVM31
-  llvm::EngineBuilder factory(module);
+  std::unique_ptr<Module> owned_module(module);
+  llvm::EngineBuilder factory(std::move(owned_module));
   factory.setEngineKind(llvm::EngineKind::JIT);
-  factory.setAllocateGVsWithCode(false);
 #if USE_FASTCC || FAST_JIT
   llvm::TargetOptions Opts;
 #if USE_FASTCC
@@ -323,7 +328,7 @@ void interpreter::init()
 #endif // LLVM 2.5 and earlier
 #endif // LLVM 3.0 or earlier
   assert(JIT);
-  module->setDataLayout(JIT->getDataLayout());
+  module->setDataLayout(ORC->data_layout());
 
   // Install a fallback mechanism to resolve references to the runtime, on
   // systems which do not allow the program to dlopen itself.
@@ -797,7 +802,7 @@ interpreter::interpreter(int _argc, char **_argv)
     nerrs(0), modno(-1), modctr(0), source_s(0), output(0),
     result(0), lastres(0), mem(0), exps(0), tmps(0), freectr(0),
     specials_only(false), module(0),
-    JIT(0), pass_state(0), astk(0), sstk(__sstk),
+    JIT(0), ORC(0), pass_state(0), astk(0), sstk(__sstk),
     stoplevel(0), tracelevel(-1), debug_skip(false), trace_skip(false),
     fptr(__fptr), tags(0), line(0), column(0), tags_init(false),
     declare_op(false)
@@ -827,7 +832,7 @@ interpreter::interpreter(int32_t nsyms, char *syms,
     nerrs(0), modno(-1), modctr(0), source_s(0), output(0),
     result(0), lastres(0), mem(0), exps(0), tmps(0), freectr(0),
     specials_only(false), module(0),
-    JIT(0), pass_state(0), astk(0), sstk(*_sstk),
+    JIT(0), ORC(0), pass_state(0), astk(0), sstk(*_sstk),
     stoplevel(0), tracelevel(-1), debug_skip(false), trace_skip(false),
     fptr(*(Env**)_fptr), tags(0), line(0), column(0), tags_init(false),
     declare_op(false)
@@ -951,6 +956,7 @@ interpreter::~interpreter()
   if (JIT) delete JIT;
 #endif
   delete pass_state;
+  delete ORC;
   // if this was the global interpreter, reset it now
   if (g_interp == this) g_interp = 0;
 }
