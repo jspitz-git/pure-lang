@@ -21,7 +21,7 @@ released without stale function or global pointers.
 1. [x] Document the expected Faust-generated symbols and supported ABI variants.
 2. [x] Port module validation, name mangling, and wrapper IR generation.
 3. [x] Implement reliable single/double precision detection.
-4. [ ] Add Faust module resources and stable reload bindings.
+4. [x] Add Faust module resources and stable reload bindings.
 5. [ ] Retire old generations only after live wrappers no longer reference them.
 6. [ ] Test initial load, unchanged reload, changed reload, and rejected ABI changes.
 
@@ -123,6 +123,31 @@ Symbol order in the LLVM module is not ABI-significant.
 
 ## Progress Log
 
+- 2026-07-24: Added separately tracked Faust ORC generations and stable reload bindings.
+  - Keep interactive Faust definitions out of the long-lived interpreter module; generate
+    convenience wrappers in the staged provider and qualify every definition by generation.
+  - Submit each complete generation under one ORC tracker and resolve every Pure-visible
+    export before preparing or publishing any stable dispatch-slot update.
+  - Preserve stable logical declarations and Pure wrappers across reloads, while physical
+    provider symbols remain unique and old successful trackers stay retained for task 5.
+  - Compare the complete operation set and LLVM function types before reload submission;
+    failed validation or materialization leaves slots, timestamps, and precision unchanged.
+  - Reuse existing stable declarations and dispatch globals for unchanged imports into new
+    namespaces, and keep the link-into-output batch path separate from interactive ORC.
+  - Remove retained Faust trackers during interpreter teardown after compiled wrappers and
+    before host symbols; do not retire superseded generations in this step.
+  - Validation:
+    - LLVM 22 debug build passed, as did `pure-jit-smoke` and all five `pure-bitcode-*` tests.
+    - A Faust 2.70.3 `pure.c` provider executed `newinit`, channel queries, `info`, `meta`,
+      and `delete` through ORC-backed stable wrappers, then returned `42`.
+    - A reload scenario returned `11`, switched the same wrappers to generation 2 returning
+      `22`, rejected an unresolved generation and an operation-set change, and continued to
+      return `22` after both failures.
+    - The ASan/UBSan build and `pure-jit-smoke` passed; a no-prelude run loaded two Faust
+      providers, rejected unsupported formats, and tore down without sanitizer findings.
+    - Batch-specific execution could not be completed in the current tree because its
+      existing tool path invokes obsolete `opt -std-compile-opts` and expects installed
+      `/usr/local` Pure runtime artifacts; the retained batch branch compiles in both builds.
 - 2026-07-23: Implemented opaque-pointer-safe Faust sample ABI detection.
   - Replaced source-filename `-single`/`-double` inference with the explicit constant
     `pure_faust_sample_format` marker, accepting only `float` and `double` public ABIs.

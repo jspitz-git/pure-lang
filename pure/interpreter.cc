@@ -140,6 +140,8 @@ struct CompilationUnitResources {
   map<const Env*, llvm::orc::ResourceTrackerSP> trackers;
   map<const llvm::Function*, CompiledFunction> functions;
   map<string, llvm::orc::ResourceTrackerSP> bitcode_modules;
+  map<string, list<llvm::orc::ResourceTrackerSP> > faust_modules;
+  map<string, uint64_t> next_faust_generations;
   map<string, HostSymbol> host_symbols;
   map<uint32_t, FunctionGeneration> implementations;
   map<uint32_t, set<uint32_t> > key_implementations;
@@ -224,6 +226,19 @@ struct CompilationUnitResources {
   {
     assert(!key.empty() && tracker && bitcode_modules.find(key) == bitcode_modules.end());
     bitcode_modules.emplace(std::move(key), std::move(tracker));
+  }
+
+  uint64_t next_faust_generation(const string& module_name)
+  {
+    assert(!module_name.empty());
+    return ++next_faust_generations[module_name];
+  }
+
+  void retain_faust(string module_name,
+                    llvm::orc::ResourceTrackerSP tracker)
+  {
+    assert(!module_name.empty() && tracker);
+    faust_modules[module_name].push_back(std::move(tracker));
   }
 
   uint64_t next_generation(int32_t tag)
@@ -375,6 +390,17 @@ struct CompilationUnitResources {
       llvm::orc::ResourceTrackerSP tracker = std::move(it->second.tracker);
       implementations.erase(it);
       errors = llvm::joinErrors(std::move(errors), tracker->remove());
+    }
+    while (!faust_modules.empty()) {
+      map<string, list<llvm::orc::ResourceTrackerSP> >::iterator module =
+        faust_modules.begin();
+      while (!module->second.empty()) {
+        llvm::orc::ResourceTrackerSP tracker =
+          std::move(module->second.front());
+        module->second.pop_front();
+        errors = llvm::joinErrors(std::move(errors), tracker->remove());
+      }
+      faust_modules.erase(module);
     }
     while (!bitcode_modules.empty()) {
       map<string, llvm::orc::ResourceTrackerSP>::iterator it =
@@ -2425,9 +2451,10 @@ bool interpreter::LoadFaustDSP(bool priv, const char *name, string *msg,
   if (!stat(name, &st)) mtime = st.st_mtime;
   // Check whether the module has already been loaded.
   bool loaded = loaded_dsps.find(modname) != loaded_dsps.end();
-  bool declared = loaded &&
+  bool active_loaded = loaded && !loaded_dsps[modname].funptrs.empty();
+  bool declared = active_loaded &&
     loaded_dsps[modname].declared(*symtab.current_namespace);
-  bool modified = !loaded || loaded_dsps[modname].t < mtime;
+  bool modified = !active_loaded || loaded_dsps[modname].t < mtime;
   if (loaded) {
     // Module already loaded. Do some consistency checks.
     if (declared &&
@@ -2440,6 +2467,37 @@ bool interpreter::LoadFaustDSP(bool priv, const char *name, string *msg,
     }
     // Check whether there's anything to do.
     if (declared && !modified) return true;
+    if (!modified && !compiling) {
+      // The interactive provider is immutable and lives in ORC. A declaration
+      // in another namespace only needs another Pure wrapper around the same
+      // stable logical declarations and dispatch slots.
+      bcdata_t& data = loaded_dsps[modname];
+      for (list<Function*>::const_iterator it = data.funptrs.begin();
+           it != data.funptrs.end(); ++it) {
+        Function *f = *it;
+        string prefix = "$$faust$"+modname+"$";
+        assert(f && f->isDeclaration() && f->getName().starts_with(prefix));
+        string operation = f->getName().drop_front(prefix.size()).str();
+        FunctionType *ft = f->getFunctionType();
+        string restype = dsptype_name
+          (operation, ft->getReturnType(), 0, true, data.dbl);
+        list<string> argtypes;
+        for (size_t i = 0; i < ft->getNumParams(); ++i)
+          argtypes.push_back(dsptype_name
+            (operation, ft->getParamType(i), i, false, data.dbl));
+        declare_extern(priv, f->getName().str(), restype, argtypes, false, 0,
+                       modname+"::"+operation, false, false);
+        symbol *sym = symtab.sym(modname+"::"+operation);
+        assert(sym);
+        required.push_back(sym->f);
+      }
+      if (symtab.current_namespace->empty())
+        namespaces.insert(modname);
+      else
+        namespaces.insert(*symtab.current_namespace+"::"+modname);
+      data.declare(*symtab.current_namespace, priv);
+      return true;
+    }
   }
   std::unique_ptr<MemoryBuffer> buf = get_membuf(name, msg);
   if (!buf) {
@@ -2653,7 +2711,7 @@ bool interpreter::LoadFaustDSP(bool priv, const char *name, string *msg,
   }
   if (!have_sample_format)
     return fail("Missing Faust public sample format metadata");
-  if (loaded && modified && loaded_dsps[modname].dbl != is_double) {
+  if (active_loaded && modified && loaded_dsps[modname].dbl != is_double) {
     string prec = (!is_double)?"double":"float";
     return fail("Module was previously loaded with the "+prec+" sample ABI");
   }
@@ -2663,6 +2721,11 @@ bool interpreter::LoadFaustDSP(bool priv, const char *name, string *msg,
   // produce weird names when emitting LLVM assembler code in the batch
   // compiler. In the future we may want to mangle those, too, if only for
   // cosmetic purposes.
+  uint64_t faust_generation =
+    (!compiling && modified) ?
+      compilation_units->next_faust_generation(modname) : 0;
+  string generation_suffix = faust_generation ?
+    "$g"+to_string(faust_generation)+"$" : "$";
   list<string> funs, aux_funs, vars;
   map<Function*, string> export_names;
   for (map<string, Function*>::iterator it = faust_exports.begin();
@@ -2683,10 +2746,10 @@ bool interpreter::LoadFaustDSP(bool priv, const char *name, string *msg,
     map<Function*, string>::iterator exported = export_names.find(&f);
     if (exported != export_names.end())
       rename_plan.push_back(make_pair
-        (&f, "$$faust$"+modname+"$"+exported->second));
+        (&f, "$$faust$"+modname+generation_suffix+exported->second));
     else {
       rename_plan.push_back(make_pair
-        (&f, "$$__faust__$"+modname+"$"+source_name));
+        (&f, "$$__faust__$"+modname+generation_suffix+source_name));
       aux_funs.push_back(source_name);
     }
   }
@@ -2696,19 +2759,21 @@ bool interpreter::LoadFaustDSP(bool priv, const char *name, string *msg,
     if (v.isDeclaration() || !v.hasName()) continue;
     string source_name = v.getName().str();
     rename_plan.push_back(make_pair
-      (&v, "$$__faust__$"+modname+"$"+source_name));
+      (&v, "$$__faust__$"+modname+generation_suffix+source_name));
     vars.push_back(source_name);
   }
   for (Module::alias_iterator it = M->alias_begin(), end = M->alias_end();
        it != end; ++it)
     if (!it->isDeclaration() && it->hasName())
       rename_plan.push_back(make_pair
-        (&*it, "$$__faust__$"+modname+"$"+it->getName().str()));
+        (&*it, "$$__faust__$"+modname+generation_suffix+
+         it->getName().str()));
   for (Module::ifunc_iterator it = M->ifunc_begin(), end = M->ifunc_end();
        it != end; ++it)
     if (!it->isDeclaration() && it->hasName())
       rename_plan.push_back(make_pair
-        (&*it, "$$__faust__$"+modname+"$"+it->getName().str()));
+        (&*it, "$$__faust__$"+modname+generation_suffix+
+         it->getName().str()));
 
   set<string> destination_names;
   for (vector<pair<GlobalValue*, string> >::iterator it = rename_plan.begin();
@@ -2724,7 +2789,7 @@ bool interpreter::LoadFaustDSP(bool priv, const char *name, string *msg,
     if (it->first->getName() != it->second)
       return fail("Failed to mangle Faust symbol as '"+it->second+"'");
   }
-  if (loaded && modified) {
+  if (compiling && loaded && modified) {
     // Get rid of all globals of the old module.
     bcdata_t& data = loaded_dsps[modname];
     list<Function*>& funptrs = data.funptrs;
@@ -2748,13 +2813,39 @@ bool interpreter::LoadFaustDSP(bool priv, const char *name, string *msg,
     for (list<GlobalVariable*>::iterator v = varptrs.begin();
 	 v != varptrs.end(); ++v) (*v)->eraseFromParent();
   }
-  // Link the mangled module into the Pure module. This only needs to be done
-  // if the module was modified.
-  if (modified && Linker::linkModules(*module, std::move(M))) {
-    if (msg && msg->empty()) *msg = "Error linking dsp module";
-    dsp_errmsg(name, msg);
-    return false;
+  // Batch output still needs provider definitions in the emitted module.
+  // Interactive generations remain isolated in the staged module and are
+  // submitted to ORC as one resource-tracked unit below.
+  Module *faust_module = 0;
+  if (compiling) {
+    if (modified && Linker::linkModules(*module, std::move(M))) {
+      if (msg && msg->empty()) *msg = "Error linking dsp module";
+      dsp_errmsg(name, msg);
+      return false;
+    }
+    faust_module = module;
+  } else {
+    assert(modified && M);
+    faust_module = M.get();
   }
+  auto faust_name = [&](const string& operation) {
+    return "$$faust$"+modname+generation_suffix+operation;
+  };
+  auto faust_aux_name = [&](const string& source_name) {
+    return "$$__faust__$"+modname+generation_suffix+source_name;
+  };
+  auto runtime_helper = [&](const string& helper_name) -> Function* {
+    Function *helper = faust_module->getFunction(helper_name);
+    if (helper) return helper;
+    Function *source = module->getFunction(helper_name);
+    assert(source);
+    helper = Function::Create(source->getFunctionType(),
+                              Function::ExternalLinkage, helper_name,
+                              faust_module);
+    helper->setCallingConv(source->getCallingConv());
+    helper->setAttributes(source->getAttributes());
+    return helper;
+  };
   // Add some convenience functions.
   list<string> myfuns;
   myfuns.push_back("newinit");
@@ -2763,13 +2854,13 @@ bool interpreter::LoadFaustDSP(bool priv, const char *name, string *msg,
     // The newinit function calls new then init, yielding a properly
     // initialized dsp instance. It takes one i32 argument, the samplerate.
     {
-      Function *newfun = module->getFunction("$$faust$"+modname+"$new");
-      Function *initfun = module->getFunction("$$faust$"+modname+"$init");
+      Function *newfun = faust_module->getFunction(faust_name("new"));
+      Function *initfun = faust_module->getFunction(faust_name("init"));
       llvm_const_Type *dsp_ty = newfun->getReturnType();
       vector<llvm_const_Type*> argt(1, int32_type());
       FunctionType *ft = func_type(dsp_ty, argt, false);
       Function *f = Function::Create(ft, Function::ExternalLinkage,
-				     "$$faust$"+modname+"$newinit", module);
+                                     faust_name("newinit"), faust_module);
       BasicBlock *bb = basic_block("entry", f);
       Builder b(context);
       b.SetInsertPoint(bb);
@@ -2800,8 +2891,8 @@ bool interpreter::LoadFaustDSP(bool priv, const char *name, string *msg,
     // format as the faust_info function in the pure-faust module.
     {
       // This is the Faust function to initialize the UI data structure.
-      Function *buildUserInterface = module->getFunction
-	("$$faust$"+modname+"$buildUserInterface");
+      Function *buildUserInterface = faust_module->getFunction
+        (faust_name("buildUserInterface"));
       // The first argument gives the validated opaque dsp pointer type.
       llvm_const_FunctionType *ht = buildUserInterface->getFunctionType();
       llvm_const_Type *dsp_type = ht->getParamType(0);
@@ -2809,16 +2900,16 @@ bool interpreter::LoadFaustDSP(bool priv, const char *name, string *msg,
       vector<llvm_const_Type*> argt(1, dsp_type);
       FunctionType *ft = func_type(ExprPtrTy, argt, false);
       Function *f = Function::Create(ft, Function::ExternalLinkage,
-				     "$$faust$"+modname+"$info", module);
+                                     faust_name("info"), faust_module);
       BasicBlock *bb = basic_block("entry", f);
       Builder b(context);
       b.SetInsertPoint(bb);
       // Call getNumInputs and getNumOutputs to obtain the number of input and
       // output channels.
       Function *getNumInputs =
-	module->getFunction("$$faust$"+modname+"$getNumInputs");
+        faust_module->getFunction(faust_name("getNumInputs"));
       Function *getNumOutputs =
-	module->getFunction("$$faust$"+modname+"$getNumOutputs");
+        faust_module->getFunction(faust_name("getNumOutputs"));
       vector<Value*> args;
       Function::arg_iterator a = f->arg_begin();
       // Historical modules may independently define either channel-count
@@ -2829,8 +2920,8 @@ bool interpreter::LoadFaustDSP(bool priv, const char *name, string *msg,
       if (getNumOutputs->arg_size() > 0) args.push_back(a);
       Value *n_out = b.CreateCall(getNumOutputs, mkargs(args));
       // Call the runtime function to create the internal UI data structure.
-      Function *uifun = module->getFunction
-	(is_double?"faust_double_ui":"faust_float_ui");
+      Function *uifun = runtime_helper
+        (is_double?"faust_double_ui":"faust_float_ui");
       args.clear();
       Value *v = b.CreateCall(uifun, mkargs(args));
       // Pointer roles were validated before mangling; LLVM 22 represents both
@@ -2839,12 +2930,13 @@ bool interpreter::LoadFaustDSP(bool priv, const char *name, string *msg,
       args.push_back(v);
       b.CreateCall(buildUserInterface, mkargs(args));
       // Construct the info tuple.
-      Function *infofun = module->getFunction("faust_make_info");
+      Function *infofun = runtime_helper("faust_make_info");
       // Pass the module name so that faust_make_info knows about the dsp name.
       GlobalVariable *w = global_variable
-	(module, ArrayType::get(int8_type(), modname.size()+1), true,
-	 GlobalVariable::InternalLinkage, constant_char_array(modname.c_str()),
-	 "$$faust_str");
+        (faust_module, ArrayType::get(int8_type(), modname.size()+1), true,
+         GlobalVariable::InternalLinkage,
+         constant_char_array(modname.c_str()),
+         faust_aux_name("module_name"));
       // "cast" the char array to a char*
       Value *idx[2] = { ConstantInt::get(interpreter::int32_type(), 0),
 			ConstantInt::get(interpreter::int32_type(), 0) };
@@ -2856,7 +2948,7 @@ bool interpreter::LoadFaustDSP(bool priv, const char *name, string *msg,
       args.push_back(p);
       Value *u = b.CreateCall(infofun, mkargs(args));
       // Get rid of the internal UI data structure.
-      Function *freefun = module->getFunction("faust_free_ui");
+      Function *freefun = runtime_helper("faust_free_ui");
       args.clear();
       args.push_back(v);
       b.CreateCall(freefun, mkargs(args));
@@ -2868,31 +2960,31 @@ bool interpreter::LoadFaustDSP(bool priv, const char *name, string *msg,
     // faust_meta function in the pure-faust module. Note that older Faust2
     // versions (before git rev. 2ecd0a40) don't support this, so this
     // function is only added if this feature is actually available.
-    Function *metadata = module->getFunction("$$faust$"+modname+"$metadata");
+    Function *metadata = faust_module->getFunction(faust_name("metadata"));
     if (metadata) {
       myfuns.push_back("meta");
       // Create the call interface of our convenience function.
       vector<llvm_const_Type*> argt;
       FunctionType *ft = func_type(ExprPtrTy, argt, false);
       Function *f = Function::Create(ft, Function::ExternalLinkage,
-				     "$$faust$"+modname+"$meta", module);
+                                     faust_name("meta"), faust_module);
       BasicBlock *bb = basic_block("entry", f);
       Builder b(context);
       b.SetInsertPoint(bb);
       // Call the runtime function to create the internal meta data structure.
-      Function *newfun = module->getFunction("faust_new_metadata");
+      Function *newfun = runtime_helper("faust_new_metadata");
       vector<Value*> args;
       Value *v = b.CreateCall(newfun, mkargs(args));
       // The metadata pointer role was validated before mangling.
       args.push_back(v);
       b.CreateCall(metadata, mkargs(args));
       // Construct the metadata list.
-      Function *makefun = module->getFunction("faust_make_metadata");
+      Function *makefun = runtime_helper("faust_make_metadata");
       args.clear();
       args.push_back(v);
       Value *u = b.CreateCall(makefun, mkargs(args));
       // Get rid of the internal meta data structure.
-      Function *freefun = module->getFunction("faust_free_metadata");
+      Function *freefun = runtime_helper("faust_free_metadata");
       args.clear();
       args.push_back(v);
       b.CreateCall(freefun, mkargs(args));
@@ -2902,18 +2994,18 @@ bool interpreter::LoadFaustDSP(bool priv, const char *name, string *msg,
     // getSampleRate is already implemented in the latest faust2 versions.
     // On older faust2 versions we emulate it if possible.
     GlobalVariable *sr = have_getSampleRate?0:
-      module->getNamedGlobal("$$__faust__$"+modname+"$fSamplingFreq");
+      faust_module->getNamedGlobal(faust_aux_name("fSamplingFreq"));
     if (sr && sr->getValueType() == int32_type()) {
       // The getSampleRate function takes a dsp as parameter and returns its
       // sample rate.
       myfuns.push_back("getSampleRate");
-      Function *newfun = module->getFunction("$$faust$"+modname+"$new");
+      Function *newfun = faust_module->getFunction(faust_name("new"));
       llvm_const_Type *dsp_ty = newfun->getReturnType();
       vector<llvm_const_Type*> argt(1, dsp_ty);
       FunctionType *ft = func_type(int32_type(), argt, false);
       Function *f = Function::Create(ft, Function::ExternalLinkage,
-				     "$$faust$"+modname+"$getSampleRate",
-				     module);
+                                     faust_name("getSampleRate"),
+                                     faust_module);
       BasicBlock *bb = basic_block("entry", f);
       Builder b(context);
       b.SetInsertPoint(bb);
@@ -2923,139 +3015,257 @@ bool interpreter::LoadFaustDSP(bool priv, const char *name, string *msg,
   }
   if (modified) {
     string wrapper_verification_error;
-    if (!verify_module(*module, wrapper_verification_error))
+    if (!verify_module(*faust_module, wrapper_verification_error))
       return fail("Invalid linked dsp module: "+wrapper_verification_error);
   }
   funs.insert(funs.end(), myfuns.begin(), myfuns.end());
-  // Record the newly created function and variable pointers. These are to be
-  // stored in the module table so that we can remove them later when the
-  // module gets reloaded.
-  list<Function*> funptrs;
-  list<GlobalVariable*> varptrs;
-  for (list<string>::iterator f = funs.begin(); f != funs.end(); ++f) {
-    string fname = "$$faust$"+modname+"$"+*f;
-    Function *g = module->getFunction(fname);
-    assert(g);
-    funptrs.push_back(g);
+  if (!compiling && active_loaded) {
+    const list<Function*>& stable_exports = loaded_dsps[modname].funptrs;
+    if (stable_exports.size() != funs.size())
+      return fail("Faust reload changes the exported operation set");
+    list<Function*>::const_iterator stable = stable_exports.begin();
+    for (list<string>::const_iterator operation = funs.begin();
+         operation != funs.end(); ++operation, ++stable) {
+      string logical_name = "$$faust$"+modname+"$"+*operation;
+      Function *physical = faust_module->getFunction(faust_name(*operation));
+      if (!*stable || (*stable)->getName() != logical_name || !physical ||
+          (*stable)->getFunctionType() != physical->getFunctionType())
+        return fail("Faust reload changes the ABI of operation '"+
+                    *operation+"'");
+    }
   }
-  for (list<string>::iterator f = aux_funs.begin(); f != aux_funs.end(); ++f) {
-    string fname = "$$__faust__$"+modname+"$"+*f;
-    Function *g = module->getFunction(fname);
-    assert(g);
-    funptrs.push_back(g);
+  if (!compiling && !declared) {
+    // Preflight all long-lived declarations before provider submission so a
+    // normal symbol/privacy conflict cannot leave a partially prepared import.
+    for (list<string>::const_iterator operation = funs.begin();
+         operation != funs.end(); ++operation) {
+      Function *physical = faust_module->getFunction(faust_name(*operation));
+      assert(physical);
+      string logical_name = "$$faust$"+modname+"$"+*operation;
+      Function *stable = module->getFunction(logical_name);
+      if (stable && (!stable->isDeclaration() ||
+                     stable->getFunctionType() != physical->getFunctionType()))
+        return fail("Conflicting stable Faust declaration '"+logical_name+"'");
+      string asname = modname+"::"+*operation;
+      symbol *existing = symtab.lookup(make_absid(asname));
+      if (!existing) continue;
+      if (existing->priv != priv)
+        return fail("Faust symbol '"+asname+"' has conflicting visibility");
+      if (globenv.find(existing->f) != globenv.end() &&
+          externals.find(existing->f) == externals.end())
+        return fail("Faust symbol '"+asname+"' is already defined in Pure");
+    }
   }
-  for (list<string>::iterator v = vars.begin(); v != vars.end(); ++v) {
-    string vname = "$$__faust__$"+modname+"$"+*v;
-    GlobalVariable *u = module->getGlobalVariable(vname, true);
-    assert(u);
-    varptrs.push_back(u);
+  if (compiling) {
+    // Preserve the legacy batch path: definitions and convenience functions
+    // remain embedded in the output module and MCJIT supplies their addresses.
+    list<Function*> funptrs;
+    list<GlobalVariable*> varptrs;
+    for (list<string>::iterator f = funs.begin(); f != funs.end(); ++f) {
+      Function *g = module->getFunction(faust_name(*f));
+      assert(g);
+      funptrs.push_back(g);
+    }
+    for (list<string>::iterator f = aux_funs.begin();
+         f != aux_funs.end(); ++f) {
+      Function *g = module->getFunction(faust_aux_name(*f));
+      assert(g);
+      funptrs.push_back(g);
+    }
+    for (list<string>::iterator v = vars.begin(); v != vars.end(); ++v) {
+      GlobalVariable *u = module->getGlobalVariable(faust_aux_name(*v), true);
+      assert(u);
+      varptrs.push_back(u);
+    }
+    if (symtab.current_namespace->empty())
+      namespaces.insert(modname);
+    else
+      namespaces.insert(*symtab.current_namespace+"::"+modname);
+    loaded_dsps[modname].declare(*symtab.current_namespace, priv);
+    bcmap::iterator mod = loaded_dsps.find(modname);
+    assert(mod != loaded_dsps.end());
+    mod->second.t = mtime;
+    mod->second.dbl = is_double;
+    mod->second.funptrs = funptrs;
+    mod->second.varptrs = varptrs;
+    if (mod->second.tag == 0) mod->second.tag = pure_make_tag();
+    dsp_mods[mod->second.tag] = mod;
+
+    for (list<string>::iterator it = funs.begin(), end = funs.end();
+         it != end; ++it) {
+      string fname = faust_name(*it);
+      Function *f = module->getFunction(fname);
+      assert(f);
+      pass_state->optimize(*f);
+      string asname = modname+"::"+*it;
+      FunctionType *ft = f->getFunctionType();
+      string restype = dsptype_name
+        (*it, ft->getReturnType(), 0, true, is_double);
+      list<string> argtypes;
+      for (size_t i = 0; i < ft->getNumParams(); ++i)
+        argtypes.push_back(dsptype_name
+          (*it, ft->getParamType(i), i, false, is_double));
+      if (loaded && modified) {
+        GlobalVariable *v = module->getNamedGlobal("$"+fname);
+        void **fp = v ? (void**)host_global_address(v) : 0;
+        if (!fp && v) fp = (void**)JIT->getPointerToGlobal(v);
+        if (fp)
+          *fp = JIT->getPointerToFunction(f);
+        else {
+          assert(!declared);
+          symbol *sym = symtab.sym(asname);
+          assert(sym);
+          externals.erase(sym->f);
+          globalvars.erase(sym->f);
+        }
+      }
+      if (!declared) {
+        declare_extern(priv, fname, restype, argtypes, false, 0, asname,
+                       false, false);
+        symbol *sym = symtab.sym(asname);
+        assert(sym);
+        required.push_back(sym->f);
+      }
+    }
+    if (!declared) {
+      string dispatch_verification_error;
+      if (!verify_module(*module, dispatch_verification_error))
+        return fail("Invalid Faust wrapper module: "+
+                    dispatch_verification_error);
+      for (list<string>::iterator it = funs.begin(), end = funs.end();
+           it != end; ++it) {
+        string fname = faust_name(*it);
+        Function *f = module->getFunction(fname);
+        GlobalVariable *v = module->getNamedGlobal("$"+fname);
+        void **fp = v ? (void**)host_global_address(v) : 0;
+        if (!f || !fp)
+          return fail("Missing Faust dispatch slot for '"+fname+"'");
+        *fp = JIT->getPointerToFunction(f);
+      }
+    }
+    return true;
   }
-  // Create the namespace if necessary.
+
+  // Optimize and verify the complete staged generation before ORC sees it.
+  for (list<string>::const_iterator it = funs.begin(); it != funs.end(); ++it) {
+    Function *f = faust_module->getFunction(faust_name(*it));
+    assert(f && !f->isDeclaration());
+    pass_state->optimize(*f);
+  }
+  string staged_verification_error;
+  if (!verify_module(*faust_module, staged_verification_error))
+    return fail("Invalid staged dsp module: "+staged_verification_error);
+
+  llvm::orc::ResourceTrackerSP tracker = ORC->create_resource_tracker();
+  if (Error error = ORC->add_module_copy(tracker, *faust_module)) {
+    if (Error cleanup_error = tracker->remove())
+      error = joinErrors(std::move(error), std::move(cleanup_error));
+    return fail("Failed to submit ORC Faust module: "+
+                toString(std::move(error)));
+  }
+  auto fail_submitted = [&](const string& message) {
+    string detail = message;
+    if (Error cleanup_error = tracker->remove())
+      detail += ": "+toString(std::move(cleanup_error));
+    return fail(detail);
+  };
+
+  // Force every Pure-visible physical export and all its dependencies ready
+  // before preparing or changing any stable binding.
+  map<string, void*> addresses;
+  for (list<string>::const_iterator it = funs.begin(); it != funs.end(); ++it) {
+    string physical_name = faust_name(*it);
+    Expected<orc::ExecutorAddr> address = ORC->lookup(physical_name);
+    if (!address)
+      return fail_submitted
+        ("Failed to materialize Faust export '"+*it+"': "+
+         toString(address.takeError()));
+    addresses[*it] = reinterpret_cast<void*>
+      (static_cast<uintptr_t>(address->getValue()));
+  }
+
+  // The Faust tag is needed while declare_extern builds wrappers. On reload
+  // this is the existing entry; a new entry is not published until below.
+  bcdata_t& data = loaded_dsps[modname];
+  if (data.tag == 0) data.tag = pure_make_tag();
+  list<Function*> stable_functions;
+  try {
+    for (list<string>::const_iterator it = funs.begin();
+         it != funs.end(); ++it) {
+      Function *physical = faust_module->getFunction(faust_name(*it));
+      assert(physical);
+      FunctionType *ft = physical->getFunctionType();
+      string logical_name = "$$faust$"+modname+"$"+*it;
+      string asname = modname+"::"+*it;
+      string restype = dsptype_name
+        (*it, ft->getReturnType(), 0, true, is_double);
+      list<string> argtypes;
+      for (size_t i = 0; i < ft->getNumParams(); ++i)
+        argtypes.push_back(dsptype_name
+          (*it, ft->getParamType(i), i, false, is_double));
+      if (!declared) {
+        declare_extern(priv, logical_name, restype, argtypes, false, 0,
+                       asname, false, false);
+        symbol *sym = symtab.sym(asname);
+        assert(sym);
+        required.push_back(sym->f);
+      }
+      Function *stable = module->getFunction(logical_name);
+      if (!stable || !stable->isDeclaration())
+        return fail_submitted
+          ("Missing stable Faust declaration for '"+logical_name+"'");
+      if (stable->getFunctionType() != ft)
+        return fail_submitted
+          ("Incompatible Faust reload signature for '"+logical_name+"'");
+      stable_functions.push_back(stable);
+    }
+  } catch (const err& error) {
+    return fail_submitted
+      ("Failed to prepare Faust wrappers: "+string(error.what()));
+  }
+
+  string dispatch_verification_error;
+  if (!verify_module(*module, dispatch_verification_error))
+    return fail_submitted
+      ("Invalid Faust wrapper module: "+dispatch_verification_error);
+
+  vector<pair<void**, void*> > bindings;
+  list<string>::const_iterator operation = funs.begin();
+  for (list<Function*>::const_iterator it = stable_functions.begin();
+       it != stable_functions.end(); ++it, ++operation) {
+    string logical_name = (*it)->getName().str();
+    GlobalVariable *slot = module->getNamedGlobal("$"+logical_name);
+    void **target = slot ? (void**)host_global_address(slot) : 0;
+    if (!target)
+      return fail_submitted
+        ("Missing Faust dispatch slot for '"+logical_name+"'");
+    bindings.push_back(make_pair(target, addresses[*operation]));
+  }
+
+  try {
+    compilation_units->retain_faust(modname, tracker);
+  } catch (const std::exception& error) {
+    return fail_submitted
+      ("Failed to retain Faust generation: "+string(error.what()));
+  }
+  // Publication cannot fail. All bindings switch only after the complete new
+  // generation and every wrapper/slot have been prepared successfully.
+  for (vector<pair<void**, void*> >::const_iterator it = bindings.begin();
+       it != bindings.end(); ++it)
+    *it->first = it->second;
+
   if (symtab.current_namespace->empty())
     namespaces.insert(modname);
   else
     namespaces.insert(*symtab.current_namespace+"::"+modname);
-  // Update the module data. This must be done here so that the type tag is
-  // initialized when generating the wrappers.
-  loaded_dsps[modname].declare(*symtab.current_namespace, priv);
+  data.declare(*symtab.current_namespace, priv);
+  data.t = mtime;
+  data.dbl = is_double;
+  data.funptrs = stable_functions;
+  data.varptrs.clear();
   bcmap::iterator mod = loaded_dsps.find(modname);
   assert(mod != loaded_dsps.end());
-  mod->second.t = mtime;
-  mod->second.dbl = is_double;
-  mod->second.funptrs = funptrs;
-  mod->second.varptrs = varptrs;
-  if (mod->second.tag == 0) mod->second.tag = pure_make_tag();
-  dsp_mods[mod->second.tag] = mod;
-#if 0 // debugging
-  for (list<string>::iterator v = vars.begin(); v != vars.end(); ++v) {
-    string vname = "$$__faust__$"+modname+"$"+*v;
-    GlobalVariable *u = module->getGlobalVariable(vname);
-    assert(u);
-    void *p = JIT->getPointerToGlobal(u);
-    fprintf(stderr, ">>> var %s = %p\n", vname.c_str(), p);
-    u->dump();
-  }
-#endif
-  // Create wrappers.
-  for (list<string>::iterator it = funs.begin(), end = funs.end();
-       it != end; ++it) {
-    string fname = "$$faust$"+modname+"$"+*it;
-    Function *f = module->getFunction(fname);
-    assert(f);
-    pass_state->optimize(*f);
-    // The name under which the function is accessible in Pure.
-    string asname = modname+"::"+*it;
-    // The function type.
-    llvm_const_FunctionType *ft = f->getFunctionType();
-    llvm_const_Type* rest = ft->getReturnType();
-    size_t n = ft->getNumParams();
-    vector<llvm_const_Type*> argt(n);
-    for (size_t i = 0; i < n; i++) argt[i] = ft->getParamType(i);
-    string restype = dsptype_name(*it, rest, 0, true, is_double);
-    list<string> argtypes;
-    for (size_t i = 0; i < n; i++)
-      argtypes.push_back(dsptype_name(*it, argt[i], i, false, is_double));
-    if (loaded && modified) {
-      /* There's no need to actually regenerate the wrapper, we only have to
-         patch up the function pointer here. */
-      GlobalVariable *v = module->getNamedGlobal("$"+fname);
-      void **fp = v ? (void**)host_global_address(v) : 0;
-      if (!fp && v)
-	// A batch-compiled module may own the dispatch global itself.
-	fp = (void**)JIT->getPointerToGlobal(v);
-      if (fp)
-	*fp = JIT->getPointerToFunction(f);
-      else {
-	/* The variable may not actually exist in the JIT yet if we're being
-	   called in a batch-compiled program which has the same dsp module
-	   already linked into it. In this case we fix up the symbol table so
-	   that the wrapper and its variable get recreated below. */
-	assert(!declared);
-	symbol *sym = symtab.sym(asname);
-	assert(sym);
-	externals.erase(sym->f);
-	globalvars.erase(sym->f);
-      }
-    }
-    if (!declared) {
-      // Manufacture an extern declaration for the function so that it can be
-      // called in Pure land.
-      declare_extern(priv, fname, restype, argtypes, false, 0, asname, false,
-                     false);
-      // Always require this function, so that it can be called in
-      // batch-compiled scripts.
-      symbol *sym = symtab.sym(asname);
-      assert(sym);
-      required.push_back(sym->f);
-    }
-#if 0 // debugging
-    void * p = JIT->getPointerToFunction(f);
-    fprintf(stderr, ">>> fun %s = %p\n", fname.c_str(), p);
-    symbol *sym = symtab.sym(asname);
-    if (!sym) continue;
-    ExternInfo info(sym->f, fname, rest, argt, f);
-    cerr << "\n" << info << ";\n";
-    f->dump();
-#endif
-  }
-  // Materializing a Faust target while declare_extern is still constructing
-  // wrappers asks MCJIT to optimize an incomplete module. Bind dispatch slots
-  // only after every generated wrapper has a terminator and verifies.
-  if (!declared) {
-    string dispatch_verification_error;
-    if (!verify_module(*module, dispatch_verification_error))
-      return fail("Invalid Faust wrapper module: "+dispatch_verification_error);
-    for (list<string>::iterator it = funs.begin(), end = funs.end();
-         it != end; ++it) {
-      string fname = "$$faust$"+modname+"$"+*it;
-      Function *f = module->getFunction(fname);
-      GlobalVariable *v = module->getNamedGlobal("$"+fname);
-      void **fp = v ? (void**)host_global_address(v) : 0;
-      if (!f || !fp)
-        return fail("Missing Faust dispatch slot for '"+fname+"'");
-      *fp = JIT->getPointerToFunction(f);
-    }
-  }
+  dsp_mods[data.tag] = mod;
   return true;
 }
 
@@ -13673,21 +13883,41 @@ Function *interpreter::declare_extern(int priv, string name, string restype,
        Faust dsp gets reloaded. (This works similar to global Pure functions
        which are also invoked indirectly through global variables.) */
     PointerType *fptype = PointerType::get(context, 0);
-    GlobalVariable *v = global_variable
-      (module, fptype, false, GlobalVariable::InternalLinkage,
-       ConstantPointerNull::get(fptype),
-       "$"+name);
-    void **fp = (void**)malloc(sizeof(void*));
-    assert(fp);
-    *fp = materialize ? JIT->getPointerToFunction(g) : 0;
-    try {
-      register_host_global(v, fp);
-    } catch (...) {
-      free(fp);
-      v->eraseFromParent();
-      throw;
+    GlobalVariable *v = module->getNamedGlobal("$"+name);
+    if (!v) {
+      v = global_variable
+        (module, fptype, false, GlobalVariable::InternalLinkage,
+         ConstantPointerNull::get(fptype), "$"+name);
+      void **fp = (void**)malloc(sizeof(void*));
+      assert(fp);
+      *fp = materialize ? JIT->getPointerToFunction(g) : 0;
+      try {
+        register_host_global(v, fp);
+      } catch (...) {
+        free(fp);
+        v->eraseFromParent();
+        throw;
+      }
+    } else {
+      assert(v->getValueType() == fptype);
+      if (!host_global_address(v)) {
+        void **fp = (void**)malloc(sizeof(void*));
+        assert(fp);
+        *fp = materialize ? JIT->getPointerToFunction(g) : 0;
+        try {
+          register_host_global(v, fp);
+        } catch (...) {
+          free(fp);
+          throw;
+        }
+      }
     }
     Value *callee = b.CreateLoad(v->getValueType(), v);
+    BasicBlock *callbb = basic_block("call");
+    b.CreateCondBr(b.CreateICmpNE
+      (callee, ConstantPointerNull::get(fptype)), callbb, noretbb);
+    callbb->insertInto(f);
+    b.SetInsertPoint(callbb);
     u = b.CreateCall(gt, callee, mkargs(unboxed));
   } else
     u = b.CreateCall(g, mkargs(unboxed));
