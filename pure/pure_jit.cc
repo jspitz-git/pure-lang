@@ -37,9 +37,27 @@
 PureJit::PureJit(std::unique_ptr<llvm::orc::LLJIT> jit) noexcept
   : jit_(std::move(jit))
 {
+  jit_->getExecutionSession().setErrorReporter
+    ([this](llvm::Error error) { record_session_error(std::move(error)); });
 }
 
 PureJit::~PureJit() = default;
+
+void PureJit::record_session_error(llvm::Error error)
+{
+  std::lock_guard<std::mutex> lock(session_error_mutex_);
+  std::string message = llvm::toString(std::move(error));
+  if (!session_error_.empty()) session_error_ += "\n";
+  session_error_ += message;
+}
+
+std::string PureJit::take_session_error()
+{
+  std::lock_guard<std::mutex> lock(session_error_mutex_);
+  std::string message;
+  message.swap(session_error_);
+  return message;
+}
 
 static void collect_dependencies
 (llvm::Value *value, llvm::SmallPtrSetImpl<llvm::GlobalValue*>& reachable)
@@ -230,5 +248,14 @@ llvm::Error PureJit::add_module_copy(llvm::orc::ResourceTrackerSP tracker,
 
 llvm::Expected<llvm::orc::ExecutorAddr> PureJit::lookup(llvm::StringRef name)
 {
-  return jit_->lookup(name);
+  take_session_error();
+  llvm::Expected<llvm::orc::ExecutorAddr> address = jit_->lookup(name);
+  if (!address) {
+    std::string detail = llvm::toString(address.takeError());
+    std::string session_error = take_session_error();
+    if (!session_error.empty()) detail += ": "+session_error;
+    return llvm::createStringError("failed to resolve ORC symbol '%s': %s",
+                                   name.str().c_str(), detail.c_str());
+  }
+  return address;
 }

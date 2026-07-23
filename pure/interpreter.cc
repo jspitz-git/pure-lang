@@ -295,7 +295,7 @@ struct NewPassManagerState {
   }
 };
 
-static void* resolve_external(const std::string& name)
+static void* resolve_legacy_external(const std::string& name)
 {
   /* If we come here, the dynamic loader has already tried everything to
      resolve the function, so instead we just print an error message and
@@ -483,7 +483,7 @@ void interpreter::init()
 
   // Install a fallback mechanism to resolve references to the runtime, on
   // systems which do not allow the program to dlopen itself.
-  JIT->InstallLazyFunctionCreator(resolve_external);
+  JIT->InstallLazyFunctionCreator(resolve_legacy_external);
 
   // LLVM 22 uses one opaque pointer type per address space. Semantic C pointer
   // distinctions are tracked separately by CAbiType.

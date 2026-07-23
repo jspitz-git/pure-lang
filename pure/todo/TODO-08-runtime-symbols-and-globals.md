@@ -22,7 +22,7 @@ resolves the Pure runtime, external functions, and mutable host-backed globals.
 2. [x] Add mangled absolute-symbol registration to `PureJit`.
 3. [x] Convert activation stack, shadow stack, function pointer, and Pure globals.
 4. [x] Convert external C wrapper lookup and indirect calls.
-5. [ ] Replace `resolve_external` with an ORC-compatible failure strategy.
+5. [x] Replace `resolve_external` with an ORC-compatible failure strategy.
 6. [ ] Test symbol visibility for executable, shared-library, and plugin builds.
 
 ## Legacy Symbol Inventory
@@ -83,6 +83,23 @@ resolves the Pure runtime, external functions, and mutable host-backed globals.
 
 ## Progress Log
 
+- 2026-07-23: Added actionable ORC missing-symbol diagnostics.
+  - `PureJit` now captures `ExecutionSession` materialization errors under a mutex
+    and attaches them to the synchronous lookup error. Pure callers receive both
+    the requested entry name and the actual unresolved dependency instead of a
+    detached `JIT session error` on stderr.
+  - The smoke test submits an entry calling an intentionally absent external,
+    verifies that lookup fails with the missing target name, and removes the
+    failed unit's tracker without aborting the process.
+  - Renamed the remaining dummy resolver to `resolve_legacy_external`; it is used
+    only by transitional MCJIT paths and is not the ORC failure strategy.
+  - Validation:
+    - The focused Debug smoke target built with zero warnings and errors.
+    - Its positive host function/data, resource removal, and negative unresolved
+      symbol cases all passed without a standalone session diagnostic.
+    - Sanitizer validation was not run to avoid renewed WSL memory pressure.
+  - Task 5 is complete for ORC. The legacy resolver disappears with final MCJIT
+    removal after TODO-09 and TODO-11.
 - 2026-07-23: Cached external C wrapper implementations in ORC.
   - Added interpreter-lifetime compiled-function resources keyed by source
     `Function*`. Each wrapper snapshot receives a unique exported name, typed

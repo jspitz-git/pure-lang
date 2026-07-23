@@ -19,6 +19,8 @@
 #include <llvm/Support/Error.h>
 
 #include <memory>
+#include <mutex>
+#include <string>
 #include <type_traits>
 #include <utility>
 
@@ -83,6 +85,11 @@ public:
 private:
   explicit PureJit(std::unique_ptr<llvm::orc::LLJIT> jit) noexcept;
 
+  void record_session_error(llvm::Error error);
+  std::string take_session_error();
+
+  std::mutex session_error_mutex_;
+  std::string session_error_;
   std::unique_ptr<llvm::orc::LLJIT> jit_;
 };
 

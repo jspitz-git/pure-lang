@@ -11,6 +11,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <string>
 #include <utility>
 
 static int report_error(llvm::Error error)
@@ -92,5 +93,36 @@ int main()
     return 1;
   }
   llvm::consumeError(removed_symbol.takeError());
+
+  llvm::Function *missing_target = llvm::Function::Create
+    (function_type, llvm::Function::ExternalLinkage,
+     "pure_jit_smoke_missing_target", module.get());
+  llvm::Function *missing_entry = llvm::Function::Create
+    (function_type, llvm::Function::InternalLinkage,
+     "pure_jit_smoke_missing_entry", module.get());
+  llvm::BasicBlock *missing_block = llvm::BasicBlock::Create
+    (*context, "entry", missing_entry);
+  llvm::IRBuilder<> missing_builder(missing_block);
+  missing_builder.CreateRet(missing_builder.CreateCall(missing_target));
+
+  llvm::orc::ResourceTrackerSP missing_tracker =
+    (*jit)->create_resource_tracker();
+  if (llvm::Error error = (*jit)->add_module_copy
+        (missing_tracker, *module, "pure_jit_smoke_missing_entry"))
+    return report_error(std::move(error));
+  llvm::Expected<llvm::orc::ExecutorAddr> missing =
+    (*jit)->lookup("pure_jit_smoke_missing_entry");
+  if (missing) {
+    llvm::errs() << "PureJit resolved an intentionally missing symbol\n";
+    return 1;
+  }
+  std::string missing_error = llvm::toString(missing.takeError());
+  if (missing_error.find("pure_jit_smoke_missing_target") == std::string::npos) {
+    llvm::errs() << "PureJit missing-symbol error lacks symbol context: "
+                 << missing_error << '\n';
+    return 1;
+  }
+  if (llvm::Error error = missing_tracker->remove())
+    return report_error(std::move(error));
   return 0;
 }
