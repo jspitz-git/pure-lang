@@ -37,7 +37,11 @@ check_symbol_exists(_longjmp "setjmp.h" HAVE__LONGJMP)
 check_symbol_exists(fstat "sys/stat.h" HAVE_FSTAT)
 check_symbol_exists(mkstemp "stdlib.h" HAVE_MKSTEMP)
 check_symbol_exists(readdir "dirent.h" HAVE_READDIR)
-check_symbol_exists(strptime "time.h" HAVE_STRPTIME)
+set(_pure_required_definitions "${CMAKE_REQUIRED_DEFINITIONS}")
+list(APPEND CMAKE_REQUIRED_DEFINITIONS -D_XOPEN_SOURCE=700)
+check_symbol_exists(strptime "time.h" HAVE_XOPEN_STRPTIME)
+set(CMAKE_REQUIRED_DEFINITIONS "${_pure_required_definitions}")
+set(HAVE_STRPTIME "${HAVE_XOPEN_STRPTIME}")
 
 set(CMAKE_REQUIRED_LIBRARIES PkgConfig::READLINE)
 check_symbol_exists(

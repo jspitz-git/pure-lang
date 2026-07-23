@@ -35,6 +35,7 @@ char *alloca ();
 #endif
 
 #include "interpreter.hh"
+#include "pure_jit.hh"
 #include "util.hh"
 #include <cmath>
 #include <memory>
@@ -56,6 +57,7 @@ char *alloca ();
 
 #include <llvm/Bitcode/BitcodeReader.h>
 #include <llvm/Bitcode/BitcodeWriter.h>
+#include <llvm/ExecutionEngine/MCJIT.h>
 #include <llvm/IR/CallingConv.h>
 #include <llvm/Linker/Linker.h>
 #include <llvm/Support/DynamicLibrary.h>
@@ -264,15 +266,21 @@ void interpreter::init()
      horrible, maybe we should drop support for anything older than LLVM 2.6
      in the future. */
   init_llvm_target();
+  Expected<std::unique_ptr<PureJit> > orc = PureJit::create();
+  if (!orc)
+    throw err("failed to create ORC JIT: "+toString(orc.takeError()));
+  ORC = orc->release();
   module = new Module(modname, context);
   pass_state = new NewPassManagerState;
 #if !LLVM27
   MP = new ExistingModuleProvider(module);
 #endif
 #if LLVM31
-  llvm::EngineBuilder factory(module);
+  string legacy_jit_error;
+  std::unique_ptr<Module> owned_module(module);
+  llvm::EngineBuilder factory(std::move(owned_module));
   factory.setEngineKind(llvm::EngineKind::JIT);
-  factory.setAllocateGVsWithCode(false);
+  factory.setErrorStr(&legacy_jit_error);
 #if USE_FASTCC || FAST_JIT
   llvm::TargetOptions Opts;
 #if USE_FASTCC
@@ -322,8 +330,12 @@ void interpreter::init()
 #endif
 #endif // LLVM 2.5 and earlier
 #endif // LLVM 3.0 or earlier
-  assert(JIT);
-  module->setDataLayout(JIT->getDataLayout());
+  if (!JIT) {
+    if (legacy_jit_error.empty()) legacy_jit_error = "unknown LLVM error";
+    throw err("failed to create transitional ExecutionEngine: "+
+              legacy_jit_error);
+  }
+  module->setDataLayout(ORC->data_layout());
 
   // Install a fallback mechanism to resolve references to the runtime, on
   // systems which do not allow the program to dlopen itself.
@@ -797,7 +809,8 @@ interpreter::interpreter(int _argc, char **_argv)
     nerrs(0), modno(-1), modctr(0), source_s(0), output(0),
     result(0), lastres(0), mem(0), exps(0), tmps(0), freectr(0),
     specials_only(false), module(0),
-    JIT(0), pass_state(0), astk(0), sstk(__sstk),
+    JIT(0), ORC(0), orc_evaluation_started(false), pass_state(0), astk(0),
+    sstk(__sstk),
     stoplevel(0), tracelevel(-1), debug_skip(false), trace_skip(false),
     fptr(__fptr), tags(0), line(0), column(0), tags_init(false),
     declare_op(false)
@@ -827,7 +840,8 @@ interpreter::interpreter(int32_t nsyms, char *syms,
     nerrs(0), modno(-1), modctr(0), source_s(0), output(0),
     result(0), lastres(0), mem(0), exps(0), tmps(0), freectr(0),
     specials_only(false), module(0),
-    JIT(0), pass_state(0), astk(0), sstk(*_sstk),
+    JIT(0), ORC(0), orc_evaluation_started(false), pass_state(0), astk(0),
+    sstk(*_sstk),
     stoplevel(0), tracelevel(-1), debug_skip(false), trace_skip(false),
     fptr(*(Env**)_fptr), tags(0), line(0), column(0), tags_init(false),
     declare_op(false)
@@ -951,6 +965,7 @@ interpreter::~interpreter()
   if (JIT) delete JIT;
 #endif
   delete pass_state;
+  delete ORC;
   // if this was the global interpreter, reset it now
   if (g_interp == this) g_interp = 0;
 }
@@ -2026,7 +2041,7 @@ bool interpreter::LoadFaustDSP(bool priv, const char *name, string *msg,
 	 f != funptrs.end(); ++f) {
       string fname = (*f)->getName().str();
       (*f)->dropAllReferences();
-      JIT->freeMachineCodeForFunction(*f);
+      // ORC resource trackers will reclaim the corresponding machine code.
     }
     for (list<GlobalVariable*>::iterator v = varptrs.begin();
 	 v != varptrs.end(); ++v) {
@@ -3967,14 +3982,30 @@ void interpreter::compile()
 	push("compile", &f);
 	fun_body(info.m, info.mxs);
 	pop(&f);
-	// Always run the JIT on these right away and set up the runtime type
-	// information. These functions are called indirectly through the
-	// runtime, and we don't know when or where that will be.
-	if (f.f != f.h) JIT->getPointerToFunction(f.f);
-	void *fp = JIT->getPointerToFunction(f.h);
-	pure_add_rtty(ftag, f.n, fp);
+
+      }
+    }
+    // MCJIT optimizes the entire module, so all type function bodies must be
+    // complete before compiling any of them.
+    string verification_error;
+    if (!verify_module(*module, verification_error))
+      throw err("invalid LLVM module before type JIT compilation: "+
+                verification_error);
+    for (funset::const_iterator f = dirty_types.begin();
+         f != dirty_types.end(); f++) {
+      env::iterator e = typeenv.find(*f);
+      if (e != typeenv.end() && e->second.t != env_info::none) {
+        int32_t ftag = e->first;
+        env_info& info = e->second;
+        if (!info.m && !info.mxs) continue;
+        Env& type_function = globaltypes[ftag];
+        if (type_function.f != type_function.h)
+          JIT->getPointerToFunction(type_function.f);
+        void *fp = JIT->getPointerToFunction(type_function.h);
+        pure_add_rtty(ftag, type_function.n, fp);
 #if DEBUG>1
-	std::cerr << "JIT " << f.f->getName().str() << " -> " << fp << '\n';
+        std::cerr << "JIT " << type_function.f->getName().str()
+                  << " -> " << fp << '\n';
 #endif
       }
     }
@@ -11261,8 +11292,8 @@ void Env::clear()
     std::cerr << "clearing local '" << name << "'\n";
 #endif
     if (!refp || *refp == 0) {
-      if (h != f) interp.JIT->freeMachineCodeForFunction(h);
-      interp.JIT->freeMachineCodeForFunction(f);
+      // The transitional execution engine retains machine code until shutdown;
+      // ORC resource trackers will reclaim local compilation units.
     } else {
       /* The code for this function is still used in a closure somewhere. To
 	 avoid dangling function pointers, we just unmap the function pointer
@@ -11303,8 +11334,8 @@ void Env::clear()
 	}
       }
       if (dead) {
-	if (h != f) interp.JIT->freeMachineCodeForFunction(h);
-	interp.JIT->freeMachineCodeForFunction(f);
+	// The transitional execution engine retains machine code until shutdown;
+	// ORC resource trackers will reclaim superseded definitions.
       } else {
 	/* Keep the code for a function which is still bound by a closure.
 	   See the remarks above. */
@@ -13328,14 +13359,47 @@ pure_expr *interpreter::doeval(expr x, pure_expr*& e, bool keep)
   fun_finish();
   pop(&f);
   if (!keep) {
-    // JIT and execute the function.
-    void *fp = JIT->getPointerToFunction(f.f);
-    assert(fp);
+    // Compile the first anonymous evaluation through ORC. Later evaluations
+    // remain on the transitional engine until compilation units own their
+    // dependencies and resource trackers.
+    void *fp = 0;
+    llvm::orc::ResourceTrackerSP tracker;
+    if (!orc_evaluation_started) {
+      string verification_error;
+      if (!verify_module(*module, verification_error))
+        throw err("invalid LLVM module before ORC evaluation: "+
+                  verification_error);
+      tracker = ORC->create_resource_tracker();
+      llvm::StringRef entry_name = f.f->getName();
+      if (llvm::Error error =
+            ORC->add_module_copy(tracker, *module, entry_name)) {
+        if (llvm::Error cleanup_error = tracker->remove())
+          error = llvm::joinErrors(std::move(error), std::move(cleanup_error));
+        throw err("failed to add initial ORC evaluation module: "+
+                  llvm::toString(std::move(error)));
+      }
+      llvm::Expected<pure_expr* (*)()> entry =
+        ORC->lookup_function<pure_expr*()>(entry_name);
+      if (!entry) {
+        llvm::Error error = entry.takeError();
+        if (llvm::Error cleanup_error = tracker->remove())
+          error = llvm::joinErrors(std::move(error), std::move(cleanup_error));
+        throw err("failed to resolve initial ORC evaluation function: "+
+                  llvm::toString(std::move(error)));
+      }
+      fp = reinterpret_cast<void*>(*entry);
+      orc_evaluation_started = true;
+    } else {
+      fp = JIT->getPointerToFunction(f.f);
+      if (!fp) throw err("failed to compile transitional evaluation function");
+    }
     begin_stats();
     res = pure_invoke(fp, &e);
     end_stats();
-    // Get rid of our anonymous function.
-    JIT->freeMachineCodeForFunction(f.f);
+    if (tracker)
+      if (llvm::Error error = tracker->remove())
+        throw err("failed to remove initial ORC evaluation module: "+
+                  llvm::toString(std::move(error)));
     f.f->eraseFromParent();
     // If there are no more references, we can get rid of the environment now.
     if (fptr->refc == 1)
@@ -13537,8 +13601,8 @@ pure_expr *interpreter::dodefn(env vars, const vinfo& vi,
   begin_stats();
   res = pure_invoke(fp, &e);
   end_stats();
-  // Get rid of our anonymous function.
-  JIT->freeMachineCodeForFunction(f.f);
+  // The transitional execution engine retains anonymous machine code until
+  // shutdown; ORC will remove it through the compilation unit's tracker.
   if (!keep) {
     f.f->eraseFromParent();
     // If there are no more references, we can get rid of the environment now.

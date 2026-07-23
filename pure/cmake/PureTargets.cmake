@@ -23,6 +23,7 @@ add_custom_target(
 
 set(PURE_RUNTIME_SOURCES
   expr.cc
+  pure_jit.cc
   interpreter.cc
   matcher.cc
   printer.cc
@@ -42,6 +43,7 @@ llvm_map_components_to_libnames(
   Core
   OrcJIT
   ExecutionEngine
+  MCJIT
   native
   nativecodegen
   Passes

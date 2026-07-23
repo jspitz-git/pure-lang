@@ -520,7 +520,7 @@ static string unixize(const string& s)
 extern void pure_finalize(void);
 
 int
-main(int argc, char *argv[])
+main(int argc, char *argv[]) try
 {
   char base;
   interpreter interp(argc, argv);
@@ -1023,4 +1023,9 @@ _|                       for license information.)\n\
      interpreter instance if we're exiting anyway. */
   pure_finalize();
   exit(0);
+}
+catch (const err& e)
+{
+  cerr << "pure: " << e.what() << '\n';
+  return 1;
 }
