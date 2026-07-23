@@ -23,6 +23,7 @@ add_custom_target(
 
 set(PURE_RUNTIME_SOURCES
   expr.cc
+  pure_jit.cc
   interpreter.cc
   matcher.cc
   printer.cc

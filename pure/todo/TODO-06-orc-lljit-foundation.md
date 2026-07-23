@@ -18,7 +18,7 @@ without exposing ORC details throughout the interpreter.
 
 ## Task List
 
-1. [ ] Define the narrow `PureJit` API and ownership model.
+1. [x] Define the narrow `PureJit` API and ownership model.
 2. [ ] Create `LLJIT`, its main `JITDylib`, and process symbol generator.
 3. [ ] Add `ThreadSafeModule` submission and typed address lookup helpers.
 4. [ ] Convert LLVM `Error` and `Expected` failures to actionable Pure messages.
@@ -44,6 +44,22 @@ without exposing ORC details throughout the interpreter.
 
 ## Progress Log
 
+- 2026-07-23: Added the initial `PureJit` ownership and error-preserving API.
+  - `PureJit` exclusively owns `LLJIT` through `unique_ptr`; the incomplete ORC
+    type remains hidden from callers and is destroyed out of line.
+  - `ThreadSafeModule` is accepted by value and moved into ORC. Optional
+    `ResourceTrackerSP` ownership is explicit, and lookup returns
+    `Expected<ExecutorAddr>`.
+  - Creation, module submission, lookup, and resource operations preserve LLVM
+    `Error`/`Expected` values for conversion at the Pure diagnostic boundary.
+  - `pure_jit.cc` is part of `pure-runtime`; the interpreter does not use the
+    wrapper yet.
+  - Validation:
+    - `cmake --preset llvm22-debug` configured successfully.
+    - Ninja compiled `CMakeFiles/pure-runtime.dir/pure_jit.cc.o` separately with
+      zero warnings and errors.
+    - The full build retains only the nine known legacy JIT errors in
+      `interpreter.cc`; no `PureJit` diagnostics were added.
 - 2026-07-22: Initial ORC foundation plan created.
   - Validation:
     - Not run; this update creates planning documentation only.
