@@ -44,6 +44,20 @@ without exposing ORC details throughout the interpreter.
 
 ## Progress Log
 
+- 2026-07-23: Corrected the type-function compilation boundary for whole-module
+  MCJIT behavior.
+  - All dirty type function bodies are now completed before any
+    `getPointerToFunction` call, and the module is verified once at that boundary.
+  - This eliminated the former LLVM stack corruption in branch-probability
+    analysis, which was caused by MCJIT seeing later type prologs with
+    unterminated entry blocks.
+  - Validation:
+    - The complete Debug build succeeds with zero warnings and errors.
+    - The module verifier now passes before type compilation.
+    - `test007.pure` advances to anonymous `$$init` evaluation, where MCJIT
+      returns null because its already-finalized module cannot accept the newly
+      added function. This identifies the first concrete function that must move
+      to a separate ORC compilation unit.
 - 2026-07-23: Restored a runnable transitional MCJIT baseline alongside ORC.
   - CMake links the `MCJIT` component, and `interpreter.cc` includes the official
     `MCJIT.h` force-link hook so static archive registration is retained.

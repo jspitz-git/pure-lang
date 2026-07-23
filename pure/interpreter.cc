@@ -3980,14 +3980,30 @@ void interpreter::compile()
 	push("compile", &f);
 	fun_body(info.m, info.mxs);
 	pop(&f);
-	// Always run the JIT on these right away and set up the runtime type
-	// information. These functions are called indirectly through the
-	// runtime, and we don't know when or where that will be.
-	if (f.f != f.h) JIT->getPointerToFunction(f.f);
-	void *fp = JIT->getPointerToFunction(f.h);
-	pure_add_rtty(ftag, f.n, fp);
+
+      }
+    }
+    // MCJIT optimizes the entire module, so all type function bodies must be
+    // complete before compiling any of them.
+    string verification_error;
+    if (!verify_module(*module, verification_error))
+      throw err("invalid LLVM module before type JIT compilation: "+
+                verification_error);
+    for (funset::const_iterator f = dirty_types.begin();
+         f != dirty_types.end(); f++) {
+      env::iterator e = typeenv.find(*f);
+      if (e != typeenv.end() && e->second.t != env_info::none) {
+        int32_t ftag = e->first;
+        env_info& info = e->second;
+        if (!info.m && !info.mxs) continue;
+        Env& type_function = globaltypes[ftag];
+        if (type_function.f != type_function.h)
+          JIT->getPointerToFunction(type_function.f);
+        void *fp = JIT->getPointerToFunction(type_function.h);
+        pure_add_rtty(ftag, type_function.n, fp);
 #if DEBUG>1
-	std::cerr << "JIT " << f.f->getName().str() << " -> " << fp << '\n';
+        std::cerr << "JIT " << type_function.f->getName().str()
+                  << " -> " << fp << '\n';
 #endif
       }
     }
