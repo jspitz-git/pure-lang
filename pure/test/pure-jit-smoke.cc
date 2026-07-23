@@ -32,7 +32,7 @@ int main()
   llvm::FunctionType *function_type = llvm::FunctionType::get
     (llvm::Type::getInt32Ty(*context), false);
   llvm::Function *function = llvm::Function::Create
-    (function_type, llvm::Function::ExternalLinkage,
+    (function_type, llvm::Function::InternalLinkage,
      "pure_jit_smoke_value", module.get());
   llvm::BasicBlock *entry = llvm::BasicBlock::Create
     (*context, "entry", function);
@@ -40,7 +40,8 @@ int main()
   builder.CreateRet(llvm::ConstantInt::get(llvm::Type::getInt32Ty(*context), 42));
 
   llvm::orc::ResourceTrackerSP tracker = (*jit)->create_resource_tracker();
-  if (llvm::Error error = (*jit)->add_module_copy(tracker, *module))
+  if (llvm::Error error =
+        (*jit)->add_module_copy(tracker, *module, "pure_jit_smoke_value"))
     return report_error(std::move(error));
 
   llvm::Expected<std::int32_t (*)()> value =

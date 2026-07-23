@@ -809,7 +809,8 @@ interpreter::interpreter(int _argc, char **_argv)
     nerrs(0), modno(-1), modctr(0), source_s(0), output(0),
     result(0), lastres(0), mem(0), exps(0), tmps(0), freectr(0),
     specials_only(false), module(0),
-    JIT(0), ORC(0), pass_state(0), astk(0), sstk(__sstk),
+    JIT(0), ORC(0), orc_evaluation_started(false), pass_state(0), astk(0),
+    sstk(__sstk),
     stoplevel(0), tracelevel(-1), debug_skip(false), trace_skip(false),
     fptr(__fptr), tags(0), line(0), column(0), tags_init(false),
     declare_op(false)
@@ -839,7 +840,8 @@ interpreter::interpreter(int32_t nsyms, char *syms,
     nerrs(0), modno(-1), modctr(0), source_s(0), output(0),
     result(0), lastres(0), mem(0), exps(0), tmps(0), freectr(0),
     specials_only(false), module(0),
-    JIT(0), ORC(0), pass_state(0), astk(0), sstk(*_sstk),
+    JIT(0), ORC(0), orc_evaluation_started(false), pass_state(0), astk(0),
+    sstk(*_sstk),
     stoplevel(0), tracelevel(-1), debug_skip(false), trace_skip(false),
     fptr(*(Env**)_fptr), tags(0), line(0), column(0), tags_init(false),
     declare_op(false)
@@ -13357,14 +13359,47 @@ pure_expr *interpreter::doeval(expr x, pure_expr*& e, bool keep)
   fun_finish();
   pop(&f);
   if (!keep) {
-    // JIT and execute the function.
-    void *fp = JIT->getPointerToFunction(f.f);
-    assert(fp);
+    // Compile the first anonymous evaluation through ORC. Later evaluations
+    // remain on the transitional engine until compilation units own their
+    // dependencies and resource trackers.
+    void *fp = 0;
+    llvm::orc::ResourceTrackerSP tracker;
+    if (!orc_evaluation_started) {
+      string verification_error;
+      if (!verify_module(*module, verification_error))
+        throw err("invalid LLVM module before ORC evaluation: "+
+                  verification_error);
+      tracker = ORC->create_resource_tracker();
+      llvm::StringRef entry_name = f.f->getName();
+      if (llvm::Error error =
+            ORC->add_module_copy(tracker, *module, entry_name)) {
+        if (llvm::Error cleanup_error = tracker->remove())
+          error = llvm::joinErrors(std::move(error), std::move(cleanup_error));
+        throw err("failed to add initial ORC evaluation module: "+
+                  llvm::toString(std::move(error)));
+      }
+      llvm::Expected<pure_expr* (*)()> entry =
+        ORC->lookup_function<pure_expr*()>(entry_name);
+      if (!entry) {
+        llvm::Error error = entry.takeError();
+        if (llvm::Error cleanup_error = tracker->remove())
+          error = llvm::joinErrors(std::move(error), std::move(cleanup_error));
+        throw err("failed to resolve initial ORC evaluation function: "+
+                  llvm::toString(std::move(error)));
+      }
+      fp = reinterpret_cast<void*>(*entry);
+      orc_evaluation_started = true;
+    } else {
+      fp = JIT->getPointerToFunction(f.f);
+      if (!fp) throw err("failed to compile transitional evaluation function");
+    }
     begin_stats();
     res = pure_invoke(fp, &e);
     end_stats();
-    // Get rid of our anonymous function IR. The transitional execution engine
-    // retains its machine code until shutdown; ORC will use a resource tracker.
+    if (tracker)
+      if (llvm::Error error = tracker->remove())
+        throw err("failed to remove initial ORC evaluation module: "+
+                  llvm::toString(std::move(error)));
     f.f->eraseFromParent();
     // If there are no more references, we can get rid of the environment now.
     if (fptr->refc == 1)

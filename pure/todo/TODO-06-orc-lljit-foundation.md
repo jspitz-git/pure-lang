@@ -1,6 +1,6 @@
 # TODO-06 - ORC LLJIT Foundation
 
-Status: Open
+Status: Complete
 Branch: todo/06-orc-lljit-foundation
 
 ## Purpose
@@ -23,7 +23,7 @@ without exposing ORC details throughout the interpreter.
 3. [x] Add `ThreadSafeModule` submission and typed address lookup helpers.
 4. [x] Convert LLVM `Error` and `Expected` failures to actionable Pure messages.
 5. [x] Compile and invoke a minimal constant-returning function.
-6. [ ] Route initial interpreter evaluation through `PureJit`.
+6. [x] Route initial interpreter evaluation through `PureJit`.
 
 ## Guardrails
 
@@ -44,6 +44,24 @@ without exposing ORC details throughout the interpreter.
 
 ## Progress Log
 
+- 2026-07-23: Routed the first anonymous interpreter evaluation through ORC.
+  - `doeval` verifies and snapshots the mutable module, promotes only the copied
+    internal entry function for lookup, resolves it with a typed
+    `pure_expr* ()` signature, invokes it, and removes its resource tracker.
+  - Submission and lookup failures roll back the tracker before producing a
+    contextual Pure error, preventing duplicate symbols on retry.
+  - The smoke test now verifies promotion and lookup of an internal entry symbol
+    without modifying the source module.
+  - Validation:
+    - The complete Debug build and isolated ORC CTest pass with zero warnings
+      and errors.
+    - First-process evaluations return `1` for `1;` and `2` for `1+1;` through
+      the ORC path.
+    - `test007.pure` no longer reports missing or duplicate ORC symbols. It now
+      reaches `pure_call(nullptr)`, exposing unmigrated runtime/global mappings
+      owned by TODO-08.
+  - This completes the narrow eager `LLJIT` foundation. Compilation-unit
+    lifetime, global symbols, and closure redefinition remain in TODO-07–09.
 - 2026-07-23: Added an ORC-safe snapshot path for the mutable interpreter module.
   - `PureJit::add_module_copy` serializes a module to bitcode, reparses it in a
     fresh owned `LLVMContext`, and submits the resulting `ThreadSafeModule`

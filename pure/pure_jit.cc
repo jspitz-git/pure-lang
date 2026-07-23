@@ -14,6 +14,7 @@
 #include <llvm/Bitcode/BitcodeWriter.h>
 #include <llvm/ExecutionEngine/Orc/LLJIT.h>
 #include <llvm/IR/DataLayout.h>
+#include <llvm/IR/Function.h>
 #include <llvm/IR/LLVMContext.h>
 #include <llvm/IR/Module.h>
 #include <llvm/Support/MemoryBuffer.h>
@@ -72,7 +73,8 @@ llvm::Error PureJit::add_module(llvm::orc::ResourceTrackerSP tracker,
 }
 
 llvm::Error PureJit::add_module_copy(llvm::orc::ResourceTrackerSP tracker,
-                                     const llvm::Module& module)
+                                     const llvm::Module& module,
+                                     llvm::StringRef exported_symbol)
 {
   llvm::SmallVector<char, 0> bitcode;
   llvm::raw_svector_ostream out(bitcode);
@@ -84,6 +86,13 @@ llvm::Error PureJit::add_module_copy(llvm::orc::ResourceTrackerSP tracker,
   llvm::Expected<std::unique_ptr<llvm::Module> > copy =
     llvm::parseBitcodeFile(buffer, *context);
   if (!copy) return copy.takeError();
+  if (!exported_symbol.empty()) {
+    llvm::Function *entry = (*copy)->getFunction(exported_symbol);
+    if (!entry)
+      return llvm::createStringError("ORC entry symbol '%s' is not a function",
+                                     exported_symbol.str().c_str());
+    entry->setLinkage(llvm::GlobalValue::ExternalLinkage);
+  }
 
   llvm::orc::ThreadSafeModule thread_safe_module
     (std::move(*copy), std::move(context));
