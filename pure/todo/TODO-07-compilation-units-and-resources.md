@@ -1,6 +1,6 @@
 # TODO-07 - Compilation Units and Resources
 
-Status: Open
+Status: Blocked on TODO-08 and TODO-09
 Branch: todo/07-compilation-units-and-resources
 
 ## Purpose
@@ -15,6 +15,16 @@ be removed safely without mutating modules already owned by ORC.
 - Group generated IR into logical units for evaluations and definitions.
 - Associate each unit with an ORC `ResourceTracker`.
 - Replace `freeMachineCodeForFunction` and post-compilation IR erasure.
+
+## Dependencies
+
+- TODO-08 must register host-backed `GlobalVar`, `$$sstk$$`, and `$$fptr$$`
+  storage as ORC absolute symbols before `dodefn` can become an ORC unit.
+- TODO-09 must provide stable bindings and old-implementation ownership before
+  global/local definition cleanup can replace `updateGlobalMapping`, `deleteBody`,
+  and deferred IR erasure safely.
+- After those prerequisites land, resume tasks 3 and 5 on this branch or a focused
+  follow-up branch and run definition/redefinition lifetime tests.
 
 ## Task List
 
@@ -84,6 +94,17 @@ requirements, provider dependencies, and omitted values.
 
 ## Progress Log
 
+- 2026-07-23: Identified the prerequisite boundary for definition resources.
+  - `dodefn` writes matched values through host-backed `GlobalVar` storage mapped
+    by the transitional `ExecutionEngine`; submitting it to ORC now would fail on
+    unresolved globals or create duplicate storage.
+  - Remaining `Env::clear` unmapping, body deletion, and deferred IR erasure keep
+    old closure pointers valid for local/global definitions. Removing them before
+    TODO-09 supplies stable bindings would introduce dangling code pointers.
+  - Tasks 3 and 5 therefore remain open. TODO-08 must land host absolute symbols
+    first, followed by TODO-09 implementation lifetime and redefinition semantics.
+  - Validation:
+    - Source-path and ownership review only; no runtime behavior changed.
 - 2026-07-23: Completed sanitizer stress validation for anonymous ORC units.
   - Disabled only Clang's UBSan `function` check for `pure-jit-smoke`. That check
     reads compiler-emitted type metadata before an indirect-call target, but ORC
