@@ -147,6 +147,7 @@ llvm::LLVMContext& pure_llvm_context();
 
 class interpreter;
 class PureJit;
+struct CompilationUnitResources;
 struct NewPassManagerState;
 
 // verbosity levels, these can be ORed together
@@ -1014,7 +1015,7 @@ public:
   llvm::Module *module;
   llvm::ExecutionEngine *JIT;
   PureJit *ORC;
-  bool orc_evaluation_started;
+  CompilationUnitResources *compilation_units;
   NewPassManagerState *pass_state;
   llvm::StructType  *ExprTy, *IntExprTy, *DblExprTy, *StrExprTy, *PtrExprTy;
   llvm::StructType  *ComplexTy, *GSLMatrixTy, *GSLDoubleMatrixTy,
