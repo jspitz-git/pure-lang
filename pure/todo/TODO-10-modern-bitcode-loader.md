@@ -22,7 +22,7 @@ linked, compiled, and unloaded predictably.
 1. [x] Modernize file loading and bitcode parse error reporting.
 2. [x] Port symbol inspection, renaming, and module linking.
 3. [x] Define compatible target triple and data-layout checks.
-4. [ ] Submit loaded code as separately tracked ORC resources.
+4. [x] Submit loaded code as separately tracked ORC resources.
 5. [ ] Generate `.bc` test fixtures from source during the CMake build.
 6. [ ] Test duplicate symbols, malformed input, ABI mismatch, and unload behavior.
 
@@ -45,6 +45,24 @@ linked, compiled, and unloaded predictably.
 
 ## Progress Log
 
+- 2026-07-23: Submitted generic bitcode as separately tracked ORC providers.
+  - Added provider ownership to the compilation-resource registry and remove providers
+    after their compiled wrapper consumers during interpreter teardown.
+  - In JIT mode, submit the prepared provider as its own tracked ORC module, force
+    materialization of every exported symbol, and keep only declarations in the
+    mutable interpreter module.
+  - Roll back the provider tracker on submission or lookup failure before committing
+    cache and namespace state.
+  - Preserve link-into-output behavior in batch compilation so emitted programs remain
+    self-contained.
+  - Validation:
+    - LLVM 22 debug and ASan/UBSan builds passed; both `pure-jit-smoke` runs passed.
+    - A separately submitted provider returned the expected value through its Pure
+      wrapper, whose provider symbol remains a declaration in interpreter IR.
+    - Two providers with the same source export remained isolated and returned `6`
+      and `101` respectively.
+    - A provider with an unresolved dependency failed during export materialization
+      with the missing symbol named in the diagnostic.
 - 2026-07-23: Defined conservative bitcode target compatibility checks.
   - Exposed the actual LLJIT target triple alongside its authoritative data layout and
     assigned both to the interpreter module during JIT initialization.

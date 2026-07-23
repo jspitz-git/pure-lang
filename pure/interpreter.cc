@@ -138,6 +138,7 @@ struct CompilationUnitResources {
 
   map<const Env*, llvm::orc::ResourceTrackerSP> trackers;
   map<const llvm::Function*, CompiledFunction> functions;
+  map<string, llvm::orc::ResourceTrackerSP> bitcode_modules;
   map<string, HostSymbol> host_symbols;
   map<uint32_t, FunctionGeneration> implementations;
   map<uint32_t, set<uint32_t> > key_implementations;
@@ -216,6 +217,12 @@ struct CompilationUnitResources {
     map<const llvm::Function*, CompiledFunction>::const_iterator it =
       functions.find(function);
     return it == functions.end() ? 0 : it->second.address;
+  }
+
+  void retain_bitcode(string key, llvm::orc::ResourceTrackerSP tracker)
+  {
+    assert(!key.empty() && tracker && bitcode_modules.find(key) == bitcode_modules.end());
+    bitcode_modules.emplace(std::move(key), std::move(tracker));
   }
 
   uint64_t next_generation(int32_t tag)
@@ -366,6 +373,13 @@ struct CompilationUnitResources {
       map<uint32_t, FunctionGeneration>::iterator it = implementations.begin();
       llvm::orc::ResourceTrackerSP tracker = std::move(it->second.tracker);
       implementations.erase(it);
+      errors = llvm::joinErrors(std::move(errors), tracker->remove());
+    }
+    while (!bitcode_modules.empty()) {
+      map<string, llvm::orc::ResourceTrackerSP>::iterator it =
+        bitcode_modules.begin();
+      llvm::orc::ResourceTrackerSP tracker = std::move(it->second);
+      bitcode_modules.erase(it);
       errors = llvm::joinErrors(std::move(errors), tracker->remove());
     }
     while (!host_symbols.empty()) {
@@ -2970,10 +2984,12 @@ bool interpreter::LoadBitcode(bool priv, const char *name, string *msg)
       argtypes.push_back(argtype);
     }
     if (!wrappable) {
+      if (!compiling) f.setLinkage(Function::InternalLinkage);
       warning(strip_filename(name)+": warning: extern function '"+
               source_name+"' has an unsupported prototype");
       continue;
     }
+    if (!compiling) f.setVisibility(GlobalValue::DefaultVisibility);
     bitcode.exports.push_back
       (bc_export_t(source_name, linked_name, restype, argtypes,
                    ft->isVarArg()));
@@ -2986,20 +3002,67 @@ bool interpreter::LoadBitcode(bool priv, const char *name, string *msg)
         it->getLinkage() == GlobalVariable::ExternalLinkage) {
       it->setName(symbol_prefix+it->getName().str());
       data_symbols.push_back(it->getName().str());
+      if (!compiling) it->setLinkage(GlobalVariable::InternalLinkage);
     }
   for (Module::alias_iterator it = M->alias_begin(), end = M->alias_end();
        it != end; ++it)
     if (it->getLinkage() == GlobalAlias::ExternalLinkage) {
       it->setName(symbol_prefix+it->getName().str());
       alias_symbols.push_back(it->getName().str());
+      if (!compiling) it->setLinkage(GlobalAlias::InternalLinkage);
     }
   for (Module::ifunc_iterator it = M->ifunc_begin(), end = M->ifunc_end();
        it != end; ++it)
     if (it->getLinkage() == GlobalIFunc::ExternalLinkage) {
       it->setName(symbol_prefix+it->getName().str());
       ifunc_symbols.push_back(it->getName().str());
+      if (!compiling) it->setLinkage(GlobalIFunc::InternalLinkage);
     }
 
+  if (!compiling) {
+    string verification_error;
+    if (!verify_module(*M, verification_error)) {
+      if (msg) *msg = "Invalid bitcode module: "+verification_error;
+      bc_errmsg(name, msg);
+      return false;
+    }
+    llvm::orc::ResourceTrackerSP tracker = ORC->create_resource_tracker();
+    if (llvm::Error error = ORC->add_module_copy(tracker, *M)) {
+      if (llvm::Error cleanup_error = tracker->remove())
+        error = llvm::joinErrors(std::move(error), std::move(cleanup_error));
+      if (msg) *msg = "Failed to submit ORC bitcode module: "+
+        llvm::toString(std::move(error));
+      bc_errmsg(name, msg);
+      return false;
+    }
+    for (list<bc_export_t>::const_iterator it = bitcode.exports.begin();
+         it != bitcode.exports.end(); ++it) {
+      llvm::Expected<llvm::orc::ExecutorAddr> address =
+        ORC->lookup(it->linked_name);
+      if (!address) {
+        llvm::Error error = address.takeError();
+        if (llvm::Error cleanup_error = tracker->remove())
+          error = llvm::joinErrors(std::move(error), std::move(cleanup_error));
+        if (msg) *msg = "Failed to materialize bitcode export '"+
+          it->source_name+"': "+llvm::toString(std::move(error));
+        bc_errmsg(name, msg);
+        return false;
+      }
+    }
+    for (list<bc_export_t>::const_iterator it = bitcode.exports.begin();
+         it != bitcode.exports.end(); ++it) {
+      declare_extern(priv, it->linked_name, it->restype, it->argtypes,
+                     it->varargs, 0, it->source_name, false);
+      Function *declaration = module->getFunction(it->linked_name);
+      assert(declaration && declaration->isDeclaration());
+    }
+    bitcode.declare(*symtab.current_namespace, priv);
+    compilation_units->retain_bitcode(module_key, std::move(tracker));
+    loaded_bcs.emplace(module_key, std::move(bitcode));
+    return true;
+  }
+
+  // Batch output still needs provider definitions in its emitted module.
   // LLVM 22 consumes the source module regardless of link success.
   if (Linker::linkModules(*module, std::move(M))) {
     if (msg && msg->empty()) *msg = "Error linking bitcode module";
