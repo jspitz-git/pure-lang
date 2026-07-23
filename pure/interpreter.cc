@@ -109,7 +109,16 @@ struct CompilationUnitResources {
       : address(address), flags(flags), tracker(std::move(tracker)) {}
   };
 
+  struct CompiledFunction {
+    void *address;
+    llvm::orc::ResourceTrackerSP tracker;
+
+    CompiledFunction(void *address, llvm::orc::ResourceTrackerSP tracker)
+      : address(address), tracker(std::move(tracker)) {}
+  };
+
   map<const Env*, llvm::orc::ResourceTrackerSP> trackers;
+  map<const llvm::Function*, CompiledFunction> functions;
   map<string, HostSymbol> host_symbols;
 
   llvm::Error retain_host_symbol
@@ -169,6 +178,22 @@ struct CompilationUnitResources {
     return it == host_symbols.end() ? 0 : it->second.address;
   }
 
+  void retain_function(const llvm::Function *function, void *address,
+                       llvm::orc::ResourceTrackerSP tracker)
+  {
+    assert(function && address && tracker &&
+           functions.find(function) == functions.end());
+    functions.emplace
+      (function, CompiledFunction(address, std::move(tracker)));
+  }
+
+  void *function_address(const llvm::Function *function) const
+  {
+    map<const llvm::Function*, CompiledFunction>::const_iterator it =
+      functions.find(function);
+    return it == functions.end() ? 0 : it->second.address;
+  }
+
   void retain(const Env *environment, llvm::orc::ResourceTrackerSP tracker)
   {
     assert(environment && tracker && trackers.find(environment) == trackers.end());
@@ -199,6 +224,13 @@ struct CompilationUnitResources {
       const Env *environment = trackers.begin()->first;
       errors = llvm::joinErrors(std::move(errors), remove(environment));
     }
+    while (!functions.empty()) {
+      map<const llvm::Function*, CompiledFunction>::iterator it =
+        functions.begin();
+      llvm::orc::ResourceTrackerSP tracker = std::move(it->second.tracker);
+      functions.erase(it);
+      errors = llvm::joinErrors(std::move(errors), tracker->remove());
+    }
     while (!host_symbols.empty()) {
       string name = host_symbols.begin()->first;
       errors = llvm::joinErrors(std::move(errors), remove_host_symbol(name));
@@ -206,6 +238,8 @@ struct CompilationUnitResources {
     return errors;
   }
 };
+
+static bool verify_module(const llvm::Module& module, string& message);
 
 struct NewPassManagerState {
   llvm::LoopAnalysisManager loops;
@@ -969,6 +1003,42 @@ void *interpreter::host_global_address
   return compilation_units->host_symbol_address(variable->getName());
 }
 
+void *interpreter::compile_orc_function(llvm::Function *function,
+                                        llvm::StringRef category)
+{
+  assert(function && !function->isDeclaration() && !category.empty());
+  if (void *address = compilation_units->function_address(function))
+    return address;
+
+  string verification_error;
+  if (!verify_module(*module, verification_error))
+    throw err("invalid LLVM module before ORC "+category.str()+": "+
+              verification_error);
+  llvm::orc::ResourceTrackerSP tracker = ORC->create_resource_tracker();
+  string entry_name = function->getName().str();
+  string exported_name = "$$orc."+category.str()+"."+
+    to_string(orc_unit_counter++);
+  if (llvm::Error error = ORC->add_module_copy
+        (tracker, *module, entry_name, exported_name)) {
+    if (llvm::Error cleanup_error = tracker->remove())
+      error = llvm::joinErrors(std::move(error), std::move(cleanup_error));
+    throw err("failed to add ORC "+category.str()+" module: "+
+              llvm::toString(std::move(error)));
+  }
+  llvm::Expected<llvm::orc::ExecutorAddr> entry = ORC->lookup(exported_name);
+  if (!entry) {
+    llvm::Error error = entry.takeError();
+    if (llvm::Error cleanup_error = tracker->remove())
+      error = llvm::joinErrors(std::move(error), std::move(cleanup_error));
+    throw err("failed to resolve ORC "+category.str()+" function: "+
+              llvm::toString(std::move(error)));
+  }
+  void *address = reinterpret_cast<void*>
+    (static_cast<uintptr_t>(entry->getValue()));
+  compilation_units->retain_function(function, address, std::move(tracker));
+  return address;
+}
+
 interpreter::interpreter(int _argc, char **_argv)
     : argc(_argc), argv(_argv),
     verbose(0), compat(false), compat2(false), compiling(false),
@@ -1095,6 +1165,7 @@ interpreter::interpreter(int32_t nsyms, char *syms,
 				      "$$wrap."+info.name, module);
       sys::DynamicLibrary::AddSymbol("$$wrap."+info.name, externs[f]);
       info.f = fp;
+      info.fp = externs[f];
     }
   }
 }
@@ -13275,8 +13346,10 @@ Function *interpreter::declare_extern(int priv, string name, string restype,
     raw_ostream& out = outs();
     f->print(out);
   }
+  void *wrapper_address = compile_orc_function(f, "external");
   externals[sym.f] = ExternInfo(sym.f, name, type, argt, abi_type,
                                 abi_argtypes, f, varargs);
+  externals[sym.f].fp = wrapper_address;
   return f;
 }
 

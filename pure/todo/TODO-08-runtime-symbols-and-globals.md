@@ -21,7 +21,7 @@ resolves the Pure runtime, external functions, and mutable host-backed globals.
 1. [x] Inventory runtime functions and globals currently mapped through `ExecutionEngine`.
 2. [x] Add mangled absolute-symbol registration to `PureJit`.
 3. [x] Convert activation stack, shadow stack, function pointer, and Pure globals.
-4. [ ] Convert external C wrapper lookup and indirect calls.
+4. [x] Convert external C wrapper lookup and indirect calls.
 5. [ ] Replace `resolve_external` with an ORC-compatible failure strategy.
 6. [ ] Test symbol visibility for executable, shared-library, and plugin builds.
 
@@ -83,6 +83,26 @@ resolves the Pure runtime, external functions, and mutable host-backed globals.
 
 ## Progress Log
 
+- 2026-07-23: Cached external C wrapper implementations in ORC.
+  - Added interpreter-lifetime compiled-function resources keyed by source
+    `Function*`. Each wrapper snapshot receives a unique exported name, typed
+    source reachability reduction, one cached address, and a tracker removed
+    before its host symbols at shutdown.
+  - `ExternInfo` now stores the compiled wrapper address. Normal extern
+    declarations compile their completed wrapper once through ORC, embedded
+    interpreters retain the supplied precompiled address, and `pure_symbol`
+    no longer calls MCJIT to obtain an external wrapper.
+  - Validation:
+    - An incremental Debug `pure` build completed with zero warnings and errors.
+    - Regression test 013 resolved libc `atan`, evaluated the constant wrapper
+      call, and invoked `foo` without unresolved, duplicate, materialization,
+      removal, or shutdown diagnostics.
+    - A focused declaration followed by evaluation of the bare `atan` symbol
+      exercised the reflective `pure_symbol` path without ORC diagnostics.
+    - Sanitizer validation was deliberately deferred after the WSL memory-pressure
+      incident; no sanitizer build was started for this milestone.
+  - Task 4 is complete for normal C externals. Faust provider addresses remain
+    in TODO-11, while Pure function implementation addresses belong to TODO-09.
 - 2026-07-23: Registered Pure runtime functions as callable ORC symbols.
   - Host registry entries now preserve `JITSymbolFlags` across rebind and rollback.
     Runtime addresses supplied to `declare_extern(fp, ...)` are defined strongly in

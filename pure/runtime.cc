@@ -1185,7 +1185,7 @@ pure_expr *pure_symbol(int32_t tag)
       // external wrapper function itself.
       const ExternInfo& info = it->second;
       size_t n = info.argtypes.size();
-      void *f = interp.JIT->getPointerToFunction(info.f);
+      void *f = info.fp;
       if (f) {
 	if (n == 0) {
 	  // Parameterless external, do a direct call.
