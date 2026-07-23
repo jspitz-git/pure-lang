@@ -44,6 +44,16 @@ without exposing ORC details throughout the interpreter.
 
 ## Progress Log
 
+- 2026-07-23: Fixed CMake detection of the system `strptime` implementation.
+  - The symbol check now uses `_XOPEN_SOURCE=700`, matching glibc's declaration
+    requirements, and maps the result to the existing `HAVE_STRPTIME` feature.
+  - The obsolete bundled K&R fallback is no longer compiled on Ubuntu.
+  - Validation:
+    - CMake found `HAVE_XOPEN_STRPTIME=1`, generated
+      `#define HAVE_STRPTIME 1`, and removed `strptime.c` from Ninja's graph.
+    - The complete LLVM 22 Debug build succeeded with zero warnings and errors
+      for the first time.
+    - The isolated `pure-jit-smoke` CTest still passed.
 - 2026-07-23: Modernized generated lexer source for C++17 and LLVM 22 streams.
   - Removed the two obsolete `register` storage specifiers from `lexer.ll`.
   - LLVM function dumps now unconditionally adapt `std::ostream` through
