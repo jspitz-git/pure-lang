@@ -1,0 +1,7 @@
+namespace duplicate_a;
+using "bc:duplicate-a";
+namespace duplicate_b;
+using "bc:duplicate-b";
+namespace;
+duplicate_a::bc_duplicate 1;
+duplicate_b::bc_duplicate 1;

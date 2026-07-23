@@ -1,6 +1,6 @@
 # TODO-10 - Modern Bitcode Loader
 
-Status: Open
+Status: Completed
 Branch: todo/10-modern-bitcode-loader
 
 ## Purpose
@@ -19,12 +19,12 @@ linked, compiled, and unloaded predictably.
 
 ## Task List
 
-1. [ ] Modernize file loading and bitcode parse error reporting.
-2. [ ] Port symbol inspection, renaming, and module linking.
-3. [ ] Define compatible target triple and data-layout checks.
-4. [ ] Submit loaded code as separately tracked ORC resources.
-5. [ ] Generate `.bc` test fixtures from source during the CMake build.
-6. [ ] Test duplicate symbols, malformed input, ABI mismatch, and unload behavior.
+1. [x] Modernize file loading and bitcode parse error reporting.
+2. [x] Port symbol inspection, renaming, and module linking.
+3. [x] Define compatible target triple and data-layout checks.
+4. [x] Submit loaded code as separately tracked ORC resources.
+5. [x] Generate `.bc` test fixtures from source during the CMake build.
+6. [x] Test duplicate symbols, malformed input, ABI mismatch, and unload behavior.
 
 ## Guardrails
 
@@ -45,6 +45,96 @@ linked, compiled, and unloaded predictably.
 
 ## Progress Log
 
+- 2026-07-23: Completed automated bitcode loader failure and lifecycle coverage.
+  - Added CTest integration cases for isolated duplicate exports, malformed bitcode,
+    incompatible target ABI, unresolved dependencies with rollback, and interpreter
+    teardown after loading a provider.
+  - Run scripts through the configured `run-test` environment on standard input so the
+    tests exercise interactive imports and preserve ordered diagnostics and recovery.
+  - Generate malformed and cross-target ABI fixtures during the build; canonical source
+    inputs remain in the repository instead of generated bitcode.
+  - Extended `pure-jit-smoke` with separate provider and consumer resource trackers,
+    removal in dependency order, and verification that the removed provider disappears.
+  - Validation:
+    - LLVM 22 debug build passed `pure-jit-smoke` and all five `pure-bitcode-*` tests.
+    - LLVM 22 ASan/UBSan build and `pure-jit-smoke` passed without sanitizer findings.
+    - The ASan black-box unload case was not used for lifecycle validation because its
+      prelude startup exceeded the 60-second integration-test timeout; the equivalent
+      tracker lifecycle is covered by the fast sanitizer smoke test.
+- 2026-07-23: Generated LLVM 22 bitcode fixtures from canonical C sources.
+  - Added basic, duplicate-symbol, and unresolved-dependency fixture sources under
+    `test/bitcode`; no generated binary bitcode is stored in the repository.
+  - Added the `pure-bitcode-fixtures` CMake target, built by default when testing is
+    enabled, which invokes the configured Clang compiler with `-emit-llvm`.
+  - Generate readable `.ll` disassemblies and verify every fixture with LLVM `opt`
+    before considering each custom command complete.
+  - Keep fixture compilation independent of project sanitizer flags so test-provider
+    ABI and dependencies are identical in debug and sanitizer builds.
+  - Validation:
+    - Debug and ASan presets generated all four `.bc` and `.ll` outputs.
+    - `file` identified every binary output as LLVM IR bitcode; explicit `llvm-dis-22`
+      and `opt-22 -passes=verify` checks passed.
+    - A second Ninja build reported `no work to do`.
+    - ASan fixture disassemblies contain no ASan or UBSan instrumentation symbols.
+- 2026-07-23: Submitted generic bitcode as separately tracked ORC providers.
+  - Added provider ownership to the compilation-resource registry and remove providers
+    after their compiled wrapper consumers during interpreter teardown.
+  - In JIT mode, submit the prepared provider as its own tracked ORC module, force
+    materialization of every exported symbol, and keep only declarations in the
+    mutable interpreter module.
+  - Roll back the provider tracker on submission or lookup failure before committing
+    cache and namespace state.
+  - Preserve link-into-output behavior in batch compilation so emitted programs remain
+    self-contained.
+  - Validation:
+    - LLVM 22 debug and ASan/UBSan builds passed; both `pure-jit-smoke` runs passed.
+    - A separately submitted provider returned the expected value through its Pure
+      wrapper, whose provider symbol remains a declaration in interpreter IR.
+    - Two providers with the same source export remained isolated and returned `6`
+      and `101` respectively.
+    - A provider with an unresolved dependency failed during export materialization
+      with the missing symbol named in the diagnostic.
+- 2026-07-23: Defined conservative bitcode target compatibility checks.
+  - Exposed the actual LLJIT target triple alongside its authoritative data layout and
+    assigned both to the interpreter module during JIT initialization.
+  - Accept empty target metadata as unspecified and canonicalize it to the JIT target.
+  - For explicit triples, require matching architecture, subarchitecture, OS/version,
+    environment, and object format while allowing vendor-only spelling differences.
+  - Require semantic `DataLayout` equality instead of accepting modules which merely
+    share endianness and default pointer size.
+  - Validation:
+    - LLVM 22 debug build and `pure-jit-smoke` passed.
+    - Native Clang 22 bitcode loaded and executed successfully.
+    - Vendor-only and unspecified target metadata variants loaded successfully.
+    - AArch64 bitcode was rejected with an architecture diagnostic containing both
+      triples.
+    - A same-pointer-size layout with changed `i64` alignment was rejected with both
+      complete layouts in the diagnostic.
+- 2026-07-23: Ported generic bitcode symbol inspection and linking.
+  - Inspect exported functions and copy their complete Pure ABI metadata before LLVM
+    consumes the source module during linking.
+  - Give every defined function, global, alias, and ifunc a load-specific IR name,
+    then internalize linked definitions so separate ORC units cannot collide.
+  - Cache export metadata by loaded file path; imports into another namespace now
+    recreate wrappers without reopening or reparsing a potentially changed file.
+  - Replace post-link assertions with checked diagnostics for missing linked symbols.
+  - Validation:
+    - LLVM 22 debug build and `pure-jit-smoke` passed.
+    - Clang 22 fixtures passed `llvm-dis-22` and `opt-22 -passes=verify`.
+    - Two modules exporting the same function name remained independent and returned
+      distinct expected values through separate Pure namespaces.
+    - A second namespace import succeeded after the first import deleted its `.bc`
+      file, confirming that redeclaration uses cached linked metadata.
+- 2026-07-23: Completed modern bitcode file loading and parse diagnostics.
+  - Confirmed file buffers and parsed modules already use `std::unique_ptr`, LLVM 22
+    `MemoryBuffer::getFile`, and `parseBitcodeFile` returning `Expected`.
+  - Hardened parse failure handling so the LLVM `Error` is always consumed, including
+    callers which intentionally omit a diagnostic string.
+  - Preserved filesystem diagnostics and LLVM's detailed malformed-bitcode messages.
+  - Validation:
+    - LLVM 22 debug build passed.
+    - `pure-jit-smoke` passed.
+    - Manual malformed and missing-file imports returned diagnostics without aborting.
 - 2026-07-22: Initial bitcode-loader migration plan created.
   - Validation:
     - Not run; this update creates planning documentation only.
