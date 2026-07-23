@@ -20,8 +20,8 @@ updates new calls without invalidating closures that still reference earlier cod
 
 1. [x] Document exact current semantics for global, local, and anonymous functions.
 2. [x] Design stable binding and concrete implementation data structures.
-3. [ ] Redirect public bindings atomically when a definition changes.
-4. [ ] Keep old `ResourceTracker`s alive while referenced by closures.
+3. [x] Redirect public bindings atomically when a definition changes.
+4. [x] Keep old `ResourceTracker`s alive while referenced by closures.
 5. [ ] Release obsolete implementations after the last reference disappears.
 6. [ ] Cover nested, recursive, and mutually recursive redefinition cases.
 
@@ -203,6 +203,40 @@ implementations[key]          FunctionGeneration owning that closure key
 
 ## Progress Log
 
+- 2026-07-23: Added ORC ownership for immutable global function generations.
+  - Added generation-qualified ORC units indexed by closure key, with independent
+    trackers retained after a generation is superseded.
+  - Materialized each global definition before publication while preserving deferred
+    closure semantics: first invocation resolves the current generation and transfers
+    the closure's key/refcounter ownership before storing its callable address.
+  - Kept tracker removal out of closure release paths; obsolete generations remain
+    registered until safe collection is implemented in item 5.
+  - Moved runtime type-function entry points to ORC as well, preventing ORC-generated
+    globals from calling stale transitional execution-engine code.
+  - Validation:
+    - LLVM 22 debug build passed.
+    - `pure-jit-smoke` passed.
+    - Tests 052, 053, and 068 produce the expected closure/redefinition results; the
+      runner still reports failure because of pre-existing malformed pragma warnings
+      while loading library scripts.
+    - Test 063 no longer crashes, but `__func__` inside `when`/`case` still differs in
+      two nested identity cases tracked by item 6; the remaining test behaves as
+      expected.
+- 2026-07-23: Made global function binding publication ordered and reentrant-safe.
+  - Added one publication path which retains the replacement, swaps the stable
+    `GlobalVar` host slot, and only then releases or retires the previous value.
+  - Used deferred retirement while `compile()` is active so closure sentries cannot
+    reenter compilation before the new definition is visible.
+  - Routed `clearsym()` through the same publication path, including publication of
+    a null binding for `--defined` externals.
+  - Validation:
+    - LLVM 22 debug configure and build passed.
+    - `pure-jit-smoke` passed.
+    - Tests 052, 053, 063, and 068 ran but failed because the current ORC deferred
+      resolver leaves global calls unreduced; library loading also reports existing
+      malformed pragma diagnostics. These failures precede generation ownership and
+      collection work in the remaining tasks.
+    - The full `pure-regression` CTest exceeded the 180-second validation limit.
 - 2026-07-23: Designed stable bindings and immutable implementation generations.
   - Selected the existing ORC-bound `GlobalVar` closure slot as the stable public
     binding instead of adding an LLVM indirect stub to every Pure function.

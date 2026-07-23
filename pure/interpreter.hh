@@ -1106,6 +1106,11 @@ public:
   void *host_global_address(const llvm::GlobalVariable *variable) const;
   void *compile_orc_function(llvm::Function *function,
                              llvm::StringRef category);
+  void publish_global_closure(int32_t tag, GlobalVar& binding,
+                              pure_expr *closure,
+                              list<pure_expr*> *retired = 0);
+  void *compile_global_generation(Env& environment);
+  void *resolve_global_closure(pure_expr *closure);
 
   llvm::BasicBlock *basic_block(const char *name, llvm::Function* f = 0)
   { return llvm::BasicBlock::Create(context, name, f); }

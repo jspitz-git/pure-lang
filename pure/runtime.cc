@@ -5645,21 +5645,8 @@ pure_expr *pure_matrix_columnsvq(uint32_t n, pure_expr **xs)
 #if DEFER_GLOBALS
 static inline void *get_funptr(pure_expr *x)
 {
-  if (!x->data.clos->fp) {
-    // The function hasn't been JITed yet. Do it now.
-    interpreter& interp = *interpreter::g_interp;
-    map<int32_t,Env>::iterator g = interp.globalfuns.find(x->tag);
-    // Make sure that the function wasn't purged in the meantime.
-    if (g != interp.globalfuns.end()) {
-      llvm::Function *f = g->second.f, *h = g->second.h;
-      assert(h);
-      if (f != h) interp.JIT->getPointerToFunction(f);
-      x->data.clos->fp = interp.JIT->getPointerToFunction(h);
-#if DEBUG>1
-      std::cerr << "JIT " << h->getNameStr() << " -> " << x->data.clos->fp << '\n';
-#endif
-    }
-  }
+  if (!x->data.clos->fp)
+    return interpreter::g_interp->resolve_global_closure(x);
   return x->data.clos->fp;
 }
 #else
