@@ -54,6 +54,7 @@ typedef struct {
   void *fp;			// pointer to executable code
   void *ep;			// pointer to compile time environment (Env*)
   void *refp;			// pointer to reference counter (uint32_t*)
+  void *owner;			// owning interpreter
   uint32_t n, m;		// number of arguments and environment size
   struct _pure_expr **env;	// captured environment (if m>0, 0 otherwise)
   bool local;			// local function?

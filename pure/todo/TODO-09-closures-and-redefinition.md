@@ -22,7 +22,7 @@ updates new calls without invalidating closures that still reference earlier cod
 2. [x] Design stable binding and concrete implementation data structures.
 3. [x] Redirect public bindings atomically when a definition changes.
 4. [x] Keep old `ResourceTracker`s alive while referenced by closures.
-5. [ ] Release obsolete implementations after the last reference disappears.
+5. [x] Release obsolete implementations after the last reference disappears.
 6. [ ] Cover nested, recursive, and mutually recursive redefinition cases.
 
 ## Current Closure and Redefinition Semantics
@@ -203,6 +203,26 @@ implementations[key]          FunctionGeneration owning that closure key
 
 ## Progress Log
 
+- 2026-07-23: Collected superseded ORC generations after their last closure.
+  - Recorded all root and nested closure keys/refcounters owned by each generation,
+    deduplicating shared `FMap` environments and indexing keys back to their units.
+  - Added an interpreter owner to runtime closures so last-reference callbacks reach
+    the correct generation registry; closure copies preserve this owner.
+  - Queued collection both when a closure is freed and when deferred resolution
+    transfers its reference to a newer generation; drain only after the outermost
+    runtime invocation returns so reentrant redefinition cannot unmap active code.
+  - Remove a tracker only after the generation is no longer current and every closure
+    refcounter in its compilation unit is zero; failed ORC removals remain registered
+    and are reported rather than losing ownership state.
+  - Validation:
+    - LLVM 22 debug and ASan/UBSan builds passed.
+    - Debug and ASan `pure-jit-smoke` passed.
+    - Tests 052, 053, and 068 retain their expected closure/redefinition output; the
+      runner still fails only on the existing malformed pragma diagnostics.
+    - A zero-arity function which clears itself reentrantly returned from its old
+      generation safely and subsequently exposed the cleared public binding.
+    - ASan test 052 exceeded the 180-second limit during library startup and produced
+      no final result.
 - 2026-07-23: Added ORC ownership for immutable global function generations.
   - Added generation-qualified ORC units indexed by closure key, with independent
     trackers retained after a generation is superseded.
