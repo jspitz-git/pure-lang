@@ -22,7 +22,7 @@ released without stale function or global pointers.
 2. [x] Port module validation, name mangling, and wrapper IR generation.
 3. [x] Implement reliable single/double precision detection.
 4. [x] Add Faust module resources and stable reload bindings.
-5. [ ] Retire old generations only after live wrappers no longer reference them.
+5. [x] Retire old generations only after live wrappers no longer reference them.
 6. [ ] Test initial load, unchanged reload, changed reload, and rejected ABI changes.
 
 ## Supported Faust Module ABI
@@ -103,6 +103,10 @@ Symbol order in the LLVM module is not ABI-significant.
 - Reload may replace implementation code only when class suffix, precision, required
   operation signatures, target ABI, and externally visible globals remain compatible.
   An ABI change is rejected while the previous generation remains active.
+- Interactive reload is deliberately quiescent: it is rejected during an active JIT call
+  or while any DSP instance from the current generation remains live. Applications must
+  explicitly delete or otherwise release those instances before retrying the reload. This
+  prevents a stable wrapper or sentry from ever applying new code to an old object layout.
 
 ## Guardrails
 
@@ -123,6 +127,28 @@ Symbol order in the LLVM module is not ABI-significant.
 
 ## Progress Log
 
+- 2026-07-24: Retired superseded Faust generations after live DSP users disappear.
+  - Replaced anonymous tracker lists with generation records carrying generation identity,
+    current state, live-instance counts, and their owning ORC tracker.
+  - Generated interactive constructor/clone wrappers retain the current generation for each
+    non-null DSP result; explicit or sentry-driven `delete` releases it and clears its tag.
+  - Reject reload while DSP instances or JIT calls are active, choosing safe quiescent reload
+    over generation-affine object dispatch and preventing new code from seeing old layouts.
+  - Publish the replacement generation only after task-4 validation/materialization, then
+    remove noncurrent zero-user trackers through the existing quiescent collection hook.
+  - Keep batch wrappers free of the new lifecycle hooks and force-remove any remaining
+    generation records only during interpreter teardown.
+  - Validation:
+    - LLVM 22 debug build passed, as did `pure-jit-smoke` and all five `pure-bitcode-*` tests.
+    - A live generation-1 object returned `11` and blocked reload; after explicit `delete`,
+      the same stable wrappers reloaded generation 2 and returned `22`.
+    - A subsequent unresolved provider was rolled back and the current generation continued
+      returning `22`; explicit delete invalidated its pointer tag without double release.
+    - Null DSP constructor results now take the wrapper failure path before tagging, retaining,
+      or attaching a sentry, preventing unbalanced lifecycle counts.
+    - The ASan/UBSan build and `pure-jit-smoke` passed. The full lifecycle run reached the
+      expected final `42` without sanitizer findings, then exceeded the known slow-teardown
+      limit after 480 seconds.
 - 2026-07-24: Added separately tracked Faust ORC generations and stable reload bindings.
   - Keep interactive Faust definitions out of the long-lived interpreter module; generate
     convenience wrappers in the staged provider and qualify every definition by generation.

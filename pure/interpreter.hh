@@ -1222,6 +1222,8 @@ public:
   // Faust interface.
   bool LoadFaustDSP(bool priv, const char *name, string *msg,
 		    const char *modnm = 0);
+  void retain_faust_instance(int32_t tag, pure_expr *dsp);
+  void release_faust_instance(int32_t tag, pure_expr *dsp) noexcept;
   // Generic LLVM bitcode interface.
   bool LoadBitcode(bool priv, const char *name, string *msg);
   // Handle inline code.

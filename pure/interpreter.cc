@@ -97,6 +97,18 @@ llvm::LLVMContext& pure_llvm_context()
   return interpreter::g_interp->llvm_context();
 }
 
+extern "C" void pure_faust_retain_instance(int32_t tag, pure_expr *dsp)
+{
+  if (interpreter::g_interp)
+    interpreter::g_interp->retain_faust_instance(tag, dsp);
+}
+
+extern "C" void pure_faust_release_instance(int32_t tag, pure_expr *dsp)
+{
+  if (interpreter::g_interp)
+    interpreter::g_interp->release_faust_instance(tag, dsp);
+}
+
 map<uint32_t, void (*)(void*)> interpreter::locals_destroy_cb;
 
 struct CompilationUnitResources {
@@ -116,6 +128,18 @@ struct CompilationUnitResources {
 
     CompiledFunction(void *address, llvm::orc::ResourceTrackerSP tracker)
       : address(address), tracker(std::move(tracker)) {}
+  };
+
+  struct FaustGeneration {
+    uint64_t generation;
+    size_t live_instances;
+    bool current;
+    llvm::orc::ResourceTrackerSP tracker;
+
+    FaustGeneration(uint64_t generation,
+                    llvm::orc::ResourceTrackerSP tracker)
+      : generation(generation), live_instances(0), current(false),
+        tracker(std::move(tracker)) {}
   };
 
   struct FunctionGeneration {
@@ -140,7 +164,7 @@ struct CompilationUnitResources {
   map<const Env*, llvm::orc::ResourceTrackerSP> trackers;
   map<const llvm::Function*, CompiledFunction> functions;
   map<string, llvm::orc::ResourceTrackerSP> bitcode_modules;
-  map<string, list<llvm::orc::ResourceTrackerSP> > faust_modules;
+  map<string, list<FaustGeneration> > faust_modules;
   map<string, uint64_t> next_faust_generations;
   map<string, HostSymbol> host_symbols;
   map<uint32_t, FunctionGeneration> implementations;
@@ -234,11 +258,81 @@ struct CompilationUnitResources {
     return ++next_faust_generations[module_name];
   }
 
-  void retain_faust(string module_name,
+  void retain_faust(string module_name, uint64_t generation,
                     llvm::orc::ResourceTrackerSP tracker)
   {
-    assert(!module_name.empty() && tracker);
-    faust_modules[module_name].push_back(std::move(tracker));
+    assert(!module_name.empty() && generation && tracker);
+    faust_modules[module_name].emplace_back(generation, std::move(tracker));
+  }
+
+  FaustGeneration *current_faust(const string& module_name)
+  {
+    map<string, list<FaustGeneration> >::iterator module =
+      faust_modules.find(module_name);
+    if (module == faust_modules.end()) return 0;
+    for (list<FaustGeneration>::iterator it = module->second.begin();
+         it != module->second.end(); ++it)
+      if (it->current) return &*it;
+    return 0;
+  }
+
+  bool faust_has_live_instances(const string& module_name)
+  {
+    FaustGeneration *generation = current_faust(module_name);
+    return generation && generation->live_instances != 0;
+  }
+
+  void publish_faust(const string& module_name, uint64_t generation)
+  {
+    map<string, list<FaustGeneration> >::iterator module =
+      faust_modules.find(module_name);
+    assert(module != faust_modules.end());
+    bool found = false;
+    for (list<FaustGeneration>::iterator it = module->second.begin();
+         it != module->second.end(); ++it) {
+      it->current = it->generation == generation;
+      found |= it->current;
+    }
+    assert(found);
+  }
+
+  void retain_faust_instance(const string& module_name)
+  {
+    FaustGeneration *generation = current_faust(module_name);
+    assert(generation);
+    ++generation->live_instances;
+  }
+
+  void release_faust_instance(const string& module_name) noexcept
+  {
+    FaustGeneration *generation = current_faust(module_name);
+    if (!generation || generation->live_instances == 0) return;
+    --generation->live_instances;
+  }
+
+  void collect_faust_generations() noexcept
+  {
+    for (map<string, list<FaustGeneration> >::iterator module =
+           faust_modules.begin(); module != faust_modules.end(); ) {
+      for (list<FaustGeneration>::iterator generation =
+             module->second.begin(); generation != module->second.end(); ) {
+        if (generation->current || generation->live_instances != 0) {
+          ++generation;
+          continue;
+        }
+        if (llvm::Error error = generation->tracker->remove()) {
+          llvm::logAllUnhandledErrors(std::move(error), llvm::errs(),
+                                      "failed to collect ORC Faust generation: ");
+          ++generation;
+        } else {
+          generation = module->second.erase(generation);
+        }
+      }
+      if (module->second.empty())
+        module = faust_modules.erase(module);
+      else
+        ++module;
+    }
   }
 
   uint64_t next_generation(int32_t tag)
@@ -392,11 +486,11 @@ struct CompilationUnitResources {
       errors = llvm::joinErrors(std::move(errors), tracker->remove());
     }
     while (!faust_modules.empty()) {
-      map<string, list<llvm::orc::ResourceTrackerSP> >::iterator module =
+      map<string, list<FaustGeneration> >::iterator module =
         faust_modules.begin();
       while (!module->second.empty()) {
         llvm::orc::ResourceTrackerSP tracker =
-          std::move(module->second.front());
+          std::move(module->second.front().tracker);
         module->second.pop_front();
         errors = llvm::joinErrors(std::move(errors), tracker->remove());
       }
@@ -1117,6 +1211,10 @@ void interpreter::init()
 		 "pure_tag",        "expr*",  2, "int", "expr*");
   declare_extern((void*)pure_check_tag,
 		 "pure_check_tag",  "bool",   2, "int", "expr*");
+  declare_extern((void*)pure_faust_retain_instance,
+                 "pure_faust_retain_instance", "void", 2, "int", "expr*");
+  declare_extern((void*)pure_faust_release_instance,
+                 "pure_faust_release_instance", "void", 2, "int", "expr*");
   declare_extern((void*)pure_add_rtti,
 		 "pure_add_rtti",   "void",   2, "char*", "int");
   declare_extern((void*)pure_add_rtty,
@@ -1283,8 +1381,34 @@ void interpreter::release_closure_implementation(uint32_t key) noexcept
 
 void interpreter::collect_pending_generations() noexcept
 {
-  if (compilation_units && !astk && active_jit_calls == 0)
+  if (compilation_units && !astk && active_jit_calls == 0) {
     compilation_units->collect_pending_generations();
+    compilation_units->collect_faust_generations();
+  }
+}
+
+void interpreter::retain_faust_instance(int32_t tag, pure_expr *dsp)
+{
+  void *pointer = 0;
+  map<int,bcmap::iterator>::iterator module = dsp_mods.find(tag);
+  if (!compilation_units || module == dsp_mods.end() ||
+      !pure_is_pointer(dsp, &pointer) || !pointer)
+    return;
+  compilation_units->retain_faust_instance(module->second->first);
+}
+
+void interpreter::release_faust_instance(int32_t tag,
+                                         pure_expr *dsp) noexcept
+{
+  void *pointer = 0;
+  map<int,bcmap::iterator>::iterator module = dsp_mods.find(tag);
+  if (!compilation_units || module == dsp_mods.end() ||
+      !pure_is_pointer(dsp, &pointer) || !pointer ||
+      !pure_check_tag(tag, dsp))
+    return;
+  compilation_units->release_faust_instance(module->second->first);
+  pure_tag(0, dsp);
+  collect_pending_generations();
 }
 
 void *interpreter::compile_orc_function(llvm::Function *function,
@@ -2514,6 +2638,12 @@ bool interpreter::LoadFaustDSP(bool priv, const char *name, string *msg,
     dsp_errmsg(name, msg);
     return false;
   };
+  if (!compiling && active_loaded && modified) {
+    if (active_jit_calls != 0 || astk)
+      return fail("Cannot reload Faust module during an active JIT call");
+    if (compilation_units->faust_has_live_instances(modname))
+      return fail("Cannot reload Faust module while DSP instances are live");
+  }
   // Faust bitcode follows the same target ABI rules as generic bitcode.
   // Assigning target metadata only canonicalizes compatible or unspecified
   // input; it must never disguise an incompatible module.
@@ -3243,7 +3373,8 @@ bool interpreter::LoadFaustDSP(bool priv, const char *name, string *msg,
   }
 
   try {
-    compilation_units->retain_faust(modname, tracker);
+    compilation_units->retain_faust
+      (modname, faust_generation, tracker);
   } catch (const std::exception& error) {
     return fail_submitted
       ("Failed to retain Faust generation: "+string(error.what()));
@@ -3253,6 +3384,7 @@ bool interpreter::LoadFaustDSP(bool priv, const char *name, string *msg,
   for (vector<pair<void**, void*> >::const_iterator it = bindings.begin();
        it != bindings.end(); ++it)
     *it->first = it->second;
+  compilation_units->publish_faust(modname, faust_generation);
 
   if (symtab.current_namespace->empty())
     namespaces.insert(modname);
@@ -3266,6 +3398,7 @@ bool interpreter::LoadFaustDSP(bool priv, const char *name, string *msg,
   bcmap::iterator mod = loaded_dsps.find(modname);
   assert(mod != loaded_dsps.end());
   dsp_mods[data.tag] = mod;
+  collect_pending_generations();
   return true;
 }
 
@@ -13921,6 +14054,14 @@ Function *interpreter::declare_extern(int priv, string name, string restype,
     u = b.CreateCall(gt, callee, mkargs(unboxed));
   } else
     u = b.CreateCall(g, mkargs(unboxed));
+  if (!compiling && is_faust_fun && faust_fun == "delete") {
+    Function *release = module->getFunction("pure_faust_release_instance");
+    assert(release && !args.empty());
+    vector<Value*> release_args;
+    release_args.push_back(SInt(faust_tag));
+    release_args.push_back(args[0]);
+    b.CreateCall(release, mkargs(release_args));
+  }
   // box the result
   if (type == void_type())
     u = b.CreateCall(module->getFunction("pure_const"),
@@ -13982,11 +14123,21 @@ Function *interpreter::declare_extern(int priv, string name, string restype,
     b.SetInsertPoint(okbb);
     // value is passed through
   } else if (abi_type.is_pointer()) {
+    bool faust_dsp_result = is_faust_fun && abi_type.name == "faust_dsp*";
+    if (faust_dsp_result) {
+      BasicBlock *okbb = basic_block("ok");
+      PointerType *pointer_type = cast<PointerType>(u->getType());
+      b.CreateCondBr
+        (b.CreateICmpNE(u, ConstantPointerNull::get(pointer_type)),
+         okbb, noretbb);
+      okbb->insertInto(f);
+      b.SetInsertPoint(okbb);
+    }
     if (gt->getReturnType() != VoidPtrTy)
       // bitcast the pointer result to a void*
       u = b.CreateBitCast(u, VoidPtrTy);
     u = b.CreateCall(module->getFunction("pure_pointer"), u);
-    if (is_faust_fun) {
+    if (faust_dsp_result) {
       // This is a pointer to a Faust dsp instance, tag it with the
       // appropriate module key.
       Function *f = module->getFunction("pure_tag");
@@ -13995,6 +14146,11 @@ Function *interpreter::declare_extern(int priv, string name, string restype,
       args.push_back(SInt(faust_tag));
       args.push_back(u);
       b.CreateCall(f, mkargs(args));
+      if (!compiling) {
+        Function *retain = module->getFunction("pure_faust_retain_instance");
+        assert(retain);
+        b.CreateCall(retain, mkargs(args));
+      }
       // Now add the delete routine as a sentry on the dsp pointer, so that
       // dsp instances free themselves when garbage-collected. FIXME: This
       // assumes that the delete routine always comes before any dsp-creating
