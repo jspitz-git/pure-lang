@@ -1,0 +1,7 @@
+{
+  "dap": {
+    "CodeLLDB": {
+      "binary": "/usr/bin/lldb-dap-22"
+    }
+  }
+}

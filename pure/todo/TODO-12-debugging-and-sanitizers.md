@@ -20,7 +20,7 @@ with actionable stack traces rather than opaque crashes.
 
 1. [x] Add debug-friendly compiler flags without changing release behavior.
 2. [x] Add sanitizer targets or presets with correct compile and link flags.
-3. [ ] Configure LLDB launch support and document common breakpoints.
+3. [x] Configure LLDB launch support and document common breakpoints.
 4. [ ] Register JIT debug objects and verify generated function names in LLDB.
 5. [ ] Add concise IR/object dumps controlled by a runtime or build option.
 6. [ ] Run resource-lifetime and redefinition stress tests under sanitizers.
@@ -57,6 +57,35 @@ bitcode tests even with no sanitizer diagnostic. The separate `llvm22-lsan`
 test preset enables leak scanning against the same build for targeted tests.
 No sanitizer finding is suppressed; Clang's documented `function` exception for
 ORC-generated call targets remains scoped to `pure-jit-smoke`.
+
+## LLDB 22
+
+Zed's `Pure JIT smoke (LLDB 22)` debug scenario builds the Debug preset with one
+parallel job and launches `build/llvm22-debug/pure-jit-smoke`. Project settings
+bind Zed's `CodeLLDB` adapter entry to `/usr/bin/lldb-dap-22`, so the DAP session
+uses the same LLVM 22 toolchain as the build. Start it from the debug panel or
+with `debugger: start` (`F4`). The equivalent command-line launch is:
+
+```text
+lldb-22 -- build/llvm22-debug/pure-jit-smoke
+```
+
+Useful symbolic breakpoints are independent of source line numbers:
+
+| Breakpoint | Purpose |
+| --- | --- |
+| `PureJit::create` | LLJIT and process-symbol setup |
+| `PureJit::add_module_copy` | IR cloning and ORC module submission |
+| `PureJit::lookup` | Symbol lookup and deferred materialization |
+| `PureJit::record_session_error` | Asynchronous ORC session failures |
+| `interpreter::compile_orc_function` | Interpreter-to-ORC compilation |
+| `NewPassManagerState::verify` | Function verification around optimization |
+| `CompilationUnitResources::remove_all` | Shutdown resource removal |
+| `__cxa_throw` | C++ exception origin; enable only for error paths |
+
+For example, use `breakpoint set --name PureJit::lookup` in LLDB. GDB remains
+usable with the same debug build and symbolic names, for example
+`break PureJit::lookup` followed by `run`.
 
 ## Guardrails
 
@@ -121,3 +150,18 @@ ORC-generated call targets remains scoped to `pure-jit-smoke`.
       Lifecycle stress and root-cause analysis remain in task 6. The Faust
       lifecycle test remained explicitly disabled in the sanitizer
       configuration.
+- 2026-07-24: Added a Zed LLDB 22 launch scenario and documented stable symbolic
+  breakpoints for ORC setup, materialization, lookup, verification, errors, and
+  resource removal.
+  - Validation:
+    - `lldb-22 --version` reported 22.1.8, and `/usr/bin/lldb-dap-22` was
+      available for Zed.
+    - `cmake --build --preset llvm22-debug --parallel 1`
+    - Batch `lldb-22` loaded `pure-jit-smoke` and resolved `PureJit::lookup`
+      to `pure_jit.cc:256` with one breakpoint location.
+    - Inferior launch could not be validated in the agent sandbox: LLDB timed
+      out before process start for both `pure-jit-smoke` and `/bin/true`.
+      `lldb-server-22` is installed and Linux reports `ptrace_scope=1`, so the
+      Zed launch must be exercised in the interactive editor environment.
+    - `ctest --preset llvm22-debug -R pure-jit-smoke --output-on-failure`
+      passed.
