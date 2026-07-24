@@ -131,12 +131,14 @@ TODO-17's bounded runner completed the full Release corpus in 1347.36 seconds wi
 four workers. It found 77 passing and 20 failing inputs; serial `-f` reproduced all
 20 failures, proving they are not scheduler races. TODO-18 owns their behavior
 compatibility classification and fixes, with the ORC subset shared with TODO-14.
-TODO-18 has now cleared the configuration-independent differences: confirmation runs
-passed 97/97 in Release in 897.16 seconds with four workers and in Debug in 1043.32
-seconds with eight workers. The initial four-worker Debug run exceeded its 30-minute
-outer limit but correctly cleaned up workers, staging, and the build-directory lock.
-The first complete sanitizer run then finished all 97 inputs with eight workers in
-5273.61 seconds and exposed five genuine ASan/UBSan failures. Their bigint conversion,
+TODO-18 has now cleared the configuration-independent differences: initial confirmation
+runs passed 97/97 in Release in 897.16 seconds with four workers and in Debug in
+1043.32 seconds with eight workers. The initial four-worker Debug run exceeded its
+30-minute outer limit but correctly cleaned up workers, staging, and the build-directory
+lock. After removing quadratic ORC snapshots and restoring deferred global compilation,
+the Release corpus still passes 97/97 but now finishes in 292.28 seconds. The first
+complete pre-fix sanitizer run finished all 97 inputs with eight workers in 5273.61
+seconds and exposed five genuine ASan/UBSan failures. Their bigint conversion,
 blob alignment, pragma parsing, and hash-rotation root causes are fixed, and all five
 failed-only sanitizer reruns now pass. No complete supported-suite pass is claimed
 until a clean full sanitizer confirmation run establishes the final budget.
@@ -472,3 +474,18 @@ The release cleanup produced four numbered follow-ups:
       `test070`, and `test074` in 260.41 seconds without a finding.
     - The same five Release inputs passed in 80.40 seconds with unchanged golden output.
     - A clean complete sanitizer confirmation run remains required.
+- 2026-07-24: Diagnosed and removed the ORC startup and memory regression.
+  - Each isolated test process recreated 530 prelude objects. Entry snapshots copied
+    the entire growing module before reduction, and global generations forced lookup
+    despite active `DEFER_GLOBALS`; ASan quarantine amplified the allocation churn.
+  - Entry snapshots now reduce before serialization, while deferred global generations
+    retain compact bitcode and materialize only on first closure invocation.
+  - Validation:
+    - Release prelude startup improved from 22.91 to 3.72 seconds and ASan/UBSan
+      startup from 68.08 to 12.56 seconds; object emission fell from 530 to 260.
+    - Default-quarantine sanitizer RSS was 718 MiB per empty-prelude process versus
+      413 MiB with a 64 MiB quarantine and 272 MiB with quarantine disabled.
+    - All 12 focused Release and sanitizer tests passed in 36.18 and 112.44 seconds.
+    - `run-tests -j 4` passed all 97 Release inputs in 292.28 seconds.
+    - A complete post-fix sanitizer run remains required to select its final worker,
+      quarantine, and timeout budget.

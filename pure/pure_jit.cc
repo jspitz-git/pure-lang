@@ -39,6 +39,7 @@
 #include <llvm/Support/MemoryBuffer.h>
 #include <llvm/Support/TargetSelect.h>
 #include <llvm/Support/raw_ostream.h>
+#include <llvm/Transforms/Utils/Cloning.h>
 
 #include <cstdlib>
 #include <iterator>
@@ -328,25 +329,55 @@ llvm::Error PureJit::add_module(llvm::orc::ResourceTrackerSP tracker,
   return jit_->addIRModule(std::move(tracker), std::move(module));
 }
 
-llvm::Error PureJit::add_module_copy(llvm::orc::ResourceTrackerSP tracker,
-                                     const llvm::Module& module,
-                                     llvm::StringRef entry_symbol,
-                                     llvm::StringRef exported_symbol)
+llvm::Expected<std::unique_ptr<llvm::MemoryBuffer> >
+PureJit::snapshot_module(const llvm::Module& module,
+                         llvm::StringRef entry_symbol,
+                         llvm::StringRef exported_symbol)
 {
+  const llvm::Module *source = &module;
+  std::unique_ptr<llvm::Module> reduced;
+  if (!entry_symbol.empty()) {
+    llvm::Function *entry = module.getFunction(entry_symbol);
+    if (!entry)
+      return llvm::createStringError("ORC entry symbol '%s' is not a function",
+                                     entry_symbol.str().c_str());
+    llvm::SmallPtrSet<llvm::GlobalValue*, 32> reachable;
+    collect_dependencies(entry, reachable);
+    llvm::ValueToValueMapTy values;
+    reduced = llvm::CloneModule
+      (module, values, [&reachable](const llvm::GlobalValue *global) {
+        if (!reachable.contains(const_cast<llvm::GlobalValue*>(global)))
+          return false;
+        const llvm::GlobalVariable *variable =
+          llvm::dyn_cast<llvm::GlobalVariable>(global);
+        return !variable ||
+          (variable->isConstant() && variable->hasInitializer());
+      });
+    if (llvm::Error error =
+          reduce_to_entry(*reduced, entry_symbol, exported_symbol))
+      return std::move(error);
+    if (llvm::Error error = verify_module(*reduced, "reduced"))
+      return std::move(error);
+    source = reduced.get();
+  }
+
   llvm::SmallVector<char, 0> bitcode;
   llvm::raw_svector_ostream out(bitcode);
-  llvm::WriteBitcodeToFile(module, out);
-
-  std::unique_ptr<llvm::LLVMContext> context(new llvm::LLVMContext);
-  llvm::MemoryBufferRef buffer
+  llvm::WriteBitcodeToFile(*source, out);
+  return llvm::MemoryBuffer::getMemBufferCopy
     (llvm::StringRef(bitcode.data(), bitcode.size()), module.getName());
+}
+
+llvm::Error PureJit::add_module_snapshot
+(llvm::orc::ResourceTrackerSP tracker,
+ std::unique_ptr<llvm::MemoryBuffer> snapshot)
+{
+  if (!snapshot)
+    return llvm::createStringError("cannot add an empty ORC module snapshot");
+  std::unique_ptr<llvm::LLVMContext> context(new llvm::LLVMContext);
   llvm::Expected<std::unique_ptr<llvm::Module> > copy =
-    llvm::parseBitcodeFile(buffer, *context);
+    llvm::parseBitcodeFile(snapshot->getMemBufferRef(), *context);
   if (!copy) return copy.takeError();
-  if (!entry_symbol.empty())
-    if (llvm::Error error =
-          reduce_to_entry(**copy, entry_symbol, exported_symbol))
-      return error;
   if (llvm::Error error = optimize_module(**copy)) return error;
   if (dump_ir_) {
     std::lock_guard<std::mutex> lock(jit_dump_mutex());
@@ -357,6 +388,17 @@ llvm::Error PureJit::add_module_copy(llvm::orc::ResourceTrackerSP tracker,
   llvm::orc::ThreadSafeModule thread_safe_module
     (std::move(*copy), std::move(context));
   return add_module(std::move(tracker), std::move(thread_safe_module));
+}
+
+llvm::Error PureJit::add_module_copy(llvm::orc::ResourceTrackerSP tracker,
+                                     const llvm::Module& module,
+                                     llvm::StringRef entry_symbol,
+                                     llvm::StringRef exported_symbol)
+{
+  llvm::Expected<std::unique_ptr<llvm::MemoryBuffer> > snapshot =
+    snapshot_module(module, entry_symbol, exported_symbol);
+  if (!snapshot) return snapshot.takeError();
+  return add_module_snapshot(std::move(tracker), std::move(*snapshot));
 }
 
 llvm::Expected<llvm::orc::ExecutorAddr> PureJit::lookup(llvm::StringRef name)

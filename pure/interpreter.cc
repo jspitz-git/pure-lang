@@ -147,16 +147,20 @@ struct CompilationUnitResources {
     uint64_t generation;
     uint32_t key;
     uint32_t *refp;
+    string symbol;
+    std::unique_ptr<llvm::MemoryBuffer> snapshot;
     void *address;
     llvm::orc::ResourceTrackerSP tracker;
     map<uint32_t, uint32_t*> closure_refs;
     bool current;
 
     FunctionGeneration(int32_t tag, uint64_t generation, uint32_t key,
-                       uint32_t *refp, void *address,
-                       llvm::orc::ResourceTrackerSP tracker,
+                       uint32_t *refp, string symbol,
+                       std::unique_ptr<llvm::MemoryBuffer> snapshot,
+                       void *address, llvm::orc::ResourceTrackerSP tracker,
                        const map<uint32_t, uint32_t*>& closure_refs)
       : tag(tag), generation(generation), key(key), refp(refp),
+        symbol(std::move(symbol)), snapshot(std::move(snapshot)),
         address(address), tracker(std::move(tracker)),
         closure_refs(closure_refs), current(false) {}
   };
@@ -349,15 +353,19 @@ struct CompilationUnitResources {
   }
 
   void retain_generation(int32_t tag, uint64_t generation, uint32_t key,
-                         uint32_t *refp, void *address,
-                         llvm::orc::ResourceTrackerSP tracker,
+                         uint32_t *refp, string symbol,
+                         std::unique_ptr<llvm::MemoryBuffer> snapshot,
+                         void *address, llvm::orc::ResourceTrackerSP tracker,
                          const map<uint32_t, uint32_t*>& closure_refs)
   {
-    assert(tag > 0 && key && refp && address && tracker &&
+    assert(tag > 0 && key && refp && !symbol.empty() &&
+           ((snapshot && !address && !tracker) ||
+            (!snapshot && address && tracker)) &&
            implementations.find(key) == implementations.end() &&
            closure_refs.find(key) != closure_refs.end());
     implementations.emplace
-      (key, FunctionGeneration(tag, generation, key, refp, address,
+      (key, FunctionGeneration(tag, generation, key, refp, std::move(symbol),
+                               std::move(snapshot), address,
                                std::move(tracker), closure_refs));
     for (map<uint32_t, uint32_t*>::const_iterator it = closure_refs.begin();
          it != closure_refs.end(); ++it)
@@ -380,11 +388,13 @@ struct CompilationUnitResources {
     if (implementation == implementations.end() ||
         implementation->second.current || !unused(implementation->second))
       return;
-    if (llvm::Error error = implementation->second.tracker->remove()) {
-      llvm::logAllUnhandledErrors(std::move(error), llvm::errs(),
-                                  "failed to collect ORC function generation: ");
-      return;
-    }
+    if (implementation->second.tracker)
+      if (llvm::Error error = implementation->second.tracker->remove()) {
+        llvm::logAllUnhandledErrors
+          (std::move(error), llvm::errs(),
+           "failed to collect ORC function generation: ");
+        return;
+      }
     for (map<uint32_t, uint32_t*>::const_iterator
            it = implementation->second.closure_refs.begin();
          it != implementation->second.closure_refs.end(); ++it) {
@@ -491,7 +501,8 @@ struct CompilationUnitResources {
       map<uint32_t, FunctionGeneration>::iterator it = implementations.begin();
       llvm::orc::ResourceTrackerSP tracker = std::move(it->second.tracker);
       implementations.erase(it);
-      errors = llvm::joinErrors(std::move(errors), tracker->remove());
+      if (tracker)
+        errors = llvm::joinErrors(std::move(errors), tracker->remove());
     }
     while (!faust_modules.empty()) {
       map<string, list<FaustGeneration> >::iterator module =
@@ -1322,10 +1333,21 @@ void *interpreter::compile_global_generation(Env& environment)
          !environment.h->isDeclaration());
   uint64_t generation =
     compilation_units->next_generation(environment.tag);
-  llvm::orc::ResourceTrackerSP tracker = ORC->create_resource_tracker();
   string entry_name = environment.h->getName().str();
   string exported_name = "$$orc.fun."+to_string(environment.tag)+"."+
     to_string(generation);
+  std::unique_ptr<llvm::MemoryBuffer> snapshot;
+  void *address = 0;
+  llvm::orc::ResourceTrackerSP tracker;
+#if DEFER_GLOBALS
+  llvm::Expected<std::unique_ptr<llvm::MemoryBuffer> > pending =
+    ORC->snapshot_module(*module, entry_name, exported_name);
+  if (!pending)
+    throw err("failed to snapshot deferred ORC global function: "+
+              llvm::toString(pending.takeError()));
+  snapshot = std::move(*pending);
+#else
+  tracker = ORC->create_resource_tracker();
   if (llvm::Error error = ORC->add_module_copy
         (tracker, *module, entry_name, exported_name)) {
     if (llvm::Error cleanup_error = tracker->remove())
@@ -1341,14 +1363,16 @@ void *interpreter::compile_global_generation(Env& environment)
     throw err("failed to resolve ORC global function: "+
               llvm::toString(std::move(error)));
   }
-  void *address = reinterpret_cast<void*>
+  address = reinterpret_cast<void*>
     (static_cast<uintptr_t>(entry->getValue()));
+#endif
   map<uint32_t, uint32_t*> closure_refs;
   set<const Env*> visited;
   collect_generation_closure_refs(&environment, closure_refs, visited);
   compilation_units->retain_generation
     (environment.tag, generation, environment.getkey(), environment.refp,
-     address, std::move(tracker), closure_refs);
+     exported_name, std::move(snapshot), address, std::move(tracker),
+     closure_refs);
   return address;
 }
 
@@ -1360,6 +1384,29 @@ void *interpreter::resolve_global_closure(pure_expr *closure)
   CompilationUnitResources::FunctionGeneration *generation =
     compilation_units->current_generation(closure->tag);
   if (!generation) return 0;
+  if (generation->snapshot) {
+    llvm::orc::ResourceTrackerSP tracker = ORC->create_resource_tracker();
+    if (llvm::Error error = ORC->add_module_snapshot
+          (tracker, std::move(generation->snapshot))) {
+      if (llvm::Error cleanup_error = tracker->remove())
+        error = llvm::joinErrors(std::move(error), std::move(cleanup_error));
+      llvm::logAllUnhandledErrors
+        (std::move(error), llvm::errs(),
+         "failed to add deferred ORC function: ");
+      return 0;
+    }
+    generation->tracker = std::move(tracker);
+  }
+  if (!generation->address) {
+    llvm::Expected<llvm::orc::ExecutorAddr> entry = ORC->lookup(generation->symbol);
+    if (!entry) {
+      llvm::logAllUnhandledErrors(entry.takeError(), llvm::errs(),
+                                  "failed to resolve deferred ORC function: ");
+      return 0;
+    }
+    generation->address = reinterpret_cast<void*>
+      (static_cast<uintptr_t>(entry->getValue()));
+  }
 
   if (clos->key != generation->key) {
     assert(generation->refp);

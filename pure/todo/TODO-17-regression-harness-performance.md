@@ -70,6 +70,40 @@ This changes scheduling and temporary ownership only. Golden comparison, CRLF
 normalization, process isolation, deterministic output, and `run-tests -f`
 semantics remain unchanged.
 
+## JIT Startup Root Cause
+
+The parallel runner exposed a runtime regression rather than an inherently expensive
+corpus. Each of the 97 isolated processes loaded the 1848-line prelude, and one empty
+Release process spent 22.91 seconds and 115 MiB doing so; the same ASan/UBSan process
+spent 68.08 seconds and 750 MiB. Starting without the prelude took 0.01 and 0.04
+seconds respectively, while `test001` added only 3.00 and 6.41 seconds. Test complexity
+was therefore not the dominant cost.
+
+Prelude loading produced 530 separately optimized and materialized ORC objects: 272
+global function generations, 220 external wrappers, 25 type functions, and 13
+anonymous evaluations. Every entry submission first serialized the entire growing
+interpreter module, parsed it in a new LLVM context, reduced it to the entry, ran a
+second O1 module pipeline after function O1, and forced object emission through
+`lookup`. This made startup quadratic in accumulated IR and defeated the historical
+`DEFER_GLOBALS` policy. Commit `ead40820` introduced the eager global-generation
+lookup even though the published closure still received a null function pointer.
+
+Entry snapshots now clone only reachable definitions before bitcode serialization.
+Deferred global generations retain that reduced bitcode buffer without an LLVM
+context or resource tracker; first closure invocation parses, optimizes, submits, and
+resolves it. This preserves immutable generations and process isolation while
+restoring lazy compilation. Empty-prelude object emission dropped from 530 to 260.
+Release prelude startup fell to 3.72 seconds and `test001` to 5.59 seconds. The complete
+four-worker Release corpus passed 97/97 in 292.28 seconds, restoring the expected
+several-minute scale.
+
+ASan allocator quarantine explains the remaining memory multiplier. With compact lazy
+snapshots, an empty sanitizer prelude process used 272 MiB with no quarantine, 413 MiB
+with a 64 MiB quarantine, and 718 MiB with the default quarantine. Eight default
+workers can therefore consume about 5.7 GiB even though retained JIT code is not that
+large. Final sanitizer worker and quarantine policy remains to be selected from a
+complete post-fix run; quarantine must remain nonzero for release validation.
+
 ## Guardrails
 
 - Do not hide failures by sharding away or disabling corpus inputs.
@@ -157,3 +191,17 @@ Deterministic runtime/golden failures exposed by the completed runner belong to 
     88-minute pre-fix baseline while exposing five genuine sanitizer findings.
   - The five-input failed-only confirmation passed in 260.41 seconds after their
     runtime fixes; a clean complete run remains required for the final budget.
+- 2026-07-24: Removed quadratic ORC startup work and restored deferred globals.
+  - Isolated prelude timing proved test bodies were not the dominant cost: no-prelude
+    startup was effectively instantaneous, while every process rebuilt 530 ORC units.
+  - Reduced entry modules before serialization and retained unmaterialized global
+    generations as compact bitcode snapshots until their first closure invocation.
+  - Release prelude startup improved from 22.91 to 3.72 seconds; ASan/UBSan improved
+    from 68.08 to 12.56 seconds. Prelude object emission fell from 530 to 260 objects.
+  - Measured sanitizer RSS at 272 MiB without quarantine, 413 MiB with a 64 MiB
+    quarantine, and 718 MiB with the default quarantine.
+  - Validation:
+    - Release and ASan/UBSan JIT smoke and lifetime stress tests passed.
+    - All 12 focused Release tests passed in 36.18 seconds.
+    - All 12 focused ASan/UBSan tests passed in 112.44 seconds.
+    - The complete four-worker Release corpus passed 97/97 in 292.28 seconds.
