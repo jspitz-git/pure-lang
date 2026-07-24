@@ -1376,13 +1376,10 @@ void *interpreter::compile_global_generation(Env& environment)
   return address;
 }
 
-void *interpreter::resolve_global_closure(pure_expr *closure)
+void *interpreter::materialize_global_generation(int32_t tag, string *error_message)
 {
-  assert(closure && closure->data.clos && closure->tag > 0);
-  pure_closure *clos = closure->data.clos;
-  if (clos->fp) return clos->fp;
   CompilationUnitResources::FunctionGeneration *generation =
-    compilation_units->current_generation(closure->tag);
+    compilation_units->current_generation(tag);
   if (!generation) return 0;
   if (generation->snapshot) {
     llvm::orc::ResourceTrackerSP tracker = ORC->create_resource_tracker();
@@ -1390,9 +1387,8 @@ void *interpreter::resolve_global_closure(pure_expr *closure)
           (tracker, std::move(generation->snapshot))) {
       if (llvm::Error cleanup_error = tracker->remove())
         error = llvm::joinErrors(std::move(error), std::move(cleanup_error));
-      llvm::logAllUnhandledErrors
-        (std::move(error), llvm::errs(),
-         "failed to add deferred ORC function: ");
+      if (error_message) *error_message = llvm::toString(std::move(error));
+      else llvm::consumeError(std::move(error));
       return 0;
     }
     generation->tracker = std::move(tracker);
@@ -1400,13 +1396,31 @@ void *interpreter::resolve_global_closure(pure_expr *closure)
   if (!generation->address) {
     llvm::Expected<llvm::orc::ExecutorAddr> entry = ORC->lookup(generation->symbol);
     if (!entry) {
-      llvm::logAllUnhandledErrors(entry.takeError(), llvm::errs(),
-                                  "failed to resolve deferred ORC function: ");
+      if (error_message) *error_message = llvm::toString(entry.takeError());
+      else llvm::consumeError(entry.takeError());
       return 0;
     }
     generation->address = reinterpret_cast<void*>
       (static_cast<uintptr_t>(entry->getValue()));
   }
+  return generation->address;
+}
+
+void *interpreter::resolve_global_closure(pure_expr *closure)
+{
+  assert(closure && closure->data.clos && closure->tag > 0);
+  pure_closure *clos = closure->data.clos;
+  if (clos->fp) return clos->fp;
+  string detail;
+  void *address = materialize_global_generation(closure->tag, &detail);
+  if (!address) {
+    if (!detail.empty())
+      llvm::errs() << "failed to resolve deferred ORC function: " << detail << '\n';
+    return 0;
+  }
+  CompilationUnitResources::FunctionGeneration *generation =
+    compilation_units->current_generation(closure->tag);
+  assert(generation && generation->address == address);
 
   if (clos->key != generation->key) {
     assert(generation->refp);
@@ -5322,18 +5336,13 @@ void interpreter::jit_now(const set<int> fnos, bool recurse)
     compile();
     if (done) return;
   }
+  set<int32_t> targets;
   if (fnos.empty()) {
-    // Force compilation of everything. This is slow.
-    for (llvm::Module::iterator it = module->begin(), end = module->end();
-	 it != end; ++it) {
-      llvm::Function *fn = &*it;
-      JIT->getPointerToFunction(fn);
-    }
+    // Force compilation of every current global function generation.
+    for (map<int32_t,Env>::const_iterator it = globalfuns.begin();
+         it != globalfuns.end(); ++it)
+      targets.insert(it->first);
   } else {
-    /* TODO: We should cache the results of analyzing the call graph and reuse
-       these results as much as possible. But the LLVM JIT seems to take the
-       lion share of the compilation time anyway, so this isn't really worth
-       the effort until the JIT gets much faster. */
     set<llvm::Function*> used;
     map<llvm::GlobalVariable*,llvm::Function*> varmap;
     for (set<int>::const_iterator it = fnos.begin(), end = fnos.end();
@@ -5347,13 +5356,21 @@ void interpreter::jit_now(const set<int> fnos, bool recurse)
       }
     }
     check_used(used, varmap);
-    // Force compilation of the given functions and everything they might use.
-    for (llvm::Module::iterator it = module->begin(), end = module->end();
-	 it != end; ++it) {
-      llvm::Function *fn = &*it;
-      if (used.find(fn) != used.end())
-	JIT->getPointerToFunction(fn);
+    // Force compilation of the given functions and every global they might use.
+    for (map<int32_t,Env>::const_iterator it = globalfuns.begin();
+         it != globalfuns.end(); ++it) {
+      llvm::Function *f = it->second.f, *h = it->second.h;
+      if ((f && used.find(f) != used.end()) ||
+          (h && used.find(h) != used.end()))
+        targets.insert(it->first);
     }
+  }
+  for (set<int32_t>::const_iterator it = targets.begin();
+       it != targets.end(); ++it) {
+    string detail;
+    void *address = materialize_global_generation(*it, &detail);
+    if (!address && !detail.empty())
+      throw err("failed to eagerly materialize ORC function: "+detail);
   }
 }
 

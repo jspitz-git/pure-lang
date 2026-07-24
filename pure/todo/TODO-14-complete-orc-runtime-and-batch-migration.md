@@ -23,7 +23,7 @@ compatibility gates can be removed.
 ## Task List
 
 1. [x] Inventory every remaining `ExecutionEngine`, MCJIT, mapping, and materialization consumer.
-2. [ ] Route `jit_now` and `pure_interp_compile` through explicit ORC units.
+2. [x] Route `jit_now` and `pure_interp_compile` through explicit ORC units.
 3. [ ] Route retained `dodefn(keep)` initialization and batch Faust through ORC.
 4. [ ] Replace legacy mappings and fallback resolution with ORC symbols.
 5. [ ] Replace stale-module cleanup with tracker and generation ownership.
@@ -114,3 +114,19 @@ publication and invalid continuation after a failed materialization.
     `LLVM33` and `LLVM35` have no consumers beyond their definitions.
   - Validation:
     - Read-only source, header, and CMake audit; no build or runtime test was required.
+- 2026-07-25: Routed eager compilation and `pure_interp_compile` through current ORC
+  function generations.
+  - Extracted shared current-generation materialization from deferred closure resolution,
+    preserving tracker ownership, immutable snapshots, and latest-generation rebinding.
+  - Kept `jit_now`'s dependency analysis while replacing MCJIT function-pointer requests
+    with explicit ORC snapshot submission and lookup.
+  - Added the no-prelude `pure-jit-eager` regression test for eager root and dependency
+    materialization; the public C API continues to delegate directly to `jit_now`.
+  - Validation:
+    - `cmake --build --preset llvm22-release --parallel 1` passed.
+    - `pure-jit-eager`, `pure-jit-lifetime-stress`, and `pure-jit-smoke` passed in the
+      LLVM 22 Release preset.
+    - `cmake --build --preset llvm22-asan --parallel 1` and the same focused tests passed
+      under ASan/UBSan without sanitizer findings.
+    - Confirmed `jit_now` no longer calls `getPointerToFunction`; remaining calls belong
+      to retained definition and batch Faust migration in task 3.

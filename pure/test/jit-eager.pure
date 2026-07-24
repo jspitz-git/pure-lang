@@ -1,0 +1,6 @@
+#! --eager eager_root
+
+eager_leaf x = x;
+eager_root x = eager_leaf x;
+
+eager_root 42;
