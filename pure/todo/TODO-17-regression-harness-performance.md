@@ -117,3 +117,10 @@ golden comparison; this follow-up owns the independent repeated-startup performa
       selected, passed, and cleared exactly that test on retry.
     - Four Release inputs passed in 98.68 seconds with `-j 1` and 34.79 seconds
       with `-j 4`, a 2.84x wall-clock speedup with identical outcomes.
+- 2026-07-24: Captured worker-shell diagnostics for deterministic publication.
+  - Redirected each background worker's own output into its ordinal staging area;
+    unexpected shell diagnostics are appended to a failed diff in input order.
+  - Validation:
+    - A parallel Release run with the known-failing prelude followed by passing
+      `test001.pure` emitted only their ordered status/diff output; no `Aborted`
+      diagnostic escaped ahead of parent publication.

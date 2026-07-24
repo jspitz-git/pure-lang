@@ -162,7 +162,7 @@ echo Running tests.
 
 for t in "$@"; do
   ordinal=$(($ordinal + 1))
-  run_one "$ordinal" "$t" &
+  run_one "$ordinal" "$t" > "$rundir/$ordinal/worker-output" 2>&1 &
   pids="$pids $!"
   running=$(($running + 1))
   if test "$running" -eq "$jobs"; then
@@ -193,10 +193,18 @@ for t in "$@"; do
     rc=1
     if test "$status" -eq 1; then
       mv "$work/diff" "$diff"
+      if test -s "$work/worker-output"; then
+        {
+          echo
+          echo "test worker diagnostics:"
+          cat "$work/worker-output"
+        } >> "$diff"
+      fi
     else
       {
         echo "test harness failed before comparison"
         test ! -f "$work/error" || cat "$work/error"
+        test ! -f "$work/worker-output" || cat "$work/worker-output"
       } > "$diff"
     fi
     echo "${ECHO_T}FAILED"
