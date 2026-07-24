@@ -88,8 +88,8 @@ and every expression hash rotation rather than only the observed lines.
 5. [x] Classify and fix the remaining language/runtime differences.
 6. [x] Run all 97 inputs in Release with no golden differences.
 7. [x] Run the complete corpus in the sanitizer configuration.
-   - Debug passes 97/97 with eight workers in 1043.32 seconds.
-   - ASan/UBSan passes 97/97 with four workers in 1280.27 seconds.
+   - Post-fix Debug passes 97/97 with four workers in 457.56 seconds.
+   - Post-fix ASan/UBSan passes 97/97 with four workers in 1280.27 seconds.
 
 ## Guardrails
 
@@ -209,3 +209,6 @@ TODO-13 runs did not progress far enough to expose these deterministic differenc
     - `run-tests -j 4` passed the prelude and all 96 numbered inputs (97/97) in
       1280.27 seconds without a sanitizer finding or golden difference.
     - Release, Debug, and ASan/UBSan now have equivalent complete-corpus results.
+- 2026-07-24: Reconfirmed Debug behavior after the JIT startup optimization.
+  - Validation:
+    - `run-tests -j 4` passed all 97 inputs in 457.56 seconds with no golden diff.

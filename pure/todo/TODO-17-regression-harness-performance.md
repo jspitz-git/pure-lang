@@ -23,7 +23,8 @@ release-validation budget in Debug, Release, and sanitizer configurations.
 2. [x] Classify isolation and shared-filesystem constraints across the corpus.
 3. [x] Choose a bounded execution design which preserves test semantics.
 4. [x] Implement deterministic scheduling and collision-free output handling.
-5. [ ] Validate identical golden results before and after the harness change.
+5. [x] Validate identical golden results before and after the harness change.
+   - Post-fix Release, Debug, and ASan/UBSan runs all pass 97/97.
 6. [ ] Set and document realistic CTest timeouts for complete release runs.
 
 ## Isolation Audit
@@ -93,9 +94,9 @@ Deferred global generations retain that reduced bitcode buffer without an LLVM
 context or resource tracker; first closure invocation parses, optimizes, submits, and
 resolves it. This preserves immutable generations and process isolation while
 restoring lazy compilation. Empty-prelude object emission dropped from 530 to 260.
-Release prelude startup fell to 3.72 seconds and `test001` to 5.59 seconds. The complete
-four-worker Release corpus passed 97/97 in 292.28 seconds, restoring the expected
-several-minute scale.
+Release prelude startup fell to 3.72 seconds and `test001` to 5.59 seconds. Complete
+four-worker corpora passed 97/97 in 292.28 seconds in Release and 457.56 seconds in
+Debug, restoring the expected several-minute scale.
 
 ASan allocator quarantine explains the remaining memory multiplier. With compact lazy
 snapshots, an empty sanitizer prelude process used 272 MiB with no quarantine, 413 MiB
@@ -213,3 +214,8 @@ Deterministic runtime/golden failures exposed by the completed runner belong to 
     inputs in 1280.27 seconds with deterministic output and no sanitizer finding.
   - This establishes a 22-minute observed sanitizer baseline and completes the
     final behavioral measurement needed for preset-specific policy.
+- 2026-07-24: Completed the post-fix Debug corpus with four workers.
+  - `run-tests -j 4` passed all 97 inputs in 457.56 seconds, improving on the
+    1043.32-second eight-worker pre-fix baseline.
+  - Release, Debug, and ASan/UBSan all retain identical 97/97 golden results after
+    the harness and lazy-JIT changes, completing task 5.
