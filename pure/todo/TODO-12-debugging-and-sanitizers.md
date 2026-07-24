@@ -1,6 +1,6 @@
 # TODO-12 - Debugging and Sanitizers
 
-Status: Open
+Status: Completed
 Branch: todo/12-debugging-and-sanitizers
 
 ## Purpose
@@ -23,7 +23,7 @@ with actionable stack traces rather than opaque crashes.
 3. [x] Configure LLDB launch support and document common breakpoints.
 4. [x] Register JIT debug objects and verify generated function names in LLDB.
 5. [x] Add concise IR/object dumps controlled by a runtime or build option.
-6. [ ] Run resource-lifetime and redefinition stress tests under sanitizers.
+6. [x] Run resource-lifetime and redefinition stress tests under sanitizers.
 
 ## Debug-Friendly Builds
 
@@ -129,6 +129,23 @@ avoid interleaving. Unknown values fail JIT creation with an actionable error
 instead of silently enabling unexpected output. The option works in all build
 configurations, but has no output or object-parsing cost unless requested.
 
+## Lifetime Stress
+
+`pure-jit-lifetime-stress` runs without the prelude so sanitizer time is spent
+on ORC lifetime behavior rather than library startup. It repeatedly materializes
+closures, clears and redefines their global functions, invokes both retained old
+closures and current bindings, and verifies an old self-recursive generation
+after replacement. Its complete output is compared with a checked-in reference.
+
+The first LSan run found two ownership defects. Uninitialized temporary `Env`
+objects leaked their `FMap`, while simply clearing it exposed that rvalue
+assignment had only shallow-copied owned local environments. Move assignment now
+transfers `Env` and `FMap` ownership into the global registry. Matcher objects
+also leaked their automaton states; their cleanup deduplicates the state table,
+severs owning transition edges, and deletes each state exactly once. No finding
+is suppressed. The test completes normally with the existing signal handling,
+so sanitizer builds do not disable it.
+
 ## Guardrails
 
 - Debug instrumentation must be disabled or low-overhead in release builds.
@@ -142,10 +159,6 @@ configurations, but has no output or object-parsing cost unless requested.
 - `ctest --preset llvm22-asan -R pure-jit-smoke --output-on-failure`
 - `ctest --preset llvm22-lsan -R pure-jit-smoke --output-on-failure`
 - Launch the smoke test under `lldb-22` and resolve a named JITed frame.
-
-## Open Questions
-
-- Should sanitizer builds disable custom signal handling to improve reports?
 
 ## Progress Log
 
@@ -236,3 +249,21 @@ configurations, but has no output or object-parsing cost unless requested.
       `llvm22-asan`; the sanitizer run reported no ASan or UBSan findings.
     - The default smoke run wrote zero bytes to standard output and error.
     - `PURE_JIT_DUMP=invalid` was rejected with the documented expected values.
+- 2026-07-24: Added a prelude-independent ORC lifetime stress test covering
+  retained closures, repeated global redefinition, tracker removal, and an old
+  self-recursive generation. Fixed the `Env`/`FMap` ownership transfer and
+  reclaimed matcher automata discovered by LSan without suppressions.
+  - Validation:
+    - `cmake --build --preset llvm22-debug --parallel 1`
+    - `ctest --preset llvm22-debug -R pure-jit-lifetime-stress
+      --output-on-failure` passed.
+    - `cmake --build --preset llvm22-release --parallel 1`
+    - `ctest --preset llvm22-release -R pure-jit-lifetime-stress
+      --output-on-failure` passed.
+    - `cmake --build --preset llvm22-asan --parallel 1`
+    - `ctest --preset llvm22-asan -R pure-jit-lifetime-stress
+      --output-on-failure` passed without ASan or UBSan findings.
+    - `ctest --preset llvm22-lsan -R pure-jit-lifetime-stress
+      --output-on-failure` passed without leak findings.
+    - Debug test 096 completed without a crash and retained only its known
+      pre-existing pragma-output diff.

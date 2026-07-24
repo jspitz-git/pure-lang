@@ -12316,6 +12316,17 @@ FMap& FMap::operator= (const FMap& f)
   return *this;
 }
 
+FMap& FMap::operator= (FMap&& f) noexcept
+{
+  clear();
+  m = std::move(f.m); root = std::move(f.root);
+  pred = std::move(f.pred); succ = std::move(f.succ);
+  idx = f.idx; lastidx = f.lastidx;
+  f.m.clear(); f.root.clear(); f.pred.clear(); f.succ.clear();
+  f.idx = 0; f.lastidx = -1;
+  return *this;
+}
+
 void FMap::clear()
 {
   set<Env*> e;
@@ -12430,6 +12441,25 @@ Env& Env::operator= (const Env& e)
   return *this;
 }
 
+Env& Env::operator= (Env&& e) noexcept
+{
+  if (f) {
+    assert(!local && !parent && e.n == n && e.tag == tag && b == e.b &&
+           !e.local && !e.parent);
+    clear();
+  } else {
+    tag = e.tag; name = std::move(e.name); n = e.n; f = e.f; h = e.h;
+    args = std::move(e.args); envs = e.envs;
+    b = e.b; local = e.local; parent = e.parent;
+  }
+  fmap = std::move(e.fmap); xmap = std::move(e.xmap);
+  xtab = std::move(e.xtab); prop = std::move(e.prop); m = e.m;
+  if (e.descr) descr = e.descr;
+  key = e.key; refp = e.refp;
+  e.f = e.h = 0; e.rp = 0; e.refp = 0;
+  return *this;
+}
+
 void Env::clear()
 {
   /* Note that we deliberately leak memory on refp here, because it may be
@@ -12439,7 +12469,10 @@ void Env::clear()
   interpreter& interp = *interpreter::g_interp;
   if (interp.compilation_units)
     interp.compilation_units->remove_and_report(this);
-  if (!f) return; // not initialized
+  if (!f) {
+    fmap.clear();
+    return;
+  }
   if (rp) delete rp;
   if (local) {
     // purge local functions

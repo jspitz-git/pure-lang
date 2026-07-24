@@ -143,6 +143,9 @@ struct matcher {
     : st(statev()), r(rulev()), s(0), start(0) { make(r, skip); }
   matcher(const rulel& rl, uint32_t skip = 0)
     : st(statev()), r(rulev()), s(0), start(0) { make(rl, skip); }
+  matcher(const matcher&) = delete;
+  matcher& operator=(const matcher&) = delete;
+  ~matcher();
 
   /* Construction algorithm for the pattern matching automaton. */
 

@@ -243,6 +243,7 @@ struct FMap {
   { m[0] = new EnvMap; }
   // assignment
   FMap& operator= (const FMap& f);
+  FMap& operator= (FMap&& f) noexcept;
   // clear
   void clear();
   // set index to first, next and given root node
@@ -399,6 +400,7 @@ public:
   // environment for which no LLVM function has been created yet, or if it is
   // a global function to be overridden
   Env& operator= (const Env& e);
+  Env& operator= (Env&& e) noexcept;
   // clearing an environment; this also removes the LLVM code of the function
   void clear();
   // destructor

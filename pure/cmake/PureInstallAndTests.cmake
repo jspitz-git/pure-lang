@@ -285,6 +285,25 @@ if(BUILD_TESTING)
       PASS_REGULAR_EXPRESSION
         "\\[pure-jit object\\].*format='[^']+'.*symbols="
   )
+  add_test(
+    NAME pure-jit-lifetime-stress
+    COMMAND
+      "${CMAKE_COMMAND}"
+      -DPURE_EXECUTABLE=$<TARGET_FILE:pure>
+      -DPURE_SCRIPT=${CMAKE_CURRENT_SOURCE_DIR}/test/jit-lifetime-stress.pure
+      -DPURE_EXPECTED=${CMAKE_CURRENT_SOURCE_DIR}/test/jit-lifetime-stress.log
+      -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunPureLifetimeStress.cmake"
+  )
+  set_tests_properties(
+    pure-jit-lifetime-stress
+    PROPERTIES
+      LABELS "jit;stress"
+      REQUIRED_FILES
+        "${CMAKE_CURRENT_SOURCE_DIR}/test/jit-lifetime-stress.pure;${CMAKE_CURRENT_SOURCE_DIR}/test/jit-lifetime-stress.log"
+      TIMEOUT 60
+      FAIL_REGULAR_EXPRESSION
+        "failed to remove ORC compilation unit;AddressSanitizer;LeakSanitizer;runtime error:"
+  )
 
   function(add_pure_bitcode_test name script fixture)
     add_test(

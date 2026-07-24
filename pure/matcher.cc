@@ -112,6 +112,17 @@ trans::~trans()
   delete st;
 }
 
+matcher::~matcher()
+{
+  set<state*> nodes(st.begin(), st.end());
+  for (set<state*>::iterator node = nodes.begin(); node != nodes.end(); ++node)
+    for (transl::iterator edge = (*node)->tr.begin();
+         edge != (*node)->tr.end(); ++edge)
+      edge->st = 0;
+  for (set<state*>::iterator node = nodes.begin(); node != nodes.end(); ++node)
+    delete *node;
+}
+
 /* TA matching algorithm. */
 
 // This is needed to get access to the GlobalVar struct.
