@@ -1,6 +1,6 @@
 # TODO-07 - Compilation Units and Resources
 
-Status: Blocked on TODO-08 and TODO-09
+Status: Open
 Branch: todo/07-compilation-units-and-resources
 
 ## Purpose
@@ -18,19 +18,18 @@ be removed safely without mutating modules already owned by ORC.
 
 ## Dependencies
 
-- TODO-08 must register host-backed `GlobalVar`, `$$sstk$$`, and `$$fptr$$`
-  storage as ORC absolute symbols before `dodefn` can become an ORC unit.
-- TODO-09 must provide stable bindings and old-implementation ownership before
-  global/local definition cleanup can replace `updateGlobalMapping`, `deleteBody`,
-  and deferred IR erasure safely.
-- After those prerequisites land, resume tasks 3 and 5 on this branch or a focused
-  follow-up branch and run definition/redefinition lifetime tests.
+TODO-08 registered host-backed `GlobalVar`, `$$sstk$$`, and `$$fptr$$` storage as
+ORC absolute symbols. TODO-09 then supplied stable bindings, implementation
+generations, and old-closure ownership. Both original blockers are resolved:
+definition environments now use ORC trackers, and lifetime stress has passed
+under sanitizers. Task 5 remains coupled to removal of the transitional MCJIT
+and is tracked by TODO-13's runtime follow-up gate.
 
 ## Task List
 
 1. [x] Define which declarations are recreated in each working module.
 2. [x] Finalize, verify, optimize, and submit modules without later mutation.
-3. [ ] Track resources for anonymous evaluation and definition environments.
+3. [x] Track resources for anonymous evaluation and definition environments.
 4. [x] Remove temporary evaluation resources after execution.
 5. [ ] Replace legacy function-code deletion and stale-module operations.
 6. [x] Stress repeated evaluation and verify stable memory behavior.
@@ -75,6 +74,21 @@ requirements, provider dependencies, and omitted values.
 - A module is immutable after submission. Provider replacement creates and
   submits a new module instead of mutating an ORC-owned module.
 
+## Retrospective Status
+
+Anonymous evaluations and interactive definitions both register their ORC
+tracker by `Env` identity. Non-escaping environments remove resources after
+invocation; escaped closures retain the environment and tracker until cleanup.
+Global implementation generations remain available while old closures refer to
+them, and the prelude-independent lifetime stress exercises this behavior under
+Debug, Release, ASan/UBSan, and LeakSanitizer.
+
+Task 5 is still real rather than a stale checkbox. `Env::clear` retains legacy
+mapping and body-deletion operations because eager JIT, batch definitions, and
+batch Faust still consume the transitional `ExecutionEngine`. Removing those
+operations belongs with full MCJIT migration, not with the already completed ORC
+compilation-unit ownership.
+
 ## Guardrails
 
 - Never modify a `Module` after ownership has moved into `ThreadSafeModule`/ORC.
@@ -87,10 +101,14 @@ requirements, provider dependencies, and omitted values.
 - Test successful and exceptional evaluation cleanup paths.
 - Inspect resource-removal errors and ensure they are reported rather than ignored.
 
-## Open Questions
+## Decisions
 
-- What is the smallest practical compilation unit for mutually recursive definitions?
-- Which declarations should be cloned versus recreated from a module template?
+- One implementation generation owns one tracker and one qualified concrete
+  symbol. Self-recursion stays generation-local; calls to peer global names use
+  their stable dynamic bindings, including mutual recursion across redefinition.
+- Entry-reachable owned definitions and immutable data are cloned into a fresh
+  context. Runtime/provider functions and host-backed mutable globals are
+  recreated as exact declarations; unreachable definitions are omitted.
 
 ## Progress Log
 
@@ -199,3 +217,13 @@ requirements, provider dependencies, and omitted values.
 - 2026-07-22: Initial compilation-unit and resource plan created.
   - Validation:
     - Not run; this update creates planning documentation only.
+- 2026-07-24: Revisited the TODO after TODO-08, TODO-09, and TODO-12 removed its
+  blockers. Marked definition-environment tracking complete and reopened only
+  the legacy operation cleanup.
+  - Validation:
+    - Cross-checked evaluation and definition tracker ownership against current
+      `doeval`, `dodefn`, and `Env::clear` behavior.
+    - Reused the recorded Debug, Release, ASan/UBSan, and LSan lifetime-stress
+      results from TODO-12.
+    - Confirmed that remaining mapping/body deletion is still consumed by live
+      MCJIT paths and therefore cannot be removed independently.

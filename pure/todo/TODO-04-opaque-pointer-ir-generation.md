@@ -1,6 +1,6 @@
 # TODO-04 - Opaque-Pointer IR Generation
 
-Status: Blocked on TODO-06 runtime validation
+Status: Closed on 2026-07-24
 Branch: todo/04-opaque-pointer-ir-generation
 
 ## Purpose
@@ -22,8 +22,7 @@ types that LLVM no longer stores.
 2. [x] Port loads, stores, GEPs, calls, and indirect calls with explicit types.
 3. [x] Replace pointer nesting comparisons in external and Faust ABI detection.
 4. [x] Modernize function, basic block, attribute, and calling-convention APIs.
-5. [ ] Run `verifyFunction` and `verifyModule` over representative generated IR.
-   Blocked until TODO-06 provides a runnable ORC-backed interpreter.
+5. [x] Run `verifyFunction` and `verifyModule` over representative generated IR.
 6. [x] Compile all IR generation code without deprecated compatibility wrappers.
 
 ## Inventory Findings
@@ -90,6 +89,20 @@ types that LLVM no longer stores.
   JSON compile options. Sample precision now uses that explicit compile metadata
   instead of comparing the opaque `compute` parameter type.
 
+## Retrospective Closure
+
+TODO-06 removed the runtime blocker. The current interpreter verifies completed
+functions around optimization and verifies reduced ORC modules before and after
+the module pipeline. Later bitcode and Faust fixtures also run `opt-22
+-passes=verify -disable-output`, and the Debug, Release, and ASan focused suites
+exercise arithmetic, calls, aggregates, matching, recursion, imported bitcode,
+and Faust providers through these boundaries.
+
+This closes generated-IR verification without weakening the explicit opaque
+pointer limitation: generic external bitcode functions with pointer parameters
+or results remain unwrappable until modules can provide semantic Pure ABI
+metadata. TODO-13's retrospective gate 5 owns creation of that follow-up.
+
 ## Guardrails
 
 - Never guess a pointee type solely to silence a compiler error.
@@ -102,12 +115,13 @@ types that LLVM no longer stores.
 - Emit representative `.ll` files and run `opt-22 -passes=verify -disable-output`.
 - Run focused tests for arithmetic, calls, aggregates, matching, and recursion once runnable.
 
-## Open Questions
+## Decisions
 
-- What module/function metadata format should carry Pure C ABI names for opaque
-  pointer parameters and results in externally produced bitcode?
-
-- Which indirect call sites need explicit stored `FunctionType` metadata?
+- Externally produced pointer-bearing bitcode requires a future explicit Pure C
+  ABI metadata format; LLVM opaque pointer types must never be guessed.
+- The generic-value Faust call site carries an explicit stored `FunctionType`.
+  Other migrated indirect calls retain a concrete function type, and LLVM 22
+  builds report no remaining untyped indirect-call API use.
 
 ## Progress Log
 
@@ -397,3 +411,11 @@ types that LLVM no longer stores.
 - 2026-07-22: Initial opaque-pointer migration plan created.
   - Validation:
     - Not run; this update creates planning documentation only.
+- 2026-07-24: Closed the verifier milestone after its TODO-06 prerequisite and
+  downstream integration coverage completed.
+  - Validation:
+    - Cross-checked active function/module verifier boundaries and fixture
+      `opt-22` verification against TODO-05, TODO-10, and TODO-11.
+    - Reused TODO-13's recorded 10/10 focused Debug, Release, and ASan results.
+    - Preserved pointer-bearing external bitcode as an explicit follow-up rather
+      than inferring semantic ABI types from opaque pointers.

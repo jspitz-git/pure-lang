@@ -190,13 +190,13 @@ need correction.
 
 | TODO | Current audit result | Required disposition before task 6 |
 | --- | --- | --- |
-| TODO-01 | The baseline checklist was never updated. Later work documented the runner, added closure/redefinition coverage, established smoke tests, and classified the corpus. | Reconcile the inventory against TODO-09, TODO-12, and this TODO; explicitly classify the no-longer-repeatable pre-port check. |
+| TODO-01 | Retrospectively closed: the runner inventory, later coverage, smoke policy, golden oracle, and pre-port blockers are now explicit. | Complete; the historical branch lacked implementation commits, but downstream evidence satisfies the original baseline purpose. |
 | TODO-02 | Build/install blockers are resolved on Linux. Windows and macOS were deliberately not validated. | Keep the historical closure and assign non-Linux validation only after defining the supported release matrix. |
 | TODO-03 | Context/type migration is complete. The deferred LLVM version gates still protect both dead branches and live MCJIT code. | Move gate removal with the transitional engine rather than treating it as context cleanup. |
-| TODO-04 | TODO-06 removed the runtime blocker and representative generated modules now pass verifier-backed integration tests. Pointer-bearing external bitcode is still rejected without explicit Pure ABI metadata. | Complete verifier closure, then assign pointer ABI metadata to a dedicated follow-up. |
+| TODO-04 | Closed after reconciling its verifier boundary with downstream integration results. Pointer-bearing external bitcode is still rejected without explicit Pure ABI metadata. | Verifier work is complete; assign pointer ABI metadata under gate 5. |
 | TODO-05 | Standard O1 was selected and pre/post-pass IR was verified. The planned runnable O0/O1 comparison was never performed. | Either perform a test-only comparison or explicitly record O1 as the supported correctness baseline and move tuning out of release scope. |
 | TODO-06 | The LLJIT foundation and typed lookup are complete. `ExecutionEngine` remains live for mappings, eager JIT, batch definitions, and batch Faust. | Assign full MCJIT removal to a runtime follow-up. |
-| TODO-07 | TODO-08/09 removed both blockers and definition environments now own trackers, so task 3 is complete. Legacy unmapping/body deletion in task 5 remains tied to MCJIT. | Reconcile task 3 and move task 5 to the same runtime follow-up. |
+| TODO-07 | Reopened with task 3 complete. Legacy unmapping/body deletion in task 5 remains tied to MCJIT. | Move task 5 to the runtime follow-up under gate 4, then close the ORC resource TODO. |
 | TODO-08 | ORC host symbols, rebinding, and missing-symbol diagnostics are complete. Legacy mappings and the fallback resolver remain active beside them. | Preserve the ORC closure and assign removal of the synchronized legacy path to the runtime follow-up. |
 | TODO-09 | Closure generations, redefinition, and collection are complete. ORC stubs were intentionally unnecessary for language calls; stable native callable addresses remain undecided. | Record the existing stable-slot decision and assign or reject a native-extension ABI guarantee. |
 | TODO-10 | Target/data-layout policy and per-provider trackers are complete. It did not solve TODO-04's pointer ABI metadata requirement. | Close its resolved design questions without claiming pointer-bearing ABI support. |
@@ -206,7 +206,7 @@ need correction.
 The remaining work therefore falls into six explicit gates before final release
 closure:
 
-1. [ ] Reconcile the stale TODO-01, TODO-04, and TODO-07 checklists/statuses.
+1. [x] Reconcile the stale TODO-01, TODO-04, and TODO-07 checklists/statuses.
 2. [ ] Resolve TODO-05's O0/O1 validation disposition and stale design questions.
 3. [ ] Exercise the named JIT frame under LLDB 22 and the bitcode tests under the
    targeted LeakSanitizer preset with generous timeouts.
@@ -341,3 +341,16 @@ closure:
     - Counted 189 CRLF files among 199 top-level `test/*.pure` and `test/*.log`
       corpus files on this worktree.
     - No build or test was run because this step is a read-only ownership audit.
+- 2026-07-24: Reconciled TODO-01, TODO-04, and TODO-07 after their downstream
+  prerequisites and validation landed.
+  - Validation:
+    - Documented `run-tests` discovery, `run-test` environment setup, golden-log
+      comparison, focused migration coverage, and the historical pre-port
+      execution boundary in TODO-01.
+    - Closed TODO-04's verifier task using the recorded LLVM verifier, fixture,
+      and focused integration results while preserving pointer ABI metadata as
+      follow-up work.
+    - Marked TODO-07 definition tracking complete and changed its stale blocked
+      status to open; legacy MCJIT cleanup remains its only unchecked task.
+    - No test was rerun because this step reconciles existing implementation and
+      recorded validation without changing code.
