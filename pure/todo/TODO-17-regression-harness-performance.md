@@ -63,9 +63,11 @@ It will:
    normalized input/expected output, candidate diff, status, and captured output;
 4. execute a bounded number of silent workers selected by `TEST_JOBS` or `-j`, with
    a compatibility default of one until preset budgets choose an explicit value;
-5. replay status, publish/remove persistent diffs, and print `-v` output strictly in
+5. refill each worker slot as soon as its test completes, without waiting for the
+   other members of a fixed-size batch;
+6. replay status, publish/remove persistent diffs, and print `-v` output strictly in
    original test order, independent of worker completion order;
-6. use one run-scoped cleanup trap and preserve aggregate nonzero exit status.
+7. use one run-scoped cleanup trap and preserve aggregate nonzero exit status.
 
 This changes scheduling and temporary ownership only. Golden comparison, CRLF
 normalization, process isolation, deterministic output, and `run-tests -f`
@@ -219,3 +221,15 @@ Deterministic runtime/golden failures exposed by the completed runner belong to 
     1043.32-second eight-worker pre-fix baseline.
   - Release, Debug, and ASan/UBSan all retain identical 97/97 golden results after
     the harness and lazy-JIT changes, completing task 5.
+- 2026-07-24: Replaced fixed-size batch barriers with continuous slot refill.
+  - The parent tracks each ordinal/PID pair and reaps the first worker whose complete
+    marker appears, immediately launching the next input while preserving ordered
+    result publication and an exact live-PID list for cleanup.
+  - Validation:
+    - Generated Release runner passed `sh -n`.
+    - A controlled `-j 4` run with one three-second worker, three one-second workers,
+      and a fifth one-second input finished in 3.13 seconds rather than the roughly
+      four seconds required by the former batch barrier.
+    - Five real Release inputs passed in argument order in 10.49 seconds.
+    - Interrupting four long-running workers removed every child process, staging
+      directory, and build lock.

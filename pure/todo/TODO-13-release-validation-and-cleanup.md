@@ -504,3 +504,10 @@ The release cleanup produced four numbered follow-ups:
     - `run-tests -j 4` passed all 97 inputs in 457.56 seconds with no golden diff.
     - Together with the post-fix Release and sanitizer runs, this confirms unchanged
       golden behavior across all supported configurations after lazy-JIT restoration.
+- 2026-07-24: Removed fixed-size barriers from the parallel regression scheduler.
+  - A completed worker now releases its slot immediately instead of waiting for all
+    other workers in the same group; deterministic result replay remains unchanged.
+  - Validation:
+    - Generated runner passed `sh -n`.
+    - A controlled uneven five-input `-j 4` schedule completed in 3.13 seconds, and
+      five real Release inputs passed in deterministic argument order.
