@@ -201,15 +201,15 @@ need correction.
 | TODO-09 | Closure generations, redefinition, and collection are complete. ORC stubs were intentionally unnecessary for language calls; stable native callable addresses remain undecided. | Record the existing stable-slot decision and assign or reject a native-extension ABI guarantee. |
 | TODO-10 | Target/data-layout policy and per-provider trackers are complete. It did not solve TODO-04's pointer ABI metadata requirement. | Close its resolved design questions without claiming pointer-bearing ABI support. |
 | TODO-11 | Interactive Faust load/reload/rollback/lifetime behavior is complete. Batch execution was not validated because it still uses legacy MCJIT and `opt -std-compile-opts`. | Move batch modernization into the runtime/batch follow-up and correct active documentation. |
-| TODO-12 | Debug objects and lifetime sanitizer coverage are implemented. A real LLDB stop in a named JIT frame and targeted LeakSanitizer bitcode tests were not completed. | Run both now-unblocked validations or record a reproducible host limitation. |
+| TODO-12 | Closed after all five targeted LeakSanitizer bitcode tests passed. JIT symbol publication is automatic; actual LLDB inferior launch fails identically for the smoke binary and `/bin/true` on this host. | Complete with a reproducible host limitation; a real named-frame stop remains an interactive check on a host which permits LLDB launch. |
 
 The remaining work therefore falls into six explicit gates before final release
 closure:
 
 1. [x] Reconcile the stale TODO-01, TODO-04, and TODO-07 checklists/statuses.
 2. [x] Resolve TODO-05's O0/O1 validation disposition and stale design questions.
-3. [ ] Exercise the named JIT frame under LLDB 22 and the bitcode tests under the
-   targeted LeakSanitizer preset with generous timeouts.
+3. [x] Exercise the named JIT frame under LLDB 22 and the bitcode tests under the
+   targeted LeakSanitizer preset, recording the host launch limitation.
 4. [ ] Correct the active batch documentation and assign LLVM 22 batch/MCJIT
    modernization, compatibility-gate removal, and native callable ABI policy.
 5. [ ] Assign explicit Pure metadata for pointer-bearing bitcode and non-Linux
@@ -364,3 +364,15 @@ closure:
       --output-on-failure` passed 1/1 in 5.90 seconds.
     - Kept runtime optimization selection, custom pipelines, and performance
       tuning outside the LLVM 22 correctness release until justified by profiling.
+- 2026-07-24: Completed the deferred TODO-12 LeakSanitizer validation and
+  reproduced the LLDB host limitation.
+  - Validation:
+    - `ctest --preset llvm22-lsan -R '^pure-bitcode-'
+      --output-on-failure` passed 5/5 in 299.85 seconds without sanitizer or leak
+      findings.
+    - LLDB created the Debug smoke target and pending generated-function
+      breakpoint, but `run` reported `no target` and timed out after 300 seconds.
+    - The same launch failure occurred for `/bin/true` under a hard 30-second
+      limit, isolating it from Pure's JIT and debugger-object registration.
+    - TODO-12 now distinguishes automated generated-symbol publication from the
+      interactive named-frame stop unavailable on this host.
