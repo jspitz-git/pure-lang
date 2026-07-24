@@ -22,7 +22,7 @@ suite passes.
 1. [x] Audit the tree for old JIT calls, LLVM version macros, and obsolete headers.
 2. [x] Run the full tests and classify any remaining behavior differences.
 3. [x] Verify build, test, install, uninstall, and installed-program execution.
-4. [ ] Update documentation for Clang/LLVM 22, CMake, Ninja, LLDB, and bitcode policy.
+4. [x] Update documentation for Clang/LLVM 22, CMake, Ninja, LLDB, and bitcode policy.
 5. [ ] Remove superseded Autoconf and Makefile infrastructure after parity review.
 6. [ ] Perform a clean-tree release build and close or create follow-up TODOs.
 
@@ -143,6 +143,23 @@ has no corresponding optional rules, and neither tool is installed on the
 validation host. Task 5 must preserve these files or explicitly classify them
 before removing the legacy build; this does not block verified core host parity.
 
+## Supported Documentation
+
+`INSTALL` now defines Clang/LLVM 22 with CMake and Ninja as the supported source
+build. It documents presets and custom builds, serial compilation, focused and
+full tests, sanitizer and leak modes, configure-time installation prefixes,
+pkg-config, manifest uninstall, LLDB/Zed launch support, symbolic ORC
+breakpoints, and opt-in JIT dumps. The README installation summary points to the
+same workflow and no longer recommends Autoconf or LLVM 2.5-3.5.
+
+The language manual now describes eager materialization without obsolete LLVM
+version gates. Its active foreign-code sections require LLVM 22-compatible
+bitcode, use `clang-22` and Flang 22 examples, explain target/data-layout
+validation and cross-version incompatibility, and document transactional Faust
+reload with explicit sample-format markers or recognized legacy metadata.
+Historical release notes and glossary entries remain as history rather than
+supported build instructions.
+
 ## Guardrails
 
 - Do not remove the old build before the CMake path covers required installation assets.
@@ -217,3 +234,20 @@ before removing the legacy build; this does not block verified core host parity.
       invocation succeeded with all entries already absent.
     - Emacs and TeXmacs were unavailable; their optional legacy install rules
       remain a task 5 parity decision.
+- 2026-07-24: Replaced the LLVM 3.4/Autoconf installation guide with the
+  supported LLVM 22 CMake/Ninja workflow and synchronized the README and active
+  bitcode, inline-code, eager-JIT, Faust, debugging, and uninstall guidance.
+  - Validation:
+    - Searched `INSTALL`, `README`, and active `pure.txt` sections for obsolete
+      LLVM 2.x/3.x, llvm-gcc, DragonEgg, Autoconf, and GNU make instructions.
+    - Confirmed current commands use the checked presets, Clang 22, LLVM 22,
+      Ninja, LLDB 22, and the tested CMake install/uninstall targets.
+    - Confirmed bitcode documentation covers target/data-layout rejection,
+      resource ownership, and LLVM-major compatibility.
+    - Confirmed Faust documentation covers sample-format validation,
+      transactional replacement, live-instance protection, and rollback.
+    - Confirmed `PURE_ATSCC`, `PURE_ATSCCOMP`, and `PURE_JIT_DUMP` names and
+      values against their implementations.
+    - Standalone `rst2html` validation is not applicable because `INSTALL` uses
+      the Sphinx `highlight` directive; CMake has no documentation target.
+    - No build was run because this step changes documentation only.
