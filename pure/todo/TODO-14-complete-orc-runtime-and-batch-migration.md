@@ -36,7 +36,8 @@ compatibility gates can be removed.
 ## Guardrails
 
 - Do not remove MCJIT while any runtime-reachable consumer remains.
-- Do not weaken old-closure lifetime or transactional Faust reload behavior.
+- Do not weaken old-closure, first-class extern-wrapper, or transactional Faust
+  reload lifetime behavior.
 - Do not promise a stable native callable address unless tests define and enforce it.
 - Keep `LLVM_VERSION`; it is current build metadata, not a compatibility gate.
 

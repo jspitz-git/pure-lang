@@ -30,7 +30,7 @@ are deterministic runtime/golden differences rather than scheduler races.
 | ORC definition/materialization | `prelude`, `test014`, `test015`, `test020`, `test021`, `test025`, `test028`, `test036`, `test061`, `test072`, `test079` | Duplicate `$$fastcc.*` definitions, often followed by unterminated type-JIT functions; prelude also aborts after the reported failure. |
 | Formatted input | `test011`, `test018`, `test069` | `sscanf` returns `scanf_error` or `failed_cond` for previously accepted string, unsigned, and GMP formats. |
 | Binary fixture loading | `test042` | All four architecture blob reads fail their condition despite resolving under `srcdir/test`. |
-| Other language/runtime behavior | `test020`, `test054` | Math-test segmentation fault and a separate `stack_fault`; the other five initial members passed after transactional type-generation replacement. |
+| Other language/runtime behavior | `test020` | Math-test segmentation fault; all six other initial members now pass after type-generation and extern-closure lifetime fixes. |
 
 The ORC class overlaps TODO-14's hybrid-runtime migration, but TODO-18 owns the
 minimal corpus reproducers and the release golden-pass criterion. Fixes may land in
@@ -66,7 +66,9 @@ Mutable type functions no longer reuse a cached ORC address keyed only by their 
 `llvm::Function*`. Type recompilation now materializes a new unit, publishes its address
 through `pure_add_rtty`, and removes the previous tracker afterward. This fixed stale
 type behavior in `test058` and also cleared `test051`, `test057`, `test063`, and
-`test072`. Only `test020` and `test054` remain from the initial 20 failures.
+`test072`. A first-class extern closure also now retains the anonymous ORC unit
+which cloned its wrapper, fixing `test054`. Only `test020` remains from the initial
+20 failures.
 
 ## Task List
 
@@ -74,7 +76,7 @@ type behavior in `test058` and also cleared `test051`, `test057`, `test063`, and
 2. [x] Fix duplicate ORC publication and invalid type-JIT continuation after failure.
 3. [x] Reconcile `printf`/`sscanf` string, integer, unsigned, and GMP behavior.
 4. [x] Validate blob fixture discovery and decoding after the shared I/O fix.
-5. [ ] Classify and fix the two remaining language/runtime differences.
+5. [ ] Classify and fix the one remaining language/runtime difference.
 6. [ ] Run all 97 inputs in Release with no golden differences.
 7. [ ] Run the complete corpus in Debug and sanitizer configurations.
 
@@ -146,3 +148,19 @@ TODO-13 runs did not progress far enough to expose these deterministic differenc
     - Of the six remaining runtime inputs, `test051`, `test057`, `test063`, and
       `test072` now pass; only `test020` and `test054` still fail.
     - All 12 focused Release CTests passed in 109.58 seconds.
+- 2026-07-24: Retained ORC units for escaped first-class external closures.
+  - Reduced `test054` to `extern double sqrt(double); let f = sqrt; f 1.0;`;
+    direct calls worked, while the alias recursed to `stack_fault` and eventually
+    segfaulted with a larger stack limit.
+  - IR showed that `dodefn` cloned `$$wrap.sqrt` into its unit but created the
+    resulting closure with a null environment, so the tracker was removed as
+    apparently nonescaping and the closure retained a dangling code pointer.
+  - First-class extern closure construction now retains the current anonymous
+    environment when one exists; global/batch contexts still receive null safely.
+  - Extended lifetime stress with a no-prelude extern alias and explicit clear.
+  - Validation:
+    - `test054.pure` and the no-prelude reproducer both returned `1.0`.
+    - `pure-jit-lifetime-stress` passed in Release and ASan/UBSan in 0.20 and
+      0.45 seconds without a finding.
+    - Persistent failed-only state now contains only `test020.diff`.
+    - All 12 focused Release CTests passed in 123.09 seconds.

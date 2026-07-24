@@ -16400,7 +16400,7 @@ Value *interpreter::codegen(expr x, bool quote)
       vector<Value*> env;
       // build an fbox for the external
       return call("pure_clos", false, x.tag(), 0, info.f,
-		  NullPtr, info.argtypes.size(), env);
+		  envptr(true), info.argtypes.size(), env);
     }
     // check for an existing global variable
     map<int32_t,GlobalVar>::iterator v = globalvars.find(x.tag());

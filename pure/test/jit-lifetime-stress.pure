@@ -89,5 +89,10 @@ typed_value 5;
 type positive n::bigint = 1;
 typed_value 5L;
 
+extern double sqrt(double);
+let sqrt_alias = sqrt;
+sqrt_alias 1.0;
+clear sqrt_alias
+
 done = 4242;
 done;
