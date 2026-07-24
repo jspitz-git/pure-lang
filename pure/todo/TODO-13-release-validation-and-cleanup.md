@@ -23,7 +23,7 @@ suite passes.
 2. [x] Run the full tests and classify any remaining behavior differences.
 3. [x] Verify build, test, install, uninstall, and installed-program execution.
 4. [x] Update documentation for Clang/LLVM 22, CMake, Ninja, LLDB, and bitcode policy.
-5. [ ] Remove superseded Autoconf and Makefile infrastructure after parity review.
+5. [x] Remove superseded Autoconf and Makefile infrastructure after parity review.
 6. [ ] Perform a clean-tree release build and close or create follow-up TODOs.
 
 ## Legacy LLVM Audit
@@ -77,15 +77,17 @@ compatibility gate, and must remain.
   branches.
 - ORC headers and `ExecutionEngine/JITSymbol.h` are current LLVM 22 dependencies;
   the latter supplies live `JITSymbolFlags` and is not legacy MCJIT residue.
-- The legacy build consists of `configure.ac`, `acinclude.m4`, `Makefile.in`, and
-  `examples/Makefile.in`. Its LLVM 2.5-3.5 tool search, removed-header probes,
-  `jit` component selection, and version feature checks are obsolete, but the
-  files stay until installation parity is verified in task 3.
+- The legacy build consisted of `configure.ac`, `acinclude.m4`, `Makefile.in`,
+  and `examples/Makefile.in`. Its LLVM 2.5-3.5 tool search, removed-header
+  probes, `jit` component selection, and version feature checks were obsolete.
+  The files remained through installation parity validation in task 3 and were
+  removed in task 5.
 
-The safe cleanup order is: collapse dead version gates, preserve their LLVM 22
-behavior, migrate live materialization and host mappings to ORC, remove the
-transitional engine and linked components, then retire Autoconf after parity
-review.
+The remaining runtime cleanup order is: collapse dead version gates, preserve
+their LLVM 22 behavior, migrate live materialization and host mappings to ORC,
+and then remove the transitional engine and linked components. Retiring the
+independent legacy build files required installation parity, not completion of
+that runtime migration.
 
 ## Full-test Classification
 
@@ -138,10 +140,11 @@ removes all installed files and symlinks, tolerates already absent files, and a
 second invocation remains successful. It intentionally leaves empty parent
 directories owned by the prefix.
 
-The legacy build can optionally install Emacs and TeXmacs integrations. CMake
-has no corresponding optional rules, and neither tool is installed on the
-validation host. Task 5 must preserve these files or explicitly classify them
-before removing the legacy build; this does not block verified core host parity.
+The legacy build could optionally install Emacs and TeXmacs integrations. CMake
+now provides opt-in source installation for both, with configurable destination
+directories. Emacs bytecode generation is intentionally left to package
+maintainers because `.elc` output depends on the target Emacs version. Neither
+Emacs nor TeXmacs is required to preserve or install the portable source assets.
 
 ## Supported Documentation
 
@@ -159,6 +162,21 @@ validation and cross-version incompatibility, and document transactional Faust
 reload with explicit sample-format markers or recognized legacy metadata.
 Historical release notes and glossary entries remain as history rather than
 supported build instructions.
+
+## Legacy Build Removal
+
+The CMake build now preserves the final optional installation features from the
+legacy Makefiles. `PURE_INSTALL_EMACS_MODE` configures and installs
+`pure-mode.el` with `flycheck-pure.el`, while `PURE_INSTALL_TEXMACS_PLUGIN`
+installs the complete package, documentation, Scheme helpers, and Pure helper
+script. Both options default to off so the verified core installation manifest
+is unchanged, and both destination roots are configurable.
+
+With this parity in place, `configure.ac`, `acinclude.m4`, `Makefile.in`, and
+`examples/Makefile.in` have been removed. Historical references in `ChangeLog`
+remain intact. Live MCJIT/`ExecutionEngine` dependencies and LLVM compatibility
+gates are outside this build-system cleanup and remain tracked for a dedicated
+runtime migration.
 
 ## Guardrails
 
@@ -251,3 +269,17 @@ supported build instructions.
     - Standalone `rst2html` validation is not applicable because `INSTALL` uses
       the Sphinx `highlight` directive; CMake has no documentation target.
     - No build was run because this step changes documentation only.
+- 2026-07-24: Replaced the last optional legacy install rules with explicit
+  CMake options and removed the superseded Autoconf and Makefile infrastructure.
+  - Validation:
+    - Configured a fresh Release build with both optional install features
+      enabled, without requiring Emacs or TeXmacs executables.
+    - Built serially; the focused integration suite passed all ten tests in 97
+      seconds.
+    - Installed into an isolated prefix and verified both configured paths in
+      the generated Emacs mode, the Flycheck mode, and all eight TeXmacs assets
+      among the 37 install-manifest entries.
+    - Ran manifest uninstall and confirmed that every installed file was
+      removed.
+    - Searched the active tree for references to the four removed build files;
+      only historical `ChangeLog` and this migration record remain.

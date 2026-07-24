@@ -131,9 +131,18 @@ After installation, verify the selected toolchain and package metadata::
   $ pkg-config --modversion pure
   $ pure examples/hello.pure
 
-The legacy tree also contains optional editor modes and a TeXmacs plugin under
-``etc`` and ``texmacs``. CMake does not currently install these automatically;
-they can be copied manually if needed.
+Optional editor integrations are disabled by default. Enable their CMake
+installation rules when configuring a package or dedicated user installation::
+
+  $ cmake --preset llvm22-release \
+      -DPURE_INSTALL_EMACS_MODE=ON \
+      -DPURE_INSTALL_TEXMACS_PLUGIN=ON
+
+The Emacs Lisp files default to ``share/emacs/site-lisp`` and the TeXmacs tree
+to ``share/TeXmacs`` below the installation prefix. Override these locations
+with ``PURE_EMACS_SITE_LISP_DIR`` and ``PURE_TEXMACS_DIR``. CMake installs
+portable Emacs Lisp source; package maintainers may byte-compile it for their
+target Emacs version after installation.
 
 Uninstallation
 ==============

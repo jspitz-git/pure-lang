@@ -411,6 +411,7 @@ set(PURE_INSTALL_LIBRARY_DIR "${CMAKE_INSTALL_LIBDIR}/${PURE_LIBRARY_DIRECTORY}"
 
 set(prefix "${CMAKE_INSTALL_PREFIX}")
 set(exec_prefix "${CMAKE_INSTALL_PREFIX}")
+set(bindir "${CMAKE_INSTALL_FULL_BINDIR}")
 set(libdir "${CMAKE_INSTALL_FULL_LIBDIR}")
 set(includedir "${CMAKE_INSTALL_FULL_INCLUDEDIR}")
 set(LLVM_EXE_LIBS "")
@@ -457,6 +458,49 @@ install(
   FILES pure.1
   DESTINATION "${CMAKE_INSTALL_MANDIR}/man1"
 )
+
+option(
+  PURE_INSTALL_EMACS_MODE
+  "Install the Pure Emacs and Flycheck modes"
+  OFF
+)
+set(
+  PURE_EMACS_SITE_LISP_DIR
+  "${CMAKE_INSTALL_DATADIR}/emacs/site-lisp"
+  CACHE STRING
+  "Installation directory for Pure Emacs Lisp files"
+)
+if(PURE_INSTALL_EMACS_MODE)
+  configure_file(
+    "${CMAKE_CURRENT_SOURCE_DIR}/etc/pure-mode.el.in"
+    "${CMAKE_CURRENT_BINARY_DIR}/etc/pure-mode.el"
+    @ONLY
+  )
+  install(
+    FILES
+      "${CMAKE_CURRENT_BINARY_DIR}/etc/pure-mode.el"
+      "${CMAKE_CURRENT_SOURCE_DIR}/etc/flycheck-pure.el"
+    DESTINATION "${PURE_EMACS_SITE_LISP_DIR}"
+  )
+endif()
+
+option(
+  PURE_INSTALL_TEXMACS_PLUGIN
+  "Install the Pure TeXmacs plugin"
+  OFF
+)
+set(
+  PURE_TEXMACS_DIR
+  "${CMAKE_INSTALL_DATADIR}/TeXmacs"
+  CACHE STRING
+  "Installation root for Pure TeXmacs files"
+)
+if(PURE_INSTALL_TEXMACS_PLUGIN)
+  install(
+    DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/texmacs/"
+    DESTINATION "${PURE_TEXMACS_DIR}"
+  )
+endif()
 
 configure_file(
   "${CMAKE_CURRENT_SOURCE_DIR}/cmake/Uninstall.cmake.in"
