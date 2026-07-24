@@ -142,3 +142,12 @@ Deterministic runtime/golden failures exposed by the completed runner belong to 
     passed all 97 inputs in 897.16 seconds with deterministic ordered output.
   - This establishes a 15-minute observed Release baseline; timeout policy remains
     open until Debug and sanitizer measurements determine preset-specific budgets.
+- 2026-07-24: Completed the corrected Debug corpus and measured its worker budget.
+  - `run-tests -j 4` exceeded a 30-minute outer limit, so four workers are not a
+    sufficient Debug release-validation configuration on this host.
+  - Timeout termination correctly removed all workers, the run-scoped staging tree,
+    and the build-directory lock, confirming interrupted-run cleanup at corpus scale.
+  - `run-tests -j 8` passed all 97 inputs in 1043.32 seconds with deterministic
+    ordered output and no golden difference.
+  - This establishes an observed 18-minute Debug baseline with eight workers;
+    sanitizer measurement is still required before setting preset timeout policy.

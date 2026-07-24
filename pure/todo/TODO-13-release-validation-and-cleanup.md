@@ -28,11 +28,11 @@ suite passes.
 5. [x] Remove superseded Autoconf and Makefile infrastructure after parity review.
 6. [x] Perform a clean-tree release build and close or create follow-up TODOs.
 
-Final status remains open pending TODO-17's Debug/sanitizer budgets and TODO-18's
-runtime compatibility fixes. The Release build and all 12 current focused tests pass.
+Final status remains open pending TODO-17's sanitizer budget and TODO-18's final
+sanitizer compatibility run. The Release build and all 12 current focused tests pass.
 The bounded Release corpus initially found 20 deterministic differences; TODO-18 fixed
-all of them, and the confirmation run now passes 97/97. Complete Debug and sanitizer
-corpus runs remain before claiming a supported-suite pass.
+all of them, and the confirmation runs now pass 97/97 in both Release and Debug. The
+complete sanitizer corpus remains before claiming a supported-suite pass.
 
 ## Legacy LLVM Audit
 
@@ -131,9 +131,12 @@ TODO-17's bounded runner completed the full Release corpus in 1347.36 seconds wi
 four workers. It found 77 passing and 20 failing inputs; serial `-f` reproduced all
 20 failures, proving they are not scheduler races. TODO-18 owns their behavior
 compatibility classification and fixes, with the ORC subset shared with TODO-14.
-TODO-18 has now cleared the Release differences: the confirmation run passed 97/97
-in 897.16 seconds. No complete supported-suite pass is claimed until TODO-17
-establishes and meets corresponding Debug and sanitizer budgets.
+TODO-18 has now cleared the configuration-independent differences: confirmation runs
+passed 97/97 in Release in 897.16 seconds with four workers and in Debug in 1043.32
+seconds with eight workers. The initial four-worker Debug run exceeded its 30-minute
+outer limit but correctly cleaned up workers, staging, and the build-directory lock.
+No complete supported-suite pass is claimed until TODO-17 establishes and meets the
+corresponding sanitizer budget.
 
 ## Installation Validation
 
@@ -449,3 +452,10 @@ The release cleanup produced four numbered follow-ups:
     - `run-tests -j 4` passed all 97 inputs in 897.16 seconds with no golden diff.
     - Release behavior is complete; full Debug and sanitizer corpus validation
       remains before TODO-13 can close.
+- 2026-07-24: Completed the corrected full Debug corpus.
+  - Validation:
+    - The initial `run-tests -j 4` exceeded the 30-minute outer validation limit;
+      termination correctly removed its workers, staging tree, and build lock.
+    - `run-tests -j 8` passed all 97 inputs in 1043.32 seconds with no golden diff.
+    - Debug behavior is complete; only full sanitizer corpus validation remains
+      before TODO-13 can claim the complete supported-suite pass.

@@ -1,6 +1,6 @@
 # TODO-18 - Regression Behavior Compatibility
 
-Status: Open - Release complete; Debug and sanitizer pending
+Status: Open - Release and Debug complete; sanitizer pending
 Branch: todo/18-regression-behavior-compatibility
 
 ## Purpose
@@ -78,7 +78,8 @@ No Release failure remains from the initial set of 20.
 4. [x] Validate blob fixture discovery and decoding after the shared I/O fix.
 5. [x] Classify and fix the remaining language/runtime differences.
 6. [x] Run all 97 inputs in Release with no golden differences.
-7. [ ] Run the complete corpus in Debug and sanitizer configurations.
+7. [ ] Run the complete corpus in the sanitizer configuration.
+   - The Debug corpus passes 97/97 with eight workers in 1043.32 seconds.
 
 ## Guardrails
 
@@ -173,3 +174,11 @@ TODO-13 runs did not progress far enough to expose these deterministic differenc
       897.16 seconds with no golden difference.
     - Release behavior compatibility is complete; Debug and sanitizer corpus runs
       remain the only unchecked task in this TODO.
+- 2026-07-24: Confirmed behavior compatibility across the complete Debug corpus.
+  - The four-worker attempt exceeded its 30-minute outer limit without exposing a
+    runtime or golden failure; interrupted-run cleanup completed correctly.
+  - Validation:
+    - `run-tests -j 8` passed the prelude and all 96 numbered inputs (97/97) in
+      1043.32 seconds with no golden difference.
+    - Release and Debug behavior compatibility are complete; only the sanitizer
+      corpus remains unchecked.
