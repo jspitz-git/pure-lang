@@ -27,7 +27,7 @@ compatibility gates can be removed.
 3. [x] Route retained `dodefn(keep)` initialization and batch Faust through ORC.
 4. [x] Replace legacy mappings and fallback resolution with ORC symbols.
 5. [x] Replace stale-module cleanup with tracker and generation ownership.
-6. [ ] Decide and document the native callable-address ABI policy.
+6. [x] Decide and document the native callable-address ABI policy.
 7. [ ] Remove `ExecutionEngine`, MCJIT linkage, obsolete headers, and `LLVM26` through
    `LLVM35` plus `NEW_USER_ITERATOR` compatibility gates.
 8. [ ] Validate eager mode, complete batch executables, batch Faust, redefinition
@@ -74,6 +74,22 @@ legacy mappings/cleanup, then delete engine construction, resolver, linkage, hea
 and compatibility branches. Interactive evaluation, definition units, lazy global
 snapshots, type generations, external wrappers, bitcode providers, and interactive
 Faust generations already use ORC and form the correctness baseline.
+
+## Native Callable-Address ABI Policy
+
+`pure_interp_compile` is a compilation barrier, not an address-acquisition API. It
+materializes the current global function generation and its reachable dependencies but
+returns no native pointer, does not pin that generation, and creates no stable ORC stub.
+Clearing or redefining a function may therefore supersede and eventually reclaim its
+previous generation after the last owning closure is released.
+
+Native extensions which need interactive redefinition semantics must retain and invoke
+Pure expressions through the closure/application API. The generation-specific
+`pure_closure::fp` field and internal ORC lookup addresses are implementation details, not
+a public callable-address ABI. A future stable native entry point would require a separate
+API, an ORC indirection stub with specified retargeting and teardown semantics, and tests;
+none is introduced by this migration. Batch-compiled output symbols remain governed by
+the existing separate batch ABI.
 
 ## Guardrails
 
@@ -195,3 +211,12 @@ publication and invalid continuation after a failed materialization.
     - `pure-jit-lifetime-stress`, `pure-jit-eager`, `pure-bitcode-unload`,
       `pure-faust-lifecycle`, and `pure-batch-faust` passed in both presets without sanitizer
       findings.
+- 2026-07-25: Finalized the native callable-address ABI policy.
+  - Defined `pure_interp_compile` as a materialization-only barrier which neither returns
+    nor pins a generation address.
+  - Rejected a stable native callable address for interactively redefinable Pure names;
+    native clients must use Pure expressions and closure/application calls.
+  - Kept generation-specific closure addresses internal and left the existing batch output
+    symbol ABI explicitly separate.
+  - Updated the public runtime header and TODO-09's deferred disposition; no code or ABI
+    signature changed, so no build or runtime validation was required.
