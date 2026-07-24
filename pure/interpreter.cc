@@ -12568,19 +12568,8 @@ void Env::clear()
 #if DEBUG>2
     std::cerr << "clearing local '" << name << "'\n";
 #endif
-    if (!refp || *refp == 0) {
-      // The transitional execution engine retains machine code until shutdown;
-      // ORC resource trackers will reclaim local compilation units.
-    } else {
-      /* The code for this function is still used in a closure somewhere. To
-	 avoid dangling function pointers, we just unmap the function pointer
-	 instead of really freeing the code. NOTE: This effectively makes the
-	 code permanent and thus leaks memory on the code pointer. But we
-	 can't really help that because we have to get rid of the function IR
-	 at this point. */
-      if (h != f) interp.JIT->updateGlobalMapping(h, 0);
-      interp.JIT->updateGlobalMapping(f, 0);
-    }
+    // Native code is owned independently by ORC environment or generation
+    // trackers, so mutable local IR can be detached regardless of live closures.
     f->dropAllReferences(); if (h != f) h->dropAllReferences();
     fmap.clear();
     to_be_deleted.push_back(f); if (h != f) to_be_deleted.push_back(h);
@@ -12590,55 +12579,17 @@ void Env::clear()
 #endif
     bool init_code = is_init(name);
     // anonymous globals (doeval, dodefn) are taken care of elsewhere
-    if (!init_code) {
-      // get rid of the machine code
-      bool dead = !refp || *refp == 0;
-      if (!dead && *refp == 1) {
-	/* The case of global functions (which have their closures cached in
-	   global variables) is a bit more involved than the above, since refp
-	   will always be at least 1 in this case. To avoid leaking memory on
-	   redefined globals, we also check the reference counter of the
-	   closure. If it is at most 1 then the global variable (which, since
-	   we came here, is about to be cleared or redefined) is the only
-	   reference left at this point, hence the code isn't needed any more
-	   and can be freed. */
-	map<int32_t,GlobalVar>::iterator it = interp.globalvars.find(tag);
-	if (it == interp.globalvars.end())
-	  dead = true;
-	else {
-	  GlobalVar& v = it->second;
-	  dead = !v.x || v.x->refc <= 1;
-	}
-      }
-      if (dead) {
-	// The transitional execution engine retains machine code until shutdown;
-	// ORC resource trackers will reclaim superseded definitions.
-      } else {
-	/* Keep the code for a function which is still bound by a closure.
-	   See the remarks above. */
-	if (h != f) interp.JIT->updateGlobalMapping(h, 0);
-	interp.JIT->updateGlobalMapping(f, 0);
-      }
-      // only delete the body, this keeps existing references intact
+    if (!init_code)
+      // Keep the reusable declaration while ORC generations independently own
+      // native code and retain it until all captured closure refs are released.
       f->deleteBody();
-    }
     // delete all nested environments and reinitialize other body-related data
     fmap.clear(); xmap.clear(); xtab.clear(); prop.clear(); m = 0;
-    // now that all references have been removed, delete the function pointers
-    for (list<Function*>::iterator fi = to_be_deleted.begin();
-	 fi != to_be_deleted.end(); fi++) {
-#if LLVM27
-      /* XXXFIXME: This appears to be necessary to work around a bug in the
-	 lazy JIT of LLVM >=2.7, cf. http://llvm.org/bugs/show_bug.cgi?id=6360.
-	 PR#6360 has apparently been fixed since, but test052.pure still fails
-	 for me as of LLVM 3.0, so we leave this enabled for now. */
-      // LLVM >=2.7 collects the function code anyway if we erase the IR, so
-      // we just delete the body instead.
-      (*fi)->deleteBody();
-#else
+    // All ORC snapshots are independent of mutable IR. Once nested environments
+    // have dropped their references, remove the stale local declarations too.
+    for (list<Function*>::iterator fi = to_be_deleted.begin(),
+	 end = to_be_deleted.end(); fi != end; fi++)
       (*fi)->eraseFromParent();
-#endif
-    }
     to_be_deleted.clear();
   }
 }

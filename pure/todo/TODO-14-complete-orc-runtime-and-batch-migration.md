@@ -26,7 +26,7 @@ compatibility gates can be removed.
 2. [x] Route `jit_now` and `pure_interp_compile` through explicit ORC units.
 3. [x] Route retained `dodefn(keep)` initialization and batch Faust through ORC.
 4. [x] Replace legacy mappings and fallback resolution with ORC symbols.
-5. [ ] Replace stale-module cleanup with tracker and generation ownership.
+5. [x] Replace stale-module cleanup with tracker and generation ownership.
 6. [ ] Decide and document the native callable-address ABI policy.
 7. [ ] Remove `ExecutionEngine`, MCJIT linkage, obsolete headers, and `LLVM26` through
    `LLVM35` plus `NEW_USER_ITERATOR` compatibility gates.
@@ -180,3 +180,18 @@ publication and invalid continuation after a failed materialization.
       paths passed in Release.
     - Confirmed only two `updateGlobalMapping` calls remain, both isolated in `Env::clear`
       stale-function cleanup for task 5; no legacy mapping or fallback API remains elsewhere.
+- 2026-07-25: Replaced stale-function cleanup with ORC tracker and generation ownership.
+  - Removed refcount-conditioned MCJIT unmapping from `Env::clear`; escaped local and old
+    global closures now rely solely on their environment trackers or immutable generation
+    closure-ref sets for native-code lifetime.
+  - Continued reducing reusable global functions to declarations while fully erasing stale
+    local `Function` objects after nested environments drop mutable-IR references.
+  - Removed the LLVM 2.7 lazy-JIT deletion workaround and the final
+    `updateGlobalMapping` calls; no mapping, pointer-materialization, or fallback API remains.
+  - Validation:
+    - LLVM 22 Release and ASan/UBSan serial builds passed.
+    - Historical stale-pointer reproducer `test052.pure` passed in both presets after local
+      IR erasure.
+    - `pure-jit-lifetime-stress`, `pure-jit-eager`, `pure-bitcode-unload`,
+      `pure-faust-lifecycle`, and `pure-batch-faust` passed in both presets without sanitizer
+      findings.
