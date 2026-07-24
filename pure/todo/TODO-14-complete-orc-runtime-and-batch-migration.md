@@ -22,7 +22,7 @@ compatibility gates can be removed.
 
 ## Task List
 
-1. [ ] Inventory every remaining `ExecutionEngine`, MCJIT, mapping, and materialization consumer.
+1. [x] Inventory every remaining `ExecutionEngine`, MCJIT, mapping, and materialization consumer.
 2. [ ] Route `jit_now` and `pure_interp_compile` through explicit ORC units.
 3. [ ] Route retained `dodefn(keep)` initialization and batch Faust through ORC.
 4. [ ] Replace legacy mappings and fallback resolution with ORC symbols.
@@ -32,6 +32,48 @@ compatibility gates can be removed.
    `LLVM35` plus `NEW_USER_ITERATOR` compatibility gates.
 8. [ ] Validate eager mode, complete batch executables, batch Faust, redefinition
    lifetime, and shutdown in Debug, Release, and sanitizer builds.
+
+## Transitional Engine Inventory
+
+The remaining `ExecutionEngine` is created from the interpreter's mutable module by
+`EngineBuilder` during `interpreter::init`, configured for eager/lazy mode by
+`init_jit_mode`, given the `resolve_legacy_external` fallback, and deleted after global
+environments during interpreter shutdown. CMake links both `ExecutionEngine` and
+`MCJIT` solely for this path.
+
+Runtime consumers fall into five migration groups:
+
+| Group | Active consumers | Required ORC replacement |
+| --- | --- | --- |
+| Core host state | `$$sstk$$`, `$$fptr$$`, `register_host_global`, and `remove_host_global` mirror ORC absolute symbols into `addGlobalMapping`/`updateGlobalMapping`. | Remove the synchronized legacy half after every submitted ORC unit resolves these host addresses. |
+| Eager/native materialization | `jit_now` walks either the entire mutable module or the `check_used` closure and calls `getPointerToFunction`; `pure_interp_compile` is its public C API entry. | Materialize explicit immutable ORC generations for requested Pure functions and define whether the API promises only compilation or a stable native address. |
+| Retained batch initialization | `dodefn(keep)` invokes generated `$$init` code through MCJIT while retaining that code in the batch output module. | Execute a temporary reduced ORC initializer without consuming or removing the definition needed by later object emission. |
+| Batch Faust | The compiling path links Faust definitions into the output module, creates stable dispatch slots, obtains operation addresses with `getPointerToFunction`, patches reload slots, and unmaps removed globals. `declare_extern(..., materialize)` also uses MCJIT for Faust dispatch initialization. | Keep definitions in batch IR while materializing separate ORC snapshots for initialization/dispatch; track their slots and temporary providers explicitly. |
+| Legacy cleanup | `Env::clear` unmaps live local/global function addresses before deleting bodies; batch Faust reload unmaps old globals. | Let generation/resource trackers own machine code and remove only mutable-module IR after all ORC snapshots and closure references are accounted for. |
+
+Two `getPointerToGlobal` sites are not independent ownership requirements: the Faust
+fallback is paired with legacy batch materialization, while the global-function use is
+`DEBUG>1` diagnostics. The commented `const_defn` mapping call is dead documentation,
+not a consumer.
+
+The active compatibility/linkage residue is correspondingly bounded:
+
+- `LLVM27` controls eager-mode configuration, obsolete engine construction branches,
+  and stale body cleanup; `LLVM26`/`LLVM31` select dead engine/target alternatives;
+- `LLVM30` wraps the modern `CreatePHI` signature, `LLVM32` aliases `DataLayout`, and
+  `NEW_USER_ITERATOR` selects the modern user iterator;
+- `LLVM33` and `LLVM35` are defined but have no remaining C++ consumers;
+- four `!LLVM31` blocks in `pure.cc`, `pure_norl.cc`, and `runtime.cc` guard the dead
+  global `GuaranteedTailCallOpt` path;
+- `LLVM_VERSION` is unrelated current version metadata and remains protected by the
+  task guardrail.
+
+Migration order is therefore: add explicit eager ORC materialization and settle its
+native ABI, move retained initializers and batch Faust to ORC snapshots, remove mirrored
+legacy mappings/cleanup, then delete engine construction, resolver, linkage, headers,
+and compatibility branches. Interactive evaluation, definition units, lazy global
+snapshots, type generations, external wrappers, bitcode providers, and interactive
+Faust generations already use ORC and form the correctness baseline.
 
 ## Guardrails
 
@@ -58,3 +100,17 @@ Created from TODO-07 task 5 and TODO-13 retrospective gate 4. It also owns the
 batch-mode deferral recorded by TODO-11 and the native callable ABI question from
 TODO-09. TODO-18 supplies 11 complete-corpus reproducers for duplicate ORC
 publication and invalid continuation after a failed materialization.
+
+## Progress Log
+
+- 2026-07-25: Completed the transitional engine and compatibility-gate inventory.
+  - Classified engine ownership, host mappings, eager/C-API materialization, retained
+    batch initialization, batch Faust dispatch/reload, and stale IR cleanup.
+  - Distinguished active runtime consumers from one commented mapping and a debug-only
+    address print.
+  - Confirmed `pure_interp_compile` delegates directly to `jit_now` and that CMake's
+    `ExecutionEngine`/`MCJIT` components support the single interpreter-owned engine.
+  - Counted the active `LLVM26`/`27`/`30`/`31`/`32` and `NEW_USER_ITERATOR` gates;
+    `LLVM33` and `LLVM35` have no consumers beyond their definitions.
+  - Validation:
+    - Read-only source, header, and CMake audit; no build or runtime test was required.
