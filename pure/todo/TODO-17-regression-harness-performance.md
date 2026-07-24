@@ -20,8 +20,7 @@ release-validation budget in Debug, Release, and sanitizer configurations.
 ## Task List
 
 1. [ ] Record per-test and startup timings in all supported presets.
-   - `run-tests -t` / `TEST_TIMINGS=1` now provides deterministic per-input timing;
-     complete timing captures remain to be run.
+   - Release per-input timing is captured; Debug and ASan/UBSan remain.
 2. [x] Classify isolation and shared-filesystem constraints across the corpus.
 3. [x] Choose a bounded execution design which preserves test semantics.
 4. [x] Implement deterministic scheduling and collision-free output handling.
@@ -113,6 +112,17 @@ quarantine: all 97 inputs passed in 1280.27 seconds without a sanitizer finding 
 golden difference. This establishes an observed 22-minute sanitizer baseline while
 keeping expected interpreter RSS near 1.65 GiB for four concurrent workers. The policy
 still needs to be encoded in presets and CTest timeouts.
+
+## Post-fix Timing Captures
+
+| Preset | Wall time | Per-input min / median / max | Slowest inputs | Artifact |
+| --- | ---: | ---: | --- | --- |
+| Release | 365.14 s | 9 / 11 / 127 s | `test015` 127 s; `test025` 64 s; `test020` 31 s | `TODO-17-release-timings.txt` |
+
+The Release capture used four continuously refilled workers. All 97 inputs passed;
+the sum of independently measured worker wall times was 1441 seconds. The prelude
+startup entry took 10 seconds under concurrent load, consistent with the isolated
+3.72-second startup becoming slower under four-way LLVM contention.
 
 ## Guardrails
 
@@ -254,3 +264,8 @@ Deterministic runtime/golden failures exposed by the completed runner belong to 
     - Two parallel Release inputs passed with ordered 11s and 8s timings.
     - The same run without timing retained the original `passed` status lines.
     - An invalid `TEST_TIMINGS` value was rejected with usage output.
+- 2026-07-24: Captured complete post-fix Release per-input timings.
+  - Four workers passed all 97 inputs in 365.14 seconds; per-input times ranged from
+    9 to 127 seconds with an 11-second median.
+  - `test015` (127 s), `test025` (64 s), and `test020` (31 s) were the slowest inputs.
+  - Stored the complete deterministic timing output in `TODO-17-release-timings.txt`.

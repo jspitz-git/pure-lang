@@ -524,3 +524,8 @@ The release cleanup produced four numbered follow-ups:
   - Validation:
     - Generated runner passed `sh -n`; timed and default two-input Release runs passed.
     - Invalid timing configuration was rejected before test execution.
+- 2026-07-24: Captured complete Release per-input timings.
+  - `run-tests -t -j 4` passed 97/97 in 365.14 seconds.
+  - Per-input wall time ranged from 9 to 127 seconds with an 11-second median;
+    `test015`, `test025`, and `test020` were the three slowest inputs.
+  - The complete ordered capture is stored in `TODO-17-release-timings.txt`.
