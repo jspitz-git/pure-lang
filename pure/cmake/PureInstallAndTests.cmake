@@ -306,6 +306,11 @@ if(BUILD_TESTING)
   )
 
   function(add_pure_bitcode_test name script fixture)
+    if(PURE_SANITIZERS)
+      set(test_timeout 300)
+    else()
+      set(test_timeout 60)
+    endif()
     add_test(
       NAME "pure-bitcode-${name}"
       COMMAND
@@ -321,7 +326,7 @@ if(BUILD_TESTING)
         LABELS "bitcode;integration"
         REQUIRED_FILES
           "${PURE_BITCODE_FIXTURE_OUTPUT_DIR}/${fixture};${CMAKE_CURRENT_SOURCE_DIR}/test/bitcode/${script}"
-        TIMEOUT 60
+        TIMEOUT ${test_timeout}
     )
   endfunction()
 
@@ -374,21 +379,23 @@ if(BUILD_TESTING)
         -DPURE_SCRIPT=${PURE_FAUST_FIXTURE_OUTPUT_DIR}/lifecycle.pure
         -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunPureFaustTest.cmake"
     )
+    if(PURE_SANITIZERS)
+      set(faust_test_timeout 300)
+    else()
+      set(faust_test_timeout 180)
+    endif()
     set_tests_properties(
       pure-faust-lifecycle
       PROPERTIES
         LABELS "faust;bitcode;integration"
         REQUIRED_FILES
           "${reference_bc};${PURE_FAUST_FIXTURE_OUTPUT_DIR}/reload-a.bc;${PURE_FAUST_FIXTURE_OUTPUT_DIR}/reload-b.bc;${PURE_FAUST_FIXTURE_OUTPUT_DIR}/reload-float.bc;${PURE_FAUST_FIXTURE_OUTPUT_DIR}/reload-unresolved.bc;${PURE_FAUST_FIXTURE_OUTPUT_DIR}/lifecycle.pure"
-        TIMEOUT 180
+        TIMEOUT ${faust_test_timeout}
         PASS_REGULAR_EXPRESSION
           "Cannot reload Faust module while DSP instances are live(.|\n)*11(.|\n)*22(.|\n)*Module was previously loaded with the double sample ABI(.|\n)*22(.|\n)*faust_missing_test_dependency(.|\n)*22(.|\n)*42"
         FAIL_REGULAR_EXPRESSION
           "failed to remove ORC compilation unit;AddressSanitizer;LeakSanitizer;runtime error:"
     )
-    if(PURE_SANITIZERS)
-      set_tests_properties(pure-faust-lifecycle PROPERTIES DISABLED TRUE)
-    endif()
   endif()
 
   add_test(
