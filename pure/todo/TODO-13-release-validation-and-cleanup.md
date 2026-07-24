@@ -28,11 +28,10 @@ suite passes.
 5. [x] Remove superseded Autoconf and Makefile infrastructure after parity review.
 6. [x] Perform a clean-tree release build and close or create follow-up TODOs.
 
-Final status remains open pending TODO-17's preset worker and timeout policy. The
-Release build and all 12 current focused tests pass. The bounded Release corpus
-initially found 20 deterministic differences; TODO-18 fixed all of them, and complete
-confirmation runs now pass 97/97 in Release, Debug, and ASan/UBSan. This establishes
-the supported-suite behavior pass; only codifying its budgets remains.
+Final status remains open only for a closing clean-tree audit. TODO-17 and TODO-18 are
+closed, the Release build and all 12 current focused tests pass, and complete corpus
+runs pass 97/97 in Release, Debug, and ASan/UBSan. Preset worker counts, sanitizer
+memory policy, and CTest timeouts are documented and checked in.
 
 ## Legacy LLVM Audit
 
@@ -534,3 +533,9 @@ The release cleanup produced four numbered follow-ups:
   - Per-input wall time ranged from 13 to 152 seconds with a 16-second median;
     `test015`, `test025`, and `test020` remained the three slowest inputs.
   - The complete ordered capture is stored in `TODO-17-debug-timings.txt`.
+- 2026-07-24: Captured ASan/UBSan timings and completed TODO-17.
+  - `run-tests -t -j 4` passed 97/97 in 1351.16 seconds with no sanitizer signature.
+  - Per-input wall time ranged from 40 to 333 seconds with a 45-second median;
+    `test015`, `test025`, and `test020` remained the three slowest inputs.
+  - `TODO-17-asan-timings.txt` completes the three-preset timing record; TODO-13 now
+    needs only its closing clean-tree audit.

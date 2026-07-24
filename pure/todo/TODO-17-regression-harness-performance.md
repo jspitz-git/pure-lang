@@ -1,6 +1,6 @@
 # TODO-17 - Regression Harness Performance
 
-Status: Open
+Status: Closed
 Branch: todo/17-regression-harness-performance
 
 ## Purpose
@@ -19,8 +19,8 @@ release-validation budget in Debug, Release, and sanitizer configurations.
 
 ## Task List
 
-1. [ ] Record per-test and startup timings in all supported presets.
-   - Release and Debug per-input timings are captured; ASan/UBSan remains.
+1. [x] Record per-test and startup timings in all supported presets.
+   - Release, Debug, and ASan/UBSan ordered captures cover all 97 inputs.
 2. [x] Classify isolation and shared-filesystem constraints across the corpus.
 3. [x] Choose a bounded execution design which preserves test semantics.
 4. [x] Implement deterministic scheduling and collision-free output handling.
@@ -107,11 +107,11 @@ ASan allocator quarantine explains the remaining memory multiplier. With compact
 snapshots, an empty sanitizer prelude process used 272 MiB with no quarantine, 413 MiB
 with a 64 MiB quarantine, and 718 MiB with the default quarantine. Eight default
 workers can therefore consume about 5.7 GiB even though retained JIT code is not that
-The complete post-fix sanitizer run selected four workers and a nonzero 64 MiB
+large. The complete post-fix sanitizer run selected four workers and a nonzero 64 MiB
 quarantine: all 97 inputs passed in 1280.27 seconds without a sanitizer finding or
 golden difference. This establishes an observed 22-minute sanitizer baseline while
-keeping expected interpreter RSS near 1.65 GiB for four concurrent workers. The policy
-still needs to be encoded in presets and CTest timeouts.
+keeping expected interpreter RSS near 1.65 GiB for four concurrent workers. The final
+worker, stack, quarantine, and timeout policy is encoded in CTest and its presets.
 
 ## Post-fix Timing Captures
 
@@ -119,12 +119,13 @@ still needs to be encoded in presets and CTest timeouts.
 | --- | ---: | ---: | --- | --- |
 | Release | 365.14 s | 9 / 11 / 127 s | `test015` 127 s; `test025` 64 s; `test020` 31 s | `TODO-17-release-timings.txt` |
 | Debug | 499.68 s | 13 / 16 / 152 s | `test015` 152 s; `test025` 79 s; `test020` 40 s | `TODO-17-debug-timings.txt` |
+| ASan/UBSan | 1351.16 s | 40 / 45 / 333 s | `test015` 333 s; `test025` 187 s; `test020` 113 s | `TODO-17-asan-timings.txt` |
 
-Both captures used four continuously refilled workers and passed all 97 inputs. The
-sum of independently measured worker wall times was 1441 seconds in Release and 1976
-seconds in Debug. The prelude entries took 10 and 14 seconds respectively under
-concurrent load, consistent with isolated startup becoming slower under four-way LLVM
-contention.
+All captures used four continuously refilled workers and passed all 97 inputs. The
+sum of independently measured worker wall times was 1441 seconds in Release, 1976
+seconds in Debug, and 5368 seconds under ASan/UBSan. The prelude entries took 10, 14,
+and 50 seconds respectively under concurrent load, consistent with isolated startup
+becoming slower under four-way LLVM contention.
 
 ## Guardrails
 
@@ -276,3 +277,9 @@ Deterministic runtime/golden failures exposed by the completed runner belong to 
     13 to 152 seconds with a 16-second median.
   - `test015` (152 s), `test025` (79 s), and `test020` (40 s) were the slowest inputs.
   - Stored the complete deterministic timing output in `TODO-17-debug-timings.txt`.
+- 2026-07-24: Captured sanitizer timings and closed the harness performance TODO.
+  - Four workers passed all 97 ASan/UBSan inputs in 1351.16 seconds with no sanitizer
+    signature; per-input times ranged from 40 to 333 seconds with a 45-second median.
+  - `test015` (333 s), `test025` (187 s), and `test020` (113 s) were the slowest inputs.
+  - Stored the ordered output in `TODO-17-asan-timings.txt`; all tasks, behavior
+    equivalence checks, and checked-in preset budgets are now complete.
