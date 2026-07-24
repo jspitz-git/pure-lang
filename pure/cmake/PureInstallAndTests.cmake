@@ -336,8 +336,7 @@ if(BUILD_TESTING)
         FAIL_REGULAR_EXPRESSION
           "failed to remove ORC compilation unit;AddressSanitizer;LeakSanitizer;runtime error:"
     )
-    if(CMAKE_C_FLAGS MATCHES "-fsanitize" OR
-       CMAKE_CXX_FLAGS MATCHES "-fsanitize")
+    if(PURE_SANITIZERS)
       set_tests_properties(pure-faust-lifecycle PROPERTIES DISABLED TRUE)
     endif()
   endif()
