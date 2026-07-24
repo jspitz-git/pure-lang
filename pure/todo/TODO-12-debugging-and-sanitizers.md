@@ -22,7 +22,7 @@ with actionable stack traces rather than opaque crashes.
 2. [x] Add sanitizer targets or presets with correct compile and link flags.
 3. [x] Configure LLDB launch support and document common breakpoints.
 4. [x] Register JIT debug objects and verify generated function names in LLDB.
-5. [ ] Add concise IR/object dumps controlled by a runtime or build option.
+5. [x] Add concise IR/object dumps controlled by a runtime or build option.
 6. [ ] Run resource-lifetime and redefinition stress tests under sanitizers.
 
 ## Debug-Friendly Builds
@@ -110,6 +110,24 @@ The breakpoint becomes resolved when lookup materializes the function and the
 top frame is named `pure_jit_smoke_value`. The Debug smoke test also inspects
 the registered ELF object through the same JIT interface and requires that it
 contain this generated symbol name.
+
+## Opt-in JIT Dumps
+
+`PURE_JIT_DUMP` enables focused ORC diagnostics at runtime and is disabled when
+unset, empty, or `0`. It accepts comma-separated values:
+
+| Value | Output on standard error |
+| --- | --- |
+| `ir` | Reduced and optimized textual LLVM IR before ORC submission |
+| `objects` | One metadata line per compiled object: name, byte size, format, and symbol count |
+| `all` or `1` | Both diagnostics |
+
+For example, run `PURE_JIT_DUMP=ir,objects pure script.pure`. The object summary
+uses `ObjectTransformLayer` immediately before linking and never prints binary
+contents or host addresses. IR output is serialized across JIT instances to
+avoid interleaving. Unknown values fail JIT creation with an actionable error
+instead of silently enabling unexpected output. The option works in all build
+configurations, but has no output or object-parsing cost unless requested.
 
 ## Guardrails
 
@@ -207,3 +225,14 @@ contain this generated symbol name.
       `__jit_debug_register_code` and `__jit_debug_descriptor` interface.
     - LLDB inferior launch remains blocked by the agent sandbox, so resolving
       the pending JIT breakpoint in LLDB requires the interactive Zed session.
+- 2026-07-24: Added opt-in runtime dumps for optimized JIT IR and concise object
+  metadata. Object summaries report names, sizes, formats, and symbol counts
+  without binary contents or host addresses; invalid modes fail explicitly.
+  - Validation:
+    - `cmake --build --preset llvm22-debug --parallel 1`
+    - `ctest --preset llvm22-debug -R 'pure-jit-(smoke|ir-dump|object-dump)'
+      --output-on-failure` passed all three tests.
+    - The same build and three tests passed with `llvm22-release` and
+      `llvm22-asan`; the sanitizer run reported no ASan or UBSan findings.
+    - The default smoke run wrote zero bytes to standard output and error.
+    - `PURE_JIT_DUMP=invalid` was rejected with the documented expected values.

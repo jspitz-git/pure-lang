@@ -23,6 +23,7 @@
 #ifdef PURE_JIT_ELF_DEBUG_OBJECTS
 #include <llvm/ExecutionEngine/Orc/ObjectLinkingLayer.h>
 #endif
+#include <llvm/ExecutionEngine/Orc/ObjectTransformLayer.h>
 #include <llvm/IR/DataLayout.h>
 #include <llvm/IR/Function.h>
 #include <llvm/IR/GlobalAlias.h>
@@ -31,6 +32,7 @@
 #include <llvm/IR/LLVMContext.h>
 #include <llvm/IR/Module.h>
 #include <llvm/IR/Verifier.h>
+#include <llvm/Object/ObjectFile.h>
 #include <llvm/Passes/OptimizationLevel.h>
 #include <llvm/Passes/PassBuilder.h>
 #include <llvm/Support/CodeGen.h>
@@ -38,16 +40,74 @@
 #include <llvm/Support/TargetSelect.h>
 #include <llvm/Support/raw_ostream.h>
 
+#include <cstdlib>
+#include <iterator>
 #include <utility>
 
-PureJit::PureJit(std::unique_ptr<llvm::orc::LLJIT> jit) noexcept
-  : jit_(std::move(jit))
+PureJit::PureJit(std::unique_ptr<llvm::orc::LLJIT> jit, bool dump_ir) noexcept
+  : jit_(std::move(jit)), dump_ir_(dump_ir)
 {
   jit_->getExecutionSession().setErrorReporter
     ([this](llvm::Error error) { record_session_error(std::move(error)); });
 }
 
 PureJit::~PureJit() = default;
+
+namespace {
+
+struct JitDumpOptions {
+  bool ir = false;
+  bool objects = false;
+};
+
+llvm::Expected<JitDumpOptions> get_jit_dump_options()
+{
+  const char *value = std::getenv("PURE_JIT_DUMP");
+  if (!value || !*value || llvm::StringRef(value) == "0")
+    return JitDumpOptions();
+
+  JitDumpOptions options;
+  llvm::SmallVector<llvm::StringRef, 2> values;
+  llvm::StringRef(value).split(values, ',', -1, false);
+  for (llvm::StringRef option : values) {
+    option = option.trim();
+    if (option == "ir") options.ir = true;
+    else if (option == "objects") options.objects = true;
+    else if (option == "all" || option == "1")
+      options.ir = options.objects = true;
+    else
+      return llvm::createStringError
+        ("invalid PURE_JIT_DUMP value '%s'; expected ir, objects, or all",
+         option.str().c_str());
+  }
+  return options;
+}
+
+std::mutex& jit_dump_mutex()
+{
+  static std::mutex mutex;
+  return mutex;
+}
+
+void dump_object_summary(llvm::MemoryBufferRef buffer)
+{
+  std::lock_guard<std::mutex> lock(jit_dump_mutex());
+  llvm::Expected<std::unique_ptr<llvm::object::ObjectFile> > object =
+    llvm::object::ObjectFile::createObjectFile(buffer);
+  llvm::errs() << "[pure-jit object] name='" << buffer.getBufferIdentifier()
+               << "' bytes=" << buffer.getBufferSize();
+  if (!object) {
+    llvm::errs() << " parse-error='" << llvm::toString(object.takeError())
+                 << "'\n";
+    return;
+  }
+  llvm::errs() << " format='" << (*object)->getFileFormatName()
+               << "' symbols="
+               << std::distance((*object)->symbol_begin(),
+                                (*object)->symbol_end()) << '\n';
+}
+
+} // namespace
 
 void PureJit::record_session_error(llvm::Error error)
 {
@@ -201,10 +261,21 @@ llvm::Expected<std::unique_ptr<PureJit> > PureJit::create()
   // Native LLJIT requires its process-symbol JITDylib during construction.
   // LLVM links that dylib into the main dylib's default search order.
   builder.setLinkProcessSymbolsByDefault(true);
+  llvm::Expected<JitDumpOptions> dump_options = get_jit_dump_options();
+  if (!dump_options) return dump_options.takeError();
+
   llvm::Expected<std::unique_ptr<llvm::orc::LLJIT> > jit = builder.create();
   if (!jit) return jit.takeError();
+  if (dump_options->objects)
+    (*jit)->getObjTransformLayer().setTransform
+      ([](std::unique_ptr<llvm::MemoryBuffer> object)
+         -> llvm::Expected<std::unique_ptr<llvm::MemoryBuffer> > {
+        dump_object_summary(object->getMemBufferRef());
+        return std::move(object);
+      });
 
-  return std::unique_ptr<PureJit>(new PureJit(std::move(*jit)));
+  return std::unique_ptr<PureJit>
+    (new PureJit(std::move(*jit), dump_options->ir));
 }
 
 const llvm::DataLayout& PureJit::data_layout() const noexcept
@@ -265,6 +336,11 @@ llvm::Error PureJit::add_module_copy(llvm::orc::ResourceTrackerSP tracker,
           reduce_to_entry(**copy, entry_symbol, exported_symbol))
       return error;
   if (llvm::Error error = optimize_module(**copy)) return error;
+  if (dump_ir_) {
+    std::lock_guard<std::mutex> lock(jit_dump_mutex());
+    llvm::errs() << "[pure-jit IR] module='" << (*copy)->getName() << "'\n";
+    (*copy)->print(llvm::errs(), 0);
+  }
 
   llvm::orc::ThreadSafeModule thread_safe_module
     (std::move(*copy), std::move(context));

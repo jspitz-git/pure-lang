@@ -259,6 +259,32 @@ if(BUILD_TESTING)
   )
   add_test(NAME pure-jit-smoke COMMAND pure-jit-smoke)
   set_tests_properties(pure-jit-smoke PROPERTIES LABELS "jit;smoke")
+  add_test(
+    NAME pure-jit-ir-dump
+    COMMAND
+      "${CMAKE_COMMAND}" -E env PURE_JIT_DUMP=ir
+      "$<TARGET_FILE:pure-jit-smoke>"
+  )
+  set_tests_properties(
+    pure-jit-ir-dump
+    PROPERTIES
+      LABELS "jit;smoke"
+      PASS_REGULAR_EXPRESSION
+        "\\[pure-jit IR\\] module='pure-jit-smoke'"
+  )
+  add_test(
+    NAME pure-jit-object-dump
+    COMMAND
+      "${CMAKE_COMMAND}" -E env PURE_JIT_DUMP=objects
+      "$<TARGET_FILE:pure-jit-smoke>"
+  )
+  set_tests_properties(
+    pure-jit-object-dump
+    PROPERTIES
+      LABELS "jit;smoke"
+      PASS_REGULAR_EXPRESSION
+        "\\[pure-jit object\\].*format='[^']+'.*symbols="
+  )
 
   function(add_pure_bitcode_test name script fixture)
     add_test(

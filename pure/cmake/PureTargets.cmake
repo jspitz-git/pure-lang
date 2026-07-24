@@ -43,6 +43,7 @@ llvm_map_components_to_libnames(
   Core
   OrcJIT
   OrcDebugging
+  Object
   ExecutionEngine
   MCJIT
   native

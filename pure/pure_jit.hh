@@ -85,7 +85,8 @@ public:
   }
 
 private:
-  explicit PureJit(std::unique_ptr<llvm::orc::LLJIT> jit) noexcept;
+  explicit PureJit(std::unique_ptr<llvm::orc::LLJIT> jit,
+                   bool dump_ir) noexcept;
 
   void record_session_error(llvm::Error error);
   std::string take_session_error();
@@ -93,6 +94,7 @@ private:
   std::mutex session_error_mutex_;
   std::string session_error_;
   std::unique_ptr<llvm::orc::LLJIT> jit_;
+  bool dump_ir_;
 };
 
 #endif
