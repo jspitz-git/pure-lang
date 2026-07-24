@@ -3928,11 +3928,6 @@ pure_interp *pure_create_interp(int argc, char *argv[])
       break;
     }
   }
-#if USE_FASTCC && !LLVM31
-  // This global option is needed to get tail call optimization (you'll also
-  // need to have USE_FASTCC in interpreter.hh enabled).
-  if (interp.use_fastcc) llvm::GuaranteedTailCallOpt = true;
-#endif
   if ((env = getenv("PURE_INCLUDE")))
     add_path(interp.includedirs, unixize(env));
   if ((env = getenv("PURE_LIBRARY")))
@@ -4184,11 +4179,6 @@ pure_interp *pure_interp_main(int argc, char *argv[],
     add_path(interp.includedirs, unixize(env));
   if ((env = getenv("PURE_LIBRARY")))
     add_path(interp.librarydirs, unixize(env));
-#if USE_FASTCC && !LLVM31
-  // This global option is needed to get tail call optimization (you'll also
-  // need to have USE_FASTCC in interpreter.hh enabled).
-  llvm::GuaranteedTailCallOpt = true;
-#endif
   // scan the command line options
   list<string> myargs;
   if (argv && argc>0)

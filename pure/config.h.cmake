@@ -39,6 +39,4 @@
 #cmakedefine HAVE_FASTCC 1
 #cmakedefine HAVE_BISON3 1
 
-#cmakedefine NEW_USER_ITERATOR 1
-
 #endif

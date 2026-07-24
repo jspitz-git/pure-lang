@@ -28,7 +28,7 @@ compatibility gates can be removed.
 4. [x] Replace legacy mappings and fallback resolution with ORC symbols.
 5. [x] Replace stale-module cleanup with tracker and generation ownership.
 6. [x] Decide and document the native callable-address ABI policy.
-7. [ ] Remove `ExecutionEngine`, MCJIT linkage, obsolete headers, and `LLVM26` through
+7. [x] Remove `ExecutionEngine`, MCJIT linkage, obsolete headers, and `LLVM26` through
    `LLVM35` plus `NEW_USER_ITERATOR` compatibility gates.
 8. [ ] Validate eager mode, complete batch executables, batch Faust, redefinition
    lifetime, and shutdown in Debug, Release, and sanitizer builds.
@@ -235,3 +235,20 @@ publication and invalid continuation after a failed materialization.
     - `pure-jit-smoke`, `pure-jit-lifetime-stress`, `pure-jit-eager`,
       `pure-bitcode-unload`, `pure-faust-lifecycle`, `pure-batch-object`, and
       `pure-batch-faust` passed in both presets without sanitizer findings.
+- 2026-07-25: Completed removal of historical LLVM compatibility gates.
+  - Deleted the `LLVM26`, `LLVM27`, `LLVM30`, `LLVM31`, `LLVM32`, `LLVM33`, and `LLVM35`
+    definitions and flattened the surviving APIs to their LLVM 22 forms.
+  - Replaced the `NEW_USER_ITERATOR` shim with direct `Value::user_iterator` traversal,
+    made modern `CreatePHI` unconditional, and removed the unused `TargetData` aliases.
+  - Removed dead `GuaranteedTailCallOpt` branches and the obsolete `FAST_JIT` switch, plus
+    their generated configuration residue.
+  - Preserved `LLVM_VERSION` as current build/version and generated-output metadata.
+  - Validation:
+    - LLVM 22 Release and ASan/UBSan serial reconfigure/builds passed.
+    - Historical stale-pointer reproducer `test052.pure` passed in both presets.
+    - `pure-jit-smoke`, `pure-jit-lifetime-stress`, `pure-jit-eager`,
+      `pure-bitcode-unresolved-dependency`, `pure-bitcode-unload`,
+      `pure-faust-lifecycle`, `pure-batch-object`, and `pure-batch-faust` passed in both
+      presets without sanitizer findings.
+    - Confirmed no compatibility gate or shim identifier remains in active source/config;
+      `LLVM_VERSION` remains present at all metadata call sites.

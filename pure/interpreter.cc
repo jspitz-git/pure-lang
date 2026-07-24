@@ -11593,8 +11593,8 @@ void interpreter::check_used(set<Function*>& used,
     }
     if (f) {
       varmap[v] = f;
-      for (value_user_iterator it = value_user_begin(v),
-	     end = value_user_end(v); it != end; it++) {
+      for (Value::user_iterator it = v->user_begin(),
+	     end = v->user_end(); it != end; it++) {
 	if (Instruction *inst = dyn_cast<Instruction>(*it)) {
 	  Function *g = inst->getParent()->getParent();
 	  // Indirect reference through a variable. Note that we're not
@@ -11623,8 +11623,8 @@ void interpreter::check_used(set<Function*>& used,
       roots.insert(f);
     } else if (f->hasNUsesOrMore(1)) {
       // Look for uses of the function.
-      for (value_user_iterator it = value_user_begin(f),
-	     end = value_user_end(f); it != end; it++) {
+      for (Value::user_iterator it = f->user_begin(),
+	     end = f->user_end(); it != end; it++) {
 	if (Instruction *inst = dyn_cast<Instruction>(*it)) {
 	  Function *g = inst->getParent()->getParent();
 	  // This is a direct call.
@@ -11639,8 +11639,8 @@ void interpreter::check_used(set<Function*>& used,
 	  }
 	} else if (Constant *c = dyn_cast<Constant>(*it)) {
 	  // A function pointer. Check its uses.
-	  for (value_user_iterator jt = value_user_begin(c),
-		 end = value_user_end(c); jt != end; jt++) {
+	  for (Value::user_iterator jt = c->user_begin(),
+		 end = c->user_end(); jt != end; jt++) {
 	    if (Instruction *inst = dyn_cast<Instruction>(*jt)) {
 	      // This is a function that refers to f via a pointer.
 	      Function *g = inst->getParent()->getParent();

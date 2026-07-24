@@ -37,15 +37,6 @@
 #include <llvm/IR/Module.h>
 #include <llvm/IR/Verifier.h>
 
-// Transitional feature gates used by code removed in the ORC migration.
-#define LLVM26 1
-#define LLVM27 1
-#define LLVM30 1
-#define LLVM31 1
-#define LLVM32 1
-#define LLVM33 1
-#define LLVM35 1
-
 #include "parserdefs.hh"
 // Get rid of silly warnings in bison-generated position.hh.
 #pragma GCC diagnostic ignored "-Wparentheses"
@@ -61,10 +52,9 @@
 #define MEMDEBUG 0
 #endif
 
-/* Support for the "fast" calling convention which is needed to get tail call
-   elimination. As of LLVM 2.6, this is still broken on some systems,
-   specifically ppc. You can also disable this through configure with the
-   --disable-fastcc option, or at runtime with the --notc option. */
+/* Support for the "fast" calling convention used for tail call elimination.
+   You can disable this through configure with the --disable-fastcc option, or
+   at runtime with the --notc option. */
 #ifndef USE_FASTCC
 #ifdef HAVE_FASTCC
 #define USE_FASTCC 1
@@ -80,12 +70,7 @@
 #define DEFER_GLOBALS 1
 #endif
 
-/* Experimental support for fast code generation, at the expense of code
-   quality. As of LLVM 2.4, this doesn't seem to have much effect, and in LLVM
-   2.6 it doesn't seem to work at all. We recommend to leave this disabled. */
-#ifndef FAST_JIT
-#define FAST_JIT 0
-#endif
+/* Alternative code generation
 
 /* Alternative code generation for aggregate values (currently lists, tuples
    and matrices are supported). This works around performance issues with the
@@ -179,23 +164,6 @@ struct VarInfo {
 };
 
 using Builder = llvm::IRBuilder<>;
-
-#ifdef NEW_USER_ITERATOR
-/* Workarounds for LLVM 3.5 API breakage. */
-#define value_user_iterator Value::user_iterator
-#define value_user_begin(x) x->user_begin()
-#define value_user_end(x) x->user_end()
-#else
-#define value_user_iterator Value::use_iterator
-#define value_user_begin(x) x->use_begin()
-#define value_user_end(x) x->use_end()
-#endif
-
-#ifdef LLVM32
-/* Workarounds for LLVM 3.2 API breakage. */
-#define TargetData DataLayout
-#define getTargetData getDataLayout
-#endif
 
 #define llvm_const_Type llvm::Type
 #define llvm_const_FunctionType llvm::FunctionType
@@ -1131,11 +1099,7 @@ public:
 
   llvm::PHINode *phi_node(Builder &b, llvm_const_Type *ty,
 			  unsigned n, const char *name = "")
-#ifdef LLVM30
   { return b.CreatePHI(ty, n, name); }
-#else
-  { return b.CreatePHI(ty); }
-#endif
 
   map<string,int> pointer_tags;
   map<int,map<string,int>::iterator> pointer_type_with_tag;
