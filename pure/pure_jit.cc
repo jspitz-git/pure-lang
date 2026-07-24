@@ -129,27 +129,33 @@ std::string PureJit::take_session_error()
 static void collect_dependencies
 (llvm::Value *value, llvm::SmallPtrSetImpl<llvm::GlobalValue*>& reachable)
 {
-  if (!value) return;
-  if (llvm::GlobalValue *global = llvm::dyn_cast<llvm::GlobalValue>(value)) {
-    if (!reachable.insert(global).second) return;
-    if (llvm::Function *function = llvm::dyn_cast<llvm::Function>(global)) {
-      for (llvm::Instruction& instruction : llvm::instructions(function))
-        collect_dependencies(&instruction, reachable);
-    } else if (llvm::GlobalVariable *variable =
-                 llvm::dyn_cast<llvm::GlobalVariable>(global)) {
-      if (variable->hasInitializer())
-        collect_dependencies(variable->getInitializer(), reachable);
-    } else if (llvm::GlobalAlias *alias =
-                 llvm::dyn_cast<llvm::GlobalAlias>(global)) {
-      collect_dependencies(alias->getAliasee(), reachable);
-    } else if (llvm::GlobalIFunc *ifunc =
-                 llvm::dyn_cast<llvm::GlobalIFunc>(global)) {
-      collect_dependencies(ifunc->getResolver(), reachable);
+  llvm::SmallVector<llvm::Value*, 64> pending;
+  llvm::SmallPtrSet<llvm::Value*, 32> visited;
+  if (value) pending.push_back(value);
+  while (!pending.empty()) {
+    value = pending.pop_back_val();
+    if (!visited.insert(value).second) continue;
+    if (llvm::GlobalValue *global = llvm::dyn_cast<llvm::GlobalValue>(value)) {
+      reachable.insert(global);
+      if (llvm::Function *function = llvm::dyn_cast<llvm::Function>(global)) {
+        for (llvm::Instruction& instruction : llvm::instructions(function))
+          pending.push_back(&instruction);
+      } else if (llvm::GlobalVariable *variable =
+                   llvm::dyn_cast<llvm::GlobalVariable>(global)) {
+        if (variable->hasInitializer())
+          pending.push_back(variable->getInitializer());
+      } else if (llvm::GlobalAlias *alias =
+                   llvm::dyn_cast<llvm::GlobalAlias>(global)) {
+        pending.push_back(alias->getAliasee());
+      } else if (llvm::GlobalIFunc *ifunc =
+                   llvm::dyn_cast<llvm::GlobalIFunc>(global)) {
+        pending.push_back(ifunc->getResolver());
+      }
     }
+    if (llvm::User *user = llvm::dyn_cast<llvm::User>(value))
+      for (llvm::Value *operand : user->operand_values())
+        if (operand) pending.push_back(operand);
   }
-  if (llvm::User *user = llvm::dyn_cast<llvm::User>(value))
-    for (llvm::Value *operand : user->operand_values())
-      collect_dependencies(operand, reachable);
 }
 
 static llvm::Error verify_module(const llvm::Module& module,

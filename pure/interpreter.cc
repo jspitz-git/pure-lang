@@ -2928,10 +2928,9 @@ bool interpreter::LoadFaustDSP(bool priv, const char *name, string *msg,
   // produce weird names when emitting LLVM assembler code in the batch
   // compiler. In the future we may want to mangle those, too, if only for
   // cosmetic purposes.
-  uint64_t faust_generation =
-    (!compiling && modified) ?
-      compilation_units->next_faust_generation(modname) : 0;
-  string generation_suffix = faust_generation ?
+  uint64_t faust_generation = modified ?
+    compilation_units->next_faust_generation(modname) : 0;
+  string generation_suffix = !compiling && faust_generation ?
     "$g"+to_string(faust_generation)+"$" : "$";
   list<string> funs, aux_funs, vars;
   map<Function*, string> export_names;
@@ -3264,8 +3263,9 @@ bool interpreter::LoadFaustDSP(bool priv, const char *name, string *msg,
     }
   }
   if (compiling) {
-    // Preserve the legacy batch path: definitions and convenience functions
-    // remain embedded in the output module and MCJIT supplies their addresses.
+    // Definitions and convenience functions remain embedded in the output
+    // module. A modified provider is materialized as reduced ORC snapshots so
+    // compile-time wrappers can use stable host dispatch slots.
     list<Function*> funptrs;
     list<GlobalVariable*> varptrs;
     for (list<string>::iterator f = funs.begin(); f != funs.end(); ++f) {
@@ -3284,72 +3284,121 @@ bool interpreter::LoadFaustDSP(bool priv, const char *name, string *msg,
       assert(u);
       varptrs.push_back(u);
     }
-    if (symtab.current_namespace->empty())
-      namespaces.insert(modname);
-    else
-      namespaces.insert(*symtab.current_namespace+"::"+modname);
-    loaded_dsps[modname].declare(*symtab.current_namespace, priv);
-    bcmap::iterator mod = loaded_dsps.find(modname);
-    assert(mod != loaded_dsps.end());
-    mod->second.t = mtime;
-    mod->second.dbl = is_double;
-    mod->second.funptrs = funptrs;
-    mod->second.varptrs = varptrs;
-    if (mod->second.tag == 0) mod->second.tag = pure_make_tag();
-    dsp_mods[mod->second.tag] = mod;
-
-    for (list<string>::iterator it = funs.begin(), end = funs.end();
-         it != end; ++it) {
-      string fname = faust_name(*it);
-      Function *f = module->getFunction(fname);
-      assert(f);
+    for (list<string>::const_iterator it = funs.begin();
+         it != funs.end(); ++it) {
+      Function *f = module->getFunction(faust_name(*it));
+      assert(f && !f->isDeclaration());
       pass_state->optimize(*f);
-      string asname = modname+"::"+*it;
-      FunctionType *ft = f->getFunctionType();
-      string restype = dsptype_name
-        (*it, ft->getReturnType(), 0, true, is_double);
-      list<string> argtypes;
-      for (size_t i = 0; i < ft->getNumParams(); ++i)
-        argtypes.push_back(dsptype_name
-          (*it, ft->getParamType(i), i, false, is_double));
-      if (loaded && modified) {
-        GlobalVariable *v = module->getNamedGlobal("$"+fname);
-        void **fp = v ? (void**)host_global_address(v) : 0;
-        if (!fp && v) fp = (void**)JIT->getPointerToGlobal(v);
-        if (fp)
-          *fp = JIT->getPointerToFunction(f);
-        else {
-          assert(!declared);
-          symbol *sym = symtab.sym(asname);
-          assert(sym);
-          externals.erase(sym->f);
-          globalvars.erase(sym->f);
+    }
+    map<string, void*> addresses;
+    llvm::orc::ResourceTrackerSP tracker;
+    if (modified) {
+      string batch_verification_error;
+      if (!verify_module(*module, batch_verification_error))
+        return fail("Invalid linked batch dsp module: "+
+                    batch_verification_error);
+      tracker = ORC->create_resource_tracker();
+      for (list<string>::const_iterator it = funs.begin();
+           it != funs.end(); ++it) {
+        string fname = faust_name(*it);
+        string exported_name = "$$orc.batch-faust."+
+          to_string(orc_unit_counter++);
+        if (Error error = ORC->add_module_copy
+              (tracker, *module, fname, exported_name)) {
+          if (Error cleanup_error = tracker->remove())
+            error = joinErrors(std::move(error), std::move(cleanup_error));
+          return fail("Failed to submit batch ORC Faust export '"+*it+"': "+
+                      toString(std::move(error)));
         }
-      }
-      if (!declared) {
-        declare_extern(priv, fname, restype, argtypes, false, 0, asname,
-                       false, false);
-        symbol *sym = symtab.sym(asname);
-        assert(sym);
-        required.push_back(sym->f);
+        Expected<orc::ExecutorAddr> address = ORC->lookup(exported_name);
+        if (!address) {
+          Error error = address.takeError();
+          if (Error cleanup_error = tracker->remove())
+            error = joinErrors(std::move(error), std::move(cleanup_error));
+          return fail("Failed to materialize batch Faust export '"+*it+"': "+
+                      toString(std::move(error)));
+        }
+        addresses[*it] = reinterpret_cast<void*>
+          (static_cast<uintptr_t>(address->getValue()));
       }
     }
-    if (!declared) {
-      string dispatch_verification_error;
-      if (!verify_module(*module, dispatch_verification_error))
-        return fail("Invalid Faust wrapper module: "+
-                    dispatch_verification_error);
+    auto fail_batch = [&](const string& message) {
+      string detail = message;
+      if (tracker)
+        if (Error cleanup_error = tracker->remove())
+          detail += ": "+toString(std::move(cleanup_error));
+      return fail(detail);
+    };
+
+    bcdata_t& data = loaded_dsps[modname];
+    if (data.tag == 0) data.tag = pure_make_tag();
+    try {
       for (list<string>::iterator it = funs.begin(), end = funs.end();
            it != end; ++it) {
         string fname = faust_name(*it);
         Function *f = module->getFunction(fname);
-        GlobalVariable *v = module->getNamedGlobal("$"+fname);
-        void **fp = v ? (void**)host_global_address(v) : 0;
-        if (!f || !fp)
-          return fail("Missing Faust dispatch slot for '"+fname+"'");
-        *fp = JIT->getPointerToFunction(f);
+        assert(f);
+        string asname = modname+"::"+*it;
+        FunctionType *ft = f->getFunctionType();
+        string restype = dsptype_name
+          (*it, ft->getReturnType(), 0, true, is_double);
+        list<string> argtypes;
+        for (size_t i = 0; i < ft->getNumParams(); ++i)
+          argtypes.push_back(dsptype_name
+            (*it, ft->getParamType(i), i, false, is_double));
+        if (!declared) {
+          declare_extern(priv, fname, restype, argtypes, false, 0, asname,
+                         false, false);
+          symbol *sym = symtab.sym(asname);
+          assert(sym);
+          required.push_back(sym->f);
+        }
       }
+    } catch (const err& error) {
+      return fail_batch("Failed to prepare batch Faust wrappers: "+
+                        string(error.what()));
     }
+    string dispatch_verification_error;
+    if (!verify_module(*module, dispatch_verification_error))
+      return fail_batch("Invalid Faust wrapper module: "+
+                        dispatch_verification_error);
+    vector<pair<void**, void*> > bindings;
+    if (modified) {
+      for (list<string>::const_iterator it = funs.begin();
+           it != funs.end(); ++it) {
+        string fname = faust_name(*it);
+        GlobalVariable *slot = module->getNamedGlobal("$"+fname);
+        void **target = slot ? (void**)host_global_address(slot) : 0;
+        if (!target)
+          return fail_batch("Missing Faust dispatch slot for '"+fname+"'");
+        bindings.push_back(make_pair(target, addresses[*it]));
+      }
+      try {
+        compilation_units->retain_faust
+          (modname, faust_generation, tracker);
+      } catch (const std::exception& error) {
+        return fail_batch("Failed to retain batch Faust generation: "+
+                          string(error.what()));
+      }
+      for (vector<pair<void**, void*> >::const_iterator it = bindings.begin();
+           it != bindings.end(); ++it)
+        *it->first = it->second;
+      compilation_units->publish_faust(modname, faust_generation);
+    }
+
+    if (symtab.current_namespace->empty())
+      namespaces.insert(modname);
+    else
+      namespaces.insert(*symtab.current_namespace+"::"+modname);
+    data.declare(*symtab.current_namespace, priv);
+    bcmap::iterator mod = loaded_dsps.find(modname);
+    assert(mod != loaded_dsps.end());
+    data.t = mtime;
+    data.dbl = is_double;
+    data.funptrs = funptrs;
+    data.varptrs = varptrs;
+    dsp_mods[data.tag] = mod;
+    collect_pending_generations();
     return true;
   }
 
@@ -14117,6 +14166,17 @@ Function *interpreter::declare_extern(int priv, string name, string restype,
        Faust dsp gets reloaded. (This works similar to global Pure functions
        which are also invoked indirectly through global variables.) */
     PointerType *fptype = PointerType::get(context, 0);
+    auto materialize_target = [&]() -> void* {
+      if (!materialize) return 0;
+      if (g && !g->isDeclaration())
+        return compile_orc_function(g, "faust-dispatch");
+      llvm::Expected<llvm::orc::ExecutorAddr> target = ORC->lookup(name);
+      if (!target)
+        throw err("failed to resolve ORC Faust dispatch target: "+
+                  llvm::toString(target.takeError()));
+      return reinterpret_cast<void*>
+        (static_cast<uintptr_t>(target->getValue()));
+    };
     GlobalVariable *v = module->getNamedGlobal("$"+name);
     if (!v) {
       v = global_variable
@@ -14124,7 +14184,7 @@ Function *interpreter::declare_extern(int priv, string name, string restype,
          ConstantPointerNull::get(fptype), "$"+name);
       void **fp = (void**)malloc(sizeof(void*));
       assert(fp);
-      *fp = materialize ? JIT->getPointerToFunction(g) : 0;
+      *fp = materialize_target();
       try {
         register_host_global(v, fp);
       } catch (...) {
@@ -14137,7 +14197,7 @@ Function *interpreter::declare_extern(int priv, string name, string restype,
       if (!host_global_address(v)) {
         void **fp = (void**)malloc(sizeof(void*));
         assert(fp);
-        *fp = materialize ? JIT->getPointerToFunction(g) : 0;
+        *fp = materialize_target();
         try {
           register_host_global(v, fp);
         } catch (...) {

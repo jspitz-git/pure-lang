@@ -24,7 +24,7 @@ compatibility gates can be removed.
 
 1. [x] Inventory every remaining `ExecutionEngine`, MCJIT, mapping, and materialization consumer.
 2. [x] Route `jit_now` and `pure_interp_compile` through explicit ORC units.
-3. [ ] Route retained `dodefn(keep)` initialization and batch Faust through ORC.
+3. [x] Route retained `dodefn(keep)` initialization and batch Faust through ORC.
 4. [ ] Replace legacy mappings and fallback resolution with ORC symbols.
 5. [ ] Replace stale-module cleanup with tracker and generation ownership.
 6. [ ] Decide and document the native callable-address ABI policy.
@@ -142,3 +142,25 @@ publication and invalid continuation after a failed materialization.
     - LLVM 22 Release and ASan/UBSan serial builds passed.
     - `pure-batch-object` and `pure-jit-lifetime-stress` passed in both presets without
       sanitizer findings.
+- 2026-07-25: Completed batch Faust materialization and dispatch migration to ORC.
+  - Kept provider definitions in batch output IR while materializing every Pure-visible
+    export as a uniquely renamed, reduced ORC snapshot under one generation tracker.
+  - Prepared all export addresses and dispatch slots before atomically publishing a new
+    batch generation; reload now rebinds slots and collects the superseded tracker without
+    `getPointerToFunction` or `getPointerToGlobal`.
+  - Replaced the dormant implicit Faust dispatch materializer in `declare_extern` with an
+    ORC definition snapshot or symbol lookup.
+  - Reworked snapshot dependency discovery as an iterative graph walk with a visited set
+    for every LLVM value. The first real batch Faust run exposed the previous walk's
+    unbounded recursion on cyclic operand graphs as an ASan stack overflow.
+  - Added `pure-batch-faust`, which executes `newinit` and `getNumInputs` during retained
+    batch definition initialization, reloads an isolated provider from version A to B,
+    executes the rebound wrappers, and verifies object emission.
+  - Validation:
+    - LLVM 22 Release and ASan/UBSan serial builds passed.
+    - `pure-batch-faust`, `pure-batch-object`, `pure-faust-lifecycle`, `pure-jit-smoke`,
+      `pure-jit-lifetime-stress`, and `pure-jit-eager` passed in both presets without
+      sanitizer findings.
+    - Confirmed the isolated batch reload fixture was replaced by the version-B bitcode
+      during compile-time execution and that active Faust paths no longer request function
+      or global addresses from MCJIT.

@@ -225,6 +225,11 @@ if(BUILD_TESTING)
       "${PURE_FAUST_FIXTURE_OUTPUT_DIR}/lifecycle.pure"
       @ONLY
     )
+    configure_file(
+      "${CMAKE_CURRENT_SOURCE_DIR}/test/faust/batch.pure.in"
+      "${PURE_FAUST_FIXTURE_OUTPUT_DIR}/batch.pure"
+      @ONLY
+    )
   endif()
 
   add_executable(
@@ -469,6 +474,32 @@ if(BUILD_TESTING)
       FAIL_REGULAR_EXPRESSION
         "AddressSanitizer;LeakSanitizer;runtime error:"
   )
+  if(PURE_FAUST_EXECUTABLE)
+    add_test(
+      NAME pure-batch-faust
+      COMMAND
+        "${CMAKE_COMMAND}"
+        -DPURE_EXECUTABLE=$<TARGET_FILE:pure>
+        -DPURE_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
+        -DPURE_BUILD_DIR=${CMAKE_CURRENT_BINARY_DIR}
+        -DPURE_LD_LIB_PATH=${LD_LIB_PATH}
+        -DPURE_SCRIPT=${PURE_FAUST_FIXTURE_OUTPUT_DIR}/batch.pure
+        -DPURE_OUTPUT_NAME=pure-batch-faust.o
+        -DPURE_FIXTURE_SOURCE=${PURE_FAUST_FIXTURE_OUTPUT_DIR}/reload-a.bc
+        -DPURE_FIXTURE_DESTINATION=${PURE_FAUST_FIXTURE_OUTPUT_DIR}/batch_reload.bc
+        -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunPureBatchTest.cmake"
+    )
+    set_tests_properties(
+      pure-batch-faust
+      PROPERTIES
+        LABELS "batch;faust;integration"
+        REQUIRED_FILES
+          "${reference_bc};${PURE_FAUST_FIXTURE_OUTPUT_DIR}/reload-a.bc;${PURE_FAUST_FIXTURE_OUTPUT_DIR}/reload-b.bc;${PURE_FAUST_FIXTURE_OUTPUT_DIR}/batch.pure"
+        TIMEOUT ${batch_test_timeout}
+        FAIL_REGULAR_EXPRESSION
+          "failed to;AddressSanitizer;LeakSanitizer;runtime error:"
+    )
+  endif()
 
   add_test(
     NAME pure-regression
