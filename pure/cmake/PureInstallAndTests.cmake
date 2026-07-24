@@ -457,3 +457,14 @@ install(
   FILES pure.1
   DESTINATION "${CMAKE_INSTALL_MANDIR}/man1"
 )
+
+configure_file(
+  "${CMAKE_CURRENT_SOURCE_DIR}/cmake/Uninstall.cmake.in"
+  "${CMAKE_CURRENT_BINARY_DIR}/cmake_uninstall.cmake"
+  @ONLY
+)
+add_custom_target(
+  uninstall
+  COMMAND "${CMAKE_COMMAND}" -P "${CMAKE_CURRENT_BINARY_DIR}/cmake_uninstall.cmake"
+  COMMENT "Removing installed Pure files"
+)

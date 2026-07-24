@@ -21,7 +21,7 @@ suite passes.
 
 1. [x] Audit the tree for old JIT calls, LLVM version macros, and obsolete headers.
 2. [x] Run the full tests and classify any remaining behavior differences.
-3. [ ] Verify build, test, install, uninstall, and installed-program execution.
+3. [x] Verify build, test, install, uninstall, and installed-program execution.
 4. [ ] Update documentation for Clang/LLVM 22, CMake, Ninja, LLDB, and bitcode policy.
 5. [ ] Remove superseded Autoconf and Makefile infrastructure after parity review.
 6. [ ] Perform a clean-tree release build and close or create follow-up TODOs.
@@ -117,6 +117,32 @@ The EOL handling and regression-runner duration must be fixed or explicitly
 budgeted before the clean release validation in task 6. No unexplained disabled
 test or sanitizer finding remains.
 
+## Installation Validation
+
+A fresh out-of-tree Release configuration used an isolated configure-time
+prefix and built successfully with Ninja and one compile job. Its ten focused
+integration tests passed before installation. CMake installs 28 manifest entries
+covering the executable, versioned runtime library and symlinks, public header,
+`pure_main.c` and `pure_main.o`, 19 Pure library scripts, pkg-config metadata,
+and the manual page. This matches the legacy build's core installation set.
+
+The installed `pure --version` reports Pure 0.68 and LLVM 22.1.8. With the
+nonstandard temporary library directory supplied through `LD_LIBRARY_PATH`, the
+installed interpreter locates its configured library scripts and executes
+`examples/hello.pure`, printing `Hello, world!`. Its additional pragma output is
+the CRLF issue already classified in task 2. `pkg-config` reports version 0.68
+and the isolated include and library directories.
+
+CMake now provides an `uninstall` target backed by `install_manifest.txt`. It
+removes all installed files and symlinks, tolerates already absent files, and a
+second invocation remains successful. It intentionally leaves empty parent
+directories owned by the prefix.
+
+The legacy build can optionally install Emacs and TeXmacs integrations. CMake
+has no corresponding optional rules, and neither tool is installed on the
+validation host. Task 5 must preserve these files or explicitly classify them
+before removing the legacy build; this does not block verified core host parity.
+
 ## Guardrails
 
 - Do not remove the old build before the CMake path covers required installation assets.
@@ -172,3 +198,22 @@ test or sanitizer finding remains.
     - Bounded regression runs completed 1 Debug, 17 Release, and 6 ASan scripts
       after the prelude. Their diffs contain the classified CRLF EOL and pragma
       noise, with no crash or sanitizer signatures.
+- 2026-07-24: Verified the CMake build, focused tests, installation metadata,
+  installed interpreter, representative example, and manifest-based uninstall
+  in an isolated prefix. Core host installation parity is complete.
+  - Validation:
+    - Fresh Release configure in `build/install-validation/build` with Clang 22,
+      LLVM 22, Ninja, and a prefix under `build/install-validation/prefix`.
+    - `cmake --build build/install-validation/build --parallel 1`
+    - `ctest --test-dir build/install-validation/build -E pure-regression
+      --output-on-failure` passed all ten tests in 164 seconds.
+    - `cmake --install build/install-validation/build` installed 28 manifest
+      entries with no path outside the temporary prefix.
+    - Installed `pure --version` reported Pure 0.68 and LLVM 22.1.8.
+    - Installed Pure ran `examples/hello.pure` and printed `Hello, world!`.
+    - `pkg-config --modversion pure` reported 0.68; cflags and libraries used
+      the temporary prefix.
+    - The first `uninstall` removed every manifest file and symlink. A second
+      invocation succeeded with all entries already absent.
+    - Emacs and TeXmacs were unavailable; their optional legacy install rules
+      remain a task 5 parity decision.
