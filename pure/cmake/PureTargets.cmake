@@ -42,6 +42,7 @@ llvm_map_components_to_libnames(
   PURE_LLVM_LIBRARIES
   Core
   OrcJIT
+  OrcDebugging
   ExecutionEngine
   MCJIT
   native
@@ -73,6 +74,12 @@ target_include_directories(
     "$<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>"
   PRIVATE
     ${LLVM_INCLUDE_DIRS}
+)
+
+target_compile_definitions(
+  pure-runtime
+  PRIVATE
+    $<$<AND:$<CONFIG:Debug>,$<PLATFORM_ID:Linux>>:PURE_JIT_ELF_DEBUG_OBJECTS>
 )
 
 target_link_libraries(

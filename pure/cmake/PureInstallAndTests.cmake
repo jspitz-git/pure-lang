@@ -245,6 +245,11 @@ if(BUILD_TESTING)
     PRIVATE
       $<$<COMPILE_LANG_AND_ID:CXX,Clang>:-fno-sanitize=function>
   )
+  target_compile_definitions(
+    pure-jit-smoke
+    PRIVATE
+      $<$<AND:$<CONFIG:Debug>,$<PLATFORM_ID:Linux>>:PURE_JIT_ELF_DEBUG_OBJECTS>
+  )
   target_link_libraries(
     pure-jit-smoke
     PRIVATE

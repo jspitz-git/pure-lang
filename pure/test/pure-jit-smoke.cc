@@ -7,6 +7,9 @@
 #include <llvm/IR/IRBuilder.h>
 #include <llvm/IR/LLVMContext.h>
 #include <llvm/IR/Module.h>
+#ifdef PURE_JIT_ELF_DEBUG_OBJECTS
+#include <llvm/ExecutionEngine/Orc/TargetProcess/JITLoaderGDB.h>
+#endif
 #include <llvm/Support/raw_ostream.h>
 
 #include <cstdint>
@@ -22,6 +25,20 @@ static int report_error(llvm::Error error)
 }
 
 static std::int32_t host_value = 41;
+
+#ifdef PURE_JIT_ELF_DEBUG_OBJECTS
+extern "C" jit_descriptor __jit_debug_descriptor;
+
+static bool registered_debug_object_contains(llvm::StringRef name)
+{
+  for (jit_code_entry *entry = __jit_debug_descriptor.first_entry;
+       entry; entry = entry->next_entry) {
+    llvm::StringRef object(entry->symfile_addr, entry->symfile_size);
+    if (object.contains(name)) return true;
+  }
+  return false;
+}
+#endif
 
 static std::int32_t host_increment(std::int32_t value)
 {
@@ -77,6 +94,12 @@ int main()
   llvm::Expected<std::int32_t (*)()> value =
     (*jit)->lookup_function<std::int32_t()>("pure_jit_smoke_value");
   if (!value) return report_error(value.takeError());
+#ifdef PURE_JIT_ELF_DEBUG_OBJECTS
+  if (!registered_debug_object_contains("pure_jit_smoke_value")) {
+    llvm::errs() << "PureJit did not register the generated function name\n";
+    return 1;
+  }
+#endif
   if ((*value)() != 42) {
     llvm::errs() << "PureJit smoke test returned the wrong value\n";
     return 1;

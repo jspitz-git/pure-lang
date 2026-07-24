@@ -14,9 +14,15 @@
 #include <llvm/Bitcode/BitcodeReader.h>
 #include <llvm/Bitcode/BitcodeWriter.h>
 #include <llvm/ExecutionEngine/Orc/AbsoluteSymbols.h>
+#ifdef PURE_JIT_ELF_DEBUG_OBJECTS
+#include <llvm/ExecutionEngine/Orc/Debugging/ELFDebugObjectPlugin.h>
+#endif
 #include <llvm/ExecutionEngine/Orc/JITTargetMachineBuilder.h>
 #include <llvm/ExecutionEngine/Orc/LLJIT.h>
 #include <llvm/ExecutionEngine/Orc/Mangling.h>
+#ifdef PURE_JIT_ELF_DEBUG_OBJECTS
+#include <llvm/ExecutionEngine/Orc/ObjectLinkingLayer.h>
+#endif
 #include <llvm/IR/DataLayout.h>
 #include <llvm/IR/Function.h>
 #include <llvm/IR/GlobalAlias.h>
@@ -178,6 +184,20 @@ llvm::Expected<std::unique_ptr<PureJit> > PureJit::create()
 
   llvm::orc::LLJITBuilder builder;
   builder.setJITTargetMachineBuilder(std::move(*target));
+#ifdef PURE_JIT_ELF_DEBUG_OBJECTS
+  builder.setObjectLinkingLayerCreator
+    ([](llvm::orc::ExecutionSession& session)
+       -> llvm::Expected<std::unique_ptr<llvm::orc::ObjectLayer> > {
+      std::unique_ptr<llvm::orc::ObjectLinkingLayer> layer
+        (new llvm::orc::ObjectLinkingLayer(session));
+      llvm::Error error = llvm::Error::success();
+      std::shared_ptr<llvm::orc::ELFDebugObjectPlugin> debug_objects
+        (new llvm::orc::ELFDebugObjectPlugin(session, false, true, error));
+      if (error) return std::move(error);
+      layer->addPlugin(std::move(debug_objects));
+      return std::unique_ptr<llvm::orc::ObjectLayer>(std::move(layer));
+    });
+#endif
   // Native LLJIT requires its process-symbol JITDylib during construction.
   // LLVM links that dylib into the main dylib's default search order.
   builder.setLinkProcessSymbolsByDefault(true);

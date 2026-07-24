@@ -21,7 +21,7 @@ with actionable stack traces rather than opaque crashes.
 1. [x] Add debug-friendly compiler flags without changing release behavior.
 2. [x] Add sanitizer targets or presets with correct compile and link flags.
 3. [x] Configure LLDB launch support and document common breakpoints.
-4. [ ] Register JIT debug objects and verify generated function names in LLDB.
+4. [x] Register JIT debug objects and verify generated function names in LLDB.
 5. [ ] Add concise IR/object dumps controlled by a runtime or build option.
 6. [ ] Run resource-lifetime and redefinition stress tests under sanitizers.
 
@@ -87,6 +87,30 @@ For example, use `breakpoint set --name PureJit::lookup` in LLDB. GDB remains
 usable with the same debug build and symbolic names, for example
 `break PureJit::lookup` followed by `run`.
 
+## JIT Debug Objects
+
+Linux Debug builds select ORC's JITLink `ObjectLinkingLayer` and install the
+LLVM 22 `ELFDebugObjectPlugin`. The plugin automatically publishes an ELF debug
+object through the GDB JIT interface whenever ORC materializes code. LLDB and
+GDB can therefore discover generated function names after materialization.
+Release and non-Linux builds retain LLJIT's default object layer and incur no
+plugin overhead.
+
+The interpreter's current generated IR has no source-level debug metadata. The
+plugin consequently emits symbol-only objects, which provide named JIT frames
+but not Pure source lines or variables. To exercise registration with the smoke
+test in LLDB, set a pending breakpoint before launch:
+
+```text
+breakpoint set --name pure_jit_smoke_value
+run
+```
+
+The breakpoint becomes resolved when lookup materializes the function and the
+top frame is named `pure_jit_smoke_value`. The Debug smoke test also inspects
+the registered ELF object through the same JIT interface and requires that it
+contain this generated symbol name.
+
 ## Guardrails
 
 - Debug instrumentation must be disabled or low-overhead in release builds.
@@ -103,7 +127,6 @@ usable with the same debug build and symbolic names, for example
 
 ## Open Questions
 
-- Does LLVM 22's preferred debug plugin require selecting JITLink explicitly?
 - Should sanitizer builds disable custom signal handling to improve reports?
 
 ## Progress Log
@@ -165,3 +188,22 @@ usable with the same debug build and symbolic names, for example
       Zed launch must be exercised in the interactive editor environment.
     - `ctest --preset llvm22-debug -R pure-jit-smoke --output-on-failure`
       passed.
+- 2026-07-24: Enabled JIT debug-object registration for Linux Debug builds.
+  LLVM 22's ELF plugin required explicitly selecting JITLink; Release keeps
+  LLJIT's default object layer. The smoke test verifies that the registered ELF
+  object contains the generated `pure_jit_smoke_value` symbol.
+  - Validation:
+    - `cmake --build --preset llvm22-debug --parallel 1`
+    - `ctest --preset llvm22-debug -R pure-jit-smoke --output-on-failure`
+      passed, including the registered generated-name check.
+    - `cmake --build --preset llvm22-release --parallel 1`
+    - `ctest --preset llvm22-release -R pure-jit-smoke --output-on-failure`
+      passed; Release compile commands do not define
+      `PURE_JIT_ELF_DEBUG_OBJECTS`.
+    - `cmake --build --preset llvm22-asan --parallel 1`
+    - `ctest --preset llvm22-asan -R pure-jit-smoke --output-on-failure`
+      passed without ASan or UBSan diagnostics.
+    - `nm -C build/llvm22-debug/pure-jit-smoke` contains the plugin and the
+      `__jit_debug_register_code` and `__jit_debug_descriptor` interface.
+    - LLDB inferior launch remains blocked by the agent sandbox, so resolving
+      the pending JIT breakpoint in LLDB requires the interactive Zed session.
