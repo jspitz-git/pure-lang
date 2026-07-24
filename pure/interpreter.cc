@@ -597,19 +597,6 @@ struct NewPassManagerState {
   }
 };
 
-static void* resolve_legacy_external(const std::string& name)
-{
-  /* If we come here, the dynamic loader has already tried everything to
-     resolve the function, so instead we just print an error message and
-     return a dummy function which raises a Pure exception when called. In any
-     case that's better than aborting the program (which is what the JIT will
-     do when we return NULL here). */
-  cout.flush();
-  cerr << "error trying to resolve external: "
-       << (name.compare(0, 2, "$$") == 0?"<<anonymous>>":name) << '\n';
-  return (void*)pure_unresolved;
-}
-
 /* Check the C stack direction (pilfered from the Chicken sources). A value >0
    indicates that the stack grows upward, towards higher addresses, <0 that
    the stack grows downward, towards lower addresses, and =0 that the
@@ -784,10 +771,6 @@ void interpreter::init()
   module->setDataLayout(ORC->data_layout());
   module->setTargetTriple(ORC->target_triple());
 
-  // Install a fallback mechanism to resolve references to the runtime, on
-  // systems which do not allow the program to dlopen itself.
-  JIT->InstallLazyFunctionCreator(resolve_legacy_external);
-
   // LLVM 22 uses one opaque pointer type per address space. Semantic C pointer
   // distinctions are tracked separately by CAbiType.
   PointerType *OpaquePtrTy = PointerType::get(context, 0);
@@ -931,12 +914,10 @@ void interpreter::init()
     (module, ExprPtrPtrTy, false, GlobalVariable::InternalLinkage,
      ConstantPointerNull::get(ExprPtrPtrTy),
      "$$sstk$$");
-  JIT->addGlobalMapping(sstkvar, &sstk);
   fptrvar = global_variable
     (module, VoidPtrTy, false, GlobalVariable::InternalLinkage,
      ConstantPointerNull::get(VoidPtrTy),
      "$$fptr$$");
-  JIT->addGlobalMapping(fptrvar, &fptr);
 
   if (llvm::Error error = compilation_units->retain_host_symbol
         (*ORC, "$$sstk$$", &sstk))
@@ -1267,7 +1248,6 @@ void interpreter::register_host_global(llvm::GlobalVariable *variable,
     throw err("failed to register ORC host global '"+
               variable->getName().str()+"': "+
               llvm::toString(std::move(error)));
-  JIT->addGlobalMapping(variable, address);
 }
 
 void interpreter::register_host_function(llvm::StringRef name, void *address)
@@ -1288,7 +1268,6 @@ void interpreter::remove_host_global(llvm::GlobalVariable *variable)
   if (llvm::Error error = compilation_units->remove_host_symbol(name))
     throw err("failed to remove ORC host global '"+name+"': "+
               llvm::toString(std::move(error)));
-  JIT->updateGlobalMapping(variable, 0);
 }
 
 bool interpreter::remove_host_global_and_report
@@ -3007,13 +2986,8 @@ bool interpreter::LoadFaustDSP(bool priv, const char *name, string *msg,
       // ORC resource trackers will reclaim the corresponding machine code.
     }
     for (list<GlobalVariable*>::iterator v = varptrs.begin();
-	 v != varptrs.end(); ++v) {
-      string vname = (*v)->getName().str();
+	 v != varptrs.end(); ++v)
       (*v)->dropAllReferences();
-      // XXXFIXME: Do we have to free the pointer returned by
-      // updateGlobalMapping() here?
-      JIT->updateGlobalMapping(*v, 0);
-    }
     for (list<Function*>::iterator f = funptrs.begin();
 	 f != funptrs.end(); ++f) (*f)->eraseFromParent();
     for (list<GlobalVariable*>::iterator v = varptrs.begin();
@@ -4943,9 +4917,7 @@ pure_expr *interpreter::const_defn(expr pat, expr& x, pure_expr*& e)
 	  pure_expr **x = new pure_expr*;
 	  *x = it->second.x;
 	  globalvars.erase(it);
-	  // Erasing the binding from globalvars doesn't actually affect the
-	  // LLVM mapping, so there's no need to reinstate it.
-	  //JIT->addGlobalMapping(oldv, x);
+	  // Preserve the detached host storage for older retained snapshots.
 	}
 	pure_expr **xp = new pure_expr*; *xp = 0;
 	globalvars.insert(pair<int32_t,GlobalVar>(f, GlobalVar(xp)));
@@ -5353,7 +5325,7 @@ void interpreter::compile()
 	publish_global_closure(f.tag, v, fv, &to_be_freed);
 #if DEBUG>1
 	std::cerr << "global " << &v.x << " (== "
-		  << JIT->getPointerToGlobal(v.v) << ") -> "
+		  << host_global_address(v.v) << ") -> "
 		  << (void*)fv << '\n';
 #endif
       }

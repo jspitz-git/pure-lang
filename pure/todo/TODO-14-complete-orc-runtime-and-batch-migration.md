@@ -25,7 +25,7 @@ compatibility gates can be removed.
 1. [x] Inventory every remaining `ExecutionEngine`, MCJIT, mapping, and materialization consumer.
 2. [x] Route `jit_now` and `pure_interp_compile` through explicit ORC units.
 3. [x] Route retained `dodefn(keep)` initialization and batch Faust through ORC.
-4. [ ] Replace legacy mappings and fallback resolution with ORC symbols.
+4. [x] Replace legacy mappings and fallback resolution with ORC symbols.
 5. [ ] Replace stale-module cleanup with tracker and generation ownership.
 6. [ ] Decide and document the native callable-address ABI policy.
 7. [ ] Remove `ExecutionEngine`, MCJIT linkage, obsolete headers, and `LLVM26` through
@@ -164,3 +164,19 @@ publication and invalid continuation after a failed materialization.
     - Confirmed the isolated batch reload fixture was replaced by the version-B bitcode
       during compile-time execution and that active Faust paths no longer request function
       or global addresses from MCJIT.
+- 2026-07-25: Removed mirrored MCJIT host mappings and legacy fallback resolution.
+  - Made `$$sstk$$`, `$$fptr$$`, global value slots, Faust dispatch slots, and runtime
+    callables exclusively owned by tracked ORC absolute symbols.
+  - Removed `addGlobalMapping`, host-global `updateGlobalMapping`, batch Faust provider
+    unmapping, and `InstallLazyFunctionCreator`; LLJIT process symbols plus explicit runtime
+    registrations now provide the complete active external-resolution path.
+  - Switched debug-only global-address reporting to the ORC host-symbol registry and removed
+    the obsolete commented mapping guidance for detached constant storage.
+  - Validation:
+    - LLVM 22 Release and ASan/UBSan serial builds passed.
+    - `pure-jit-smoke`, `pure-jit-lifetime-stress`, `pure-jit-eager`,
+      `pure-bitcode-unresolved-dependency`, `pure-bitcode-unload`, `pure-faust-lifecycle`,
+      `pure-batch-object`, and `pure-batch-faust` passed under ASan/UBSan; the same focused
+      paths passed in Release.
+    - Confirmed only two `updateGlobalMapping` calls remain, both isolated in `Env::clear`
+      stale-function cleanup for task 5; no legacy mapping or fallback API remains elsewhere.
