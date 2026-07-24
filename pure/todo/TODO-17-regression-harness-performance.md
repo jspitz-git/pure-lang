@@ -20,11 +20,55 @@ release-validation budget in Debug, Release, and sanitizer configurations.
 ## Task List
 
 1. [ ] Record per-test and startup timings in all supported presets.
-2. [ ] Classify isolation and shared-filesystem constraints across the corpus.
-3. [ ] Choose a bounded execution design which preserves test semantics.
+2. [x] Classify isolation and shared-filesystem constraints across the corpus.
+3. [x] Choose a bounded execution design which preserves test semantics.
 4. [ ] Implement deterministic scheduling and collision-free output handling.
 5. [ ] Validate identical golden results before and after the harness change.
 6. [ ] Set and document realistic CTest timeouts for complete release runs.
+
+## Isolation Audit
+
+All 96 `test001.pure` through `test096.pure` inputs may run concurrently when
+each retains its current independent `run-test` interpreter process. They must
+not share an interpreter: tests define, trace, and clear global symbols, including
+redefinition/lifetime cases whose isolation is part of their semantics.
+
+No test launches an external process, changes directory, mutates the parent
+environment, or writes a shared path during normal top-level execution. The only
+explicit filesystem API is in `test042.pure`: its unused `write_test` helper can
+write an arbitrary path, but the executed test only reads four fixed blob fixtures
+under `srcdir/test`. `test035.pure` also loads a read-only example by relative path.
+Workers must therefore retain the existing build working directory and inherited
+`srcdir`, but distinct tests have no active filesystem conflict.
+
+Parallel hazards are currently confined to `run-tests.in`:
+
+- persistent `test/<basename>.diff` files are both failure results and the `-f`
+  selection database, so concurrent harness invocations can overwrite state;
+- transient names include the parent `$$` and rely on unique basenames;
+- the loop replaces one shell-global cleanup trap for every test;
+- direct worker status and verbose-diff output would interleave by completion order.
+
+## Bounded Execution Design
+
+The implementation will preserve one process per test and the existing logical
+order: prelude first, then sorted corpus inputs, or explicit command-line order.
+It will:
+
+1. acquire a build-directory lock before `-f` selection and hold it through result
+   publication, preventing concurrent harnesses from racing on persistent diffs;
+2. reject duplicate basenames because the basename remains the persistent result key;
+3. create one run-scoped staging directory with one ordinal child per test, holding
+   normalized input/expected output, candidate diff, status, and captured output;
+4. execute a bounded number of silent workers selected by `TEST_JOBS` or `-j`, with
+   a compatibility default of one until preset budgets choose an explicit value;
+5. replay status, publish/remove persistent diffs, and print `-v` output strictly in
+   original test order, independent of worker completion order;
+6. use one run-scoped cleanup trap and preserve aggregate nonzero exit status.
+
+This changes scheduling and temporary ownership only. Golden comparison, CRLF
+normalization, process isolation, deterministic output, and `run-tests -f`
+semantics remain unchanged.
 
 ## Guardrails
 
@@ -42,3 +86,17 @@ release-validation budget in Debug, Release, and sanitizer configurations.
 
 Created from TODO-13 retrospective gate 6. TODO-13 fixes CRLF-sensitive input and
 golden comparison; this follow-up owns the independent repeated-startup performance cost.
+
+## Progress Log
+
+- 2026-07-24: Classified corpus isolation and selected the bounded execution design.
+  - Audited all 96 regression inputs for process, environment, working-directory,
+    random/timing, and filesystem side effects.
+  - Confirmed per-test processes are required but distinct tests have no active
+    write conflict; `test042.pure` only reads fixtures in its executed path.
+  - Located concurrency hazards in persistent failure diffs, PID-only temporary
+    names, loop-local traps, and completion-order terminal output.
+  - Selected a locked, run-scoped, ordinal staging design with bounded silent
+    workers and deterministic ordered result publication.
+  - Validation:
+    - Read-only source and harness audit; no build or runtime test was required.
