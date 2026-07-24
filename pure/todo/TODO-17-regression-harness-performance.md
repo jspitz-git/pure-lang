@@ -137,3 +137,8 @@ Deterministic runtime/golden failures exposed by the completed runner belong to 
   - Validation:
     - Complete Release corpus finished without a harness timeout or lost result.
     - Persistent diffs selected exactly the same 20 inputs for the serial `-f` run.
+- 2026-07-24: Completed the corrected Release corpus within a bounded budget.
+  - After TODO-18 fixed all deterministic runtime differences, `run-tests -j 4`
+    passed all 97 inputs in 897.16 seconds with deterministic ordered output.
+  - This establishes a 15-minute observed Release baseline; timeout policy remains
+    open until Debug and sanitizer measurements determine preset-specific budgets.

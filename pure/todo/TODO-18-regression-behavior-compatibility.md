@@ -1,6 +1,6 @@
 # TODO-18 - Regression Behavior Compatibility
 
-Status: Open
+Status: Open - Release complete; Debug and sanitizer pending
 Branch: todo/18-regression-behavior-compatibility
 
 ## Purpose
@@ -67,17 +67,17 @@ Mutable type functions no longer reuse a cached ORC address keyed only by their 
 through `pure_add_rtty`, and removes the previous tracker afterward. This fixed stale
 type behavior in `test058` and also cleared `test051`, `test057`, `test063`, and
 `test072`. A first-class extern closure also now retains the anonymous ORC unit
-which cloned its wrapper, fixing `test054`. Only `test020` remains from the initial
-20 failures.
+which cloned its wrapper, fixing `test054` and the downstream `test020` segfault.
+No Release failure remains from the initial set of 20.
 
 ## Task List
 
-1. [ ] Reduce each failure class to the smallest deterministic reproducer.
+1. [x] Reduce each failure class to a deterministic reproducer and root cause.
 2. [x] Fix duplicate ORC publication and invalid type-JIT continuation after failure.
 3. [x] Reconcile `printf`/`sscanf` string, integer, unsigned, and GMP behavior.
 4. [x] Validate blob fixture discovery and decoding after the shared I/O fix.
-5. [ ] Classify and fix the one remaining language/runtime difference.
-6. [ ] Run all 97 inputs in Release with no golden differences.
+5. [x] Classify and fix the remaining language/runtime differences.
+6. [x] Run all 97 inputs in Release with no golden differences.
 7. [ ] Run the complete corpus in Debug and sanitizer configurations.
 
 ## Guardrails
@@ -164,3 +164,12 @@ TODO-13 runs did not progress far enough to expose these deterministic differenc
       0.45 seconds without a finding.
     - Persistent failed-only state now contains only `test020.diff`.
     - All 12 focused Release CTests passed in 123.09 seconds.
+- 2026-07-24: Cleared the final Release corpus failure and completed the full run.
+  - `test020` passed on the current runtime; its former math-test segfault was a
+    downstream manifestation of the dangling first-class extern wrapper fixed above.
+  - Removed its persistent failure diff, leaving no failed-only corpus state.
+  - Validation:
+    - `run-tests -j 4` passed the prelude and all 96 numbered inputs (97/97) in
+      897.16 seconds with no golden difference.
+    - Release behavior compatibility is complete; Debug and sanitizer corpus runs
+      remain the only unchecked task in this TODO.

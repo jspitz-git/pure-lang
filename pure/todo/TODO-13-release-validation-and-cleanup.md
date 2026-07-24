@@ -30,9 +30,9 @@ suite passes.
 
 Final status remains open pending TODO-17's Debug/sanitizer budgets and TODO-18's
 runtime compatibility fixes. The Release build and all 12 current focused tests pass.
-The bounded Release corpus initially found 20 deterministic differences. Targeted
-reruns after TODO-18 fixes leave only `test020`; a complete confirmation run is still
-required before claiming a supported-suite pass.
+The bounded Release corpus initially found 20 deterministic differences; TODO-18 fixed
+all of them, and the confirmation run now passes 97/97. Complete Debug and sanitizer
+corpus runs remain before claiming a supported-suite pass.
 
 ## Legacy LLVM Audit
 
@@ -131,8 +131,9 @@ TODO-17's bounded runner completed the full Release corpus in 1347.36 seconds wi
 four workers. It found 77 passing and 20 failing inputs; serial `-f` reproduced all
 20 failures, proving they are not scheduler races. TODO-18 owns their behavior
 compatibility classification and fixes, with the ORC subset shared with TODO-14.
-No complete-suite pass is claimed until TODO-18 clears these differences and
-TODO-17 establishes corresponding Debug and sanitizer budgets.
+TODO-18 has now cleared the Release differences: the confirmation run passed 97/97
+in 897.16 seconds. No complete supported-suite pass is claimed until TODO-17
+establishes and meets corresponding Debug and sanitizer budgets.
 
 ## Installation Validation
 
@@ -441,5 +442,10 @@ The release cleanup produced four numbered follow-ups:
   - Validation:
     - `run-tests -j 4` finished in 1347.36 seconds.
     - `run-tests -f -j 1` reproduced all 20 failures in 789.98 seconds.
-    - No complete-suite pass is claimed; Debug/sanitizer budgets remain in
-      TODO-17 and deterministic behavior compatibility remains in TODO-18.
+    - No complete-suite pass was claimed at this stage; later TODO-18 work fixed
+      the deterministic differences while Debug/sanitizer budgets remain in TODO-17.
+- 2026-07-24: Completed the corrected full Release corpus.
+  - Validation:
+    - `run-tests -j 4` passed all 97 inputs in 897.16 seconds with no golden diff.
+    - Release behavior is complete; full Debug and sanitizer corpus validation
+      remains before TODO-13 can close.
