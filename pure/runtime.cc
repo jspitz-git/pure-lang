@@ -3933,7 +3933,6 @@ pure_interp *pure_create_interp(int argc, char *argv[])
   // need to have USE_FASTCC in interpreter.hh enabled).
   if (interp.use_fastcc) llvm::GuaranteedTailCallOpt = true;
 #endif
-  interp.init_jit_mode();
   if ((env = getenv("PURE_INCLUDE")))
     add_path(interp.includedirs, unixize(env));
   if ((env = getenv("PURE_LIBRARY")))

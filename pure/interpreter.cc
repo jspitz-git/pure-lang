@@ -58,7 +58,6 @@ char *alloca ();
 #include <llvm/Bitcode/BitcodeReader.h>
 #include <llvm/Bitcode/BitcodeWriter.h>
 #include <llvm/Analysis/ValueTracking.h>
-#include <llvm/ExecutionEngine/MCJIT.h>
 #include <llvm/IR/CallingConv.h>
 #include <llvm/Linker/Linker.h>
 #include <llvm/Support/DynamicLibrary.h>
@@ -628,15 +627,6 @@ void interpreter::debug_init()
   debug_skip = false;
 }
 
-void interpreter::init_jit_mode()
-{
-#if LLVM27
-  JIT->DisableLazyCompilation(eager_jit);
-#else
-  eager_jit = false;
-#endif
-}
-
 void interpreter::init()
 {
   if (!g_interp) g_interp = this;
@@ -689,15 +679,6 @@ void interpreter::init()
 
   using namespace llvm;
 
-#if !LLVM27
-  // LLVM 2.6 and earlier always do lazy JITing, so this flag *must* be false.
-  eager_jit = false;
-#endif
-
-  /* Accommodate the major API breakage in recent LLVM versions. This is just
-     horrible, maybe we should drop support for anything older than LLVM 2.6
-     in the future. */
-  init_llvm_target();
   Expected<std::unique_ptr<PureJit> > orc = PureJit::create();
   if (!orc)
     throw err("failed to create ORC JIT: "+toString(orc.takeError()));
@@ -705,69 +686,6 @@ void interpreter::init()
   compilation_units = new CompilationUnitResources;
   module = new Module(modname, context);
   pass_state = new NewPassManagerState;
-#if !LLVM27
-  MP = new ExistingModuleProvider(module);
-#endif
-#if LLVM31
-  string legacy_jit_error;
-  std::unique_ptr<Module> owned_module(module);
-  llvm::EngineBuilder factory(std::move(owned_module));
-  factory.setEngineKind(llvm::EngineKind::JIT);
-  factory.setErrorStr(&legacy_jit_error);
-#if USE_FASTCC || FAST_JIT
-  llvm::TargetOptions Opts;
-#if USE_FASTCC
-  Opts.GuaranteedTailCallOpt = true;
-#endif
-#if FAST_JIT
-#warning "You selected FAST_JIT. This isn't recommended!"
-  Opts.EnableFastISel = true;
-#endif
-  factory.setTargetOptions(Opts);
-#endif
-  JIT = factory.create();
-#else // LLVM 3.0 or earlier
-#if LLVM26
-  string error;
-#if LLVM27
-  JIT = ExecutionEngine::create(module, false, &error,
-#else
-  JIT = ExecutionEngine::create(MP, false, &error,
-#endif
-#if FAST_JIT
-#warning "You selected FAST_JIT. This isn't recommended!"
-				llvm::CodeGenOpt::None,
-#else
-				llvm::CodeGenOpt::Aggressive,
-#endif
-				// bool GVsWithCode is true by default which
-				// breaks freeMachineCodeForFunction, so make
-				// sure to set it to false here
-				false);
-  if (!JIT) {
-    if (error.empty()) error = "The JIT could not be created.";
-    std::cerr << "** Panic: " << error << " Giving up. **\n";
-    exit(1);
-  }
-#if LLVM27
-  /* LLVM 2.7 and later: Enable lazy compilation if requested. (With earlier
-     LLVM versions, JITing is always done lazily, so the eager_jit flag is
-     effectively ignored and this call isn't needed.) */
-  if (!eager_jit) JIT->DisableLazyCompilation(false);
-#endif
-#else // LLVM 2.5 and earlier
-#if FAST_JIT
-  JIT = ExecutionEngine::create(MP, false, 0, true);
-#else
-  JIT = ExecutionEngine::create(MP);
-#endif
-#endif // LLVM 2.5 and earlier
-#endif // LLVM 3.0 or earlier
-  if (!JIT) {
-    if (legacy_jit_error.empty()) legacy_jit_error = "unknown LLVM error";
-    throw err("failed to create transitional ExecutionEngine: "+
-              legacy_jit_error);
-  }
   module->setDataLayout(ORC->data_layout());
   module->setTargetTriple(ORC->target_triple());
 
@@ -1319,32 +1237,35 @@ void *interpreter::compile_global_generation(Env& environment)
   void *address = 0;
   llvm::orc::ResourceTrackerSP tracker;
 #if DEFER_GLOBALS
-  llvm::Expected<std::unique_ptr<llvm::MemoryBuffer> > pending =
-    ORC->snapshot_module(*module, entry_name, exported_name);
-  if (!pending)
-    throw err("failed to snapshot deferred ORC global function: "+
-              llvm::toString(pending.takeError()));
-  snapshot = std::move(*pending);
-#else
-  tracker = ORC->create_resource_tracker();
-  if (llvm::Error error = ORC->add_module_copy
-        (tracker, *module, entry_name, exported_name)) {
-    if (llvm::Error cleanup_error = tracker->remove())
-      error = llvm::joinErrors(std::move(error), std::move(cleanup_error));
-    throw err("failed to add ORC global function module: "+
-              llvm::toString(std::move(error)));
-  }
-  llvm::Expected<llvm::orc::ExecutorAddr> entry = ORC->lookup(exported_name);
-  if (!entry) {
-    llvm::Error error = entry.takeError();
-    if (llvm::Error cleanup_error = tracker->remove())
-      error = llvm::joinErrors(std::move(error), std::move(cleanup_error));
-    throw err("failed to resolve ORC global function: "+
-              llvm::toString(std::move(error)));
-  }
-  address = reinterpret_cast<void*>
-    (static_cast<uintptr_t>(entry->getValue()));
+  if (!eager_jit) {
+    llvm::Expected<std::unique_ptr<llvm::MemoryBuffer> > pending =
+      ORC->snapshot_module(*module, entry_name, exported_name);
+    if (!pending)
+      throw err("failed to snapshot deferred ORC global function: "+
+                llvm::toString(pending.takeError()));
+    snapshot = std::move(*pending);
+  } else
 #endif
+  {
+    tracker = ORC->create_resource_tracker();
+    if (llvm::Error error = ORC->add_module_copy
+          (tracker, *module, entry_name, exported_name)) {
+      if (llvm::Error cleanup_error = tracker->remove())
+        error = llvm::joinErrors(std::move(error), std::move(cleanup_error));
+      throw err("failed to add ORC global function module: "+
+                llvm::toString(std::move(error)));
+    }
+    llvm::Expected<llvm::orc::ExecutorAddr> entry = ORC->lookup(exported_name);
+    if (!entry) {
+      llvm::Error error = entry.takeError();
+      if (llvm::Error cleanup_error = tracker->remove())
+        error = llvm::joinErrors(std::move(error), std::move(cleanup_error));
+      throw err("failed to resolve ORC global function: "+
+                llvm::toString(std::move(error)));
+    }
+    address = reinterpret_cast<void*>
+      (static_cast<uintptr_t>(entry->getValue()));
+  }
   map<uint32_t, uint32_t*> closure_refs;
   set<const Env*> visited;
   collect_generation_closure_refs(&environment, closure_refs, visited);
@@ -1514,7 +1435,7 @@ interpreter::interpreter(int _argc, char **_argv)
     nerrs(0), modno(-1), modctr(0), source_s(0), output(0),
     result(0), lastres(0), mem(0), exps(0), tmps(0), freectr(0),
     orc_unit_counter(0), specials_only(false), module(0),
-    JIT(0), ORC(0), compilation_units(0), pass_state(0),
+    ORC(0), compilation_units(0), pass_state(0),
     active_jit_calls(0), astk(0), sstk(__sstk),
     stoplevel(0), tracelevel(-1), debug_skip(false), trace_skip(false),
     fptr(__fptr), tags(0), line(0), column(0), tags_init(false),
@@ -1545,7 +1466,7 @@ interpreter::interpreter(int32_t nsyms, char *syms,
     nerrs(0), modno(-1), modctr(0), source_s(0), output(0),
     result(0), lastres(0), mem(0), exps(0), tmps(0), freectr(0),
     orc_unit_counter(0), specials_only(false), module(0),
-    JIT(0), ORC(0), compilation_units(0), pass_state(0),
+    ORC(0), compilation_units(0), pass_state(0),
     active_jit_calls(0), astk(0), sstk(*_sstk),
     stoplevel(0), tracelevel(-1), debug_skip(false), trace_skip(false),
     fptr(*(Env**)_fptr), tags(0), line(0), column(0), tags_init(false),
@@ -1663,12 +1584,7 @@ interpreter::~interpreter()
     delete m;
     m = n;
   }
-  // free the execution engine and the pass manager
-#if 1
-  // If this segfaults then you're probably running an older LLVM version. Get
-  // LLVM 2.4 or later, or disable this line.
-  if (JIT) delete JIT;
-#endif
+  // Free the pass manager and all ORC-owned compilation resources.
   delete pass_state;
   if (compilation_units) {
     if (llvm::Error error = compilation_units->remove_all())
@@ -1677,6 +1593,7 @@ interpreter::~interpreter()
     delete compilation_units;
   }
   delete ORC;
+  delete module;
   // if this was the global interpreter, reset it now
   if (g_interp == this) g_interp = 0;
 }
@@ -5236,8 +5153,8 @@ void interpreter::compile()
 
       }
     }
-    // MCJIT optimizes the entire module, so all type function bodies must be
-    // complete before compiling any of them.
+    // Complete every type function body before creating reduced ORC snapshots,
+    // so mutually dependent predicates see a consistent module.
     string verification_error;
     if (!verify_module(*module, verification_error))
       throw err("invalid LLVM module before type JIT compilation: "+
@@ -14315,7 +14232,6 @@ Function *interpreter::declare_extern(int priv, string name, string restype,
   // first. (Note that, as of Pure 0.48, the default value may also be NULL in
   // the case of a --defined function without equations.)
   pure_expr *cv = set_defined_sym(sym.f) ? 0 : pure_new(pure_const(sym.f));
-  assert(JIT);
   GlobalVar& v = globalvars[sym.f];
   if (!v.v) {
     v.v = global_variable
@@ -16506,7 +16422,6 @@ Value *interpreter::fbox(Env& f, bool defer)
 Value *interpreter::cbox(int32_t tag)
 {
   pure_expr *cv = pure_const(tag);
-  assert(JIT);
   GlobalVar& v = globalvars[tag];
   if (!v.v) {
     v.v = global_variable
@@ -18289,16 +18204,3 @@ void interpreter::try_rules(matcher *pm, state *s, BasicBlock *failedbb,
   }
   if (!have_iface) f.fmap.first();
 }
-
-/* Make sure to make this the very last thing in this file. TargetSelect.h
-   pulls in LLVM's config.h file which may stomp on our own config
-   settings! */
-
-#if LLVM26
-#include <llvm/Support/TargetSelect.h>
-
-void interpreter::init_llvm_target()
-{
-  llvm::InitializeNativeTarget();
-}
-#endif

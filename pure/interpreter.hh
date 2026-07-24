@@ -19,11 +19,7 @@
 #ifndef INTERPRETER_HH
 #define INTERPRETER_HH
 
-#include <llvm/ExecutionEngine/ExecutionEngine.h>
 #include <llvm/ExecutionEngine/Orc/Core.h>
-
-#include <llvm/Target/TargetOptions.h>
-
 
 #include <time.h>
 #include <set>
@@ -622,15 +618,13 @@ public:
   void init_sys_vars(const string& version = "",
 		     const string& host = "",
 		     const list<string>& argv = list<string>());
-  // Configure the JIT according to the setting of the eager_jit member.
-  void init_jit_mode();
 
   // Option data. You can modify these according to your needs.
   uint8_t verbose;   // debugging output from interpreter
   bool compat;       // enable backward compatibility warnings
   bool compat2;      // enable forward compatibility hints
   bool compiling;    // batch compiler mode
-  bool eager_jit;    // eager JIT (LLVM 2.7 or later)
+  bool eager_jit;    // eagerly materialize ORC global generations
   bool interactive;  // interactive mode
   bool debugging;    // debugging mode
   bool texmacs;      // texmacs mode (http://www.texmacs.org/)
@@ -1033,7 +1027,6 @@ public:
 
   llvm::LLVMContext context;
   llvm::Module *module;
-  llvm::ExecutionEngine *JIT;
   PureJit *ORC;
   CompilationUnitResources *compilation_units;
   NewPassManagerState *pass_state;
@@ -1253,7 +1246,6 @@ public:
   void swap_interpreters(interpreter *interp);
 private:
   void init();
-  void init_llvm_target();
   char *__baseptr_save;
   int nwrapped;
   Env *__fptr, **__fptr_save;

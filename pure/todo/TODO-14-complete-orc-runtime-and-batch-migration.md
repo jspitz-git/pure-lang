@@ -220,3 +220,18 @@ publication and invalid continuation after a failed materialization.
     symbol ABI explicitly separate.
   - Updated the public runtime header and TODO-09's deferred disposition; no code or ABI
     signature changed, so no build or runtime validation was required.
+- 2026-07-25: Removed the transitional `ExecutionEngine` and MCJIT linkage.
+  - Deleted engine construction, configuration, shutdown, headers, member state, and the
+    `ExecutionEngine`/`MCJIT` CMake components; the interpreter now directly owns its mutable
+    LLVM module.
+  - Preserved `--eager-jit` by immediately submitting and resolving new ORC global
+    generations instead of creating deferred snapshots.
+  - Removed the redundant native-target initialization wrapper; `PureJit::create` owns full
+    native target initialization.
+  - Task 7 remains open only for flattening the historical LLVM compatibility gates.
+  - Validation:
+    - LLVM 22 Release and ASan/UBSan serial builds linked without the removed components.
+    - Explicit `--eager-jit` execution produced `42` in both presets.
+    - `pure-jit-smoke`, `pure-jit-lifetime-stress`, `pure-jit-eager`,
+      `pure-bitcode-unload`, `pure-faust-lifecycle`, `pure-batch-object`, and
+      `pure-batch-faust` passed in both presets without sanitizer findings.
