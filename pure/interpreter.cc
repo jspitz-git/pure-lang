@@ -14908,36 +14908,39 @@ pure_expr *interpreter::dodefn(env vars, const vinfo& vi,
   unwind();
   fun_finish();
   pop(&f);
-  // JIT and execute the function.
+  // Execute an immutable ORC copy. In batch mode the original initializer and
+  // its environment remain in the mutable module for later object emission.
+  string verification_error;
+  if (!verify_module(*module, verification_error))
+    throw err("invalid LLVM module before ORC definition: "+
+              verification_error);
+  llvm::orc::ResourceTrackerSP tracker = ORC->create_resource_tracker();
+  string entry_name = f.f->getName().str();
+  string category = keep ? "batch-defn" : "defn";
+  string exported_name = "$$orc."+category+"."+
+    to_string(orc_unit_counter++);
+  if (llvm::Error error = ORC->add_module_copy
+        (tracker, *module, entry_name, exported_name)) {
+    if (llvm::Error cleanup_error = tracker->remove())
+      error = llvm::joinErrors(std::move(error), std::move(cleanup_error));
+    throw err("failed to add ORC definition module: "+
+              llvm::toString(std::move(error)));
+  }
+  llvm::Expected<pure_expr* (*)()> entry =
+    ORC->lookup_function<pure_expr*()>(exported_name);
+  if (!entry) {
+    llvm::Error error = entry.takeError();
+    if (llvm::Error cleanup_error = tracker->remove())
+      error = llvm::joinErrors(std::move(error), std::move(cleanup_error));
+    throw err("failed to resolve ORC definition function: "+
+              llvm::toString(std::move(error)));
+  }
+  void *fp = reinterpret_cast<void*>(*entry);
+  compilation_units->retain(fptr, tracker);
+  begin_stats();
+  res = pure_invoke(fp, &e);
+  end_stats();
   if (!keep) {
-    string verification_error;
-    if (!verify_module(*module, verification_error))
-      throw err("invalid LLVM module before ORC definition: "+
-                verification_error);
-    llvm::orc::ResourceTrackerSP tracker = ORC->create_resource_tracker();
-    string entry_name = f.f->getName().str();
-    string exported_name = "$$orc.defn."+to_string(orc_unit_counter++);
-    if (llvm::Error error = ORC->add_module_copy
-          (tracker, *module, entry_name, exported_name)) {
-      if (llvm::Error cleanup_error = tracker->remove())
-        error = llvm::joinErrors(std::move(error), std::move(cleanup_error));
-      throw err("failed to add ORC definition module: "+
-                llvm::toString(std::move(error)));
-    }
-    llvm::Expected<pure_expr* (*)()> entry =
-      ORC->lookup_function<pure_expr*()>(exported_name);
-    if (!entry) {
-      llvm::Error error = entry.takeError();
-      if (llvm::Error cleanup_error = tracker->remove())
-        error = llvm::joinErrors(std::move(error), std::move(cleanup_error));
-      throw err("failed to resolve ORC definition function: "+
-                llvm::toString(std::move(error)));
-    }
-    void *fp = reinterpret_cast<void*>(*entry);
-    compilation_units->retain(fptr, tracker);
-    begin_stats();
-    res = pure_invoke(fp, &e);
-    end_stats();
     f.f->eraseFromParent();
     // If there are no more references, release the compilation unit and its
     // environment. Escaped closures retain both until their Env is released.
@@ -14948,12 +14951,6 @@ pure_expr *interpreter::dodefn(env vars, const vinfo& vi,
       delete fptr;
     } else
       fptr->refc--;
-  } else {
-    void *fp = JIT->getPointerToFunction(f.f);
-    assert(fp);
-    begin_stats();
-    res = pure_invoke(fp, &e);
-    end_stats();
   }
   fptr = save_fptr;
   if (res) {

@@ -130,3 +130,15 @@ publication and invalid continuation after a failed materialization.
       under ASan/UBSan without sanitizer findings.
     - Confirmed `jit_now` no longer calls `getPointerToFunction`; remaining calls belong
       to retained definition and batch Faust migration in task 3.
+- 2026-07-25: Routed retained `dodefn(keep)` initialization through an immutable ORC
+  snapshot.
+  - Unified interactive and batch definition execution on reduced, uniquely renamed ORC
+    copies while leaving retained `$$init` IR in the mutable module for object emission.
+  - Attached the batch snapshot tracker to the retained definition environment so escaped
+    local closures and their machine code share the existing lifetime boundary.
+  - Removed the definition initializer's `ExecutionEngine::getPointerToFunction` use;
+    batch Faust remains before task 3 can be marked complete.
+  - Validation:
+    - LLVM 22 Release and ASan/UBSan serial builds passed.
+    - `pure-batch-object` and `pure-jit-lifetime-stress` passed in both presets without
+      sanitizer findings.
