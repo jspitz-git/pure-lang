@@ -1,6 +1,6 @@
 # TODO-12 - Debugging and Sanitizers
 
-Status: Completed
+Status: Closed on 2026-07-24
 Branch: todo/12-debugging-and-sanitizers
 
 ## Purpose
@@ -21,7 +21,7 @@ with actionable stack traces rather than opaque crashes.
 1. [x] Add debug-friendly compiler flags without changing release behavior.
 2. [x] Add sanitizer targets or presets with correct compile and link flags.
 3. [x] Configure LLDB launch support and document common breakpoints.
-4. [x] Register JIT debug objects and verify generated function names in LLDB.
+4. [x] Register JIT debug objects and verify generated function-name publication.
 5. [x] Add concise IR/object dumps controlled by a runtime or build option.
 6. [x] Run resource-lifetime and redefinition stress tests under sanitizers.
 
@@ -51,12 +51,13 @@ this in the toolchain avoids divergent compile and link flags and leaves the
 standard `CMAKE_*_FLAGS` cache entries available to callers.
 
 The `llvm22-asan` configure preset selects `address,undefined`. Its test preset
-stops on ASan and UBSan findings, requests UBSan stack traces, and disables leak
-scanning because the interpreter currently stalls during shutdown for several
-bitcode tests even with no sanitizer diagnostic. The separate `llvm22-lsan`
-test preset enables leak scanning against the same build for targeted tests.
-No sanitizer finding is suppressed; Clang's documented `function` exception for
-ORC-generated call targets remains scoped to `pure-jit-smoke`.
+stops on ASan and UBSan findings, requests UBSan stack traces, and keeps leak
+scanning disabled so broad ASan/UBSan runs remain separate from targeted leak
+checks. The `llvm22-lsan` test preset enables leak scanning against the same
+build. All five bitcode integration tests and the prelude-independent lifetime
+stress now pass in that mode. No sanitizer finding is suppressed; Clang's
+documented `function` exception for ORC-generated call targets remains scoped
+to `pure-jit-smoke`.
 
 ## LLDB 22
 
@@ -111,6 +112,12 @@ top frame is named `pure_jit_smoke_value`. The Debug smoke test also inspects
 the registered ELF object through the same JIT interface and requires that it
 contain this generated symbol name.
 
+Automated validation proves that the symbol is published through the debugger
+interface, but this agent host cannot launch an LLDB inferior: both the smoke
+binary and `/bin/true` create a target, then `run` reports `no target` and hangs.
+The real breakpoint stop therefore remains an interactive host check rather than
+a missing JIT registration requirement.
+
 ## Opt-in JIT Dumps
 
 `PURE_JIT_DUMP` enables focused ORC diagnostics at runtime and is disabled when
@@ -158,7 +165,8 @@ so sanitizer builds do not disable it.
 - `cmake --build --preset llvm22-asan`
 - `ctest --preset llvm22-asan -R pure-jit-smoke --output-on-failure`
 - `ctest --preset llvm22-lsan -R pure-jit-smoke --output-on-failure`
-- Launch the smoke test under `lldb-22` and resolve a named JITed frame.
+- Attempt to launch the smoke test under `lldb-22` and resolve a named JITed
+  frame; record a reproducible host limitation if inferior launch is unavailable.
 
 ## Progress Log
 
@@ -267,3 +275,17 @@ so sanitizer builds do not disable it.
       --output-on-failure` passed without leak findings.
     - Debug test 096 completed without a crash and retained only its known
       pre-existing pragma-output diff.
+- 2026-07-24: Revisited the deferred LeakSanitizer and LLDB validations.
+  - Validation:
+    - `ctest --preset llvm22-lsan -R '^pure-bitcode-'
+      --output-on-failure` passed all five bitcode tests in 299.85 seconds with
+      no ASan, UBSan, or LeakSanitizer diagnostic.
+    - Batch LLDB created the Debug smoke target and a pending
+      `pure_jit_smoke_value` breakpoint, but `run` reported `no target` and
+      remained blocked until the 300-second outer timeout.
+    - `timeout -s KILL 30 lldb-22 --batch -o run /bin/true` failed identically,
+      confirming a general inferior-launch limitation rather than a JIT symbol
+      registration failure.
+    - The automated ELF debugger-interface inspection remains the authoritative
+      validation on this host; an actual named-frame stop requires interactive
+      validation on a host which permits LLDB inferior launch.

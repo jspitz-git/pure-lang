@@ -90,8 +90,8 @@ tests are represented without relying on Autoconf for the new build.
 ## Compatibility Note
 
 - This TODO validates the initial CMake implementation on Linux/WSL only.
-  Windows and macOS installation layouts require explicit follow-up validation
-  before they can be declared supported.
+  TODO-16 owns the explicit Windows/macOS support matrix and validation; neither
+  platform is declared supported by the recorded Linux result.
 
 ## Progress Log
 

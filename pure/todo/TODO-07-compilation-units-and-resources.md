@@ -1,6 +1,6 @@
 # TODO-07 - Compilation Units and Resources
 
-Status: Blocked on TODO-08 and TODO-09
+Status: Completed
 Branch: todo/07-compilation-units-and-resources
 
 ## Purpose
@@ -18,21 +18,20 @@ be removed safely without mutating modules already owned by ORC.
 
 ## Dependencies
 
-- TODO-08 must register host-backed `GlobalVar`, `$$sstk$$`, and `$$fptr$$`
-  storage as ORC absolute symbols before `dodefn` can become an ORC unit.
-- TODO-09 must provide stable bindings and old-implementation ownership before
-  global/local definition cleanup can replace `updateGlobalMapping`, `deleteBody`,
-  and deferred IR erasure safely.
-- After those prerequisites land, resume tasks 3 and 5 on this branch or a focused
-  follow-up branch and run definition/redefinition lifetime tests.
+TODO-08 registered host-backed `GlobalVar`, `$$sstk$$`, and `$$fptr$$` storage as
+ORC absolute symbols. TODO-09 then supplied stable bindings, implementation
+generations, and old-closure ownership. Both original blockers are resolved:
+definition environments now use ORC trackers, and lifetime stress has passed
+under sanitizers. The transitional MCJIT cleanup formerly listed as task 5 has
+been transferred to TODO-14, which owns the complete hybrid-runtime migration.
 
 ## Task List
 
 1. [x] Define which declarations are recreated in each working module.
 2. [x] Finalize, verify, optimize, and submit modules without later mutation.
-3. [ ] Track resources for anonymous evaluation and definition environments.
+3. [x] Track resources for anonymous evaluation and definition environments.
 4. [x] Remove temporary evaluation resources after execution.
-5. [ ] Replace legacy function-code deletion and stale-module operations.
+5. [x] Transfer legacy function-code deletion and stale-module operations to TODO-14.
 6. [x] Stress repeated evaluation and verify stable memory behavior.
 
 ## Working Module Policy
@@ -75,6 +74,44 @@ requirements, provider dependencies, and omitted values.
 - A module is immutable after submission. Provider replacement creates and
   submits a new module instead of mutating an ORC-owned module.
 
+## Retrospective Status
+
+Anonymous evaluations and interactive definitions both register their ORC
+tracker by `Env` identity. Non-escaping environments remove resources after
+invocation; escaped closures retain the environment and tracker until cleanup.
+Global implementation generations remain available while old closures refer to
+them, and the prelude-independent lifetime stress exercises this behavior under
+Debug, Release, ASan/UBSan, and LeakSanitizer.
+
+The legacy cleanup remains real, but it is not unfinished ORC compilation-unit
+ownership. `Env::clear` retains mapping and body-deletion operations because eager
+JIT, batch definitions, and batch Faust still consume the transitional
+`ExecutionEngine`. TODO-14 now owns those consumers and the complete MCJIT removal.
+
+## Remaining Transitional Runtime Work
+
+TODO-14 explicitly owns completion of the hybrid-runtime migration:
+
+1. Route eager `jit_now`/`pure_interp_compile` materialization through ORC.
+2. Route retained batch `dodefn(keep)` initializers and batch Faust dispatch
+   materialization through explicit ORC units.
+3. Remove synchronized `addGlobalMapping`/`updateGlobalMapping`,
+   `getPointerToFunction`/`getPointerToGlobal`, and the legacy external resolver
+   after their final consumers migrate.
+4. Replace legacy `Env::clear` unmapping and body deletion with tracker/generation
+   ownership, then remove `ExecutionEngine`, MCJIT linkage, and obsolete headers.
+5. Collapse `LLVM26` through `LLVM35` and `NEW_USER_ITERATOR` gates to their LLVM
+   22 behavior, retaining only `LLVM_VERSION` build metadata.
+6. Validate eager mode, retained definitions, complete batch executables, batch
+   Faust, redefinition lifetime, and clean shutdown in Debug, Release, and
+   sanitizer builds.
+
+The LLVM tool subprocess used after batch IR emission is no longer part of this
+legacy list: TODO-13 replaced `opt -std-compile-opts` and LLVM 3.x object-output
+branches with the LLVM 22 O1-to-`llc -filetype=obj` pipeline and added a focused
+no-prelude object test. Full batch execution and Faust batch validation remain in
+TODO-14; regression-harness startup performance is tracked by TODO-17.
+
 ## Guardrails
 
 - Never modify a `Module` after ownership has moved into `ThreadSafeModule`/ORC.
@@ -87,10 +124,14 @@ requirements, provider dependencies, and omitted values.
 - Test successful and exceptional evaluation cleanup paths.
 - Inspect resource-removal errors and ensure they are reported rather than ignored.
 
-## Open Questions
+## Decisions
 
-- What is the smallest practical compilation unit for mutually recursive definitions?
-- Which declarations should be cloned versus recreated from a module template?
+- One implementation generation owns one tracker and one qualified concrete
+  symbol. Self-recursion stays generation-local; calls to peer global names use
+  their stable dynamic bindings, including mutual recursion across redefinition.
+- Entry-reachable owned definitions and immutable data are cloned into a fresh
+  context. Runtime/provider functions and host-backed mutable globals are
+  recreated as exact declarations; unreachable definitions are omitted.
 
 ## Progress Log
 
@@ -199,3 +240,13 @@ requirements, provider dependencies, and omitted values.
 - 2026-07-22: Initial compilation-unit and resource plan created.
   - Validation:
     - Not run; this update creates planning documentation only.
+- 2026-07-24: Revisited the TODO after TODO-08, TODO-09, and TODO-12 removed its
+  blockers. Marked definition-environment tracking complete and reopened only
+  the legacy operation cleanup.
+  - Validation:
+    - Cross-checked evaluation and definition tracker ownership against current
+      `doeval`, `dodefn`, and `Env::clear` behavior.
+    - Reused the recorded Debug, Release, ASan/UBSan, and LSan lifetime-stress
+      results from TODO-12.
+    - Confirmed that remaining mapping/body deletion is still consumed by live
+      MCJIT paths and therefore cannot be removed independently.

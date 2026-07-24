@@ -97,19 +97,21 @@ the LLVM license at http://llvm.org.
 INSTALLATION
 ------------
 
-Please see the INSTALL file for detailed instructions. On most Unix-like
-systems, `./configure --enable-release && make && sudo make install` should do
-the trick. This requires GNU make and g++ or clang++. For other setups, you'll
-probably have to fiddle with the Makefile and the sources. You'll also need
-LLVM for the compiler backend. LLVM versions from 2.5 up to 3.5 are supported
-right now (we recommend LLVM 3.0 or later; note that LLVM 3.6 and later are
-*not* supported yet).
+Please see the INSTALL file for detailed instructions. The supported build uses
+Clang/LLVM 22, CMake 3.25 or newer, and Ninja. A typical optimized build is:
 
-After installing the interpreter, you should also install the online
-documentation to make the `help` command work in the interpreter. If you have
-a working internet connection and the `wget` program, this can be done with
-the command `sudo make install-docs`. Again, please check the INSTALL file for
-details.
+    $ cmake --preset llvm22-release
+    $ cmake --build --preset llvm22-release --parallel 1
+    $ ctest --preset llvm22-release -E pure-regression --output-on-failure
+    $ sudo cmake --install build/llvm22-release
+
+The complete regression corpus can be run by omitting `-E pure-regression`; it
+starts a fresh interpreter for every script and therefore needs a generous time
+budget. The legacy Autoconf and GNU make files are not the supported LLVM 22
+development path.
+
+Online documentation is available at https://agraef.github.io/pure-docs/.
+The source distribution also installs the `pure(1)` manual page.
 
 USING PURE
 ----------

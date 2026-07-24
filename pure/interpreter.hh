@@ -20,6 +20,7 @@
 #define INTERPRETER_HH
 
 #include <llvm/ExecutionEngine/ExecutionEngine.h>
+#include <llvm/ExecutionEngine/Orc/Core.h>
 
 #include <llvm/Target/TargetOptions.h>
 
@@ -1120,8 +1121,9 @@ public:
   bool remove_host_global_and_report
     (llvm::GlobalVariable *variable) noexcept;
   void *host_global_address(const llvm::GlobalVariable *variable) const;
-  void *compile_orc_function(llvm::Function *function,
-                             llvm::StringRef category);
+  void *compile_orc_function
+    (llvm::Function *function, llvm::StringRef category,
+     llvm::orc::ResourceTrackerSP *previous_tracker = nullptr);
   void publish_global_closure(int32_t tag, GlobalVar& binding,
                               pure_expr *closure,
                               list<pure_expr*> *retired = 0);

@@ -279,7 +279,7 @@ blank  [ \t\f\v\r]
   mylloc->step();
   mylloc->lines(-1);
 }
-^"#!"[ \t]*"--eager"[ \t]+[^ \t\n]+([ \t]+"//".*)? {
+^"#!"{blank}*"--eager"{blank}+[^ \t\r\n]+({blank}+"//".*)?{blank}* {
   /* --eager pragma. */
   char *s = strchr(yytext, '-')+strlen("--eager"), *t = s;
   while (isspace(*t)) t++;
@@ -294,7 +294,7 @@ blank  [ \t\f\v\r]
 		   "' in --eager pragma");
   mylloc->step();
 }
-^"#!"[ \t]*"--required"[ \t]+[^ \t\n]+([ \t]+"//".*)? {
+^"#!"{blank}*"--required"{blank}+[^ \t\r\n]+({blank}+"//".*)?{blank}* {
   /* --required pragma. */
   char *s = strchr(yytext, '-')+strlen("--required"), *t = s;
   while (isspace(*t)) t++;
@@ -309,7 +309,7 @@ blank  [ \t\f\v\r]
 		   "' in --required pragma");
   mylloc->step();
 }
-^"#!"[ \t]*"--defined"[ \t]+[^ \t\n]+([ \t]+"//".*)? {
+^"#!"{blank}*"--defined"{blank}+[^ \t\r\n]+({blank}+"//".*)?{blank}* {
   /* --defined pragma. */
   char *s = strchr(yytext, '-')+strlen("--defined"), *t = s;
   while (isspace(*t)) t++;
@@ -334,7 +334,7 @@ blank  [ \t\f\v\r]
 		   "' in --defined pragma");
   mylloc->step();
 }
-^"#!"[ \t]*"--nodefined"[ \t]+[^ \t\n]+([ \t]+"//".*)? {
+^"#!"{blank}*"--nodefined"{blank}+[^ \t\r\n]+({blank}+"//".*)?{blank}* {
   /* --nodefined pragma. */
   char *s = strchr(yytext, '-')+strlen("--nodefined"), *t = s;
   while (isspace(*t)) t++;
@@ -359,7 +359,7 @@ blank  [ \t\f\v\r]
 		   "' in --nodefined pragma");
   mylloc->step();
 }
-^"#!"[ \t]*"--quoteargs"[ \t]+[^ \t\n]+([ \t]+"//".*)? {
+^"#!"{blank}*"--quoteargs"{blank}+[^ \t\r\n]+({blank}+"//".*)?{blank}* {
   /* --quoteargs pragma. */
   char *s = strchr(yytext, '-')+strlen("--quoteargs"), *t = s;
   while (isspace(*t)) t++;
@@ -374,7 +374,7 @@ blank  [ \t\f\v\r]
 		   "' in --quoteargs pragma");
   mylloc->step();
 }
-^"#!"[ \t]*"--enable"[ \t]+[^ \t\n]+([ \t]+"//".*)? {
+^"#!"{blank}*"--enable"{blank}+[^ \t\r\n]+({blank}+"//".*)?{blank}* {
   /* --enable pragma. */
   char *s = strchr(yytext, '-')+strlen("--enable"), *t = s;
   while (isspace(*t)) t++;
@@ -384,7 +384,7 @@ blank  [ \t\f\v\r]
   interp.enable(sym, true);
   mylloc->step();
 }
-^"#!"[ \t]*"--disable"[ \t]+[^ \t\n]+([ \t]+"//".*)? {
+^"#!"{blank}*"--disable"{blank}+[^ \t\r\n]+({blank}+"//".*)?{blank}* {
   /* --disable pragma. */
   char *s = strchr(yytext, '-')+strlen("--disable"), *t = s;
   while (isspace(*t)) t++;
@@ -394,7 +394,7 @@ blank  [ \t\f\v\r]
   interp.enable(sym, false);
   mylloc->step();
 }
-^"#!"[ \t]*"--if"[ \t]+[^ \t\n]+([ \t]+"//".*)? {
+^"#!"{blank}*"--if"{blank}+[^ \t\r\n]+({blank}+"//".*)?{blank}* {
   /* --if pragma. */
   char *s = strchr(yytext, '-')+strlen("--if"), *t = s;
   while (isspace(*t)) t++;
@@ -410,7 +410,7 @@ blank  [ \t\f\v\r]
     BEGIN(srcoption);
   }
 }
-^"#!"[ \t]*"--ifdef"[ \t]+[^ \t\n]+([ \t]+"//".*)? {
+^"#!"{blank}*"--ifdef"{blank}+[^ \t\r\n]+({blank}+"//".*)?{blank}* {
   /* --if pragma. */
   char *s = strchr(yytext, '-')+strlen("--ifdef"), *t = s;
   while (isspace(*t)) t++;
@@ -426,7 +426,7 @@ blank  [ \t\f\v\r]
     BEGIN(srcoption);
   }
 }
-^"#!"[ \t]*"--ifnot"[ \t]+[^ \t\n]+([ \t]+"//".*)? {
+^"#!"{blank}*"--ifnot"{blank}+[^ \t\r\n]+({blank}+"//".*)?{blank}* {
   /* --ifnot pragma. */
   char *s = strchr(yytext, '-')+strlen("--ifnot"), *t = s;
   while (isspace(*t)) t++;
@@ -442,7 +442,7 @@ blank  [ \t\f\v\r]
     BEGIN(srcoption);
   }
 }
-^"#!"[ \t]*"--ifndef"[ \t]+[^ \t\n]+([ \t]+"//".*)? {
+^"#!"{blank}*"--ifndef"{blank}+[^ \t\r\n]+({blank}+"//".*)?{blank}* {
   /* --ifnot pragma. */
   char *s = strchr(yytext, '-')+strlen("--ifndef"), *t = s;
   while (isspace(*t)) t++;
@@ -458,7 +458,7 @@ blank  [ \t\f\v\r]
     BEGIN(srcoption);
   }
 }
-^"#!"[ \t]*"--else"([ \t]+"//".*)? {
+^"#!"{blank}*"--else"({blank}+"//".*)?{blank}* {
   /* --else pragma. */
   if (interp.source_level == 0) {
     interp.error(*mylloc, "unmatched '--else' pragma");
@@ -477,7 +477,7 @@ blank  [ \t\f\v\r]
   }
   mylloc->step();
 }
-^"#!"[ \t]*"--endif"([ \t]+"//".*)? {
+^"#!"{blank}*"--endif"({blank}+"//".*)?{blank}* {
   /* --endif pragma. */
   if (interp.source_level == 0) {
     interp.error(*mylloc, "unmatched '--endif' pragma");
@@ -486,15 +486,15 @@ blank  [ \t\f\v\r]
     interp.source_level--;
   mylloc->step();
 }
-^"#!"[ \t]*"--rewarn"[ \t]*("//".*)? {
+^"#!"{blank}*"--rewarn"{blank}*("//".*)?{blank}* {
   /* --rewarn pragma. */
   if (s_compat >= 0) interp.compat = s_compat!=0;
 }
-^"#!"[ \t]*"--rewarn2"[ \t]*("//".*)? {
+^"#!"{blank}*"--rewarn2"{blank}*("//".*)?{blank}* {
   /* --rewarn2 pragma. */
   if (s_compat2 >= 0) interp.compat2 = s_compat2!=0;
 }
-^"#!"[ \t]*"--"[A-Za-z0-9-]+[ \t]*("//".*)? {
+^"#!"{blank}*"--"[A-Za-z0-9-]+{blank}*("//".*)?{blank}* {
   /* Other pragmas (code generation). */
   char *s = strchr(yytext, '-')+2, *t = s;
   while (isalnum(*t) || *t == '-') t++;
@@ -538,13 +538,13 @@ blank  [ \t\f\v\r]
   mylloc->step();
 }
 
-<srcoption>^"#!"[ \t]*"--if"("not"?)[ \t]+[^ \t\n]+([ \t]+"//".*)? {
+<srcoption>^"#!"{blank}*"--if"("not"?){blank}+[^ \t\r\n]+({blank}+"//".*)?{blank}* {
   if (interp.source_level < 64)
     interp.else_stack[interp.source_level] = 0;
   interp.source_level++;
   mylloc->step();
 }
-<srcoption>^"#!"[ \t]*"--else"([ \t]+"//".*)? {
+<srcoption>^"#!"{blank}*"--else"({blank}+"//".*)?{blank}* {
   if (interp.source_level == 0) {
     interp.error(*mylloc, "unmatched '--else' pragma");
     interp.nerrs--;
@@ -559,7 +559,7 @@ blank  [ \t\f\v\r]
   }
   mylloc->step();
 }
-<srcoption>^"#!"[ \t]*"--endif"([ \t]+"//".*)? {
+<srcoption>^"#!"{blank}*"--endif"({blank}+"//".*)?{blank}* {
   if (interp.source_level == 0) {
     interp.error(*mylloc, "unmatched '--endif' pragma");
     interp.nerrs--;

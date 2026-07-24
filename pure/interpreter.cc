@@ -147,16 +147,20 @@ struct CompilationUnitResources {
     uint64_t generation;
     uint32_t key;
     uint32_t *refp;
+    string symbol;
+    std::unique_ptr<llvm::MemoryBuffer> snapshot;
     void *address;
     llvm::orc::ResourceTrackerSP tracker;
     map<uint32_t, uint32_t*> closure_refs;
     bool current;
 
     FunctionGeneration(int32_t tag, uint64_t generation, uint32_t key,
-                       uint32_t *refp, void *address,
-                       llvm::orc::ResourceTrackerSP tracker,
+                       uint32_t *refp, string symbol,
+                       std::unique_ptr<llvm::MemoryBuffer> snapshot,
+                       void *address, llvm::orc::ResourceTrackerSP tracker,
                        const map<uint32_t, uint32_t*>& closure_refs)
       : tag(tag), generation(generation), key(key), refp(refp),
+        symbol(std::move(symbol)), snapshot(std::move(snapshot)),
         address(address), tracker(std::move(tracker)),
         closure_refs(closure_refs), current(false) {}
   };
@@ -230,20 +234,28 @@ struct CompilationUnitResources {
     return it == host_symbols.end() ? 0 : it->second.address;
   }
 
-  void retain_function(const llvm::Function *function, void *address,
-                       llvm::orc::ResourceTrackerSP tracker)
-  {
-    assert(function && address && tracker &&
-           functions.find(function) == functions.end());
-    functions.emplace
-      (function, CompiledFunction(address, std::move(tracker)));
-  }
-
   void *function_address(const llvm::Function *function) const
   {
     map<const llvm::Function*, CompiledFunction>::const_iterator it =
       functions.find(function);
     return it == functions.end() ? 0 : it->second.address;
+  }
+
+  llvm::orc::ResourceTrackerSP replace_function
+  (const llvm::Function *function, void *address,
+   llvm::orc::ResourceTrackerSP tracker)
+  {
+    assert(function && address && tracker);
+    llvm::orc::ResourceTrackerSP previous_tracker;
+    map<const llvm::Function*, CompiledFunction>::iterator previous =
+      functions.find(function);
+    if (previous != functions.end()) {
+      previous_tracker = std::move(previous->second.tracker);
+      functions.erase(previous);
+    }
+    functions.emplace
+      (function, CompiledFunction(address, std::move(tracker)));
+    return previous_tracker;
   }
 
   void retain_bitcode(string key, llvm::orc::ResourceTrackerSP tracker)
@@ -341,15 +353,19 @@ struct CompilationUnitResources {
   }
 
   void retain_generation(int32_t tag, uint64_t generation, uint32_t key,
-                         uint32_t *refp, void *address,
-                         llvm::orc::ResourceTrackerSP tracker,
+                         uint32_t *refp, string symbol,
+                         std::unique_ptr<llvm::MemoryBuffer> snapshot,
+                         void *address, llvm::orc::ResourceTrackerSP tracker,
                          const map<uint32_t, uint32_t*>& closure_refs)
   {
-    assert(tag > 0 && key && refp && address && tracker &&
+    assert(tag > 0 && key && refp && !symbol.empty() &&
+           ((snapshot && !address && !tracker) ||
+            (!snapshot && address && tracker)) &&
            implementations.find(key) == implementations.end() &&
            closure_refs.find(key) != closure_refs.end());
     implementations.emplace
-      (key, FunctionGeneration(tag, generation, key, refp, address,
+      (key, FunctionGeneration(tag, generation, key, refp, std::move(symbol),
+                               std::move(snapshot), address,
                                std::move(tracker), closure_refs));
     for (map<uint32_t, uint32_t*>::const_iterator it = closure_refs.begin();
          it != closure_refs.end(); ++it)
@@ -372,11 +388,13 @@ struct CompilationUnitResources {
     if (implementation == implementations.end() ||
         implementation->second.current || !unused(implementation->second))
       return;
-    if (llvm::Error error = implementation->second.tracker->remove()) {
-      llvm::logAllUnhandledErrors(std::move(error), llvm::errs(),
-                                  "failed to collect ORC function generation: ");
-      return;
-    }
+    if (implementation->second.tracker)
+      if (llvm::Error error = implementation->second.tracker->remove()) {
+        llvm::logAllUnhandledErrors
+          (std::move(error), llvm::errs(),
+           "failed to collect ORC function generation: ");
+        return;
+      }
     for (map<uint32_t, uint32_t*>::const_iterator
            it = implementation->second.closure_refs.begin();
          it != implementation->second.closure_refs.end(); ++it) {
@@ -483,7 +501,8 @@ struct CompilationUnitResources {
       map<uint32_t, FunctionGeneration>::iterator it = implementations.begin();
       llvm::orc::ResourceTrackerSP tracker = std::move(it->second.tracker);
       implementations.erase(it);
-      errors = llvm::joinErrors(std::move(errors), tracker->remove());
+      if (tracker)
+        errors = llvm::joinErrors(std::move(errors), tracker->remove());
     }
     while (!faust_modules.empty()) {
       map<string, list<FaustGeneration> >::iterator module =
@@ -1314,10 +1333,21 @@ void *interpreter::compile_global_generation(Env& environment)
          !environment.h->isDeclaration());
   uint64_t generation =
     compilation_units->next_generation(environment.tag);
-  llvm::orc::ResourceTrackerSP tracker = ORC->create_resource_tracker();
   string entry_name = environment.h->getName().str();
   string exported_name = "$$orc.fun."+to_string(environment.tag)+"."+
     to_string(generation);
+  std::unique_ptr<llvm::MemoryBuffer> snapshot;
+  void *address = 0;
+  llvm::orc::ResourceTrackerSP tracker;
+#if DEFER_GLOBALS
+  llvm::Expected<std::unique_ptr<llvm::MemoryBuffer> > pending =
+    ORC->snapshot_module(*module, entry_name, exported_name);
+  if (!pending)
+    throw err("failed to snapshot deferred ORC global function: "+
+              llvm::toString(pending.takeError()));
+  snapshot = std::move(*pending);
+#else
+  tracker = ORC->create_resource_tracker();
   if (llvm::Error error = ORC->add_module_copy
         (tracker, *module, entry_name, exported_name)) {
     if (llvm::Error cleanup_error = tracker->remove())
@@ -1333,14 +1363,16 @@ void *interpreter::compile_global_generation(Env& environment)
     throw err("failed to resolve ORC global function: "+
               llvm::toString(std::move(error)));
   }
-  void *address = reinterpret_cast<void*>
+  address = reinterpret_cast<void*>
     (static_cast<uintptr_t>(entry->getValue()));
+#endif
   map<uint32_t, uint32_t*> closure_refs;
   set<const Env*> visited;
   collect_generation_closure_refs(&environment, closure_refs, visited);
   compilation_units->retain_generation
     (environment.tag, generation, environment.getkey(), environment.refp,
-     address, std::move(tracker), closure_refs);
+     exported_name, std::move(snapshot), address, std::move(tracker),
+     closure_refs);
   return address;
 }
 
@@ -1352,6 +1384,29 @@ void *interpreter::resolve_global_closure(pure_expr *closure)
   CompilationUnitResources::FunctionGeneration *generation =
     compilation_units->current_generation(closure->tag);
   if (!generation) return 0;
+  if (generation->snapshot) {
+    llvm::orc::ResourceTrackerSP tracker = ORC->create_resource_tracker();
+    if (llvm::Error error = ORC->add_module_snapshot
+          (tracker, std::move(generation->snapshot))) {
+      if (llvm::Error cleanup_error = tracker->remove())
+        error = llvm::joinErrors(std::move(error), std::move(cleanup_error));
+      llvm::logAllUnhandledErrors
+        (std::move(error), llvm::errs(),
+         "failed to add deferred ORC function: ");
+      return 0;
+    }
+    generation->tracker = std::move(tracker);
+  }
+  if (!generation->address) {
+    llvm::Expected<llvm::orc::ExecutorAddr> entry = ORC->lookup(generation->symbol);
+    if (!entry) {
+      llvm::logAllUnhandledErrors(entry.takeError(), llvm::errs(),
+                                  "failed to resolve deferred ORC function: ");
+      return 0;
+    }
+    generation->address = reinterpret_cast<void*>
+      (static_cast<uintptr_t>(entry->getValue()));
+  }
 
   if (clos->key != generation->key) {
     assert(generation->refp);
@@ -1411,12 +1466,14 @@ void interpreter::release_faust_instance(int32_t tag,
   collect_pending_generations();
 }
 
-void *interpreter::compile_orc_function(llvm::Function *function,
-                                        llvm::StringRef category)
+void *interpreter::compile_orc_function
+(llvm::Function *function, llvm::StringRef category,
+ llvm::orc::ResourceTrackerSP *previous_tracker)
 {
   assert(function && !function->isDeclaration() && !category.empty());
-  if (void *address = compilation_units->function_address(function))
-    return address;
+  if (!previous_tracker)
+    if (void *address = compilation_units->function_address(function))
+      return address;
 
   llvm::orc::ResourceTrackerSP tracker = ORC->create_resource_tracker();
   string entry_name = function->getName().str();
@@ -1439,7 +1496,13 @@ void *interpreter::compile_orc_function(llvm::Function *function,
   }
   void *address = reinterpret_cast<void*>
     (static_cast<uintptr_t>(entry->getValue()));
-  compilation_units->retain_function(function, address, std::move(tracker));
+  llvm::orc::ResourceTrackerSP previous =
+    compilation_units->replace_function
+      (function, address, std::move(tracker));
+  if (previous_tracker)
+    *previous_tracker = std::move(previous);
+  else
+    assert(!previous);
   return address;
 }
 
@@ -2084,15 +2147,15 @@ bool interpreter::is_enabled(const string& optname)
       string version = PACKAGE_VERSION;
       string vers = optname.substr(strlen("version-"));
       int act_major = 0, act_minor = 0, want_major = 0, want_minor = 0;
-      char mode = 0;
+      char mode[2] = {};
       int res1 = sscanf(version.c_str(), "%d.%d", &act_major, &act_minor);
-      int res2 = sscanf(vers.c_str(), "%d.%d%[+-]",
-			&want_major, &want_minor, &mode);
+      int res2 = sscanf(vers.c_str(), "%d.%d%1[+-]",
+			&want_major, &want_minor, mode);
       if (res1 == 2 && res2 >= 2) {
-	if (mode == '+')
+	if (mode[0] == '+')
 	  flag = act_major > want_major ||
 	    (act_major == want_major && act_minor >= want_minor);
-	else if (mode == '-')
+	else if (mode[0] == '-')
 	  flag = act_major < want_major ||
 	    (act_major == want_major && act_minor <= want_minor);
 	else
@@ -5152,8 +5215,15 @@ void interpreter::compile()
         env_info& info = e->second;
         if (!info.m && !info.mxs) continue;
         Env& type_function = globaltypes[ftag];
-        void *fp = compile_orc_function(type_function.h, "type");
+        llvm::orc::ResourceTrackerSP previous_tracker;
+        void *fp = compile_orc_function
+          (type_function.h, "type", &previous_tracker);
         pure_add_rtty(ftag, type_function.n, fp);
+        if (previous_tracker)
+          if (llvm::Error error = previous_tracker->remove())
+            llvm::logAllUnhandledErrors
+              (std::move(error), llvm::errs(),
+               "failed to retire previous ORC type generation: ");
 #if DEBUG>1
         std::cerr << "JIT " << type_function.f->getName().str()
                   << " -> " << fp << '\n';
@@ -12117,35 +12187,16 @@ int interpreter::compiler(string out, list<string> libnames, string llcopts)
     string asmfile = (ext==".s")?out:out+".s";
     bool obj_target = false;
     string custom_opts = "";
-#if LLVM33
-    /* LLVM 3.3 and later generate assembler code which doesn't compile with
-       native assemblers on some systems. OTOH, they offer the capability to
-       directly generate native object files via llc, which speeds up
-       compilation and works around issues with native assembly. This is the
-       route we take here. */
     if (ext != ".s") {
       asmfile = (ext==".o")?out:out+".o";
       obj_target = true;
       custom_opts = "-filetype=obj ";
     }
-#else
-#if LLVM30 && __APPLE__
-    // The -disable-cfi seems to be needed on OSX as of LLVM 3.0.
-    custom_opts = "-disable-cfi ";
-#endif
-#endif
     if (!llcopts.empty()) llcopts += " ";
-#if defined(__MINGW32__) && LLVM35
-    // LLVM 3.5 opt seems broken on msys2/mingw, so we have to do without it
-    string cmd = llc+" "+llcopts+custom_opts+
-      string(pic?"-relocation-model=pic ":"")+quote(target)+
-      " -o "+quote(asmfile);
-#else
-    string cmd = opt+" -f -std-compile-opts "+quote(target)+
-      " | "+llc+" "+llcopts+custom_opts+
+    string cmd = opt+" -O1 "+quote(target)+" -o - | "+
+      llc+" "+llcopts+custom_opts+
       string(pic?"-relocation-model=pic ":"")+
       "-o "+quote(asmfile);
-#endif
     if (vflag) std::cerr << cmd << '\n';
     unlink(asmfile.c_str());
     int status = system(cmd.c_str());
@@ -16396,7 +16447,7 @@ Value *interpreter::codegen(expr x, bool quote)
       vector<Value*> env;
       // build an fbox for the external
       return call("pure_clos", false, x.tag(), 0, info.f,
-		  NullPtr, info.argtypes.size(), env);
+		  envptr(true), info.argtypes.size(), env);
     }
     // check for an existing global variable
     map<int32_t,GlobalVar>::iterator v = globalvars.find(x.tag());

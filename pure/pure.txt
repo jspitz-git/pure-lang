@@ -325,8 +325,8 @@ below.
 
 .. option:: --eager-jit
 
-   Enable eager JIT compilation. This requires LLVM 2.7 or later, otherwise
-   this flag will be ignored.
+   Enable eager JIT compilation. The LLVM 22 backend materializes reachable
+   functions when compilation is requested.
 
 .. option:: --enable optname
 
@@ -541,9 +541,6 @@ compilation may be more efficient in some cases (since bigger chunks of
 compilation work can be done in one go) and less efficient in others (e.g.,
 eager JITing may compile large chunks of code which aren't actually called
 later, except in rare circumstances).
-
-Note that the eager JIT mode is only available with LLVM 2.7 or later;
-otherwise this option will be ignored.
 
 It is also possible to compile your scripts to native code beforehand, using
 the :option:`-c` batch compilation option. This option forces the interpreter
@@ -899,9 +896,8 @@ Declarations`_).
    function, as soon as the function gets recompiled. This avoids the hiccups
    you get when a function is compiled on the fly if it is run for the first
    time, which is particularly useful for functions which are to be run in
-   realtime (typically in multimedia applications). Please note that, in
-   difference to the :option:`--eager-jit` option, this feature is available
-   for all LLVM versions (it doesn't require LLVM 2.7 or later).
+   realtime (typically in multimedia applications). Unlike the global
+   :option:`--eager-jit` option, this pragma selects individual functions.
 
 .. option:: --required fun
 
@@ -10012,19 +10008,12 @@ automatically. This is more than just a convenience, as it also eliminates at
 least some of the mistakes in :keyword:`extern` declarations that may arise
 when importing functions manually from dynamic libraries.
 
-.. note:: The facilities described below require that you have an LLVM-capable
-   C/C++ compiler installed. The available options right now are clang_,
-   llvm-gcc_ and dragonegg_. Please check the Pure :doc:`installation
-   instructions<install>` on how to get one of these (or all of them) up and
-   running. Note that clang and llvm-gcc are standalone compilers, while
-   dragonegg is supplied as a gcc plugin which hooks into your existing system
-   compiler (gcc 4.5 or later is required for that). Any of these enable you
-   to compile C/C++ source to LLVM assembler or bitcode. The clang compiler is
-   recommended for C/C++ development, as it offers faster compilation times
-   and has much better diagnostics than gcc. On the other hand, llvm-gcc and
-   dragonegg have the advantage that they also support alternative frontends
-   so that you can compile Fortran and Ada code as well. (But note that, as of
-   LLVM 3.x, llvm-gcc is not supported any more.)
+.. note:: The facilities described below require an LLVM 22 frontend which
+   emits bitcode compatible with Pure's target architecture and data layout.
+   Clang 22 is the supported C/C++ compiler. Please check the Pure
+   :doc:`installation instructions<install>` for the supported toolchain.
+   Bitcode is not a stable cross-version format, so modules produced by LLVM
+   2.x, LLVM 3.x, another LLVM major release, or another target must be rebuilt.
 
 LLVM bitcode is loaded in a Pure script using the following special format of
 the :keyword:`using` clause::
@@ -10085,25 +10074,18 @@ compute the greatest common divisor of two (machine) integers:
 Let's say that this code is in the file ``mygcd.c``, then you'd compile it to
 a bitcode module using clang_ as follows::
 
-  clang -emit-llvm -c mygcd.c -o mygcd.bc
+  clang-22 -emit-llvm -c mygcd.c -o mygcd.bc
 
 Note that the ``-emit-llvm -c`` options instruct clang to build an LLVM
 bitcode module. Of course, you can also add optimizations and other options to
 the compile command as desired.
 
-Using dragonegg_ is somewhat more involved, as it doesn't provide a direct way
-to produce a bitcode file yet.  However, you can create an LLVM assembler file
-which can then be translated to bitcode using the llvm-as program as follows::
+Pure validates the module before publication and rejects malformed bitcode,
+incompatible architectures, endianness, and data layouts with an actionable
+diagnostic.
 
-  gcc -fplugin=dragonegg -flto -S mygcd.c -o mygcd.ll
-  llvm-as mygcd.ll -o mygcd.bc
 
-(Note that the ``-fplugin`` option instructs gcc to use the dragonegg plugin,
-which in conjunction with the ``-flto`` flag switches it to LLVM output.
-Please check the dragonegg website for details.)
-
-In either case, you can now load the resulting bitcode module and run the
-``mygcd`` function in the Pure interpreter simply as follows::
+You can now load the resulting bitcode module and run the ``mygcd`` function in the Pure interpreter simply as follows::
 
   > using "bc:mygcd";
   > mygcd 75 105;
@@ -10116,11 +10098,11 @@ function, you can use the interactive ``show`` command::
   extern int mygcd(int, int);
 
 Some more examples showing how to use the bitcode interface can be found in
-the Pure sources. In particular, the interface also works with Fortran (using
-llvm-gfortran or gfortran with dragonegg), and there is special support for
-interfacing to Grame's functional DSP programming language Faust_ (the latter
-uses a special variant of the bitcode loader, which is selected with the
-``dsp`` tag in the :keyword:`using` clause). Further details about these can
+the Pure sources. In particular, the interface also works with LLVM 22 bitcode
+from compatible Fortran frontends such as Flang 22, and there is special
+support for interfacing to Grame's functional DSP programming language Faust_
+(the latter uses a special variant of the bitcode loader, which is selected
+with the ``dsp`` tag in the :keyword:`using` clause). Further details can
 be found below.
 
 Please note that at this time the LLVM bitcode interface is still somewhat
@@ -10188,9 +10170,11 @@ this is a problem then it's usually better to import a separate bitcode module
 instead (see `Importing LLVM Bitcode`_), or batch-compile your script to an
 executable (see `Batch Compilation`_).
 
-At present, C, C++, Fortran, ATS and Faust are supported as foreign source
-languages, with clang, clang++, gfortran (with the dragonegg plugin), patscc
-and faust as the corresponding (default) compilers. C is the default language.
+At present, C, C++, Fortran, ATS and Faust are recognized as foreign source
+languages. Clang and Clang++ are the C/C++ defaults, while the historical
+Fortran and ATS defaults may require an explicit LLVM 22-compatible compiler
+through the environment variables described below. Faust uses ``faust``. C is
+the default language.
 The desired source language can be selected by placing an appropriate tag into
 the inline code section, immediately after the opening brace. (The tag is
 removed before the code is submitted to compilation.) For instance::
@@ -10229,26 +10213,15 @@ some environment variables you can set for customization purposes.
 Specifically, :envvar:`PURE_CC` is the command to invoke the C compiler. This
 variable lets you specify the exact name of the executable along with any
 debugging and optimization options that you may want to add. Likewise,
-:envvar:`PURE_CXX`, :envvar:`PURE_FC`, :envvar:`PURE_ATS` and
+:envvar:`PURE_CXX`, :envvar:`PURE_FC`, :envvar:`PURE_ATSCC` and
 :envvar:`PURE_FAUST` are used for the C++, Fortran, ATS and Faust compilers,
-respectively.
+respectively. :envvar:`PURE_ATSCCOMP` selects the C compiler invoked by ATS.
 
-For instance, if you prefer to use llvm-gcc_ as your C compiler, and you'd
-like to invoke it with the ``-O3`` optimization option, you would set
-:envvar:`PURE_CC` to ``"llvm-gcc -O3"``. (To verify the settings you made, you
-can have the interpreter echo the compilation commands which are actually
-executed, by running Pure with the ``-v0100`` option, see `Verbosity and
-Debugging Options`_. Also note that the options necessary to produce LLVM
-bitcode will be added automatically, so you don't have to specify these.)
-
-Beginning with Pure 0.48, the dragonegg_ gcc plugin is also fully supported.
-To make this work, you need to explicitly specify the name of the plugin in
-the compilation command, so that the Pure interpreter can add the proper set
-of options needed for bitcode compilation. For instance:
-
-.. code-block:: console
-
-   PURE_CC="gcc -fplugin=dragonegg -O3"
+For instance, to select the versioned reference C compiler with optimization,
+set :envvar:`PURE_CC` to ``"clang-22 -O3"``. To verify the setting, run Pure
+with ``-v0100`` so that it echoes the compilation commands; see `Verbosity and
+Debugging Options`_. The options needed to produce bitcode are added
+automatically.
 
 Some further details on the bitcode support for specific target languages can
 be found in the subsections below.
@@ -10400,13 +10373,12 @@ ATS and call that function from Pure::
   map ifact (0..9);
 
 To make this work in Pure, you need to have ATS2 (the current version of the
-ATS compiler) installed. ATS2 in turn needs a suitable C compiler for
-generating LLVM bitcode. By default, Pure uses clang for that purpose. If you
-have gcc's dragonegg plugin installed, you can also use gcc as the C compiler
-instead, by setting the :envvar:`PURE_ATS` environment variable to ``patscc
--fplugin=dragonegg``. Also make sure that you have the :envvar:`PATSHOME`
-environment variable set to ATS's library directory, as explained in the
-`ATS installation instructions`__.
+ATS compiler) installed. ATS2 in turn needs Clang 22 to generate compatible
+LLVM bitcode. Pure selects clang for ATS-generated C by default; use
+:envvar:`PURE_ATSCC` and :envvar:`PURE_ATSCCOMP` if your installation needs
+versioned executable names or extra options. Also make sure that
+:envvar:`PATSHOME` points to ATS's library directory, as explained in the `ATS
+installation instructions`__.
 
 __ http://www.ats-lang.org/Downloads.html#Install_source_compile
 
@@ -10469,7 +10441,7 @@ Faust module needs to be linked against additional C/C++ code. For instance:
 .. code-block:: console
 
    faust -double -a pure.c -lang c example.dsp -o example.c
-   clang -emit-llvm -O3 -c example.c -o example.bc
+   clang-22 -emit-llvm -O3 -c example.c -o example.bc
 
 The :doc:`pure-faust<pure-faust>` package contains a little helper script
 ``faust2pure`` (also available in recent Faust revisions) which makes this a
@@ -10509,13 +10481,14 @@ e.g., the interface routines for the example.dsp module will end up in the
 
 Pure's Faust interface offers another useful feature not provided by the
 general bitcode interface, namely the ability to reload Faust modules on the
-fly. If you repeat the import clause for a Faust module, the compiler checks
-whether the module was modified and, if so, replaces the old module with the
-new one. Retyping an inline Faust code section has the same effect. This is
-mainly intended as a convenience for interactive usage, so that you can test
-different versions of a Faust module without having to restart the Pure
-interpreter. But it is also put to good use in addon packages like
-:doc:`pd-faust<pd-faust>` which allows Faust dsps to be reloaded at runtime.
+fly. If you repeat the import clause for a modified module, Pure validates its
+explicit ``pure_faust_sample_format`` marker or recognized legacy metadata and
+materializes a new generation before replacing the old one. A failed reload
+leaves the previous generation available, and a module with live DSP instances
+cannot be replaced. Retyping an inline Faust code section has the same effect.
+This is mainly intended as a
+convenience for interactive usage, but is also used by addon packages such as
+:doc:`pd-faust<pd-faust>`.
 
 For instance, consider the following little Faust program, which takes a
 stereo audio signal as input, mixes the two channels and multiplies the
@@ -12624,8 +12597,7 @@ addition to the commands which are invoked in the compilation process):
 .. code-block:: none
 
   $ pure -v0100 -c hello.pure -o hello.o
-  opt -f -std-compile-opts hello.o.bc | llc -f -o hello.o.s
-  gcc -c hello.o.s -o hello.o
+  opt -O1 hello.o.bc -o - | llc -filetype=obj -o hello.o
   Link with: g++ hello.o -lpure
 
 Well, we already knew that, so let's consider a slightly more interesting
@@ -12634,8 +12606,7 @@ example from Pure's ODBC module:
 .. code-block:: none
 
   $ pure -v0100 -c pure-odbc/examples/menagerie.pure -o menagerie.o
-  opt -f -std-compile-opts menagerie.o.bc | llc -f -o menagerie.o.s
-  gcc -c menagerie.o.s -o menagerie.o
+  opt -O1 menagerie.o.bc -o - | llc -filetype=obj -o menagerie.o
   Link with: g++ menagerie.o /usr/local/lib/pure/odbc.so -lpure
   $ g++ -shared -o menagerie.so menagerie.o /usr/local/lib/pure/odbc.so -lpure
 

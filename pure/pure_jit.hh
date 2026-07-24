@@ -27,6 +27,7 @@
 namespace llvm {
 
 class DataLayout;
+class MemoryBuffer;
 class Module;
 class Triple;
 
@@ -67,6 +68,12 @@ public:
   llvm::Error add_module(llvm::orc::ThreadSafeModule module);
   llvm::Error add_module(llvm::orc::ResourceTrackerSP tracker,
                          llvm::orc::ThreadSafeModule module);
+  llvm::Expected<std::unique_ptr<llvm::MemoryBuffer> > snapshot_module
+    (const llvm::Module& module, llvm::StringRef entry_symbol = "",
+     llvm::StringRef exported_symbol = "");
+  llvm::Error add_module_snapshot
+    (llvm::orc::ResourceTrackerSP tracker,
+     std::unique_ptr<llvm::MemoryBuffer> snapshot);
   llvm::Error add_module_copy(llvm::orc::ResourceTrackerSP tracker,
                               const llvm::Module& module,
                               llvm::StringRef entry_symbol = "",

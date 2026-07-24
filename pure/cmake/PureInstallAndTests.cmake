@@ -306,6 +306,11 @@ if(BUILD_TESTING)
   )
 
   function(add_pure_bitcode_test name script fixture)
+    if(PURE_SANITIZERS)
+      set(test_timeout 300)
+    else()
+      set(test_timeout 60)
+    endif()
     add_test(
       NAME "pure-bitcode-${name}"
       COMMAND
@@ -321,7 +326,7 @@ if(BUILD_TESTING)
         LABELS "bitcode;integration"
         REQUIRED_FILES
           "${PURE_BITCODE_FIXTURE_OUTPUT_DIR}/${fixture};${CMAKE_CURRENT_SOURCE_DIR}/test/bitcode/${script}"
-        TIMEOUT 60
+        TIMEOUT ${test_timeout}
     )
   endfunction()
 
@@ -374,29 +379,98 @@ if(BUILD_TESTING)
         -DPURE_SCRIPT=${PURE_FAUST_FIXTURE_OUTPUT_DIR}/lifecycle.pure
         -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunPureFaustTest.cmake"
     )
+    if(PURE_SANITIZERS)
+      set(faust_test_timeout 300)
+    else()
+      set(faust_test_timeout 180)
+    endif()
     set_tests_properties(
       pure-faust-lifecycle
       PROPERTIES
         LABELS "faust;bitcode;integration"
         REQUIRED_FILES
           "${reference_bc};${PURE_FAUST_FIXTURE_OUTPUT_DIR}/reload-a.bc;${PURE_FAUST_FIXTURE_OUTPUT_DIR}/reload-b.bc;${PURE_FAUST_FIXTURE_OUTPUT_DIR}/reload-float.bc;${PURE_FAUST_FIXTURE_OUTPUT_DIR}/reload-unresolved.bc;${PURE_FAUST_FIXTURE_OUTPUT_DIR}/lifecycle.pure"
-        TIMEOUT 180
+        TIMEOUT ${faust_test_timeout}
         PASS_REGULAR_EXPRESSION
           "Cannot reload Faust module while DSP instances are live(.|\n)*11(.|\n)*22(.|\n)*Module was previously loaded with the double sample ABI(.|\n)*22(.|\n)*faust_missing_test_dependency(.|\n)*22(.|\n)*42"
         FAIL_REGULAR_EXPRESSION
           "failed to remove ORC compilation unit;AddressSanitizer;LeakSanitizer;runtime error:"
     )
-    if(PURE_SANITIZERS)
-      set_tests_properties(pure-faust-lifecycle PROPERTIES DISABLED TRUE)
-    endif()
   endif()
+
+  if(PURE_SANITIZERS)
+    set(formatted_io_test_timeout 300)
+  else()
+    set(formatted_io_test_timeout 120)
+  endif()
+  add_test(
+    NAME pure-formatted-io
+    COMMAND
+      "${CMAKE_CURRENT_BINARY_DIR}/run-test"
+      "${CMAKE_CURRENT_SOURCE_DIR}/test/formatted-io-smoke.pure"
+    WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
+  )
+  set_tests_properties(
+    pure-formatted-io
+    PROPERTIES
+      LABELS "runtime;integration"
+      REQUIRED_FILES "${CMAKE_CURRENT_SOURCE_DIR}/test/formatted-io-smoke.pure"
+      TIMEOUT ${formatted_io_test_timeout}
+      PASS_REGULAR_EXPRESSION "formatted:ok:42"
+      FAIL_REGULAR_EXPRESSION
+        "unhandled exception;AddressSanitizer;LeakSanitizer;runtime error:"
+  )
+  if(PURE_SANITIZERS)
+    set_tests_properties(
+      pure-formatted-io PROPERTIES ENVIRONMENT "PURE_STACK=0"
+    )
+  endif()
+
+  add_test(
+    NAME pure-batch-object
+    COMMAND
+      "${CMAKE_COMMAND}"
+      -DPURE_EXECUTABLE=$<TARGET_FILE:pure>
+      -DPURE_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
+      -DPURE_BUILD_DIR=${CMAKE_CURRENT_BINARY_DIR}
+      -DPURE_LD_LIB_PATH=${LD_LIB_PATH}
+      -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunPureBatchTest.cmake"
+  )
+  if(PURE_SANITIZERS)
+    set(batch_test_timeout 300)
+  else()
+    set(batch_test_timeout 120)
+  endif()
+  set_tests_properties(
+    pure-batch-object
+    PROPERTIES
+      LABELS "batch;integration"
+      REQUIRED_FILES "${CMAKE_CURRENT_SOURCE_DIR}/test/batch-smoke.pure"
+      TIMEOUT ${batch_test_timeout}
+      FAIL_REGULAR_EXPRESSION
+        "AddressSanitizer;LeakSanitizer;runtime error:"
+  )
 
   add_test(
     NAME pure-regression
     COMMAND "${CMAKE_CURRENT_BINARY_DIR}/run-tests"
     WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
   )
-  set_tests_properties(pure-regression PROPERTIES LABELS "regression")
+  set(regression_timeout 600)
+  set(regression_environment "TEST_JOBS=4")
+  if(PURE_SANITIZERS)
+    set(regression_timeout 1800)
+    list(APPEND regression_environment "PURE_STACK=0")
+  elseif(CMAKE_BUILD_TYPE STREQUAL "Debug")
+    set(regression_timeout 900)
+  endif()
+  set_tests_properties(
+    pure-regression
+    PROPERTIES
+      ENVIRONMENT "${regression_environment}"
+      LABELS "regression"
+      TIMEOUT ${regression_timeout}
+  )
 endif()
 
 set(PURE_INSTALL_INCLUDE_DIR "${CMAKE_INSTALL_INCLUDEDIR}/pure")
@@ -404,6 +478,7 @@ set(PURE_INSTALL_LIBRARY_DIR "${CMAKE_INSTALL_LIBDIR}/${PURE_LIBRARY_DIRECTORY}"
 
 set(prefix "${CMAKE_INSTALL_PREFIX}")
 set(exec_prefix "${CMAKE_INSTALL_PREFIX}")
+set(bindir "${CMAKE_INSTALL_FULL_BINDIR}")
 set(libdir "${CMAKE_INSTALL_FULL_LIBDIR}")
 set(includedir "${CMAKE_INSTALL_FULL_INCLUDEDIR}")
 set(LLVM_EXE_LIBS "")
@@ -449,4 +524,58 @@ install(
 install(
   FILES pure.1
   DESTINATION "${CMAKE_INSTALL_MANDIR}/man1"
+)
+
+option(
+  PURE_INSTALL_EMACS_MODE
+  "Install the Pure Emacs and Flycheck modes"
+  OFF
+)
+set(
+  PURE_EMACS_SITE_LISP_DIR
+  "${CMAKE_INSTALL_DATADIR}/emacs/site-lisp"
+  CACHE STRING
+  "Installation directory for Pure Emacs Lisp files"
+)
+if(PURE_INSTALL_EMACS_MODE)
+  configure_file(
+    "${CMAKE_CURRENT_SOURCE_DIR}/etc/pure-mode.el.in"
+    "${CMAKE_CURRENT_BINARY_DIR}/etc/pure-mode.el"
+    @ONLY
+  )
+  install(
+    FILES
+      "${CMAKE_CURRENT_BINARY_DIR}/etc/pure-mode.el"
+      "${CMAKE_CURRENT_SOURCE_DIR}/etc/flycheck-pure.el"
+    DESTINATION "${PURE_EMACS_SITE_LISP_DIR}"
+  )
+endif()
+
+option(
+  PURE_INSTALL_TEXMACS_PLUGIN
+  "Install the Pure TeXmacs plugin"
+  OFF
+)
+set(
+  PURE_TEXMACS_DIR
+  "${CMAKE_INSTALL_DATADIR}/TeXmacs"
+  CACHE STRING
+  "Installation root for Pure TeXmacs files"
+)
+if(PURE_INSTALL_TEXMACS_PLUGIN)
+  install(
+    DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/texmacs/"
+    DESTINATION "${PURE_TEXMACS_DIR}"
+  )
+endif()
+
+configure_file(
+  "${CMAKE_CURRENT_SOURCE_DIR}/cmake/Uninstall.cmake.in"
+  "${CMAKE_CURRENT_BINARY_DIR}/cmake_uninstall.cmake"
+  @ONLY
+)
+add_custom_target(
+  uninstall
+  COMMAND "${CMAKE_COMMAND}" -P "${CMAKE_CURRENT_BINARY_DIR}/cmake_uninstall.cmake"
+  COMMENT "Removing installed Pure files"
 )

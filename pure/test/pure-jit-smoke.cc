@@ -176,6 +176,53 @@ int main()
   }
   llvm::consumeError(removed_provider.takeError());
 
+  std::unique_ptr<llvm::Module> repeated
+    (new llvm::Module("pure-jit-repeated-helper", *context));
+  repeated->setDataLayout((*jit)->data_layout());
+  repeated->setTargetTriple((*jit)->target_triple());
+  llvm::Function *shared_helper = llvm::Function::Create
+    (function_type, llvm::Function::ExternalLinkage,
+     "pure_jit_smoke_shared_helper", repeated.get());
+  llvm::BasicBlock *shared_helper_entry = llvm::BasicBlock::Create
+    (*context, "entry", shared_helper);
+  llvm::IRBuilder<> shared_helper_builder(shared_helper_entry);
+  shared_helper_builder.CreateRet(llvm::ConstantInt::get(int32_type, 42));
+  llvm::Function *repeated_entry = llvm::Function::Create
+    (function_type, llvm::Function::InternalLinkage,
+     "pure_jit_smoke_repeated_entry", repeated.get());
+  llvm::BasicBlock *repeated_entry_block = llvm::BasicBlock::Create
+    (*context, "entry", repeated_entry);
+  llvm::IRBuilder<> repeated_entry_builder(repeated_entry_block);
+  repeated_entry_builder.CreateRet
+    (repeated_entry_builder.CreateCall(shared_helper));
+
+  llvm::orc::ResourceTrackerSP repeated_tracker_one =
+    (*jit)->create_resource_tracker();
+  if (llvm::Error error = (*jit)->add_module_copy
+        (repeated_tracker_one, *repeated, "pure_jit_smoke_repeated_entry",
+         "pure_jit_smoke_repeated_one"))
+    return report_error(std::move(error));
+  llvm::orc::ResourceTrackerSP repeated_tracker_two =
+    (*jit)->create_resource_tracker();
+  if (llvm::Error error = (*jit)->add_module_copy
+        (repeated_tracker_two, *repeated, "pure_jit_smoke_repeated_entry",
+         "pure_jit_smoke_repeated_two"))
+    return report_error(std::move(error));
+  llvm::Expected<std::int32_t (*)()> repeated_one =
+    (*jit)->lookup_function<std::int32_t()>("pure_jit_smoke_repeated_one");
+  if (!repeated_one) return report_error(repeated_one.takeError());
+  llvm::Expected<std::int32_t (*)()> repeated_two =
+    (*jit)->lookup_function<std::int32_t()>("pure_jit_smoke_repeated_two");
+  if (!repeated_two) return report_error(repeated_two.takeError());
+  if ((*repeated_one)() != 42 || (*repeated_two)() != 42) {
+    llvm::errs() << "PureJit repeated helper test returned the wrong value\n";
+    return 1;
+  }
+  if (llvm::Error error = repeated_tracker_two->remove())
+    return report_error(std::move(error));
+  if (llvm::Error error = repeated_tracker_one->remove())
+    return report_error(std::move(error));
+
   llvm::Function *missing_target = llvm::Function::Create
     (function_type, llvm::Function::ExternalLinkage,
      "pure_jit_smoke_missing_target", module.get());

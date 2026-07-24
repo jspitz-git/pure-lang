@@ -1,0 +1,6 @@
+using system;
+
+if pointer_type stdout == "FILE*" then () else throw "bad FILE pointer tag";
+printf "formatted:%s:%d\n" ("ok",42);
+if sscanf "17 value" "%d %s" == (17,"value") then ()
+else throw "bad formatted input";
