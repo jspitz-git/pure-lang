@@ -151,3 +151,9 @@ Deterministic runtime/golden failures exposed by the completed runner belong to 
     ordered output and no golden difference.
   - This establishes an observed 18-minute Debug baseline with eight workers;
     sanitizer measurement is still required before setting preset timeout policy.
+- 2026-07-24: Measured the first complete ASan/UBSan corpus execution.
+  - Four workers exceeded a 60-minute outer limit and cleaned up all run state.
+  - Eight workers completed all 97 inputs in 5273.61 seconds, establishing an
+    88-minute pre-fix baseline while exposing five genuine sanitizer findings.
+  - The five-input failed-only confirmation passed in 260.41 seconds after their
+    runtime fixes; a clean complete run remains required for the final budget.

@@ -4460,7 +4460,7 @@ int64_t pure_get_int64(pure_expr *x)
     (sizeof(mp_limb_t) == 8) ? (uint64_t)mpz_getlimbn(x->data.z, 0) :
     (mpz_getlimbn(x->data.z, 0) +
      (((uint64_t)mpz_getlimbn(x->data.z, 1))<<32));
-  return (mpz_sgn(x->data.z) < 0) ? -(int64_t)v : (int64_t)v;
+  return (int64_t)((mpz_sgn(x->data.z) < 0) ? (uint64_t)0-v : v);
 }
 
 extern "C"
@@ -4469,7 +4469,7 @@ int32_t pure_get_int(pure_expr *x)
   uint32_t v =
     (sizeof(mp_limb_t) == 8) ? (uint32_t)(uint64_t)mpz_getlimbn(x->data.z, 0) :
     mpz_getlimbn(x->data.z, 0);
-  return (mpz_sgn(x->data.z) < 0) ? -(int32_t)v : (int32_t)v;
+  return (int32_t)((mpz_sgn(x->data.z) < 0) ? (uint32_t)0-v : v);
 }
 
 extern "C"
@@ -9608,9 +9608,11 @@ struct Blob {
     dest_endian = WORDS_BIGENDIAN?1:-1;
     src_endian = h->tag==(int32_t)MAGIC?dest_endian:-dest_endian;
     size_t n1 = swap(h->n1), n2 = swap(h->n2); uint32_t crc = swap(h->crc);
-    if (n1 < n2) return;
-    int32_t tag = swap(*(int32_t*)((char*)data+n2));
-    int32_t marker = swap(*(int32_t*)((char*)data+n1-sizeof(int32_t)));
+    if (n1 < sizeof(int32_t) || n2 > n1-sizeof(int32_t)) return;
+    int32_t tag, marker;
+    memcpy(&tag, (char*)data+n2, sizeof(tag));
+    memcpy(&marker, (char*)data+n1-sizeof(marker), sizeof(marker));
+    tag = swap(tag); marker = swap(marker);
     if (tag != 0 || marker != -4711) return;
     size_t ofs = align(sizeof(hdrdata));
     uint32_t mycrc = cksum(n1-ofs, (const unsigned char*)data+ofs);
@@ -12492,6 +12494,11 @@ static uint32_t string_hash(const char *s)
   return h;
 }
 
+static inline uint32_t hash_rotate(uint32_t h)
+{
+  return (h<<1) | (h>>31);
+}
+
 extern "C"
 uint32_t hash(pure_expr *x)
 {
@@ -12529,69 +12536,68 @@ uint32_t hash(pure_expr *x)
   }
   case EXPR::APP: {
     checkstk(test);
-    int h;
-    h = ::hash(x->data.x[0]);
-    h = (h<<1) | (h<0 ? 1 : 0);
+    uint32_t h = ::hash(x->data.x[0]);
+    h = hash_rotate(h);
     h ^= ::hash(x->data.x[1]);
-    return (uint32_t)h;
+    return h;
   }
   case EXPR::MATRIX: {
     gsl_matrix_symbolic *m = (gsl_matrix_symbolic*)x->data.mat.p;
     const size_t tda = m->tda;
     checkstk(test);
-    int h = EXPR::MATRIX;
+    uint32_t h = EXPR::MATRIX;
     for (size_t i = 0; i < m->size1; i++)
       for (size_t j = 0; j < m->size2; j++) {
-	h = (h<<1) | (h<0 ? 1 : 0);
+	h = hash_rotate(h);
 	h ^= ::hash(m->data[i*tda+j]);
       }
-    return (uint32_t)h;
+    return h;
   }
   case EXPR::DMATRIX: {
     gsl_matrix *m = (gsl_matrix*)x->data.mat.p;
     const size_t tda = m->tda;
-    int h = EXPR::DMATRIX;
+    uint32_t h = EXPR::DMATRIX;
     for (size_t i = 0; i < m->size1; i++)
       for (size_t j = 0; j < m->size2; j++) {
-	h = (h<<1) | (h<0 ? 1 : 0);
+	h = hash_rotate(h);
 	h ^= double_hash(m->data[i*tda+j]);
       }
-    return (uint32_t)h;
+    return h;
   }
   case EXPR::CMATRIX: {
     gsl_matrix_complex *m = (gsl_matrix_complex*)x->data.mat.p;
     const size_t tda = m->tda;
-    int h = EXPR::CMATRIX;
+    uint32_t h = EXPR::CMATRIX;
     for (size_t i = 0; i < m->size1; i++)
       for (size_t j = 0; j < m->size2; j++) {
 	const size_t k = 2*(i*tda+j);
-	h = (h<<1) | (h<0 ? 1 : 0);
+	h = hash_rotate(h);
 	h ^= double_hash(m->data[k]);
-	h = (h<<1) | (h<0 ? 1 : 0);
+	h = hash_rotate(h);
 	h ^= double_hash(m->data[k+1]);
       }
-    return (uint32_t)h;
+    return h;
   }
   case EXPR::IMATRIX: {
     gsl_matrix_int *m = (gsl_matrix_int*)x->data.mat.p;
     const size_t tda = m->tda;
-    int h = EXPR::IMATRIX;
+    uint32_t h = EXPR::IMATRIX;
     for (size_t i = 0; i < m->size1; i++)
       for (size_t j = 0; j < m->size2; j++) {
-	h = (h<<1) | (h<0 ? 1 : 0);
-	h ^= (int)m->data[i*tda+j];
+	h = hash_rotate(h);
+	h ^= (uint32_t)m->data[i*tda+j];
       }
-    return (uint32_t)h;
+    return h;
   }
   default:
     assert(x->tag>=0);
     if (x->data.clos && x->data.clos->local) {
-      int h = x->tag ^ x->data.clos->key;
+      uint32_t h = (uint32_t)(x->tag ^ x->data.clos->key);
       for (uint32_t i = 0; i < x->data.clos->m; i++) {
-	h = (h<<1) | (h<0 ? 1 : 0);
+	h = hash_rotate(h);
 	h ^= ::hash(x->data.clos->env[i]);
       }
-      return (uint32_t)h;
+      return h;
     } else
       return (uint32_t)x->tag;
   }

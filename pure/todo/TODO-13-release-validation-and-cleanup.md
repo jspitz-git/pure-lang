@@ -135,8 +135,11 @@ TODO-18 has now cleared the configuration-independent differences: confirmation 
 passed 97/97 in Release in 897.16 seconds with four workers and in Debug in 1043.32
 seconds with eight workers. The initial four-worker Debug run exceeded its 30-minute
 outer limit but correctly cleaned up workers, staging, and the build-directory lock.
-No complete supported-suite pass is claimed until TODO-17 establishes and meets the
-corresponding sanitizer budget.
+The first complete sanitizer run then finished all 97 inputs with eight workers in
+5273.61 seconds and exposed five genuine ASan/UBSan failures. Their bigint conversion,
+blob alignment, pragma parsing, and hash-rotation root causes are fixed, and all five
+failed-only sanitizer reruns now pass. No complete supported-suite pass is claimed
+until a clean full sanitizer confirmation run establishes the final budget.
 
 ## Installation Validation
 
@@ -459,3 +462,13 @@ The release cleanup produced four numbered follow-ups:
     - `run-tests -j 8` passed all 97 inputs in 1043.32 seconds with no golden diff.
     - Debug behavior is complete; only full sanitizer corpus validation remains
       before TODO-13 can claim the complete supported-suite pass.
+- 2026-07-24: Completed the first full sanitizer corpus and fixed its five findings.
+  - A four-worker attempt exceeded a 60-minute outer limit and cleaned up correctly;
+    eight workers completed all 97 inputs in 5273.61 seconds with five failures.
+  - Fixed signed overflow in 32- and 64-bit bigint extraction, the one-byte pragma
+    version scanset destination, an unaligned blob marker read, and signed hash shifts.
+  - Validation:
+    - ASan/UBSan `run-tests -f -j 5` passed `test018`, `test041`, `test042`,
+      `test070`, and `test074` in 260.41 seconds without a finding.
+    - The same five Release inputs passed in 80.40 seconds with unchanged golden output.
+    - A clean complete sanitizer confirmation run remains required.

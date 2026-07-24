@@ -70,6 +70,15 @@ type behavior in `test058` and also cleared `test051`, `test057`, `test063`, and
 which cloned its wrapper, fixing `test054` and the downstream `test020` segfault.
 No Release failure remains from the initial set of 20.
 
+The first complete ASan/UBSan corpus run found five additional undefined-behavior
+failures: signed negation at the minimum bigint conversion boundary (`test018`),
+misaligned blob-marker loads (`test041` and `test042`), a one-byte destination for a
+NUL-terminated pragma version scanset (`test070`), and signed left shift in matrix
+hashing (`test074`). Bigint extraction now uses unsigned modular negation, blob markers
+use `memcpy`, the scanset is width-limited with a two-byte destination, and all hash
+rotations use `uint32_t`. The same treatment covers the equivalent 64-bit conversion
+and every expression hash rotation rather than only the observed lines.
+
 ## Task List
 
 1. [x] Reduce each failure class to a deterministic reproducer and root cause.
@@ -182,3 +191,13 @@ TODO-13 runs did not progress far enough to expose these deterministic differenc
       1043.32 seconds with no golden difference.
     - Release and Debug behavior compatibility are complete; only the sanitizer
       corpus remains unchecked.
+- 2026-07-24: Fixed five findings from the first complete sanitizer corpus run.
+  - Eight workers completed all 97 inputs in 5273.61 seconds; `test018`, `test041`,
+    `test042`, `test070`, and `test074` reported genuine ASan/UBSan failures.
+  - Replaced signed minimum-value negation, unaligned blob-marker dereference, an
+    undersized scanset destination, and signed hash shifts with defined equivalents.
+  - Validation:
+    - `run-tests -f -j 5` passed all five sanitizer reproducers in 260.41 seconds
+      with `PURE_STACK=0` and the preset ASan/UBSan options.
+    - All five inputs retained their Release golden output in an 80.40-second run.
+    - A clean complete sanitizer run remains required before closing task 7.
