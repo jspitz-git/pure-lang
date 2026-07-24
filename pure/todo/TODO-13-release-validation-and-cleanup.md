@@ -22,7 +22,9 @@ suite passes.
 1. [x] Audit the tree for old JIT calls, LLVM version macros, and obsolete headers.
 2. [x] Run the full tests and classify any remaining behavior differences.
 3. [x] Verify build, test, install, uninstall, and installed-program execution.
-4. [x] Update documentation for Clang/LLVM 22, CMake, Ninja, LLDB, and bitcode policy.
+4. [ ] Update documentation for Clang/LLVM 22, CMake, Ninja, LLDB, and bitcode policy.
+   - Reopened by the retrospective audit: the active batch compiler and manual
+     still use the removed `opt -std-compile-opts` pipeline.
 5. [x] Remove superseded Autoconf and Makefile infrastructure after parity review.
 6. [ ] Perform a clean-tree release build and close or create follow-up TODOs.
 
@@ -178,6 +180,43 @@ remain intact. Live MCJIT/`ExecutionEngine` dependencies and LLVM compatibility
 gates are outside this build-system cleanup and remain tracked for a dedicated
 runtime migration.
 
+## Retrospective TODO Audit
+
+A second pass over TODO-01 through TODO-12 found prerequisites which later work
+satisfied but never reconciled in the originating documents, plus deliberate
+scope deferrals which still need explicit ownership. Historical progress-log
+entries remain unchanged; only their current status and follow-up implications
+need correction.
+
+| TODO | Current audit result | Required disposition before task 6 |
+| --- | --- | --- |
+| TODO-01 | The baseline checklist was never updated. Later work documented the runner, added closure/redefinition coverage, established smoke tests, and classified the corpus. | Reconcile the inventory against TODO-09, TODO-12, and this TODO; explicitly classify the no-longer-repeatable pre-port check. |
+| TODO-02 | Build/install blockers are resolved on Linux. Windows and macOS were deliberately not validated. | Keep the historical closure and assign non-Linux validation only after defining the supported release matrix. |
+| TODO-03 | Context/type migration is complete. The deferred LLVM version gates still protect both dead branches and live MCJIT code. | Move gate removal with the transitional engine rather than treating it as context cleanup. |
+| TODO-04 | TODO-06 removed the runtime blocker and representative generated modules now pass verifier-backed integration tests. Pointer-bearing external bitcode is still rejected without explicit Pure ABI metadata. | Complete verifier closure, then assign pointer ABI metadata to a dedicated follow-up. |
+| TODO-05 | Standard O1 was selected and pre/post-pass IR was verified. The planned runnable O0/O1 comparison was never performed. | Either perform a test-only comparison or explicitly record O1 as the supported correctness baseline and move tuning out of release scope. |
+| TODO-06 | The LLJIT foundation and typed lookup are complete. `ExecutionEngine` remains live for mappings, eager JIT, batch definitions, and batch Faust. | Assign full MCJIT removal to a runtime follow-up. |
+| TODO-07 | TODO-08/09 removed both blockers and definition environments now own trackers, so task 3 is complete. Legacy unmapping/body deletion in task 5 remains tied to MCJIT. | Reconcile task 3 and move task 5 to the same runtime follow-up. |
+| TODO-08 | ORC host symbols, rebinding, and missing-symbol diagnostics are complete. Legacy mappings and the fallback resolver remain active beside them. | Preserve the ORC closure and assign removal of the synchronized legacy path to the runtime follow-up. |
+| TODO-09 | Closure generations, redefinition, and collection are complete. ORC stubs were intentionally unnecessary for language calls; stable native callable addresses remain undecided. | Record the existing stable-slot decision and assign or reject a native-extension ABI guarantee. |
+| TODO-10 | Target/data-layout policy and per-provider trackers are complete. It did not solve TODO-04's pointer ABI metadata requirement. | Close its resolved design questions without claiming pointer-bearing ABI support. |
+| TODO-11 | Interactive Faust load/reload/rollback/lifetime behavior is complete. Batch execution was not validated because it still uses legacy MCJIT and `opt -std-compile-opts`. | Move batch modernization into the runtime/batch follow-up and correct active documentation. |
+| TODO-12 | Debug objects and lifetime sanitizer coverage are implemented. A real LLDB stop in a named JIT frame and targeted LeakSanitizer bitcode tests were not completed. | Run both now-unblocked validations or record a reproducible host limitation. |
+
+The remaining work therefore falls into six explicit gates before final release
+closure:
+
+1. [ ] Reconcile the stale TODO-01, TODO-04, and TODO-07 checklists/statuses.
+2. [ ] Resolve TODO-05's O0/O1 validation disposition and stale design questions.
+3. [ ] Exercise the named JIT frame under LLDB 22 and the bitcode tests under the
+   targeted LeakSanitizer preset with generous timeouts.
+4. [ ] Correct the active batch documentation and assign LLVM 22 batch/MCJIT
+   modernization, compatibility-gate removal, and native callable ABI policy.
+5. [ ] Assign explicit Pure metadata for pointer-bearing bitcode and non-Linux
+   release validation to follow-up work.
+6. [ ] Fix or explicitly defer the CRLF-sensitive, repeatedly-started regression
+   harness before claiming a complete supported test-suite pass.
+
 ## Guardrails
 
 - Do not remove the old build before the CMake path covers required installation assets.
@@ -283,3 +322,22 @@ runtime migration.
       removed.
     - Searched the active tree for references to the four removed build files;
       only historical `ChangeLog` and this migration record remain.
+- 2026-07-24: Re-audited TODO-01 through TODO-12 for deferred work whose later
+  prerequisites have landed. Reopened the documentation milestone and recorded
+  six pre-closure gates rather than hiding unresolved work in historical logs.
+  - Validation:
+    - Enumerated every current status and unchecked main checklist item across
+      all thirteen TODO documents.
+    - Cross-checked deferred ownership against later TODO results, current CMake
+      tests, and the active interpreter implementation.
+    - Confirmed that TODO-04 verification and TODO-07 definition tracking are
+      now unblocked, while TODO-07 legacy cleanup remains coupled to MCJIT.
+    - Confirmed active `ExecutionEngine` mappings/materialization, the legacy
+      external resolver, LLVM compatibility gates, and batch Faust consumers.
+    - Confirmed that pointer-bearing bitcode exports remain rejected pending
+      explicit Pure ABI metadata.
+    - Found the obsolete batch `opt -std-compile-opts` command in both
+      `interpreter.cc` and active `pure.txt`, reopening task 4.
+    - Counted 189 CRLF files among 199 top-level `test/*.pure` and `test/*.log`
+      corpus files on this worktree.
+    - No build or test was run because this step is a read-only ownership audit.
