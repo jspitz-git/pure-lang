@@ -5,6 +5,11 @@ option(
   "Require the reference Clang 22 and LLVM 22 toolchain"
   ON
 )
+option(
+  PURE_DEBUG_FRIENDLY
+  "Preserve complete types and stack frames in Clang debug builds"
+  ON
+)
 
 if(PURE_STRICT_TOOLCHAIN)
   if(NOT CMAKE_C_COMPILER_ID STREQUAL "Clang")
@@ -36,6 +41,19 @@ if(LLVM_PACKAGE_VERSION VERSION_LESS 22
    OR LLVM_PACKAGE_VERSION VERSION_GREATER_EQUAL 23)
   message(FATAL_ERROR
     "Pure requires LLVM 22.x; found LLVM ${LLVM_PACKAGE_VERSION}"
+  )
+endif()
+
+if(PURE_DEBUG_FRIENDLY)
+  add_compile_options(
+    "$<$<AND:$<CONFIG:Debug>,$<COMPILE_LANG_AND_ID:C,Clang>>:-fno-omit-frame-pointer>"
+    "$<$<AND:$<CONFIG:Debug>,$<COMPILE_LANG_AND_ID:C,Clang>>:-fno-optimize-sibling-calls>"
+    "$<$<AND:$<CONFIG:Debug>,$<COMPILE_LANG_AND_ID:C,Clang>>:-fstandalone-debug>"
+    "$<$<AND:$<CONFIG:Debug>,$<COMPILE_LANG_AND_ID:C,Clang>>:-gdwarf-4>"
+    "$<$<AND:$<CONFIG:Debug>,$<COMPILE_LANG_AND_ID:CXX,Clang>>:-fno-omit-frame-pointer>"
+    "$<$<AND:$<CONFIG:Debug>,$<COMPILE_LANG_AND_ID:CXX,Clang>>:-fno-optimize-sibling-calls>"
+    "$<$<AND:$<CONFIG:Debug>,$<COMPILE_LANG_AND_ID:CXX,Clang>>:-fstandalone-debug>"
+    "$<$<AND:$<CONFIG:Debug>,$<COMPILE_LANG_AND_ID:CXX,Clang>>:-gdwarf-4>"
   )
 endif()
 
