@@ -12117,35 +12117,16 @@ int interpreter::compiler(string out, list<string> libnames, string llcopts)
     string asmfile = (ext==".s")?out:out+".s";
     bool obj_target = false;
     string custom_opts = "";
-#if LLVM33
-    /* LLVM 3.3 and later generate assembler code which doesn't compile with
-       native assemblers on some systems. OTOH, they offer the capability to
-       directly generate native object files via llc, which speeds up
-       compilation and works around issues with native assembly. This is the
-       route we take here. */
     if (ext != ".s") {
       asmfile = (ext==".o")?out:out+".o";
       obj_target = true;
       custom_opts = "-filetype=obj ";
     }
-#else
-#if LLVM30 && __APPLE__
-    // The -disable-cfi seems to be needed on OSX as of LLVM 3.0.
-    custom_opts = "-disable-cfi ";
-#endif
-#endif
     if (!llcopts.empty()) llcopts += " ";
-#if defined(__MINGW32__) && LLVM35
-    // LLVM 3.5 opt seems broken on msys2/mingw, so we have to do without it
-    string cmd = llc+" "+llcopts+custom_opts+
-      string(pic?"-relocation-model=pic ":"")+quote(target)+
-      " -o "+quote(asmfile);
-#else
-    string cmd = opt+" -f -std-compile-opts "+quote(target)+
-      " | "+llc+" "+llcopts+custom_opts+
+    string cmd = opt+" -O1 "+quote(target)+" -o - | "+
+      llc+" "+llcopts+custom_opts+
       string(pic?"-relocation-model=pic ":"")+
       "-o "+quote(asmfile);
-#endif
     if (vflag) std::cerr << cmd << '\n';
     unlink(asmfile.c_str());
     int status = system(cmd.c_str());

@@ -55,6 +55,8 @@ pathops()
   local _bname="${_fname%.*}"
   local _diff="$outdir/$_bname.diff"
   local _tmp="$_diff.$$"
+  local _input="$outdir/$_bname.input.$$"
+  local _expected="$outdir/$_bname.expected.$$"
   local _log="$testdir/$_bname.log"
 
   case "$mode" in
@@ -62,6 +64,8 @@ pathops()
       bname="$_bname" \
       diff="$_diff" \
       tmp="$_tmp" \
+      input="$_input" \
+      expected="$_expected" \
       log="$_log"
     ;;
   -d) echo $_diff
@@ -90,14 +94,17 @@ for t in "$@"; do
   pufs="$PURE_FLAGS"
   test "x$bname" = "xprelude" && pufs="$pufs -n"
   echo ${ECHO_N} "$fname: ${ECHO_C}"
-  trap 'x=$?; rm -f '$tmp'; exit $x;' ALRM HUP INT TERM
-  if ./run-test ${pufs} < "$t" 2>&1 | ${DIFF} -u "$log" - > "$tmp"
+  trap 'x=$?; rm -f '$tmp' '$input' '$expected'; exit $x;' ALRM HUP INT TERM
+  sed 's/\r$//' "$t" > "$input"
+  sed 's/\r$//' "$log" > "$expected"
+  if ./run-test ${pufs} < "$input" 2>&1 | ${DIFF} -u "$expected" - > "$tmp"
   then
-    rm -f "$tmp" "$diff"
+    rm -f "$tmp" "$input" "$expected" "$diff"
     echo "${ECHO_T}passed"
   else
     rc=1
     mv "$tmp" "$diff"
+    rm -f "$input" "$expected"
     echo "${ECHO_T}FAILED"
     test "$verbosity" -gt 0 && cat "$diff"
   fi

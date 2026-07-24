@@ -22,11 +22,16 @@ suite passes.
 1. [x] Audit the tree for old JIT calls, LLVM version macros, and obsolete headers.
 2. [x] Run the full tests and classify any remaining behavior differences.
 3. [x] Verify build, test, install, uninstall, and installed-program execution.
-4. [ ] Update documentation for Clang/LLVM 22, CMake, Ninja, LLDB, and bitcode policy.
-   - Reopened by the retrospective audit: the active batch compiler and manual
-     still use the removed `opt -std-compile-opts` pipeline.
+4. [x] Update documentation for Clang/LLVM 22, CMake, Ninja, LLDB, and bitcode policy.
+   - The active batch compiler and manual now use an LLVM 22 O1-to-`llc
+     -filetype=obj` pipeline, covered by a focused object-output test.
 5. [x] Remove superseded Autoconf and Makefile infrastructure after parity review.
-6. [ ] Perform a clean-tree release build and close or create follow-up TODOs.
+6. [x] Perform a clean-tree release build and close or create follow-up TODOs.
+
+Final status remains open pending TODO-17's bounded complete-corpus run. The fresh
+Release build and all 11 focused tests pass, but this document does not claim the
+complete supported suite passes while its repeatedly-started regression harness
+still exceeds the release-validation budget.
 
 ## Legacy LLVM Audit
 
@@ -117,9 +122,13 @@ a classified language or ORC behavior failure:
   seconds, so the serial 97-input runner needs tens of minutes in Release and
   substantially longer under ASan.
 
-The EOL handling and regression-runner duration must be fixed or explicitly
-budgeted before the clean release validation in task 6. No unexplained disabled
-test or sanitizer finding remains.
+TODO-13 fixed EOL handling at both relevant boundaries: pragma lexer rules now
+accept CRLF in directly loaded library scripts, and `run-tests` normalizes line
+endings in test inputs and golden logs before execution/comparison. The former
+`test070.pure` reproducer now passes while loading the prelude and libraries.
+Repeated interpreter startup remains an independent performance problem assigned
+to TODO-17; no complete-suite pass is claimed until that work establishes and
+meets a release budget. No unexplained disabled test or sanitizer finding remains.
 
 ## Installation Validation
 
@@ -198,9 +207,9 @@ need correction.
 | TODO-06 | The LLJIT foundation and typed lookup are complete. `ExecutionEngine` remains live for mappings, eager JIT, batch definitions, and batch Faust. | Assign full MCJIT removal to a runtime follow-up. |
 | TODO-07 | Reopened with task 3 complete. Legacy unmapping/body deletion in task 5 remains tied to MCJIT. | Move task 5 to the runtime follow-up under gate 4, then close the ORC resource TODO. |
 | TODO-08 | ORC host symbols, rebinding, and missing-symbol diagnostics are complete. Legacy mappings and the fallback resolver remain active beside them. | Preserve the ORC closure and assign removal of the synchronized legacy path to the runtime follow-up. |
-| TODO-09 | Closure generations, redefinition, and collection are complete. ORC stubs were intentionally unnecessary for language calls; stable native callable addresses remain undecided. | Record the existing stable-slot decision and assign or reject a native-extension ABI guarantee. |
+| TODO-09 | Closure generations, redefinition, and collection are complete. ORC stubs are unnecessary for language calls, which use stable closure slots. | No native callable-address guarantee is currently promised; TODO-14 owns an explicit future decision and any implementation. |
 | TODO-10 | Target/data-layout policy and per-provider trackers are complete. It did not solve TODO-04's pointer ABI metadata requirement. | Close its resolved design questions without claiming pointer-bearing ABI support. |
-| TODO-11 | Interactive Faust load/reload/rollback/lifetime behavior is complete. Batch execution was not validated because it still uses legacy MCJIT and `opt -std-compile-opts`. | Move batch modernization into the runtime/batch follow-up and correct active documentation. |
+| TODO-11 | Interactive Faust load/reload/rollback/lifetime behavior is complete. The LLVM 22 batch object pipeline now passes, while batch Faust still uses legacy MCJIT. | TODO-14 owns complete batch-Faust execution and MCJIT removal; active batch documentation is corrected. |
 | TODO-12 | Closed after all five targeted LeakSanitizer bitcode tests passed. JIT symbol publication is automatic; actual LLDB inferior launch fails identically for the smoke binary and `/bin/true` on this host. | Complete with a reproducible host limitation; a real named-frame stop remains an interactive check on a host which permits LLDB launch. |
 
 The remaining work therefore falls into six explicit gates before final release
@@ -210,12 +219,30 @@ closure:
 2. [x] Resolve TODO-05's O0/O1 validation disposition and stale design questions.
 3. [x] Exercise the named JIT frame under LLDB 22 and the bitcode tests under the
    targeted LeakSanitizer preset, recording the host launch limitation.
-4. [ ] Correct the active batch documentation and assign LLVM 22 batch/MCJIT
-   modernization, compatibility-gate removal, and native callable ABI policy.
-5. [ ] Assign explicit Pure metadata for pointer-bearing bitcode and non-Linux
-   release validation to follow-up work.
-6. [ ] Fix or explicitly defer the CRLF-sensitive, repeatedly-started regression
-   harness before claiming a complete supported test-suite pass.
+4. [x] Correct the active batch documentation and assign LLVM 22 batch/MCJIT
+   modernization, compatibility-gate removal, and native callable ABI policy to
+   TODO-14.
+5. [x] Assign explicit Pure metadata for pointer-bearing bitcode to TODO-15 and
+   non-Linux release validation to TODO-16.
+6. [x] Fix CRLF-sensitive lexer/input/golden handling and assign the independent
+   repeatedly-started regression-harness performance problem to TODO-17. Do not
+   claim a complete supported test-suite pass until TODO-17 completes it.
+
+## Release-build Result
+
+A fresh out-of-tree Release configuration in `build/todo13-release-final` used
+Clang/LLVM 22.1.8 and Ninja. Its serial 31-step build completed successfully, and
+all 11 focused CTest tests passed in 193 seconds, including bitcode, Faust, JIT
+lifetime/debug-dump, and LLVM 22 batch object output. This satisfies the clean
+build portion of task 6. The complete `pure-regression` corpus is deliberately not
+reported as passing; TODO-17 owns the remaining startup-duration gate.
+
+The release cleanup produced four numbered follow-ups:
+
+- TODO-14: complete ORC runtime/batch migration and decide native callable ABI;
+- TODO-15: define pointer-bearing external bitcode ABI metadata;
+- TODO-16: define and validate the non-Linux release matrix;
+- TODO-17: bound the repeatedly-started complete regression harness.
 
 ## Guardrails
 
@@ -376,3 +403,26 @@ closure:
       limit, isolating it from Pure's JIT and debugger-object registration.
     - TODO-12 now distinguishes automated generated-symbol publication from the
       interactive named-frame stop unavailable on this host.
+- 2026-07-24: Modernized the active LLVM 22 batch object pipeline, fixed CRLF
+  pragma and golden-test handling, assigned all retrospective deferrals, and ran
+  the fresh Release validation.
+  - Replaced `opt -std-compile-opts` and LLVM 3.x object-output branches with
+    `opt -O1 -o - | llc -filetype=obj` in the compiler and active manual.
+  - Added `pure-batch-object`, which compiles a no-prelude Pure source and checks
+    that batch compilation creates a nonempty object file.
+  - Made all active and skipped-source pragma rules consume CRLF correctly, and
+    normalized test inputs and golden logs at the regression harness boundary.
+  - Closed TODO-07 after moving its final hybrid-runtime cleanup to TODO-14;
+    TODO-15, TODO-16, and TODO-17 own pointer ABI metadata, non-Linux validation,
+    and regression startup performance respectively.
+  - Validation:
+    - Debug `pure-batch-object` passed in 0.08 seconds.
+    - Debug and fresh Release `run-tests -v test/test070.pure` runs passed after
+      rebuilding the lexer; this test also loads the CRLF prelude and libraries.
+    - ASan/UBSan `pure-batch-object` passed in 0.15 seconds without a finding.
+    - A fresh serial Release build in `build/todo13-release-final` completed all
+      31 steps with Clang/LLVM 22.1.8 and Ninja.
+    - `ctest --test-dir build/todo13-release-final -E '^pure-regression$'
+      --output-on-failure` passed all 11 focused tests in 193.05 seconds.
+    - The complete regression corpus was not rerun to completion; TODO-17 remains
+      the explicit release-duration gate, so no complete-suite pass is claimed.

@@ -198,10 +198,12 @@ implementations[key]          FunctionGeneration owning that closure key
 - Test closures created before and after several redefinitions.
 - Exercise local functions, global functions, recursion, and exception paths.
 
-## Open Questions
+## Native Callable ABI Disposition
 
-- Which LLVM 22 indirection-stub API offers the best long-term compatibility?
-- Must public symbol addresses remain stable for native extension clients as well?
+Language-level calls use the existing stable closure slot and require no ORC
+indirection stub. No stable callable address for an interactively redefinable Pure
+name is currently promised to native extension clients. TODO-14 owns the explicit
+decision to reject that guarantee or define and test an ORC-backed native ABI.
 
 ## Progress Log
 

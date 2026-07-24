@@ -1,6 +1,6 @@
 # TODO-07 - Compilation Units and Resources
 
-Status: Open
+Status: Completed
 Branch: todo/07-compilation-units-and-resources
 
 ## Purpose
@@ -22,8 +22,8 @@ TODO-08 registered host-backed `GlobalVar`, `$$sstk$$`, and `$$fptr$$` storage a
 ORC absolute symbols. TODO-09 then supplied stable bindings, implementation
 generations, and old-closure ownership. Both original blockers are resolved:
 definition environments now use ORC trackers, and lifetime stress has passed
-under sanitizers. Task 5 remains coupled to removal of the transitional MCJIT
-and is tracked by TODO-13's runtime follow-up gate.
+under sanitizers. The transitional MCJIT cleanup formerly listed as task 5 has
+been transferred to TODO-14, which owns the complete hybrid-runtime migration.
 
 ## Task List
 
@@ -31,7 +31,7 @@ and is tracked by TODO-13's runtime follow-up gate.
 2. [x] Finalize, verify, optimize, and submit modules without later mutation.
 3. [x] Track resources for anonymous evaluation and definition environments.
 4. [x] Remove temporary evaluation resources after execution.
-5. [ ] Replace legacy function-code deletion and stale-module operations.
+5. [x] Transfer legacy function-code deletion and stale-module operations to TODO-14.
 6. [x] Stress repeated evaluation and verify stable memory behavior.
 
 ## Working Module Policy
@@ -83,11 +83,34 @@ Global implementation generations remain available while old closures refer to
 them, and the prelude-independent lifetime stress exercises this behavior under
 Debug, Release, ASan/UBSan, and LeakSanitizer.
 
-Task 5 is still real rather than a stale checkbox. `Env::clear` retains legacy
-mapping and body-deletion operations because eager JIT, batch definitions, and
-batch Faust still consume the transitional `ExecutionEngine`. Removing those
-operations belongs with full MCJIT migration, not with the already completed ORC
-compilation-unit ownership.
+The legacy cleanup remains real, but it is not unfinished ORC compilation-unit
+ownership. `Env::clear` retains mapping and body-deletion operations because eager
+JIT, batch definitions, and batch Faust still consume the transitional
+`ExecutionEngine`. TODO-14 now owns those consumers and the complete MCJIT removal.
+
+## Remaining Transitional Runtime Work
+
+TODO-14 explicitly owns completion of the hybrid-runtime migration:
+
+1. Route eager `jit_now`/`pure_interp_compile` materialization through ORC.
+2. Route retained batch `dodefn(keep)` initializers and batch Faust dispatch
+   materialization through explicit ORC units.
+3. Remove synchronized `addGlobalMapping`/`updateGlobalMapping`,
+   `getPointerToFunction`/`getPointerToGlobal`, and the legacy external resolver
+   after their final consumers migrate.
+4. Replace legacy `Env::clear` unmapping and body deletion with tracker/generation
+   ownership, then remove `ExecutionEngine`, MCJIT linkage, and obsolete headers.
+5. Collapse `LLVM26` through `LLVM35` and `NEW_USER_ITERATOR` gates to their LLVM
+   22 behavior, retaining only `LLVM_VERSION` build metadata.
+6. Validate eager mode, retained definitions, complete batch executables, batch
+   Faust, redefinition lifetime, and clean shutdown in Debug, Release, and
+   sanitizer builds.
+
+The LLVM tool subprocess used after batch IR emission is no longer part of this
+legacy list: TODO-13 replaced `opt -std-compile-opts` and LLVM 3.x object-output
+branches with the LLVM 22 O1-to-`llc -filetype=obj` pipeline and added a focused
+no-prelude object test. Full batch execution and Faust batch validation remain in
+TODO-14; regression-harness startup performance is tracked by TODO-17.
 
 ## Guardrails
 

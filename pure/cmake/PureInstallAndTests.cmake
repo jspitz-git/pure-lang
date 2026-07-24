@@ -399,6 +399,31 @@ if(BUILD_TESTING)
   endif()
 
   add_test(
+    NAME pure-batch-object
+    COMMAND
+      "${CMAKE_COMMAND}"
+      -DPURE_EXECUTABLE=$<TARGET_FILE:pure>
+      -DPURE_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
+      -DPURE_BUILD_DIR=${CMAKE_CURRENT_BINARY_DIR}
+      -DPURE_LD_LIB_PATH=${LD_LIB_PATH}
+      -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunPureBatchTest.cmake"
+  )
+  if(PURE_SANITIZERS)
+    set(batch_test_timeout 300)
+  else()
+    set(batch_test_timeout 120)
+  endif()
+  set_tests_properties(
+    pure-batch-object
+    PROPERTIES
+      LABELS "batch;integration"
+      REQUIRED_FILES "${CMAKE_CURRENT_SOURCE_DIR}/test/batch-smoke.pure"
+      TIMEOUT ${batch_test_timeout}
+      FAIL_REGULAR_EXPRESSION
+        "AddressSanitizer;LeakSanitizer;runtime error:"
+  )
+
+  add_test(
     NAME pure-regression
     COMMAND "${CMAKE_CURRENT_BINARY_DIR}/run-tests"
     WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"

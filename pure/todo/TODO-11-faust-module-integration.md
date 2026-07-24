@@ -127,6 +127,8 @@ Symbol order in the LLVM module is not ABI-significant.
 - The Faust compiler remains optional at configure time. Runtime loading is always built,
   while generated Faust fixtures and their lifecycle CTest are registered only when the
   compiler is available.
+- Interactive Faust lifecycle behavior completes this TODO. TODO-14 owns the retained
+  MCJIT batch implementation and complete batch-Faust execution validation.
 
 ## Progress Log
 

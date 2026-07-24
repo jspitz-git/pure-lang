@@ -12597,8 +12597,7 @@ addition to the commands which are invoked in the compilation process):
 .. code-block:: none
 
   $ pure -v0100 -c hello.pure -o hello.o
-  opt -f -std-compile-opts hello.o.bc | llc -f -o hello.o.s
-  gcc -c hello.o.s -o hello.o
+  opt -O1 hello.o.bc -o - | llc -filetype=obj -o hello.o
   Link with: g++ hello.o -lpure
 
 Well, we already knew that, so let's consider a slightly more interesting
@@ -12607,8 +12606,7 @@ example from Pure's ODBC module:
 .. code-block:: none
 
   $ pure -v0100 -c pure-odbc/examples/menagerie.pure -o menagerie.o
-  opt -f -std-compile-opts menagerie.o.bc | llc -f -o menagerie.o.s
-  gcc -c menagerie.o.s -o menagerie.o
+  opt -O1 menagerie.o.bc -o - | llc -filetype=obj -o menagerie.o
   Link with: g++ menagerie.o /usr/local/lib/pure/odbc.so -lpure
   $ g++ -shared -o menagerie.so menagerie.o /usr/local/lib/pure/odbc.so -lpure
 

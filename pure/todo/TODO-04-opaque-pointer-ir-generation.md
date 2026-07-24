@@ -101,7 +101,7 @@ and Faust providers through these boundaries.
 This closes generated-IR verification without weakening the explicit opaque
 pointer limitation: generic external bitcode functions with pointer parameters
 or results remain unwrappable until modules can provide semantic Pure ABI
-metadata. TODO-13's retrospective gate 5 owns creation of that follow-up.
+metadata. TODO-15 now owns the metadata format, validation, and loader coverage.
 
 ## Guardrails
 
