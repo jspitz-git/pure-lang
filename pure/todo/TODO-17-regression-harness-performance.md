@@ -20,7 +20,7 @@ release-validation budget in Debug, Release, and sanitizer configurations.
 ## Task List
 
 1. [ ] Record per-test and startup timings in all supported presets.
-   - Release per-input timing is captured; Debug and ASan/UBSan remain.
+   - Release and Debug per-input timings are captured; ASan/UBSan remains.
 2. [x] Classify isolation and shared-filesystem constraints across the corpus.
 3. [x] Choose a bounded execution design which preserves test semantics.
 4. [x] Implement deterministic scheduling and collision-free output handling.
@@ -118,11 +118,13 @@ still needs to be encoded in presets and CTest timeouts.
 | Preset | Wall time | Per-input min / median / max | Slowest inputs | Artifact |
 | --- | ---: | ---: | --- | --- |
 | Release | 365.14 s | 9 / 11 / 127 s | `test015` 127 s; `test025` 64 s; `test020` 31 s | `TODO-17-release-timings.txt` |
+| Debug | 499.68 s | 13 / 16 / 152 s | `test015` 152 s; `test025` 79 s; `test020` 40 s | `TODO-17-debug-timings.txt` |
 
-The Release capture used four continuously refilled workers. All 97 inputs passed;
-the sum of independently measured worker wall times was 1441 seconds. The prelude
-startup entry took 10 seconds under concurrent load, consistent with the isolated
-3.72-second startup becoming slower under four-way LLVM contention.
+Both captures used four continuously refilled workers and passed all 97 inputs. The
+sum of independently measured worker wall times was 1441 seconds in Release and 1976
+seconds in Debug. The prelude entries took 10 and 14 seconds respectively under
+concurrent load, consistent with isolated startup becoming slower under four-way LLVM
+contention.
 
 ## Guardrails
 
@@ -269,3 +271,8 @@ Deterministic runtime/golden failures exposed by the completed runner belong to 
     9 to 127 seconds with an 11-second median.
   - `test015` (127 s), `test025` (64 s), and `test020` (31 s) were the slowest inputs.
   - Stored the complete deterministic timing output in `TODO-17-release-timings.txt`.
+- 2026-07-24: Captured complete post-fix Debug per-input timings.
+  - Four workers passed all 97 inputs in 499.68 seconds; per-input times ranged from
+    13 to 152 seconds with a 16-second median.
+  - `test015` (152 s), `test025` (79 s), and `test020` (40 s) were the slowest inputs.
+  - Stored the complete deterministic timing output in `TODO-17-debug-timings.txt`.

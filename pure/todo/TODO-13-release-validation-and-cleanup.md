@@ -529,3 +529,8 @@ The release cleanup produced four numbered follow-ups:
   - Per-input wall time ranged from 9 to 127 seconds with an 11-second median;
     `test015`, `test025`, and `test020` were the three slowest inputs.
   - The complete ordered capture is stored in `TODO-17-release-timings.txt`.
+- 2026-07-24: Captured complete Debug per-input timings.
+  - `run-tests -t -j 4` passed 97/97 in 499.68 seconds.
+  - Per-input wall time ranged from 13 to 152 seconds with a 16-second median;
+    `test015`, `test025`, and `test020` remained the three slowest inputs.
+  - The complete ordered capture is stored in `TODO-17-debug-timings.txt`.
