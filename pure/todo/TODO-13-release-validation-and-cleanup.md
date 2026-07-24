@@ -519,3 +519,8 @@ The release cleanup produced four numbered follow-ups:
     - Generated CTest JSON contained the exact timeout/environment policy in all
       three presets.
     - The checked-in Release `pure-regression` test passed 97/97 in 243.72 seconds.
+- 2026-07-24: Added opt-in ordered per-input timing to the regression runner.
+  - `-t` and `TEST_TIMINGS=1` expose worker wall time without changing default output.
+  - Validation:
+    - Generated runner passed `sh -n`; timed and default two-input Release runs passed.
+    - Invalid timing configuration was rejected before test execution.

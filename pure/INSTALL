@@ -87,7 +87,8 @@ times on a 12-CPU host were approximately 5, 8, and 22 minutes respectively.
 Sanitizer regression runs disable Pure's address-difference stack heuristic because
 ASan detects actual stack overflow, and use a nonzero 64 MiB quarantine to retain
 use-after-free coverage without multiplying memory by the ASan default for every
-worker.
+worker. To include each script's elapsed wall time in the otherwise ordered runner
+output, invoke ``run-tests -t`` in a build directory or set ``TEST_TIMINGS=1``.
 
 Leak checks use the ASan build and are intended for focused tests::
 

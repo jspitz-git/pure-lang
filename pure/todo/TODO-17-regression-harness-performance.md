@@ -20,6 +20,8 @@ release-validation budget in Debug, Release, and sanitizer configurations.
 ## Task List
 
 1. [ ] Record per-test and startup timings in all supported presets.
+   - `run-tests -t` / `TEST_TIMINGS=1` now provides deterministic per-input timing;
+     complete timing captures remain to be run.
 2. [x] Classify isolation and shared-filesystem constraints across the corpus.
 3. [x] Choose a bounded execution design which preserves test semantics.
 4. [x] Implement deterministic scheduling and collision-free output handling.
@@ -244,3 +246,11 @@ Deterministic runtime/golden failures exposed by the completed runner belong to 
     - CTest JSON reported the expected timeout and environment for all three presets.
     - `ctest --preset llvm22-release -R '^pure-regression$'` passed in 243.72 seconds
       under the checked-in policy.
+- 2026-07-24: Added opt-in deterministic per-input timing output.
+  - `-t` or `TEST_TIMINGS=1` records worker wall time and appends it during ordered
+    result replay; default status output remains byte-compatible.
+  - Validation:
+    - Generated runner passed `sh -n`.
+    - Two parallel Release inputs passed with ordered 11s and 8s timings.
+    - The same run without timing retained the original `passed` status lines.
+    - An invalid `TEST_TIMINGS` value was rejected with usage output.

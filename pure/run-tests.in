@@ -20,13 +20,16 @@ outdir="./test"
 failed=0
 usage=0
 verbosity=0
+timings=${TEST_TIMINGS:-0}
 jobs=${TEST_JOBS:-1}
 
-while getopts :fhvj: opt; do
+while getopts :fhvtj: opt; do
   case $opt in
   f) failed=1
     ;;
   j) jobs=$OPTARG
+    ;;
+  t) timings=1
     ;;
   \?|h) usage=1
     ;;
@@ -43,16 +46,21 @@ case "$jobs" in
   *) test "$jobs" -gt 0 || usage=1
     ;;
 esac
+case "$timings" in
+  0|1) ;;
+  *) usage=1 ;;
+esac
 
 if test 0 -ne $failed && test 0 -ne $#; then
   usage=1
 fi
 
 if test 0 -ne $usage; then
-  echo "usage: $0 [-v] [-j jobs] [-h|-f|test...]"
+  echo "usage: $0 [-tv] [-j jobs] [-h|-f|test...]"
   echo "  -h          display this help"
   echo "  -f          run previously failed tests"
   echo "  -j jobs     run at most this many tests concurrently"
+  echo "  -t          show each test's elapsed wall time"
   echo "  -v          show result diffs for failed tests"
   echo "  test...     test file(s) to run"
   exit 1
@@ -82,8 +90,11 @@ run_one()
 {
   local ordinal=$1 t=$2
   local work="$rundir/$ordinal"
-  local pufs
+  local pufs started finished
 
+  if test "$timings" -ne 0; then
+    started=$(date +%s)
+  fi
   pathops -A "$t"
   pufs="$PURE_FLAGS"
   test "x$bname" = "xprelude" && pufs="$pufs -n"
@@ -91,14 +102,16 @@ run_one()
      ! sed 's/\r$//' "$log" > "$work/expected" 2>> "$work/error"
   then
     echo 2 > "$work/status"
-    return
-  fi
-  if ./run-test ${pufs} < "$work/input" 2>&1 |
-     ${DIFF} -u "$work/expected" - > "$work/diff"
+  elif ./run-test ${pufs} < "$work/input" 2>&1 |
+       ${DIFF} -u "$work/expected" - > "$work/diff"
   then
     echo 0 > "$work/status"
   else
     echo 1 > "$work/status"
+  fi
+  if test "$timings" -ne 0; then
+    finished=$(date +%s)
+    echo $(($finished - $started)) > "$work/duration"
   fi
 }
 
@@ -222,9 +235,13 @@ for t in "$@"; do
   echo ${ECHO_N} "$fname: ${ECHO_C}"
   status=2
   test ! -f "$work/status" || status=$(cat "$work/status")
+  timing=
+  if test "$timings" -ne 0 && test -f "$work/duration"; then
+    timing=" ($(cat "$work/duration")s)"
+  fi
   if test "$status" -eq 0; then
     rm -f "$diff"
-    echo "${ECHO_T}passed"
+    echo "${ECHO_T}passed$timing"
   else
     rc=1
     if test "$status" -eq 1; then
@@ -243,7 +260,7 @@ for t in "$@"; do
         test ! -f "$work/worker-output" || cat "$work/worker-output"
       } > "$diff"
     fi
-    echo "${ECHO_T}FAILED"
+    echo "${ECHO_T}FAILED$timing"
     test "$verbosity" -gt 0 && cat "$diff"
   fi
 done
