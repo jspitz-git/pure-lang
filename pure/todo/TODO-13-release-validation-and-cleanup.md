@@ -1,6 +1,6 @@
 # TODO-13 - Release Validation and Cleanup
 
-Status: Open
+Status: Closed
 Branch: todo/13-release-validation-and-cleanup
 
 ## Purpose
@@ -28,10 +28,10 @@ suite passes.
 5. [x] Remove superseded Autoconf and Makefile infrastructure after parity review.
 6. [x] Perform a clean-tree release build and close or create follow-up TODOs.
 
-Final status remains open only for a closing clean-tree audit. TODO-17 and TODO-18 are
-closed, the Release build and all 12 current focused tests pass, and complete corpus
-runs pass 97/97 in Release, Debug, and ASan/UBSan. Preset worker counts, sanitizer
-memory policy, and CTest timeouts are documented and checked in.
+TODO-13 is complete. TODO-17 and TODO-18 are closed, all 12 current focused tests
+pass, and complete corpus runs pass 97/97 in Release, Debug, and ASan/UBSan. Preset
+worker counts, sanitizer memory policy, CTest timeouts, and per-input timing captures
+are documented and checked in.
 
 ## Legacy LLVM Audit
 
@@ -98,14 +98,13 @@ that runtime migration.
 
 ## Full-test Classification
 
-All ten focused integration tests pass in Debug and Release. The ASan/UBSan
-preset initially had the Faust lifecycle test disabled; running its exact driver
-under the sanitizer environment completed without a finding, so it is now
-active. With sanitizer-specific bitcode and Faust timeouts raised to 300 seconds,
-all ten ASan/UBSan integration tests pass in one 434-second CTest run.
+All 12 current focused tests pass in Debug, Release, and ASan/UBSan. The sanitizer
+preset initially had the Faust lifecycle test disabled; its driver passed under the
+sanitizer environment and the test is now active. Later focused additions cover LLVM
+22 batch object output and formatted I/O.
 
-The `pure-regression` test remains a harness and performance blocker rather than
-a classified language or ORC behavior failure:
+The initial `pure-regression` attempts exposed harness and performance blockers rather
+than a classified language or ORC behavior failure:
 
 - the complete preset was started in all three configurations; bounded runs
   completed the prelude plus 1 Debug, 17 Release, and 6 ASan regression scripts
@@ -126,23 +125,17 @@ TODO-13 fixed EOL handling at both relevant boundaries: pragma lexer rules now
 accept CRLF in directly loaded library scripts, and `run-tests` normalizes line
 endings in test inputs and golden logs before execution/comparison. The former
 `test070.pure` reproducer now passes while loading the prelude and libraries.
-TODO-17's bounded runner completed the full Release corpus in 1347.36 seconds with
-four workers. It found 77 passing and 20 failing inputs; serial `-f` reproduced all
-20 failures, proving they are not scheduler races. TODO-18 owns their behavior
-compatibility classification and fixes, with the ORC subset shared with TODO-14.
-TODO-18 has now cleared the configuration-independent differences: initial confirmation
-runs passed 97/97 in Release in 897.16 seconds with four workers and in Debug in
-1043.32 seconds with eight workers. The initial four-worker Debug run exceeded its
-30-minute outer limit but correctly cleaned up workers, staging, and the build-directory
-lock. After removing quadratic ORC snapshots and restoring deferred global compilation,
-the four-worker corpora still pass 97/97 but now finish in 292.28 seconds in Release
-and 457.56 seconds in Debug. The first complete pre-fix sanitizer run finished all 97
-inputs with eight workers in 5273.61
-seconds and exposed five genuine ASan/UBSan failures. Their bigint conversion,
-blob alignment, pragma parsing, and hash-rotation root causes are fixed. The post-fix
-sanitizer confirmation passes 97/97 in 1280.27 seconds with four workers, `PURE_STACK=0`,
-and a nonzero 64 MiB ASan quarantine. The supported corpus now passes in all three
-configurations; TODO-17 only needs to codify the measured preset budgets.
+TODO-17's first bounded Release run completed in 1347.36 seconds with 77 passes and
+20 deterministic failures, all reproduced by a serial `-f` rerun. TODO-18 fixed their
+ORC and runtime causes without changing golden logs. Restoring compact lazy global
+snapshots then removed the dominant startup regression, and continuous worker refill
+removed fixed-size batch barriers.
+
+Final four-worker timing captures pass 97/97 in 365.14 seconds in Release, 499.68
+seconds in Debug, and 1351.16 seconds under ASan/UBSan. The sanitizer run uses
+`PURE_STACK=0` and a nonzero 64 MiB quarantine and contains no sanitizer finding.
+CTest budgets of 600, 900, and 1800 seconds encode measured headroom for the three
+configurations.
 
 ## Installation Validation
 
@@ -246,12 +239,12 @@ closure:
 
 A fresh out-of-tree Release configuration in `build/todo13-release-final` used
 Clang/LLVM 22.1.8 and Ninja. Its serial 31-step build completed successfully, and
-all 11 focused CTest tests passed in 193 seconds, including bitcode, Faust, JIT
-lifetime/debug-dump, and LLVM 22 batch object output. This satisfies the clean
-build portion of task 6. The complete `pure-regression` corpus is deliberately not
-reported as passing; TODO-17 owns the remaining startup-duration gate.
+all 11 focused tests then present passed in 193 seconds, including bitcode, Faust,
+JIT lifetime/debug-dump, and LLVM 22 batch object output. The subsequently added
+formatted-I/O test brings the current focused set to 12, all passing in Release,
+Debug, and ASan/UBSan. The complete corpus passes 97/97 in all three configurations.
 
-The release cleanup produced four numbered follow-ups:
+The release cleanup produced five numbered follow-ups:
 
 - TODO-14: complete ORC runtime/batch migration and decide native callable ABI;
 - TODO-15: define pointer-bearing external bitcode ABI metadata;
@@ -539,3 +532,14 @@ The release cleanup produced four numbered follow-ups:
     `test015`, `test025`, and `test020` remained the three slowest inputs.
   - `TODO-17-asan-timings.txt` completes the three-preset timing record; TODO-13 now
     needs only its closing clean-tree audit.
+- 2026-07-24: Completed the closing audit and closed TODO-13.
+  - Confirmed TODO-13, TODO-17, and TODO-18 have no unchecked tasks and all three
+    status fields are closed.
+  - Confirmed all five numbered follow-up documents TODO-14 through TODO-18 exist;
+    intentionally live MCJIT, pointer ABI, and non-Linux work remains owned there.
+  - Confirmed generated Release CTest metadata contains 12 focused tests plus the
+    complete regression test.
+  - Validation:
+    - The branch entered the audit with a clean worktree.
+    - Documentation diff passed `git diff --check`; no runtime rerun was needed after
+      the already completed three-preset timing captures.
