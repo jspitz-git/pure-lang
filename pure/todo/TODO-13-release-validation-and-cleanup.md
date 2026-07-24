@@ -28,10 +28,10 @@ suite passes.
 5. [x] Remove superseded Autoconf and Makefile infrastructure after parity review.
 6. [x] Perform a clean-tree release build and close or create follow-up TODOs.
 
-Final status remains open pending TODO-17's bounded complete-corpus run. The fresh
-Release build and all 11 focused tests pass, but this document does not claim the
-complete supported suite passes while its repeatedly-started regression harness
-still exceeds the release-validation budget.
+Final status remains open pending TODO-17's Debug/sanitizer budgets and TODO-18's
+runtime compatibility fixes. The fresh Release build and all 11 focused tests pass.
+The bounded Release corpus now finishes, but 20 deterministic inputs differ from
+their golden logs, so this document does not claim a complete supported-suite pass.
 
 ## Legacy LLVM Audit
 
@@ -126,9 +126,12 @@ TODO-13 fixed EOL handling at both relevant boundaries: pragma lexer rules now
 accept CRLF in directly loaded library scripts, and `run-tests` normalizes line
 endings in test inputs and golden logs before execution/comparison. The former
 `test070.pure` reproducer now passes while loading the prelude and libraries.
-Repeated interpreter startup remains an independent performance problem assigned
-to TODO-17; no complete-suite pass is claimed until that work establishes and
-meets a release budget. No unexplained disabled test or sanitizer finding remains.
+TODO-17's bounded runner completed the full Release corpus in 1347.36 seconds with
+four workers. It found 77 passing and 20 failing inputs; serial `-f` reproduced all
+20 failures, proving they are not scheduler races. TODO-18 owns their behavior
+compatibility classification and fixes, with the ORC subset shared with TODO-14.
+No complete-suite pass is claimed until TODO-18 clears these differences and
+TODO-17 establishes corresponding Debug and sanitizer budgets.
 
 ## Installation Validation
 
@@ -242,7 +245,8 @@ The release cleanup produced four numbered follow-ups:
 - TODO-14: complete ORC runtime/batch migration and decide native callable ABI;
 - TODO-15: define pointer-bearing external bitcode ABI metadata;
 - TODO-16: define and validate the non-Linux release matrix;
-- TODO-17: bound the repeatedly-started complete regression harness.
+- TODO-17: bound the repeatedly-started complete regression harness;
+- TODO-18: resolve deterministic corpus behavior and golden differences.
 
 ## Guardrails
 
@@ -424,5 +428,17 @@ The release cleanup produced four numbered follow-ups:
       31 steps with Clang/LLVM 22.1.8 and Ninja.
     - `ctest --test-dir build/todo13-release-final -E '^pure-regression$'
       --output-on-failure` passed all 11 focused tests in 193.05 seconds.
-    - The complete regression corpus was not rerun to completion; TODO-17 remains
-      the explicit release-duration gate, so no complete-suite pass is claimed.
+    - At this point the complete regression corpus had not yet finished; later
+      TODO-17 work below completed it and exposed the TODO-18 behavior failures.
+- 2026-07-24: Finished the first bounded complete Release corpus and classified
+  the remaining release blockers.
+  - The parallel harness completed all 97 inputs with 77 passes and 20 golden
+    failures; a serial failed-only rerun reproduced the exact same failure set.
+  - Assigned 11 ORC publication/materialization cases jointly to TODO-14/TODO-18,
+    and assigned formatted input, blob fixtures, and other language differences
+    to TODO-18.
+  - Validation:
+    - `run-tests -j 4` finished in 1347.36 seconds.
+    - `run-tests -f -j 1` reproduced all 20 failures in 789.98 seconds.
+    - No complete-suite pass is claimed; Debug/sanitizer budgets remain in
+      TODO-17 and deterministic behavior compatibility remains in TODO-18.

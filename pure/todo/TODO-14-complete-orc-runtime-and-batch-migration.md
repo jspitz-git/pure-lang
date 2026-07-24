@@ -47,9 +47,12 @@ compatibility gates can be removed.
 - Search for `ExecutionEngine`, `EngineBuilder`, MCJIT mapping/materialization methods,
   `LLVM2`/`LLVM3` compatibility macros, and `NEW_USER_ITERATOR`.
 - Run the complete supported regression corpus after the runtime transition.
+- Clear TODO-18's 11 duplicate-definition/materialization inputs without allowing a
+  failed publication to leave unterminated type-JIT functions behind.
 
 ## Origin
 
 Created from TODO-07 task 5 and TODO-13 retrospective gate 4. It also owns the
 batch-mode deferral recorded by TODO-11 and the native callable ABI question from
-TODO-09.
+TODO-09. TODO-18 supplies 11 complete-corpus reproducers for duplicate ORC
+publication and invalid continuation after a failed materialization.

@@ -86,6 +86,7 @@ semantics remain unchanged.
 
 Created from TODO-13 retrospective gate 6. TODO-13 fixes CRLF-sensitive input and
 golden comparison; this follow-up owns the independent repeated-startup performance cost.
+Deterministic runtime/golden failures exposed by the completed runner belong to TODO-18.
 
 ## Progress Log
 
@@ -124,3 +125,15 @@ golden comparison; this follow-up owns the independent repeated-startup performa
     - A parallel Release run with the known-failing prelude followed by passing
       `test001.pure` emitted only their ordered status/diff output; no `Aborted`
       diagnostic escaped ahead of parent publication.
+- 2026-07-24: Completed and classified the first bounded full Release corpus run.
+  - `run-tests -j 4` executed the prelude and all 96 numbered tests in 1347.36
+    seconds: 77 passed and 20 produced persistent golden diffs.
+  - A serial `run-tests -f -j 1` reran the 20 failures in 789.98 seconds and
+    reproduced every one, excluding parallel scheduling as their cause.
+  - Classified 11 ORC definition/materialization failures, three formatted-input
+    failures, one blob-fixture failure, and five other language/runtime differences.
+  - Created TODO-18 to own behavior compatibility and the all-golden release gate;
+    TODO-17 remains scoped to timing, scheduling equivalence, and preset budgets.
+  - Validation:
+    - Complete Release corpus finished without a harness timeout or lost result.
+    - Persistent diffs selected exactly the same 20 inputs for the serial `-f` run.
