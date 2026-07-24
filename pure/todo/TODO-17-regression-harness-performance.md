@@ -22,7 +22,7 @@ release-validation budget in Debug, Release, and sanitizer configurations.
 1. [ ] Record per-test and startup timings in all supported presets.
 2. [x] Classify isolation and shared-filesystem constraints across the corpus.
 3. [x] Choose a bounded execution design which preserves test semantics.
-4. [ ] Implement deterministic scheduling and collision-free output handling.
+4. [x] Implement deterministic scheduling and collision-free output handling.
 5. [ ] Validate identical golden results before and after the harness change.
 6. [ ] Set and document realistic CTest timeouts for complete release runs.
 
@@ -100,3 +100,20 @@ golden comparison; this follow-up owns the independent repeated-startup performa
     workers and deterministic ordered result publication.
   - Validation:
     - Read-only source and harness audit; no build or runtime test was required.
+- 2026-07-24: Implemented bounded parallel execution with deterministic publication.
+  - Added `-j jobs` with `TEST_JOBS` as its environment default while preserving
+    serial execution when neither selects a larger worker count.
+  - Added an exclusive build-directory lock, one run-scoped staging tree, ordinal
+    worker directories, duplicate-basename rejection, and signal/exit cleanup.
+  - Workers retain separate interpreter processes and write no terminal or persistent
+    result state; the parent publishes pass/fail lines and `.diff` files in input order.
+  - Validation:
+    - Generated Release runner passed `sh -n`.
+    - `test001.pure` and CRLF-sensitive `test070.pure` passed under both `-j 1`
+      and `-j 2` with byte-identical ordered terminal output.
+    - A precreated lock blocked a second invocation, and a duplicate `test001`
+      argument was rejected before execution.
+    - An intentionally invalid `PURE_FLAGS` run created a failure result; `-f -j 2`
+      selected, passed, and cleared exactly that test on retry.
+    - Four Release inputs passed in 98.68 seconds with `-j 1` and 34.79 seconds
+      with `-j 4`, a 2.84x wall-clock speedup with identical outcomes.

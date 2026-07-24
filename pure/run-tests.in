@@ -20,10 +20,13 @@ outdir="./test"
 failed=0
 usage=0
 verbosity=0
+jobs=${TEST_JOBS:-1}
 
-while getopts :fhv opt; do
+while getopts :fhvj: opt; do
   case $opt in
   f) failed=1
+    ;;
+  j) jobs=$OPTARG
     ;;
   \?|h) usage=1
     ;;
@@ -34,14 +37,22 @@ done
 
 shift $(($OPTIND - 1))
 
+case "$jobs" in
+  ''|*[!0-9]*) usage=1
+    ;;
+  *) test "$jobs" -gt 0 || usage=1
+    ;;
+esac
+
 if test 0 -ne $failed && test 0 -ne $#; then
   usage=1
 fi
 
 if test 0 -ne $usage; then
-  echo "usage: $0 [-v] [-h|-f|test...]"
+  echo "usage: $0 [-v] [-j jobs] [-h|-f|test...]"
   echo "  -h          display this help"
   echo "  -f          run previously failed tests"
+  echo "  -j jobs     run at most this many tests concurrently"
   echo "  -v          show result diffs for failed tests"
   echo "  test...     test file(s) to run"
   exit 1
@@ -54,57 +65,140 @@ pathops()
   local _fname="${arg##*/}"
   local _bname="${_fname%.*}"
   local _diff="$outdir/$_bname.diff"
-  local _tmp="$_diff.$$"
-  local _input="$outdir/$_bname.input.$$"
-  local _expected="$outdir/$_bname.expected.$$"
   local _log="$testdir/$_bname.log"
 
   case "$mode" in
   -A) fname="$_fname" \
       bname="$_bname" \
       diff="$_diff" \
-      tmp="$_tmp" \
-      input="$_input" \
-      expected="$_expected" \
       log="$_log"
     ;;
-  -d) echo $_diff
+  -d) echo "$_diff"
     ;;
   esac
 }
 
+run_one()
+{
+  local ordinal=$1 t=$2
+  local work="$rundir/$ordinal"
+  local pufs
+
+  pathops -A "$t"
+  pufs="$PURE_FLAGS"
+  test "x$bname" = "xprelude" && pufs="$pufs -n"
+  if ! sed 's/\r$//' "$t" > "$work/input" 2> "$work/error" ||
+     ! sed 's/\r$//' "$log" > "$work/expected" 2>> "$work/error"
+  then
+    echo 2 > "$work/status"
+    return
+  fi
+  if ./run-test ${pufs} < "$work/input" 2>&1 |
+     ${DIFF} -u "$work/expected" - > "$work/diff"
+  then
+    echo 0 > "$work/status"
+  else
+    echo 1 > "$work/status"
+  fi
+}
+
+cleanup()
+{
+  if test -n "$pids"; then
+    kill $pids 2>/dev/null
+    wait $pids 2>/dev/null
+  fi
+  test ! -d "$rundir" || rm -rf "$rundir"
+  test ! -d "$lockdir" || rmdir "$lockdir" 2>/dev/null
+}
+
+test -d "$outdir" || mkdir -p "$outdir"
+lockdir="$outdir/.run-tests.lock"
+if ! mkdir "$lockdir" 2>/dev/null; then
+  echo "$0: another regression run holds $lockdir" >&2
+  exit 1
+fi
+rundir="$outdir/.run-tests.$$"
+pids=
+trap cleanup 0
+trap 'exit 1' 1 2 15
+if ! mkdir "$rundir"; then
+  echo "$0: cannot create staging directory $rundir" >&2
+  exit 1
+fi
+
 if test 0 -eq $#; then
   tests=
   for s in "$srcdir/lib/prelude.pure" $(find "$testdir" -name test\*.pure | sort); do
-    if test 0 -eq $failed || test -e $(pathops -d "$s"); then
+    if test 0 -eq $failed || test -e "$(pathops -d "$s")"; then
       tests="$tests $s"
     fi
   done
   set fnord $tests; shift
 fi
 
+ordinal=0
+for t in "$@"; do
+  ordinal=$(($ordinal + 1))
+  pathops -A "$t"
+  marker="$rundir/name.$bname"
+  if test -e "$marker"; then
+    echo "$0: duplicate test basename: $bname" >&2
+    exit 1
+  fi
+  : > "$marker"
+  if ! mkdir "$rundir/$ordinal"; then
+    echo "$0: cannot create worker directory for $fname" >&2
+    exit 1
+  fi
+done
+
 rc=0
+ordinal=0
+running=0
+pids=
 
 echo Running tests.
 
-test -d "$outdir" || mkdir -p "$outdir"
-
 for t in "$@"; do
+  ordinal=$(($ordinal + 1))
+  run_one "$ordinal" "$t" &
+  pids="$pids $!"
+  running=$(($running + 1))
+  if test "$running" -eq "$jobs"; then
+    for pid in $pids; do
+      wait "$pid"
+    done
+    pids=
+    running=0
+  fi
+done
+for pid in $pids; do
+  wait "$pid"
+done
+pids=
+
+ordinal=0
+for t in "$@"; do
+  ordinal=$(($ordinal + 1))
+  work="$rundir/$ordinal"
   pathops -A "$t"
-  pufs="$PURE_FLAGS"
-  test "x$bname" = "xprelude" && pufs="$pufs -n"
   echo ${ECHO_N} "$fname: ${ECHO_C}"
-  trap 'x=$?; rm -f '$tmp' '$input' '$expected'; exit $x;' ALRM HUP INT TERM
-  sed 's/\r$//' "$t" > "$input"
-  sed 's/\r$//' "$log" > "$expected"
-  if ./run-test ${pufs} < "$input" 2>&1 | ${DIFF} -u "$expected" - > "$tmp"
-  then
-    rm -f "$tmp" "$input" "$expected" "$diff"
+  status=2
+  test ! -f "$work/status" || status=$(cat "$work/status")
+  if test "$status" -eq 0; then
+    rm -f "$diff"
     echo "${ECHO_T}passed"
   else
     rc=1
-    mv "$tmp" "$diff"
-    rm -f "$input" "$expected"
+    if test "$status" -eq 1; then
+      mv "$work/diff" "$diff"
+    else
+      {
+        echo "test harness failed before comparison"
+        test ! -f "$work/error" || cat "$work/error"
+      } > "$diff"
+    fi
     echo "${ECHO_T}FAILED"
     test "$verbosity" -gt 0 && cat "$diff"
   fi
