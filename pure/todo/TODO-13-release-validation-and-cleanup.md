@@ -511,3 +511,11 @@ The release cleanup produced four numbered follow-ups:
     - Generated runner passed `sh -n`.
     - A controlled uneven five-input `-j 4` schedule completed in 3.13 seconds, and
       five real Release inputs passed in deterministic argument order.
+- 2026-07-24: Set preset-specific complete-corpus worker and timeout policy.
+  - CTest now runs four regression workers with 10-minute Release, 15-minute Debug,
+    and 30-minute sanitizer limits. Sanitizer regression also sets `PURE_STACK=0`,
+    while ASan/LSan presets use a nonzero bounded 64 MiB quarantine.
+  - Validation:
+    - Generated CTest JSON contained the exact timeout/environment policy in all
+      three presets.
+    - The checked-in Release `pure-regression` test passed 97/97 in 243.72 seconds.

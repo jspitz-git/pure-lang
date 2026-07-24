@@ -25,7 +25,9 @@ release-validation budget in Debug, Release, and sanitizer configurations.
 4. [x] Implement deterministic scheduling and collision-free output handling.
 5. [x] Validate identical golden results before and after the harness change.
    - Post-fix Release, Debug, and ASan/UBSan runs all pass 97/97.
-6. [ ] Set and document realistic CTest timeouts for complete release runs.
+6. [x] Set and document realistic CTest timeouts for complete release runs.
+   - CTest uses four workers with 600s Release, 900s Debug, and 1800s sanitizer
+     timeouts; sanitizer runs also set `PURE_STACK=0` and a 64 MiB quarantine.
 
 ## Isolation Audit
 
@@ -233,3 +235,12 @@ Deterministic runtime/golden failures exposed by the completed runner belong to 
     - Five real Release inputs passed in argument order in 10.49 seconds.
     - Interrupting four long-running workers removed every child process, staging
       directory, and build lock.
+- 2026-07-24: Encoded the measured complete-corpus policy in CTest and presets.
+  - `pure-regression` now uses `TEST_JOBS=4` with 600-second Release, 900-second
+    Debug, and 1800-second sanitizer timeouts.
+  - Sanitizer regression sets `PURE_STACK=0`; ASan and LSan presets retain a bounded
+    nonzero 64 MiB quarantine. `INSTALL` documents the policy and observed budgets.
+  - Validation:
+    - CTest JSON reported the expected timeout and environment for all three presets.
+    - `ctest --preset llvm22-release -R '^pure-regression$'` passed in 243.72 seconds
+      under the checked-in policy.

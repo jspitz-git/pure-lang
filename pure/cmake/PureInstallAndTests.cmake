@@ -456,7 +456,21 @@ if(BUILD_TESTING)
     COMMAND "${CMAKE_CURRENT_BINARY_DIR}/run-tests"
     WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
   )
-  set_tests_properties(pure-regression PROPERTIES LABELS "regression")
+  set(regression_timeout 600)
+  set(regression_environment "TEST_JOBS=4")
+  if(PURE_SANITIZERS)
+    set(regression_timeout 1800)
+    list(APPEND regression_environment "PURE_STACK=0")
+  elseif(CMAKE_BUILD_TYPE STREQUAL "Debug")
+    set(regression_timeout 900)
+  endif()
+  set_tests_properties(
+    pure-regression
+    PROPERTIES
+      ENVIRONMENT "${regression_environment}"
+      LABELS "regression"
+      TIMEOUT ${regression_timeout}
+  )
 endif()
 
 set(PURE_INSTALL_INCLUDE_DIR "${CMAKE_INSTALL_INCLUDEDIR}/pure")
