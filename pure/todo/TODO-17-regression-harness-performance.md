@@ -101,8 +101,11 @@ ASan allocator quarantine explains the remaining memory multiplier. With compact
 snapshots, an empty sanitizer prelude process used 272 MiB with no quarantine, 413 MiB
 with a 64 MiB quarantine, and 718 MiB with the default quarantine. Eight default
 workers can therefore consume about 5.7 GiB even though retained JIT code is not that
-large. Final sanitizer worker and quarantine policy remains to be selected from a
-complete post-fix run; quarantine must remain nonzero for release validation.
+The complete post-fix sanitizer run selected four workers and a nonzero 64 MiB
+quarantine: all 97 inputs passed in 1280.27 seconds without a sanitizer finding or
+golden difference. This establishes an observed 22-minute sanitizer baseline while
+keeping expected interpreter RSS near 1.65 GiB for four concurrent workers. The policy
+still needs to be encoded in presets and CTest timeouts.
 
 ## Guardrails
 
@@ -205,3 +208,8 @@ Deterministic runtime/golden failures exposed by the completed runner belong to 
     - All 12 focused Release tests passed in 36.18 seconds.
     - All 12 focused ASan/UBSan tests passed in 112.44 seconds.
     - The complete four-worker Release corpus passed 97/97 in 292.28 seconds.
+- 2026-07-24: Completed the post-fix sanitizer corpus within a bounded budget.
+  - Four workers with `PURE_STACK=0` and a 64 MiB ASan quarantine passed all 97
+    inputs in 1280.27 seconds with deterministic output and no sanitizer finding.
+  - This establishes a 22-minute observed sanitizer baseline and completes the
+    final behavioral measurement needed for preset-specific policy.

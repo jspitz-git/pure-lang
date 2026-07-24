@@ -1,6 +1,6 @@
 # TODO-18 - Regression Behavior Compatibility
 
-Status: Open - Release and Debug complete; sanitizer pending
+Status: Closed
 Branch: todo/18-regression-behavior-compatibility
 
 ## Purpose
@@ -87,8 +87,9 @@ and every expression hash rotation rather than only the observed lines.
 4. [x] Validate blob fixture discovery and decoding after the shared I/O fix.
 5. [x] Classify and fix the remaining language/runtime differences.
 6. [x] Run all 97 inputs in Release with no golden differences.
-7. [ ] Run the complete corpus in the sanitizer configuration.
-   - The Debug corpus passes 97/97 with eight workers in 1043.32 seconds.
+7. [x] Run the complete corpus in the sanitizer configuration.
+   - Debug passes 97/97 with eight workers in 1043.32 seconds.
+   - ASan/UBSan passes 97/97 with four workers in 1280.27 seconds.
 
 ## Guardrails
 
@@ -201,3 +202,10 @@ TODO-13 runs did not progress far enough to expose these deterministic differenc
       with `PURE_STACK=0` and the preset ASan/UBSan options.
     - All five inputs retained their Release golden output in an 80.40-second run.
     - A clean complete sanitizer run remains required before closing task 7.
+- 2026-07-24: Closed behavior compatibility with a clean sanitizer confirmation.
+  - The ORC startup fix reduced the full-run cost enough to use four workers while
+    retaining a nonzero 64 MiB ASan quarantine and keeping `PURE_STACK=0`.
+  - Validation:
+    - `run-tests -j 4` passed the prelude and all 96 numbered inputs (97/97) in
+      1280.27 seconds without a sanitizer finding or golden difference.
+    - Release, Debug, and ASan/UBSan now have equivalent complete-corpus results.

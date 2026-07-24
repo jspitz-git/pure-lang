@@ -28,11 +28,11 @@ suite passes.
 5. [x] Remove superseded Autoconf and Makefile infrastructure after parity review.
 6. [x] Perform a clean-tree release build and close or create follow-up TODOs.
 
-Final status remains open pending TODO-17's sanitizer budget and TODO-18's final
-sanitizer compatibility run. The Release build and all 12 current focused tests pass.
-The bounded Release corpus initially found 20 deterministic differences; TODO-18 fixed
-all of them, and the confirmation runs now pass 97/97 in both Release and Debug. The
-complete sanitizer corpus remains before claiming a supported-suite pass.
+Final status remains open pending TODO-17's preset worker and timeout policy. The
+Release build and all 12 current focused tests pass. The bounded Release corpus
+initially found 20 deterministic differences; TODO-18 fixed all of them, and complete
+confirmation runs now pass 97/97 in Release, Debug, and ASan/UBSan. This establishes
+the supported-suite behavior pass; only codifying its budgets remains.
 
 ## Legacy LLVM Audit
 
@@ -139,9 +139,10 @@ lock. After removing quadratic ORC snapshots and restoring deferred global compi
 the Release corpus still passes 97/97 but now finishes in 292.28 seconds. The first
 complete pre-fix sanitizer run finished all 97 inputs with eight workers in 5273.61
 seconds and exposed five genuine ASan/UBSan failures. Their bigint conversion,
-blob alignment, pragma parsing, and hash-rotation root causes are fixed, and all five
-failed-only sanitizer reruns now pass. No complete supported-suite pass is claimed
-until a clean full sanitizer confirmation run establishes the final budget.
+blob alignment, pragma parsing, and hash-rotation root causes are fixed. The post-fix
+sanitizer confirmation passes 97/97 in 1280.27 seconds with four workers, `PURE_STACK=0`,
+and a nonzero 64 MiB ASan quarantine. The supported corpus now passes in all three
+configurations; TODO-17 only needs to codify the measured preset budgets.
 
 ## Installation Validation
 
@@ -489,3 +490,11 @@ The release cleanup produced four numbered follow-ups:
     - `run-tests -j 4` passed all 97 Release inputs in 292.28 seconds.
     - A complete post-fix sanitizer run remains required to select its final worker,
       quarantine, and timeout budget.
+- 2026-07-24: Completed the clean post-fix ASan/UBSan corpus confirmation.
+  - Validation:
+    - `run-tests -j 4` passed the prelude and all 96 numbered inputs (97/97) in
+      1280.27 seconds without a sanitizer finding or golden difference.
+    - The run used `PURE_STACK=0`, the preset halt/strict sanitizer options, and a
+      nonzero 64 MiB quarantine to cap four-worker memory while retaining UAF coverage.
+    - Release, Debug, and sanitizer behavior validation is complete; only TODO-17's
+      checked-in worker, quarantine, and CTest timeout policy remains before closure.
