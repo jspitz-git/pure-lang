@@ -49,12 +49,25 @@ follow-on modules. Nine now match their golden logs completely: `prelude`, `test
 `test020` proceeds to a later segmentation fault and `test072` to interface-dispatch
 output differences; both are now classified under the remaining language/runtime work.
 
+The formatted-I/O and blob classes are also resolved. `pure_pointer_tag` previously
+round-tripped semantic pointer names through LLVM `type_name`; every opaque pointer
+therefore became `<unknown C type>`. Standard streams were tagged with that placeholder
+while generated wrappers correctly checked `FILE*`, causing `printf`, `sscanf`, and the
+blob test's diagnostic output to fail. Pointer normalization now preserves `CAbiType`
+names, and a focused test covers `FILE*`, formatted output, and formatted input.
+
+That sanitizer test also exposed four runtime string constructors which allocated
+`EXPR::STR` buffers with `new[]` although the common destructor uses
+`my_strfree`/`free`. They now use matching `malloc` ownership. Under ASan the focused
+test disables the historical address-difference `PURE_STACK` heuristic; ASan itself
+remains responsible for detecting actual stack overflow.
+
 ## Task List
 
 1. [ ] Reduce each failure class to the smallest deterministic reproducer.
 2. [x] Fix duplicate ORC publication and invalid type-JIT continuation after failure.
-3. [ ] Reconcile `sscanf` string, unsigned, and GMP conversion behavior.
-4. [ ] Restore portable blob fixture discovery and validation.
+3. [x] Reconcile `printf`/`sscanf` string, integer, unsigned, and GMP behavior.
+4. [x] Validate blob fixture discovery and decoding after the shared I/O fix.
 5. [ ] Classify and fix the five remaining language/runtime differences.
 6. [ ] Run all 97 inputs in Release with no golden differences.
 7. [ ] Run the complete corpus in Debug and sanitizer configurations.
@@ -93,3 +106,21 @@ TODO-13 runs did not progress far enough to expose these deterministic differenc
     - `prelude.pure` and `test014.pure` passed together after the initial fix.
     - The complete 11-input ORC subset ran in 399.92 seconds with nine full passes
       and no duplicate-definition or unterminated-module diagnostic.
+- 2026-07-24: Restored custom pointer tags and formatted I/O compatibility.
+  - Preserved canonical `CAbiType` names when `pure_pointer_tag` normalizes opaque
+    pointer types, keeping `FILE*` globals and wrappers on the same runtime tag.
+  - Reclassified `test042`: fixture paths, reads, and decoding were valid; its
+    failure came from the same broken `printf` wrapper as the formatted-I/O tests.
+  - Added focused `FILE*`, `printf`, and `sscanf` integration coverage.
+  - Replaced four `new[]` allocations stored in `EXPR::STR` with `malloc`, matching
+    the existing `my_strfree`/`free` destruction path found by the new ASan test.
+  - Validation:
+    - Minimal `printf "%s" "ok"` returned 2 and `pointer_type stdout` returned
+      `FILE*`; the equivalent temporary `void*` alias confirmed the former tag mismatch.
+    - `test011`, `test018`, `test042`, and `test069` all passed in one 44.49-second
+      Release run.
+    - `pure-formatted-io` passed in Release in 26.19 seconds.
+    - With `PURE_STACK=0` replacing the ASan-incompatible address heuristic,
+      `pure-formatted-io` passed under ASan/UBSan in 62.64 seconds without a finding.
+    - All 12 focused Release CTests passed in 118.11 seconds after the runtime
+      allocator fix and new integration test were included.

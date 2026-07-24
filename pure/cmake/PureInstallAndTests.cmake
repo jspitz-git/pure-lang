@@ -398,6 +398,34 @@ if(BUILD_TESTING)
     )
   endif()
 
+  if(PURE_SANITIZERS)
+    set(formatted_io_test_timeout 300)
+  else()
+    set(formatted_io_test_timeout 120)
+  endif()
+  add_test(
+    NAME pure-formatted-io
+    COMMAND
+      "${CMAKE_CURRENT_BINARY_DIR}/run-test"
+      "${CMAKE_CURRENT_SOURCE_DIR}/test/formatted-io-smoke.pure"
+    WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
+  )
+  set_tests_properties(
+    pure-formatted-io
+    PROPERTIES
+      LABELS "runtime;integration"
+      REQUIRED_FILES "${CMAKE_CURRENT_SOURCE_DIR}/test/formatted-io-smoke.pure"
+      TIMEOUT ${formatted_io_test_timeout}
+      PASS_REGULAR_EXPRESSION "formatted:ok:42"
+      FAIL_REGULAR_EXPRESSION
+        "unhandled exception;AddressSanitizer;LeakSanitizer;runtime error:"
+  )
+  if(PURE_SANITIZERS)
+    set_tests_properties(
+      pure-formatted-io PROPERTIES ENVIRONMENT "PURE_STACK=0"
+    )
+  endif()
+
   add_test(
     NAME pure-batch-object
     COMMAND

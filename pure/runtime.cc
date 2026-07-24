@@ -3338,9 +3338,10 @@ int pure_pointer_tag(const char *s)
   }
   // If the type is valid Pure syntax, normalize it a bit.
   try {
+    CAbiType abi(name);
     llvm_const_Type *ty = interp.named_type(name);
     assert(ty);
-    name = interp.type_name(ty);
+    name = abi.is_pointer() ? abi.name : interp.type_name(ty);
   } catch (err &e) {
   }
   if (name == "void*") return 0; // generic pointer
@@ -8351,7 +8352,7 @@ pure_expr *string_concat(const char* s, const char *t)
 {
   assert(s && t);
   size_t p = strlen(s), q = strlen(t);
-  char *buf = new char[p+q+1];
+  char *buf = static_cast<char*>(malloc(p+q+1));
   strcpy(buf, s); strcpy(buf+p, t);
   pure_expr *x = new_expr();
   x->tag = EXPR::STR;
@@ -8378,7 +8379,7 @@ pure_expr *string_concat_list(pure_expr *xs)
   }
   if (!is_nil(ys)) return 0;
   // allocate the result string
-  char *buf = new char[n+1]; buf[0] = 0;
+  char *buf = static_cast<char*>(malloc(n+1)); buf[0] = 0;
   // concatenate
   ys = xs; n = 0;
   while (is_cons(ys, z, zs) && z->tag == EXPR::STR) {
@@ -8412,7 +8413,7 @@ pure_expr *string_join(const char *delim, pure_expr *xs)
   }
   if (!is_nil(ys)) return 0;
   // allocate the result string
-  char *buf = new char[n+1]; buf[0] = 0;
+  char *buf = static_cast<char*>(malloc(n+1)); buf[0] = 0;
   // concatenate
   ys = xs; n = k = 0;
   while (is_cons(ys, z, zs) && z->tag == EXPR::STR) {
@@ -8473,7 +8474,7 @@ pure_expr *string_substr(const char* s, uint32_t pos, uint32_t size)
   assert(s);
   const char *p = u8strcharpos(s, pos), *q = u8strcharpos(p, size);
   size_t n = q-p;
-  char *buf = new char[n+1];
+  char *buf = static_cast<char*>(malloc(n+1));
   strncpy(buf, p, n); buf[n] = 0;
   pure_expr *x = new_expr();
   x->tag = EXPR::STR;
