@@ -1,6 +1,6 @@
 # TODO-05 - Verifier and New Pass Manager
 
-Status: Complete
+Status: Closed on 2026-07-24
 Branch: todo/05-verifier-and-pass-manager
 
 ## Purpose
@@ -25,6 +25,22 @@ fails with an actionable diagnostic before entering ORC.
 5. [x] Surface verifier and pass errors through Pure diagnostics.
 6. [x] Compare representative optimized IR with unoptimized output for ABI changes.
 
+## Optimization Policy
+
+The supported LLVM 22 runtime uses the standard O1 function-simplification
+pipeline for completed interactive functions and the standard per-module O1
+pipeline for reduced ORC snapshots. Keeping both boundaries at O1 provides one
+correctness baseline and avoids unmeasured behavioral differences between
+interactive definitions, imported providers, and their submitted snapshots.
+
+Task 6 compared representative unoptimized and O1 IR directly and verified both
+forms. That offline comparison is the intended O0 side of the original
+validation plan; the interpreter has no supported runtime O0 mode. Adding one
+solely for a one-time smoke comparison would create a new configuration surface
+without a release requirement. A runtime optimization selector, custom pipeline,
+or lazy-JIT performance work requires profiling and belongs outside this
+correctness migration.
+
 ## Guardrails
 
 - Correctness takes priority over matching the exact historical optimization sequence.
@@ -35,12 +51,16 @@ fails with an actionable diagnostic before entering ORC.
 
 - `cmake --build --preset llvm22-debug`
 - `opt-22 -passes=verify -disable-output` on emitted pre- and post-pass IR.
-- Run smoke tests at `O0` and `O1` and compare observable results.
+- Compare representative unoptimized and `O1` IR, then run the supported `O1`
+  smoke path.
 
-## Open Questions
+## Decisions
 
-- Should interactive and batch compilation use different optimization levels?
-- Is a custom small pipeline measurably preferable to LLVM's standard `O1` pipeline?
+- Interactive function optimization and reduced ORC module optimization both use
+  O1. Batch modernization must preserve that baseline unless later profiling
+  justifies a deliberate difference.
+- LLVM's standard O1 pipelines remain preferred over an unmeasured custom pass
+  sequence. Performance tuning is not part of the LLVM 22 correctness release.
 
 ## Progress Log
 
@@ -120,3 +140,14 @@ fails with an actionable diagnostic before entering ORC.
 - 2026-07-22: Initial verifier and pass-manager plan created.
   - Validation:
     - Not run; this update creates planning documentation only.
+- 2026-07-24: Closed the deferred optimization-policy questions after TODO-06
+  made the O1 runtime path executable.
+  - Validation:
+    - Confirmed both active function and ORC module pipelines select LLVM O1 and
+      expose no runtime O0 selector.
+    - Retained the recorded verifier-backed unoptimized/O1 IR comparison as the
+      ABI-equivalence check.
+    - `ctest --preset llvm22-debug -R '^pure-jit-smoke$'
+      --output-on-failure` passed 1/1 in 5.90 seconds.
+    - Classified runtime O0, custom pipelines, and performance tuning as future
+      measured design work rather than release correctness requirements.

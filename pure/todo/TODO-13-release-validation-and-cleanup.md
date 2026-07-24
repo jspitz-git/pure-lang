@@ -194,7 +194,7 @@ need correction.
 | TODO-02 | Build/install blockers are resolved on Linux. Windows and macOS were deliberately not validated. | Keep the historical closure and assign non-Linux validation only after defining the supported release matrix. |
 | TODO-03 | Context/type migration is complete. The deferred LLVM version gates still protect both dead branches and live MCJIT code. | Move gate removal with the transitional engine rather than treating it as context cleanup. |
 | TODO-04 | Closed after reconciling its verifier boundary with downstream integration results. Pointer-bearing external bitcode is still rejected without explicit Pure ABI metadata. | Verifier work is complete; assign pointer ABI metadata under gate 5. |
-| TODO-05 | Standard O1 was selected and pre/post-pass IR was verified. The planned runnable O0/O1 comparison was never performed. | Either perform a test-only comparison or explicitly record O1 as the supported correctness baseline and move tuning out of release scope. |
+| TODO-05 | Closed with standard O1 as the supported function and reduced-module correctness baseline. Verified unoptimized/O1 IR supplies the ABI comparison; no runtime O0 mode is supported. | Complete; runtime selectors, custom pipelines, and tuning require future profiling rather than release validation. |
 | TODO-06 | The LLJIT foundation and typed lookup are complete. `ExecutionEngine` remains live for mappings, eager JIT, batch definitions, and batch Faust. | Assign full MCJIT removal to a runtime follow-up. |
 | TODO-07 | Reopened with task 3 complete. Legacy unmapping/body deletion in task 5 remains tied to MCJIT. | Move task 5 to the runtime follow-up under gate 4, then close the ORC resource TODO. |
 | TODO-08 | ORC host symbols, rebinding, and missing-symbol diagnostics are complete. Legacy mappings and the fallback resolver remain active beside them. | Preserve the ORC closure and assign removal of the synchronized legacy path to the runtime follow-up. |
@@ -207,7 +207,7 @@ The remaining work therefore falls into six explicit gates before final release
 closure:
 
 1. [x] Reconcile the stale TODO-01, TODO-04, and TODO-07 checklists/statuses.
-2. [ ] Resolve TODO-05's O0/O1 validation disposition and stale design questions.
+2. [x] Resolve TODO-05's O0/O1 validation disposition and stale design questions.
 3. [ ] Exercise the named JIT frame under LLDB 22 and the bitcode tests under the
    targeted LeakSanitizer preset with generous timeouts.
 4. [ ] Correct the active batch documentation and assign LLVM 22 batch/MCJIT
@@ -354,3 +354,13 @@ closure:
       status to open; legacy MCJIT cleanup remains its only unchecked task.
     - No test was rerun because this step reconciles existing implementation and
       recorded validation without changing code.
+- 2026-07-24: Closed TODO-05's deferred optimization-policy questions.
+  - Validation:
+    - Confirmed that both active LLVM pass-manager boundaries intentionally use
+      standard O1 and that the interpreter exposes no runtime O0 mode.
+    - Retained the verified unoptimized/O1 IR comparison as the ABI-equivalence
+      half of the original validation plan.
+    - `ctest --preset llvm22-debug -R '^pure-jit-smoke$'
+      --output-on-failure` passed 1/1 in 5.90 seconds.
+    - Kept runtime optimization selection, custom pipelines, and performance
+      tuning outside the LLVM 22 correctness release until justified by profiling.
