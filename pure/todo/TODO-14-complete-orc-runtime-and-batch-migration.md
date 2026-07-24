@@ -47,8 +47,9 @@ compatibility gates can be removed.
 - Search for `ExecutionEngine`, `EngineBuilder`, MCJIT mapping/materialization methods,
   `LLVM2`/`LLVM3` compatibility macros, and `NEW_USER_ITERATOR`.
 - Run the complete supported regression corpus after the runtime transition.
-- Preserve TODO-18's fix which localizes cloned helper definitions in reduced ORC
-  units; all 11 initial duplicate-publication reproducers now pass that boundary.
+- Preserve TODO-18's reduced-helper localization and transactional type-generation
+  replacement; stale type addresses and all initial duplicate-publication boundaries
+  now pass their focused and corpus reproducers.
 
 ## Origin
 

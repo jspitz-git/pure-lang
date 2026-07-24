@@ -83,5 +83,11 @@ walk 1;
 clear old_walk
 clear walk
 
+type positive n::int = 1;
+typed_value n::positive = 42;
+typed_value 5;
+type positive n::bigint = 1;
+typed_value 5L;
+
 done = 4242;
 done;

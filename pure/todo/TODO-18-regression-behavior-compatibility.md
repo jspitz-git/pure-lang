@@ -30,7 +30,7 @@ are deterministic runtime/golden differences rather than scheduler races.
 | ORC definition/materialization | `prelude`, `test014`, `test015`, `test020`, `test021`, `test025`, `test028`, `test036`, `test061`, `test072`, `test079` | Duplicate `$$fastcc.*` definitions, often followed by unterminated type-JIT functions; prelude also aborts after the reported failure. |
 | Formatted input | `test011`, `test018`, `test069` | `sscanf` returns `scanf_error` or `failed_cond` for previously accepted string, unsigned, and GMP formats. |
 | Binary fixture loading | `test042` | All four architecture blob reads fail their condition despite resolving under `srcdir/test`. |
-| Other language/runtime behavior | `test020`, `test051`, `test054`, `test057`, `test058`, `test063`, `test072` | Math-test segfault, reflection output failure, `stack_fault`, unhandled recursive-compiler condition, changed recursive result rendering, failed constant/function evaluation, and dynamic interface dispatch differences. |
+| Other language/runtime behavior | `test020`, `test054` | Math-test segmentation fault and a separate `stack_fault`; the other five initial members passed after transactional type-generation replacement. |
 
 The ORC class overlaps TODO-14's hybrid-runtime migration, but TODO-18 owns the
 minimal corpus reproducers and the release golden-pass criterion. Fixes may land in
@@ -46,8 +46,8 @@ symbol. A smoke test keeps two such units alive and callable simultaneously.
 All 11 initial ORC inputs no longer report duplicate definitions or unterminated
 follow-on modules. Nine now match their golden logs completely: `prelude`, `test014`,
 `test015`, `test021`, `test025`, `test028`, `test036`, `test061`, and `test079`.
-`test020` proceeds to a later segmentation fault and `test072` to interface-dispatch
-output differences; both are now classified under the remaining language/runtime work.
+`test020` proceeds to a later segmentation fault. The former `test072`
+interface-dispatch difference was subsequently fixed by fresh type generations.
 
 The formatted-I/O and blob classes are also resolved. `pure_pointer_tag` previously
 round-tripped semantic pointer names through LLVM `type_name`; every opaque pointer
@@ -62,13 +62,19 @@ That sanitizer test also exposed four runtime string constructors which allocate
 test disables the historical address-difference `PURE_STACK` heuristic; ASan itself
 remains responsible for detecting actual stack overflow.
 
+Mutable type functions no longer reuse a cached ORC address keyed only by their stable
+`llvm::Function*`. Type recompilation now materializes a new unit, publishes its address
+through `pure_add_rtty`, and removes the previous tracker afterward. This fixed stale
+type behavior in `test058` and also cleared `test051`, `test057`, `test063`, and
+`test072`. Only `test020` and `test054` remain from the initial 20 failures.
+
 ## Task List
 
 1. [ ] Reduce each failure class to the smallest deterministic reproducer.
 2. [x] Fix duplicate ORC publication and invalid type-JIT continuation after failure.
 3. [x] Reconcile `printf`/`sscanf` string, integer, unsigned, and GMP behavior.
 4. [x] Validate blob fixture discovery and decoding after the shared I/O fix.
-5. [ ] Classify and fix the five remaining language/runtime differences.
+5. [ ] Classify and fix the two remaining language/runtime differences.
 6. [ ] Run all 97 inputs in Release with no golden differences.
 7. [ ] Run the complete corpus in Debug and sanitizer configurations.
 
@@ -124,3 +130,19 @@ TODO-13 runs did not progress far enough to expose these deterministic differenc
       `pure-formatted-io` passed under ASan/UBSan in 62.64 seconds without a finding.
     - All 12 focused Release CTests passed in 118.11 seconds after the runtime
       allocator fix and new integration test were included.
+- 2026-07-24: Replaced stale cached type-function addresses transactionally.
+  - Confirmed `compile_orc_function` returned a cache hit for `$$type.nat` after
+    `test058` extended the type with a `bigint` rule.
+  - Preserved cache reuse for immutable external wrappers, but made type
+    recompilation add and resolve a new ORC unit before replacing the registry entry.
+  - Publish the new type address through `pure_add_rtty` before removing the old
+    tracker, preserving the previous generation if materialization fails.
+  - Extended the no-prelude lifetime stress with an `int` type dispatch followed by
+    a `bigint` extension of the same tag.
+  - Validation:
+    - `test058.pure` passed after the replacement fix.
+    - `pure-jit-lifetime-stress` passed in Release and ASan/UBSan in 0.24 and
+      0.47 seconds respectively.
+    - Of the six remaining runtime inputs, `test051`, `test057`, `test063`, and
+      `test072` now pass; only `test020` and `test054` still fail.
+    - All 12 focused Release CTests passed in 109.58 seconds.

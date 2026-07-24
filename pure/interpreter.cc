@@ -230,20 +230,28 @@ struct CompilationUnitResources {
     return it == host_symbols.end() ? 0 : it->second.address;
   }
 
-  void retain_function(const llvm::Function *function, void *address,
-                       llvm::orc::ResourceTrackerSP tracker)
-  {
-    assert(function && address && tracker &&
-           functions.find(function) == functions.end());
-    functions.emplace
-      (function, CompiledFunction(address, std::move(tracker)));
-  }
-
   void *function_address(const llvm::Function *function) const
   {
     map<const llvm::Function*, CompiledFunction>::const_iterator it =
       functions.find(function);
     return it == functions.end() ? 0 : it->second.address;
+  }
+
+  llvm::orc::ResourceTrackerSP replace_function
+  (const llvm::Function *function, void *address,
+   llvm::orc::ResourceTrackerSP tracker)
+  {
+    assert(function && address && tracker);
+    llvm::orc::ResourceTrackerSP previous_tracker;
+    map<const llvm::Function*, CompiledFunction>::iterator previous =
+      functions.find(function);
+    if (previous != functions.end()) {
+      previous_tracker = std::move(previous->second.tracker);
+      functions.erase(previous);
+    }
+    functions.emplace
+      (function, CompiledFunction(address, std::move(tracker)));
+    return previous_tracker;
   }
 
   void retain_bitcode(string key, llvm::orc::ResourceTrackerSP tracker)
@@ -1411,12 +1419,14 @@ void interpreter::release_faust_instance(int32_t tag,
   collect_pending_generations();
 }
 
-void *interpreter::compile_orc_function(llvm::Function *function,
-                                        llvm::StringRef category)
+void *interpreter::compile_orc_function
+(llvm::Function *function, llvm::StringRef category,
+ llvm::orc::ResourceTrackerSP *previous_tracker)
 {
   assert(function && !function->isDeclaration() && !category.empty());
-  if (void *address = compilation_units->function_address(function))
-    return address;
+  if (!previous_tracker)
+    if (void *address = compilation_units->function_address(function))
+      return address;
 
   llvm::orc::ResourceTrackerSP tracker = ORC->create_resource_tracker();
   string entry_name = function->getName().str();
@@ -1439,7 +1449,13 @@ void *interpreter::compile_orc_function(llvm::Function *function,
   }
   void *address = reinterpret_cast<void*>
     (static_cast<uintptr_t>(entry->getValue()));
-  compilation_units->retain_function(function, address, std::move(tracker));
+  llvm::orc::ResourceTrackerSP previous =
+    compilation_units->replace_function
+      (function, address, std::move(tracker));
+  if (previous_tracker)
+    *previous_tracker = std::move(previous);
+  else
+    assert(!previous);
   return address;
 }
 
@@ -5152,8 +5168,15 @@ void interpreter::compile()
         env_info& info = e->second;
         if (!info.m && !info.mxs) continue;
         Env& type_function = globaltypes[ftag];
-        void *fp = compile_orc_function(type_function.h, "type");
+        llvm::orc::ResourceTrackerSP previous_tracker;
+        void *fp = compile_orc_function
+          (type_function.h, "type", &previous_tracker);
         pure_add_rtty(ftag, type_function.n, fp);
+        if (previous_tracker)
+          if (llvm::Error error = previous_tracker->remove())
+            llvm::logAllUnhandledErrors
+              (std::move(error), llvm::errs(),
+               "failed to retire previous ORC type generation: ");
 #if DEBUG>1
         std::cerr << "JIT " << type_function.f->getName().str()
                   << " -> " << fp << '\n';

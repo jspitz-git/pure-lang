@@ -30,8 +30,9 @@ suite passes.
 
 Final status remains open pending TODO-17's Debug/sanitizer budgets and TODO-18's
 runtime compatibility fixes. The Release build and all 12 current focused tests pass.
-The bounded Release corpus now finishes, but 20 deterministic inputs differ from
-their golden logs, so this document does not claim a complete supported-suite pass.
+The bounded Release corpus initially found 20 deterministic differences. Targeted
+reruns after TODO-18 fixes leave only `test020` and `test054`; a complete confirmation
+run is still required before claiming a supported-suite pass.
 
 ## Legacy LLVM Audit
 
