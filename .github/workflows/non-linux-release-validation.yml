@@ -2,6 +2,23 @@ name: macOS release validation
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - master
+      - "todo/**"
+    paths:
+      - "pure/**"
+      - ".github/workflows/non-linux-release-validation.yml"
+  pull_request:
+    branches:
+      - master
+    paths:
+      - "pure/**"
+      - ".github/workflows/non-linux-release-validation.yml"
+
+concurrency:
+  group: macos-validation-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read

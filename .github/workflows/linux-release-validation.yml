@@ -1,0 +1,119 @@
+name: Linux LLVM 22 validation
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - master
+      - "todo/**"
+    paths:
+      - "pure/**"
+      - ".github/workflows/linux-release-validation.yml"
+  pull_request:
+    branches:
+      - master
+    paths:
+      - "pure/**"
+      - ".github/workflows/linux-release-validation.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: linux-validation-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    working-directory: pure
+
+jobs:
+  ubuntu-24-04:
+    name: Ubuntu 24.04 x86_64
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      LOG_DIR: build/native-logs/ubuntu-24.04-x86_64
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Initialize validation logs
+        run: mkdir -p "$LOG_DIR"
+
+      - name: Install LLVM 22 and dependencies
+        run: |
+          set -euxo pipefail
+          {
+            wget -q https://apt.llvm.org/llvm.sh -O /tmp/llvm.sh
+            chmod +x /tmp/llvm.sh
+            sudo /tmp/llvm.sh 22
+            sudo apt-get update
+            sudo apt-get install -y \
+              llvm-22-dev clang-22 libclang-rt-22-dev \
+              cmake ninja-build bison flex pkg-config diffutils \
+              libgmp-dev libmpfr-dev libreadline-dev libpcre3-dev
+          } 2>&1 | tee "$LOG_DIR/apt-setup.log"
+
+      - name: Record host and toolchain evidence
+        run: |
+          set -euxo pipefail
+          {
+            uname -a
+            uname -m
+            clang-22 --version
+            clang-22 -dumpmachine
+            llvm-config-22 --version
+            llvm-config-22 --host-target
+            pkg-config --version
+            for package in gmp mpfr readline libpcreposix; do
+              pkg-config --modversion "$package"
+            done
+            test "$(uname -m)" = x86_64
+            case "$(clang-22 -dumpmachine)" in
+              x86_64-*-linux-gnu) ;;
+              *) exit 1 ;;
+            esac
+            case "$(llvm-config-22 --version)" in
+              22.*) ;;
+              *) exit 1 ;;
+            esac
+          } 2>&1 | tee "$LOG_DIR/host-toolchain.log"
+
+      - name: Configure and build Release
+        run: |
+          set -euxo pipefail
+          cmake --preset llvm22-release \
+            2>&1 | tee "$LOG_DIR/configure-release.log"
+          cmake --build --preset llvm22-release --parallel 1 \
+            2>&1 | tee "$LOG_DIR/build-release.log"
+
+      - name: Run complete Release tests
+        run: |
+          set -euxo pipefail
+          ctest --preset llvm22-release --output-on-failure \
+            2>&1 | tee "$LOG_DIR/ctest-release-complete.log"
+
+      - name: Configure and build ASan/UBSan
+        run: |
+          set -euxo pipefail
+          cmake --preset llvm22-asan \
+            2>&1 | tee "$LOG_DIR/configure-asan.log"
+          cmake --build --preset llvm22-asan --parallel 1 \
+            2>&1 | tee "$LOG_DIR/build-asan.log"
+
+      - name: Run focused ASan/UBSan lifetime tests
+        run: |
+          set -euxo pipefail
+          ctest --preset llvm22-asan \
+            -R '^pure-jit-(deferred-generation|lifetime-stress|eager)$' \
+            --output-on-failure 2>&1 | tee "$LOG_DIR/ctest-asan-lifetime.log"
+
+      - name: Upload native validation logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ubuntu-24.04-x86_64-native-validation
+          path: pure/build/native-logs/ubuntu-24.04-x86_64
+          if-no-files-found: warn
