@@ -11,10 +11,22 @@ releases are legacy infrastructure and are not the supported development path.
 Supported Toolchain
 ===================
 
-The reference configuration is tested on 64-bit Linux with:
+The LLVM 22 release is validated on these native hosts:
+
+- 64-bit Linux with Clang/LLVM 22;
+- Windows 11 x86_64 in the MSYS2 CLANG64 environment; and
+- macOS 15 arm64 with Homebrew Clang/LLVM 22.
+
+Do not mix target libraries from different prefixes. Windows builds must use
+CLANG64 rather than MINGW64, UCRT64, MSVC, Cygwin, or WSL. macOS builds must run
+natively on Apple silicon rather than through Rosetta and must not pair Apple
+Clang with Homebrew LLVM.
+
+All supported source builds require:
 
 - CMake 3.25 or newer and Ninja;
-- Clang 22 and LLVM 22 development files, including ``llvm-config-22``;
+- Clang 22 and LLVM 22 development files, including the matching
+  ``llvm-config`` (usually ``llvm-config-22`` on Linux);
 - Bison 3.0 or newer and Flex 2.6 or newer;
 - GMP, MPFR, GNU readline, and PCRE POSIX development packages;
 - POSIX threads, dynamic loading, and iconv support.
@@ -32,9 +44,10 @@ Optional tools enable additional validation or integrations:
   does not currently provide a documentation target);
 - LLDB 22 and ``lldb-dap-22`` provide command-line and Zed debugging.
 
-Other operating systems and architectures have not yet completed the LLVM 22
-release-validation matrix. Report portability issues with the configure output,
-compiler versions, and failing command.
+macOS x86_64, Windows arm64, 32-bit and cross-compiled targets, MSVC/clang-cl,
+and the Visual Studio and Xcode generators are not part of the validated LLVM 22
+release matrix. Report portability issues with the complete configure output,
+compiler and ``llvm-config`` versions, target triples, and failing command.
 
 Preset Build
 ============
@@ -66,6 +79,156 @@ A custom build can use the same requirements without presets::
       -DCMAKE_CXX_COMPILER=clang++-22 \
       -DLLVM_DIR=/usr/lib/llvm-22/lib/cmake/llvm
   $ cmake --build build/release --parallel 1
+
+Windows 11 with MSYS2 CLANG64
+================================
+
+Install 64-bit MSYS2 in its standard ``C:\msys64`` location, then open the
+``MSYS2 CLANG64`` terminal. Do not run these commands in the plain MSYS, MINGW64,
+UCRT64, PowerShell, cmd.exe, WSL, or Cygwin environments. MSYS supplies only
+build-time programs such as the shell, Bison, Flex, Git, and diff; the compiler,
+LLVM, CMake, and target libraries must all come from ``/clang64``.
+
+First update MSYS2. If the first command asks you to close the terminal, reopen
+the CLANG64 terminal and run the second command::
+
+  $ pacman -Syu
+  $ pacman -Su
+
+Install the required build and target packages::
+
+  $ pacman -S --needed git bison flex diffutils \
+      mingw-w64-clang-x86_64-{clang,llvm,cmake,ninja,pkgconf,gmp,mpfr,readline,pcre,libiconv,make}
+
+Flang is optional and enables the Fortran bitcode fixtures::
+
+  $ pacman -S --needed mingw-w64-clang-x86_64-flang
+
+The Windows presets assume this standard MSYS2 location. They also look for an
+optional Faust installation at ``C:\Program Files\Faust\bin\faust.exe``. If
+Faust is not installed, disable its optional fixtures by passing
+``-DPURE_FAUST_EXECUTABLE=`` to the configure command.
+
+From the ``pure`` source directory, configure and build Release serially::
+
+  $ cmake --preset windows-clang64-release -DPURE_FAUST_EXECUTABLE=
+  $ cmake --build --preset windows-clang64-release --parallel 1
+
+Run the focused tests first, then the complete suite::
+
+  $ ctest --preset windows-clang64-release -E pure-regression
+  $ ctest --preset windows-clang64-release
+
+The preset installs into ``build/windows-clang64-prefix`` so it does not require
+administrator privileges or modify the MSYS2 installation::
+
+  $ cmake --install build/windows-clang64-release
+  $ build/windows-clang64-prefix/bin/pure.exe --version
+  $ build/windows-clang64-prefix/bin/pure.exe examples/hello.pure
+  $ PKG_CONFIG_PATH="$PWD/build/windows-clang64-prefix/lib/pkgconfig" \
+      pkgconf --modversion pure
+
+Keep the CLANG64 terminal open while running the installed interpreter so that
+its dependent DLLs remain available on ``PATH``. ``DESTDIR`` is not supported
+for a Windows drive-letter installation; choose the final or staging prefix at
+configure time instead. Remove the installation with the same build tree::
+
+  $ cmake --build build/windows-clang64-release --target uninstall
+
+Use the matching ``windows-clang64-debug`` configure, build, and test presets
+for a Debug build. For a nonstandard MSYS2 location, do not use the presets;
+configure explicitly with matching paths below that installation's ``clang64``
+prefix::
+
+  $ cmake -S . -B build/windows-release -G Ninja \
+      -DCMAKE_BUILD_TYPE=Release \
+      -DCMAKE_C_COMPILER=/clang64/bin/clang.exe \
+      -DCMAKE_CXX_COMPILER=/clang64/bin/clang++.exe \
+      -DLLVM_DIR=/clang64/lib/cmake/llvm \
+      -DCMAKE_INSTALL_PREFIX="$PWD/build/windows-prefix" \
+      -DPURE_STRICT_TOOLCHAIN=ON
+
+The strict configure checks the native x86_64 MinGW target and rejects mixed
+MSYS2 package prefixes. Diagnose unexpected selections with::
+
+  $ clang --version
+  $ clang -dumpmachine
+  $ llvm-config --version
+  $ llvm-config --host-target
+  $ pkgconf --path gmp mpfr readline libpcreposix
+
+macOS 15 on Apple silicon
+===========================
+
+The validated macOS configuration is native arm64 macOS 15 with one arm64
+Homebrew installation. Install the command-line developer tools and Homebrew,
+then install the required formulas::
+
+  $ xcode-select --install
+  $ brew update
+  $ brew install cmake ninja llvm@22 bison flex pkgconf gmp mpfr readline pcre
+
+Use the Homebrew LLVM compiler explicitly; ``cc`` and ``clang`` in the default
+system ``PATH`` are normally Apple Clang and are not suitable for this build.
+Set the dependency search paths in the terminal used for configure, build, test,
+and installation::
+
+  $ export LLVM_PREFIX="$(brew --prefix llvm@22)"
+  $ export PATH="$LLVM_PREFIX/bin:$(brew --prefix bison)/bin:$(brew --prefix flex)/bin:$PATH"
+  $ export CMAKE_PREFIX_PATH="$LLVM_PREFIX;$(brew --prefix gmp);$(brew --prefix mpfr);$(brew --prefix readline);$(brew --prefix pcre)"
+  $ export PKG_CONFIG_PATH="$(brew --prefix gmp)/lib/pkgconfig:$(brew --prefix mpfr)/lib/pkgconfig:$(brew --prefix readline)/lib/pkgconfig:$(brew --prefix pcre)/lib/pkgconfig"
+
+Verify that the shell, compiler, and LLVM package are all native arm64 and that
+LLVM is version 22::
+
+  $ test "$(uname -m)" = arm64
+  $ "$LLVM_PREFIX/bin/clang" --version
+  $ "$LLVM_PREFIX/bin/clang" -dumpmachine
+  $ "$LLVM_PREFIX/bin/llvm-config" --version
+  $ "$LLVM_PREFIX/bin/llvm-config" --host-target
+
+From the ``pure`` source directory, choose an absolute installation prefix and
+configure the build::
+
+  $ export PURE_PREFIX="$PWD/build/macos-prefix"
+  $ cmake -S . -B build/macos-release -G Ninja \
+      -DCMAKE_BUILD_TYPE=Release \
+      -DCMAKE_C_COMPILER="$LLVM_PREFIX/bin/clang" \
+      -DCMAKE_CXX_COMPILER="$LLVM_PREFIX/bin/clang++" \
+      -DLLVM_DIR="$LLVM_PREFIX/lib/cmake/llvm" \
+      -DCMAKE_PREFIX_PATH="$CMAKE_PREFIX_PATH" \
+      -DCMAKE_INSTALL_PREFIX="$PURE_PREFIX" \
+      -DPURE_STRICT_TOOLCHAIN=ON
+  $ cmake --build build/macos-release --parallel 1
+
+Run the focused tests first, then the complete suite::
+
+  $ ctest --test-dir build/macos-release -E pure-regression --output-on-failure
+  $ ctest --test-dir build/macos-release --output-on-failure
+
+Install and verify the interpreter and package metadata::
+
+  $ cmake --install build/macos-release
+  $ "$PURE_PREFIX/bin/pure" --version
+  $ "$PURE_PREFIX/bin/pure" examples/hello.pure
+  $ PKG_CONFIG_PATH="$PURE_PREFIX/lib/pkgconfig:$PKG_CONFIG_PATH" \
+      pkg-config --modversion pure
+
+Installed executables use loader-relative runtime paths, so they should work
+without ``DYLD_LIBRARY_PATH``. This can be checked with::
+
+  $ env -u DYLD_LIBRARY_PATH "$PURE_PREFIX/bin/pure" --version
+  $ otool -L "$PURE_PREFIX/bin/pure"
+
+Remove the installation with the build tree that created it::
+
+  $ cmake --build build/macos-release --target uninstall
+
+For Debug validation, repeat the explicit configure in a separate directory
+with ``-DCMAKE_BUILD_TYPE=Debug``, then build serially and run the focused tests.
+The repository also provides a manually dispatched GitHub Actions workflow at
+``.github/workflows/non-linux-release-validation.yml`` which reproduces the
+complete native macOS build, test, install, pkg-config, and uninstall checks.
 
 Test Suite
 ==========

@@ -13,11 +13,11 @@ very complete and up-to-date collection of packages for Arch Linux are
 available from the [Arch User Repositories][5], please also check
 our [Pure on Arch Linux][6] wiki page for details. We also offer a reasonably
 complete set of Ubuntu packages at [Launchpad][7]. Instructions for installing
-Pure on the Mac and Windows can be found on the [Pure on Mac OS X][6b]
-and [Pure on Windows][6c] wiki pages. Source packages can be found on
-the [Download][2] page. Please also have a look at our [mailing list][8] /
-Google group and [IRC chat][9] (#pure-lang on freenode) if you need any help
-or if you want to discuss Pure.
+the current LLVM 22 source build on Linux, Windows 11 with MSYS2 CLANG64, and
+macOS 15 on Apple silicon are maintained in [pure/INSTALL][11]. Source packages
+can be found on the [Download][2] page. Please also have a look at our
+[mailing list][8] / Google group and [IRC chat][9] (#pure-lang on freenode) if
+you need any help or if you want to discuss Pure.
 
 Please also check my [personal Github site][10] for some fun side projects
 that I've written in or for Pure (mostly about computer music and multimedia).
@@ -33,9 +33,8 @@ Enjoy. :)
 [4]: https://agraef.github.io/pure-docs/puredoc.pdf
 [5]: https://aur.archlinux.org/packages/?SeB=m&K=pure-aur&PP=100
 [6]: https://github.com/agraef/pure-lang/wiki/ArchPackaging
-[6b]: https://github.com/agraef/pure-lang/wiki/PureOnMacOSX
-[6c]: https://github.com/agraef/pure-lang/wiki/PureOnWindows
 [7]: https://launchpad.net/~dr-graef
 [8]: http://groups.google.com/group/pure-lang
 [9]: http://webchat.freenode.net/?channels=pure-lang
 [10]: https://agraef.github.io/
+[11]: pure/INSTALL
