@@ -510,6 +510,14 @@ struct CompilationUnitResources {
     return &implementation->second;
   }
 
+  FunctionGeneration *find_generation(uint32_t key)
+  {
+    map<uint32_t, FunctionGeneration>::iterator implementation =
+      implementations.find(key);
+    return implementation == implementations.end()
+      ? 0 : &implementation->second;
+  }
+
   void retain(const Env *environment, llvm::orc::ResourceTrackerSP tracker)
   {
     assert(environment && tracker && trackers.find(environment) == trackers.end());
@@ -1341,6 +1349,19 @@ void *interpreter::materialize_global_generation(int32_t tag, string *error_mess
   CompilationUnitResources::FunctionGeneration *generation =
     compilation_units->current_generation(tag);
   if (!generation) return 0;
+  return materialize_global_generation_by_key(generation->key, error_message);
+}
+
+void *interpreter::materialize_global_generation_by_key
+(uint32_t key, string *error_message)
+{
+  CompilationUnitResources::FunctionGeneration *generation =
+    compilation_units->find_generation(key);
+  if (!generation) {
+    if (error_message)
+      *error_message = "unknown retained generation key "+to_string(key);
+    return 0;
+  }
   if (generation->snapshot) {
     llvm::orc::ResourceTrackerSP tracker = ORC->create_resource_tracker();
     if (llvm::Error error = ORC->add_module_snapshot
@@ -1372,30 +1393,17 @@ void *interpreter::resolve_global_closure(pure_expr *closure)
   pure_closure *clos = closure->data.clos;
   if (clos->fp) return clos->fp;
   string detail;
-  void *address = materialize_global_generation(closure->tag, &detail);
+  void *address = materialize_global_generation_by_key(clos->key, &detail);
   if (!address) {
     if (!detail.empty())
-      llvm::errs() << "failed to resolve deferred ORC function: " << detail << '\n';
+      llvm::errs() << "failed to resolve deferred ORC function generation: "
+                   << detail << '\n';
     return 0;
   }
   CompilationUnitResources::FunctionGeneration *generation =
-    compilation_units->current_generation(closure->tag);
-  assert(generation && generation->address == address);
-
-  if (clos->key != generation->key) {
-    assert(generation->refp);
-    ++*generation->refp;
-    if (clos->refp) {
-      uint32_t *previous = static_cast<uint32_t*>(clos->refp);
-      assert(*previous > 0);
-      if (--*previous == 0 && clos->owner)
-        static_cast<interpreter*>(clos->owner)->
-          release_closure_implementation(clos->key);
-    }
-    clos->key = generation->key;
-    clos->refp = generation->refp;
-    clos->owner = this;
-  }
+    compilation_units->find_generation(clos->key);
+  assert(generation && generation->tag == closure->tag &&
+         generation->address == address);
   clos->fp = generation->address;
   return clos->fp;
 }

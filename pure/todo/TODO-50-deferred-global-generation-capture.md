@@ -27,7 +27,7 @@ on its first invocation.
 1. [x] Add a focused reproducer for deferred capture before first invocation.
    - Confirm `f1`, `f2`, and `f3` retain three distinct generations.
    - Cover out-of-order release of newer closures before invoking the oldest.
-2. [ ] Implement generation lookup and materialization by closure key.
+2. [x] Implement generation lookup and materialization by closure key.
    - Reject or diagnose a missing retained generation instead of falling back
      silently to the current definition.
 3. [ ] Verify generation reference counting and ORC tracker collection.
@@ -79,3 +79,15 @@ on its first invocation.
     - Windows CLANG64 Release configure and build passed.
     - The focused test produced six third-generation results instead of the
       expected per-generation sequence, reproducing the defect in 0.13 seconds.
+- 2026-07-25: Materialized deferred global closures by retained generation key.
+  - Added direct lookup of retained `FunctionGeneration` records and kept the
+    tag-based path as a wrapper for deliberate eager materialization.
+  - Removed first-call rebinding of the closure key and reference counter to the
+    current public generation.
+  - A missing retained key now reports an explicit resolution error rather than
+    silently selecting another implementation.
+  - Validation:
+    - Windows CLANG64 Release rebuild passed.
+    - `pure-jit-deferred-generation`, `pure-jit-lifetime-stress`, and
+      `pure-jit-eager` passed 3/3 in 1.45 seconds.
+    - The isolated extended `test052.pure` passed in 4.88 seconds.
