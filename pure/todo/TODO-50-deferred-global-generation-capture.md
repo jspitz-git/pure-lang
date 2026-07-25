@@ -101,3 +101,18 @@ on its first invocation.
     - `pure-jit-deferred-generation`, `pure-jit-lifetime-stress`, and
       `pure-jit-eager` passed 3/3 under Windows ASan in 2.45 seconds without a
       sanitizer or ORC collection error.
+- 2026-07-26: Distinguished additive redefinition from replacement after `clear`.
+  - The first complete Windows run fixed `test052` but exposed `test053`: an
+    uncalled closure must see rules added to the same definition.
+  - Each retained generation now records a definition epoch. Additive rules
+    publish the latest generation in that epoch and inherit its live-reference
+    dependencies; `clear` ends the epoch.
+  - First invocation resolves the newest generation of the captured epoch and
+    transfers the closure reference only within that epoch.
+  - The focused test now covers both same-epoch rule addition and cross-`clear`
+    isolation.
+  - Validation:
+    - Windows CLANG64 Release rebuild passed.
+    - `test052.pure` and `test053.pure` passed together.
+    - Three focused JIT tests passed in Release and Windows ASan; the ASan run
+      completed 3/3 in 3.23 seconds without a finding.

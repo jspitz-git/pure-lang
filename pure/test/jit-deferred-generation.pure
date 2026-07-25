@@ -34,3 +34,14 @@ bar x = 402;
 clear dormant
 bar 0;
 clear bar
+
+// An uncalled closure follows rules added within the same definition epoch.
+
+extend 0 = 501;
+let additive = extend;
+extend 1 = 502;
+additive 0;
+additive 1;
+
+clear additive
+clear extend
