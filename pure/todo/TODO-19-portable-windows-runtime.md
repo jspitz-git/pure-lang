@@ -1,6 +1,6 @@
 # TODO-19 - Portable Windows Runtime
 
-Status: Open
+Status: Closed on 2026-07-25
 Branch: todo/19-portable-windows-runtime
 
 ## Purpose
@@ -20,8 +20,8 @@ MSYS2, MinGW, a fixed installation prefix, or machine-wide environment variables
 1. [x] Implement executable-relative runtime and library discovery.
 2. [x] Define and create the portable runtime staging layout.
 3. [x] Audit all direct and transitive PE imports.
-4. [ ] Validate interpreter, JIT, module loading, and paths containing spaces.
-5. [ ] Document the runtime/developer-tool boundary and close the TODO.
+4. [x] Validate interpreter, JIT, module loading, and paths containing spaces.
+5. [x] Document the runtime/developer-tool boundary and close the TODO.
 
 ## Guardrails
 
@@ -79,3 +79,16 @@ MSYS2, MinGW, a fixed installation prefix, or machine-wide environment variables
     - The 21 focused CLANG64 tests passed in 43.96 seconds.
     - A complete `tools/` junction in a spaced stage compiled and ran a batch
       executable using stage-relative `opt`, `llc`, and `clang++`.
+- 2026-07-25: Completed portable runtime and native-module validation.
+  - A native `hello.dll` consumer was compiled against the staged headers and
+    import library and loaded from a fresh prefix whose path contains spaces.
+  - The module and `hello.pure` ran from `C:\Windows` with `PURELIB` unset and
+    `PATH` limited to staged `bin` and Windows system directories.
+  - The staged pkg-config metadata resolved its prefix and library directory
+    relative to its own location and contained no build or MSYS2 prefix.
+  - The runtime/developer-tool boundary and optional complete `tools` component
+    are documented in `INSTALL`.
+  - The complete CTest run passed 21/22 tests. The remaining `test052.pure`
+    failure was reproduced unchanged on the parent `windows-bundle` revision
+    `c889330a`; it is a pre-existing JIT definition-lifetime regression, not a
+    portable-runtime regression.

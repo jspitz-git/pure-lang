@@ -150,6 +150,20 @@ forbidden-path list::
       -DPURE_TOOL_DIR=/clang64/bin -DPURE_FORBIDDEN_PATHS="$PWD/build" \
       -P cmake/AuditWindowsPortableInstall.cmake
 
+The mandatory runtime consists of ``bin/pure.exe``, ``bin/libpure.dll``, the
+non-system DLLs staged beside them, and ``lib/pure``. It supports the
+interpreter, JIT execution, and loading prebuilt native modules without an LLVM
+installation. The files in ``include``, the import library and pkg-config file
+in ``lib``, and the batch support objects are development files.
+
+Batch compilation and inline C or C++ compilation additionally require
+compatible ``opt``, ``llc``, ``llvm-as``, ``clang``, and ``clang++`` tools.
+Faust source requires ``faust`` as well. Pure first looks for LLVM tools in the
+optional sibling ``tools/bin`` directory and then on ``PATH``. If an installer
+provides the optional ``tools`` component, it must copy a complete matching LLVM
+and Clang tree; copying only the executables omits Clang's resource and library
+directories and is not sufficient.
+
 Remove the installation with the same build tree::
 
   $ cmake --build build/windows-clang64-release --target uninstall
