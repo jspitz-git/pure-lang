@@ -1,6 +1,6 @@
 # TODO-50 - Deferred Global Generation Capture
 
-Status: Open
+Status: Closed on 2026-07-26
 Branch: todo/50-deferred-global-generation-capture
 
 ## Purpose
@@ -33,7 +33,7 @@ on its first invocation.
 3. [x] Verify generation reference counting and ORC tracker collection.
    - Exercise both never-materialized and already-materialized closures.
    - Confirm superseded generations are reclaimed after their final reference.
-4. [ ] Run focused, complete, and sanitizer regression tests and close the TODO.
+4. [x] Run focused, complete, and sanitizer regression tests and close the TODO.
 
 ## Guardrails
 
@@ -122,4 +122,15 @@ on its first invocation.
     tests in 182.37 seconds.
   - The complete regression corpus passed, including the extended `test052`
     retained-generation case and the additive-rule behavior in `test053`.
-  - No supported local Linux WSL distribution is installed; only the Podman
+  - No supported local Linux WSL distribution is installed, so the remaining
+    Unix validation was delegated to GitHub-hosted runners.
+- 2026-07-26: Completed Linux and macOS LLVM 22 validation on GitHub Actions.
+  - Ubuntu 24.04 x86_64 Release passed 21/21 tests in 225.24 seconds.
+  - The Linux ASan/UBSan build passed the three focused JIT lifetime tests in
+    1.23 seconds without a sanitizer finding.
+  - macOS 15 arm64 Release passed 21/21 tests in 192.25 seconds; the focused
+    Debug suite also passed 20/20 tests in 41.93 seconds.
+  - The macOS job additionally validated arm64 Mach-O formats, installation,
+    an external pkg-config module, runtime loading, and idempotent uninstall.
+  - Linux run: https://github.com/jspitz-git/pure-lang/actions/runs/30178354588
+  - macOS run: https://github.com/jspitz-git/pure-lang/actions/runs/30178354597
