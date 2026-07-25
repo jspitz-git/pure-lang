@@ -116,10 +116,13 @@ target_link_libraries(
     PkgConfig::MPFR
     PkgConfig::PCREPOSIX
     Threads::Threads
-    Iconv::Iconv
     ${CMAKE_DL_LIBS}
     m
 )
+
+if(NOT Iconv_IS_BUILT_IN)
+  target_link_libraries(pure-runtime PRIVATE Iconv::Iconv)
+endif()
 
 add_executable(pure pure.cc)
 target_include_directories(
