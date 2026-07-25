@@ -110,9 +110,10 @@ target_compile_definitions(
 
 target_link_libraries(
   pure-runtime
+  PUBLIC
+    PkgConfig::GMP
   PRIVATE
     ${PURE_LLVM_LIBRARIES}
-    PkgConfig::GMP
     PkgConfig::MPFR
     PkgConfig::PCREPOSIX
     Threads::Threads
