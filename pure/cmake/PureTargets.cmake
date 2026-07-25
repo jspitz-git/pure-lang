@@ -112,9 +112,9 @@ target_link_libraries(
   pure-runtime
   PUBLIC
     PkgConfig::GMP
+    PkgConfig::MPFR
   PRIVATE
     ${PURE_LLVM_LIBRARIES}
-    PkgConfig::MPFR
     PkgConfig::PCREPOSIX
     Threads::Threads
     Iconv::Iconv
