@@ -150,7 +150,7 @@ jobs:
             otool -l "$INSTALL_PREFIX/bin/pure" | grep -A2 LC_RPATH | \
               grep -F "@loader_path/../lib"
             otool -l build/native-batch | grep -A2 LC_RPATH | \
-              grep -F "path $INSTALL_PREFIX/lib (offset"
+              grep -F "path $INSTALL_PREFIX/lib/ (offset"
             ! otool -L "$INSTALL_PREFIX/bin/pure" | grep -F "/usr/local/"
             ! otool -L "$INSTALL_PREFIX/lib/libpure.8.dylib" | grep -F "/usr/local/"
             ! otool -L "$INSTALL_PREFIX/bin/pure" | grep -F "$RELEASE_BUILD"
