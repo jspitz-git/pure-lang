@@ -128,10 +128,20 @@ administrator privileges or modify the MSYS2 installation::
   $ PKG_CONFIG_PATH="$PWD/build/windows-clang64-prefix/lib/pkgconfig" \
       pkgconf --modversion pure
 
-Keep the CLANG64 terminal open while running the installed interpreter so that
-its dependent DLLs remain available on ``PATH``. ``DESTDIR`` is not supported
-for a Windows drive-letter installation; choose the final or staging prefix at
-configure time instead. Remove the installation with the same build tree::
+Windows installation bundles the complete non-system DLL dependency closure in
+``bin`` by default. The installed interpreter therefore runs from PowerShell or
+``cmd.exe`` without MSYS2 on ``PATH``. The portable layout is::
+
+  bin/          pure.exe, libpure.dll, and non-system runtime DLLs
+  lib/pure/     Pure library sources and batch support objects
+  lib/          import library and pkg-config metadata
+  include/      installed development headers
+  share/        documentation installed by the selected configuration
+
+Set ``PURE_INSTALL_WINDOWS_RUNTIME_DEPENDENCIES=OFF`` only for a development
+prefix which deliberately obtains its DLLs elsewhere. ``DESTDIR`` is not
+supported for a Windows drive-letter installation; choose the final or staging
+prefix at configure time instead. Remove the installation with the same build tree::
 
   $ cmake --build build/windows-clang64-release --target uninstall
 

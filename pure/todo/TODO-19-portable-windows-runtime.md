@@ -18,7 +18,7 @@ MSYS2, MinGW, a fixed installation prefix, or machine-wide environment variables
 ## Task List
 
 1. [x] Implement executable-relative runtime and library discovery.
-2. [ ] Define and create the portable runtime staging layout.
+2. [x] Define and create the portable runtime staging layout.
 3. [ ] Audit all direct and transitive PE imports.
 4. [ ] Validate interpreter, JIT, module loading, and paths containing spaces.
 5. [ ] Document the runtime/developer-tool boundary and close the TODO.
@@ -52,3 +52,16 @@ MSYS2, MinGW, a fixed installation prefix, or machine-wide environment variables
       `examples/hello.pure` without `PURELIB` from `C:\Windows`.
     - A batch executable in a spaced path outside the prefix ran without
       `PURELIB`; binary string audit found no configured installation prefix.
+- 2026-07-25: Added reproducible portable Windows staging to `cmake --install`.
+  - CMake collects the full non-system runtime dependency closure into `bin`
+    and filters DLLs supplied by Windows itself.
+  - The documented layout separates runtime, Pure library, development, and
+    shared-data files; dependency bundling can be disabled for developer prefixes.
+  - Validation:
+    - A clean install into a unique path containing spaces completed without
+      runtime-dependency policy warnings.
+    - The clean stage contained exactly 12 runtime DLLs, including `libpure.dll`
+      and its 11 transitive non-system dependencies.
+    - `pure --version` and `examples/hello.pure` passed with `PATH` limited to
+      staged `bin` and Windows system directories and with `PURELIB` unset.
+    - No `msys-2.0.dll` or Windows system DLL was copied into the stage.

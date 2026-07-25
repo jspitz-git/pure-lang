@@ -672,12 +672,31 @@ configure_file(
   @ONLY
 )
 
-install(
-  TARGETS pure pure-runtime
-  RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}"
-  LIBRARY DESTINATION "${CMAKE_INSTALL_LIBDIR}"
-  ARCHIVE DESTINATION "${CMAKE_INSTALL_LIBDIR}"
+option(
+  PURE_INSTALL_WINDOWS_RUNTIME_DEPENDENCIES
+  "Install non-system runtime DLL dependencies with Pure on Windows"
+  ON
 )
+if(WIN32 AND PURE_INSTALL_WINDOWS_RUNTIME_DEPENDENCIES)
+  install(
+    TARGETS pure pure-runtime
+    RUNTIME_DEPENDENCIES
+      DIRECTORIES "${LLVM_TOOLS_BINARY_DIR}"
+      PRE_EXCLUDE_REGEXES "^api-ms-win-.*" "^ext-ms-win-.*"
+      POST_EXCLUDE_REGEXES
+        "^[A-Za-z]:[/\\\\][Ww][Ii][Nn][Dd][Oo][Ww][Ss][/\\\\]([Ss][Yy][Ss][Tt][Ee][Mm]32|[Ss][Yy][Ss][Ww][Oo][Ww]64)[/\\\\].*"
+    RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}"
+    LIBRARY DESTINATION "${CMAKE_INSTALL_LIBDIR}"
+    ARCHIVE DESTINATION "${CMAKE_INSTALL_LIBDIR}"
+  )
+else()
+  install(
+    TARGETS pure pure-runtime
+    RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}"
+    LIBRARY DESTINATION "${CMAKE_INSTALL_LIBDIR}"
+    ARCHIVE DESTINATION "${CMAKE_INSTALL_LIBDIR}"
+  )
+endif()
 install(
   FILES runtime.h
   DESTINATION "${PURE_INSTALL_INCLUDE_DIR}"
