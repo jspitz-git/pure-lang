@@ -24,7 +24,7 @@ guessing pointee types, while malformed or incomplete metadata is rejected safel
 2. [x] Parse metadata without relying on removed typed-pointer information.
 3. [x] Validate semantic ABI entries against each exported LLVM function.
 4. [x] Publish pointer-bearing exports only after complete validation.
-5. [ ] Preserve metadata across cached imports and batch output.
+5. [x] Preserve metadata across cached imports and batch output.
 6. [ ] Test valid pointers, missing metadata, malformed metadata, signature mismatch,
    duplicate exports, unload, and rollback.
 
@@ -157,3 +157,20 @@ Created from TODO-04's explicit opaque-pointer deferral and TODO-13 retrospectiv
     - The equivalent opaque pointer definition without metadata remained unpublished and
       emitted the unsupported-prototype warning.
     - All five existing `pure-bitcode-*` integration tests passed in Release.
+- 2026-07-25: Preserved qualified ABI types across cached imports and batch output.
+  - Confirmed `bc_export_t` owns the canonical ABI strings used to recreate declarations in
+    later namespaces without reparsing the immutable provider module.
+  - Added reversible percent encoding for whitespace-bearing batch extern type tokens while
+    leaving legacy single-token scalar and pointer names byte-for-byte unchanged.
+  - Decoded qualified names before reconstructing `CAbiType` and LLVM types in the batch
+    runtime, with malformed encoded tokens terminating extern table restoration safely.
+  - Removed source-name `pure.abi` from a batch provider after transferring its validated
+    semantics into `ExternInfo`; otherwise private symbol renaming would leave dangling
+    metadata records in emitted `.ll`/`.bc` modules.
+  - Validation:
+    - LLVM 22 Release serial build passed.
+    - Two namespace imports of one cached metadata provider both returned their input strings.
+    - Batch `.bc` contained `%const%20char*` result/argument tokens and no stale `pure.abi`
+      named metadata.
+    - A complete metadata-backed batch object linked and executed with clean shutdown.
+    - All five `pure-bitcode-*` tests and `pure-batch-executable` passed in Release.

@@ -91,6 +91,59 @@ int interpreter::brkflag = 0;
 int interpreter::brkmask = 0;
 bool interpreter::g_init = false;
 
+static string encode_abi_dump_token(const string& type)
+{
+  bool encode = false;
+  for (size_t i = 0; i < type.size(); ++i)
+    if (type[i] == '%' || type[i] == ' ' || type[i] == '\t' ||
+        type[i] == '\n' || type[i] == '\r') {
+      encode = true;
+      break;
+    }
+  if (!encode) return type;
+  static const char hex[] = "0123456789ABCDEF";
+  string encoded(1, '%');
+  for (size_t i = 0; i < type.size(); ++i) {
+    unsigned char c = type[i];
+    if (c == '%' || c == ' ' || c == '\t' || c == '\n' || c == '\r') {
+      encoded += '%';
+      encoded += hex[c >> 4];
+      encoded += hex[c & 0xf];
+    } else {
+      encoded += c;
+    }
+  }
+  return encoded;
+}
+
+static int abi_dump_hex_digit(char c)
+{
+  if (c >= '0' && c <= '9') return c-'0';
+  if (c >= 'A' && c <= 'F') return c-'A'+10;
+  if (c >= 'a' && c <= 'f') return c-'a'+10;
+  return -1;
+}
+
+static bool decode_abi_dump_token(string& type)
+{
+  if (type.empty() || type[0] != '%') return true;
+  string decoded;
+  for (size_t i = 1; i < type.size(); ++i) {
+    if (type[i] != '%') {
+      decoded += type[i];
+      continue;
+    }
+    if (i+2 >= type.size()) return false;
+    int high = abi_dump_hex_digit(type[i+1]);
+    int low = abi_dump_hex_digit(type[i+2]);
+    if (high < 0 || low < 0) return false;
+    decoded += char((high << 4) | low);
+    i += 2;
+  }
+  type = decoded;
+  return true;
+}
+
 llvm::LLVMContext& pure_llvm_context()
 {
   assert(interpreter::g_interp);
@@ -1494,7 +1547,7 @@ interpreter::interpreter(int32_t nsyms, char *syms,
   size_t n_args;
   while (1) {
     sin >> f >> s_name >> s_type >> n_args;
-    if (sin.fail()) break;
+    if (sin.fail() || !decode_abi_dump_token(s_type)) break;
     CAbiType abi_type(s_type);
     llvm_const_Type* rettype = named_type(s_type);
     vector<llvm_const_Type*> argtypes(n_args);
@@ -1502,6 +1555,10 @@ interpreter::interpreter(int32_t nsyms, char *syms,
     abi_argtypes.reserve(n_args);
     for (size_t i = 0; i < n_args; i++) {
       sin >> s_type;
+      if (!decode_abi_dump_token(s_type)) {
+        sin.setstate(ios::failbit);
+        break;
+      }
       abi_argtypes.push_back(CAbiType(s_type));
       argtypes[i] = named_type(s_type);
     }
@@ -3823,6 +3880,11 @@ bool interpreter::LoadBitcode(bool priv, const char *name, string *msg)
       (bc_export_t(source_name, linked_name, restype, argtypes,
                    ft->isVarArg()));
   }
+  if (compiling)
+    if (NamedMDNode *metadata = M->getNamedMetadata("pure.abi"))
+      // Source records no longer name definitions after private renaming. The
+      // validated semantic types now live in the batch extern table instead.
+      M->eraseNamedMetadata(metadata);
   // Non-function definitions are private implementation details of this load;
   // qualify them as well so independent bitcode modules cannot interpose them.
   for (Module::global_iterator it = M->global_begin(), end = M->global_end();
@@ -12198,16 +12260,18 @@ int interpreter::compiler(string out, list<string> libnames, string llcopts)
 	    ExternInfo& info = kt->second;
 	    if (!strip || used.find(info.f) != used.end()) {
 	      externs[f] = ConstantExpr::getPointerCast(info.f, VoidPtrTy);
+	      const string& result_name = info.abi_type.name.empty() ?
+		type_name(info.type) : info.abi_type.name;
 	      sout << info.tag << " " << info.name << " "
-                   << (info.abi_type.name.empty() ? type_name(info.type)
-                                                  : info.abi_type.name)
+		   << encode_abi_dump_token(result_name)
 		   << " " << info.argtypes.size();
-	      for (size_t i = 0; i < info.argtypes.size(); i++)
-		sout << " "
-                     << (i < info.abi_argtypes.size() &&
-                         !info.abi_argtypes[i].name.empty()
-                         ? info.abi_argtypes[i].name
-                         : type_name(info.argtypes[i]));
+	      for (size_t i = 0; i < info.argtypes.size(); i++) {
+		const string& argument_name =
+		  i < info.abi_argtypes.size() &&
+		  !info.abi_argtypes[i].name.empty() ?
+		  info.abi_argtypes[i].name : type_name(info.argtypes[i]);
+		sout << " " << encode_abi_dump_token(argument_name);
+	      }
 	      sout << '\n';
 	      vars[f] = v.v;
 	    }
