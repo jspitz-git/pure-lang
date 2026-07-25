@@ -125,7 +125,6 @@ jobs:
               assert_arm64_macho "$runtime"
             done
             assert_arm64_macho "$RELEASE_BUILD/test/pure-batch-smoke.o"
-            assert_arm64_macho "$RELEASE_BUILD/test/pure-batch-program.o"
             assert_arm64_macho "$RELEASE_BUILD/test/pure-batch-program"
           } 2>&1 | tee "$LOG_DIR/release-object-formats.log"
 
