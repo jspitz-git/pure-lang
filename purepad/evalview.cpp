@@ -557,9 +557,8 @@ void CEvalView::Kill()
 
 void CEvalView::ProcessInput()
 {
-	LPTSTR s = m_pipe.Read();
+	CString s = m_pipe.Read();
 	Append(s, TRUE);
-	delete[] s;
 }
 
 void CEvalView::OnViewFont() 

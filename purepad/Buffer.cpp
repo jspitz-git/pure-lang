@@ -35,32 +35,24 @@ BOOL CBuffer::Write(LPCTSTR lpszStr)
 	return res;
 }
 
-LPTSTR CBuffer::Read()
+CString CBuffer::Read()
 {
-	CSingleLock sLock(&m_mutex);
-	sLock.Lock();
+	CSingleLock sLock(&m_mutex, TRUE);
 	CString strBuf = m_strBuf;
 	// normalize line ends
 	strBuf.Replace("\r\n", "\n");
 	strBuf.Replace("\n", "\r\n");
-	LPTSTR lpszStr = new TCHAR[strBuf.GetLength()+1];
-	strcpy(lpszStr, strBuf);
 	m_strBuf.Empty();
-	sLock.Unlock();
-	return lpszStr;
+	return strBuf;
 }
 
-LPTSTR CBuffer::Peek()
+CString CBuffer::Peek()
 {
-	CSingleLock sLock(&m_mutex);
-	sLock.Lock();
+	CSingleLock sLock(&m_mutex, TRUE);
 	CString strBuf = m_strBuf;
 	strBuf.Replace("\r\n", "\n");
 	strBuf.Replace("\n", "\r\n");
-	LPTSTR lpszStr = new TCHAR[strBuf.GetLength()+1];
-	strcpy(lpszStr, strBuf);
-	sLock.Unlock();
-	return lpszStr;
+	return strBuf;
 }
 
 void CBuffer::Empty()

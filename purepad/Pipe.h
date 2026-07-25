@@ -67,13 +67,11 @@ public:
 	void Write(LPCTSTR lpszBuf);
 	// send a string to the child's stdin
 
-	LPTSTR Read();
+	CString Read();
 	// get the currently available output from the child's stdout
-	// and empty the buffer; the string is allocated dynamically
-	// using new and should be deallocated by the caller using
-	// delete
+	// and empty the buffer
 
-	LPTSTR Peek();
+	CString Peek();
 	// like Read(), but does not empty the buffer
 
 	void Empty();

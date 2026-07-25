@@ -690,8 +690,8 @@ static char	*home()
 {
 	static char *homedir = NULL;
 	if (!homedir && !(homedir = getenv("HOME"))) {
-		homedir = "/";
-		*homedir = *dirstr;
+		static char root[] = "\\";
+		homedir = root;
 	}
 	return homedir;
 }

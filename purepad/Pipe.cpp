@@ -34,7 +34,12 @@ CPipe::CPipe()
 CPipe::~CPipe()
 {
 	Kill();
-	CloseHandle(hOutput);
+	if (hOutput)
+		CloseHandle(hOutput);
+	if (hKillThreads)
+		CloseHandle(hKillThreads);
+	if (hMutex)
+		CloseHandle(hMutex);
 }
 
 // public member functions
@@ -55,12 +60,12 @@ void CPipe::Write(LPCTSTR lpszBuf)
 		SetEvent(hOutput);
 }
 
-LPTSTR CPipe::Read()
+CString CPipe::Read()
 {
 	return m_bufInput.Read();
 }
 
-LPTSTR CPipe::Peek()
+CString CPipe::Peek()
 {
 	return m_bufInput.Peek();
 }
@@ -123,14 +128,16 @@ static DWORD WINAPI Writer(LPVOID pParam)
 	while (WaitForMultipleObjects(2, hEvents, FALSE, INFINITE) ==
 		WAIT_OBJECT_0) {
 		BOOL success = TRUE;
-		LPTSTR buf = ti->pOutput->Read();
-		if (*buf) {
-			DWORD n, len = strlen(buf);
-			success =
-				WriteFile(ti->hChildStdinWr, buf, len, &n, NULL)
-				&& n == len;
+		CString buf = ti->pOutput->Read();
+		LPCTSTR data = buf;
+		DWORD remaining = static_cast<DWORD>(buf.GetLength());
+		while (success && remaining > 0) {
+			DWORD written = 0;
+			success = WriteFile(ti->hChildStdinWr, data, remaining,
+				&written, NULL) && written > 0;
+			data += written;
+			remaining -= written;
 		}
-		delete[] buf;
 		if (!success) break;
 	}
 	return 0;
@@ -211,6 +218,7 @@ static DWORD WINAPI CompileRun(LPVOID pParam)
 	cmd.ReleaseBuffer();
 	if (!res) { ReleaseMutex(ti->hMutex); return 1; }
 	ASSERT(ti->pi.hProcess != NULL);
+	CloseHandle(ti->pi.hThread); ti->pi.hThread = NULL;
 	MakeEvents(ti);
 
 	// now save to let the main thread take over until the
@@ -263,6 +271,7 @@ static DWORD WINAPI CompileRun(LPVOID pParam)
 	cmd.ReleaseBuffer();
 	ASSERT(ti->pi.hProcess != NULL);
 	if (!res) { ReleaseMutex(ti->hMutex); return 1; }
+	CloseHandle(ti->pi.hThread); ti->pi.hThread = NULL;
 	MakeEvents(ti);
 
 	ReleaseMutex(ti->hMutex);

@@ -49,3 +49,12 @@ with the portable Pure runtime.
     `mfc140.dll`.
   - Remaining secure-CRT, narrowing, and path-size warnings are retained for
     task 2 rather than hidden with a global warning suppression.
+- 2026-07-26: Removed the first set of ownership hazards.
+  - `CBuffer` and `CPipe` now return `CString` values, removing caller-owned
+    arrays and their manual `delete[]` contract.
+  - `CPipe` closes all three persistent synchronization handles and closes the
+    thread handles returned by successful `CreateProcess` calls.
+  - Pipe writes now handle partial `WriteFile` results; the home-directory
+    fallback uses mutable storage instead of modifying a string literal.
+  - Release and Debug x64 builds passed after the changes; the remaining
+    warnings are confined to the text and path modernization work.
