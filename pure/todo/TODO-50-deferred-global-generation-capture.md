@@ -1,0 +1,136 @@
+# TODO-50 - Deferred Global Generation Capture
+
+Status: Closed on 2026-07-26
+Branch: todo/50-deferred-global-generation-capture
+
+## Purpose
+
+Preserve the function generation captured by a retained global closure even
+when its native address is materialized only after later redefinitions. An
+uncalled `let f = foo` must continue to denote the generation of `foo` that was
+current at binding time, rather than silently rebinding to the newest generation
+on its first invocation.
+
+## Scope
+
+- Reproduce and fix the extended `test052.pure` failure under LLVM 22.
+- Resolve deferred global closures by their stored implementation key instead
+  of unconditionally selecting the current implementation for the symbol tag.
+- Preserve ORC resource ownership until every closure referring to a generation
+  has been released.
+- Keep direct calls to the current global definition and deliberate
+  redefinition behavior unchanged.
+- Do not include unrelated portable-runtime or Windows packaging changes.
+
+## Task List
+
+1. [x] Add a focused reproducer for deferred capture before first invocation.
+   - Confirm `f1`, `f2`, and `f3` retain three distinct generations.
+   - Cover out-of-order release of newer closures before invoking the oldest.
+2. [x] Implement generation lookup and materialization by closure key.
+   - Reject or diagnose a missing retained generation instead of falling back
+     silently to the current definition.
+3. [x] Verify generation reference counting and ORC tracker collection.
+   - Exercise both never-materialized and already-materialized closures.
+   - Confirm superseded generations are reclaimed after their final reference.
+4. [x] Run focused, complete, and sanitizer regression tests and close the TODO.
+
+## Guardrails
+
+- Do not force eager JIT compilation of every captured global merely to pin its
+  generation.
+- Do not leak obsolete ORC resource trackers or retain stale generations
+  indefinitely.
+- Preserve closure ABI fields and the public embedding ABI.
+- Keep behavior identical across Windows and the supported Unix configurations.
+- Do not weaken or rewrite the existing `test052.pure` expectations.
+
+## Validation Plan
+
+- From `build/windows-clang64-release`, run
+  `./run-tests -v ../../test/test052.pure` for the native Windows LLVM 22 build.
+- Run `pure-jit-lifetime-stress`, `pure-jit-eager`, and related closure tests.
+- Add a focused assertion for collection after out-of-order closure release.
+- Run the complete Release regression corpus on Windows and Linux.
+- Run the focused lifetime tests under ASan/UBSan before closure.
+
+## Decisions
+
+- A missing retained key emits a specific JIT resolution diagnostic and fails
+  resolution; it never falls back to a different generation.
+- Collection remains an internal invariant. The focused test exercises both
+  snapshot and materialized cleanup paths, while ASan checks their lifetime
+  without adding a public introspection API.
+
+## Progress Log
+
+- 2026-07-25: Diagnosed the extended `test052.pure` failure.
+  - Windows LLVM 22 validation commit `830d00cf` passed 22/22 tests before the
+    extended three-generation case entered the history.
+  - Commit `64d0cc0c` added the case without executing it; merge `73b3d587`
+    later introduced it into the main line.
+  - The failure was reproduced on parent revision `c889330a`: `f1` and `f2`
+    returned the third generation because `resolve_global_closure` selected
+    `current_generation(closure->tag)` at first invocation.
+  - No implementation change has been made yet.
+- 2026-07-25: Added the focused `pure-jit-deferred-generation` test.
+  - The no-prelude test retains three uncalled closures, invokes them only after
+    the third redefinition, and releases newer closures before reusing the first.
+  - Validation:
+    - Windows CLANG64 Release configure and build passed.
+    - The focused test produced six third-generation results instead of the
+      expected per-generation sequence, reproducing the defect in 0.13 seconds.
+- 2026-07-25: Materialized deferred global closures by retained generation key.
+  - Added direct lookup of retained `FunctionGeneration` records and kept the
+    tag-based path as a wrapper for deliberate eager materialization.
+  - Removed first-call rebinding of the closure key and reference counter to the
+    current public generation.
+  - A missing retained key now reports an explicit resolution error rather than
+    silently selecting another implementation.
+  - Validation:
+    - Windows CLANG64 Release rebuild passed.
+    - `pure-jit-deferred-generation`, `pure-jit-lifetime-stress`, and
+      `pure-jit-eager` passed 3/3 in 1.45 seconds.
+    - The isolated extended `test052.pure` passed in 4.88 seconds.
+- 2026-07-25: Covered both retained-generation collection paths.
+  - The focused test now releases materialized generations out of order and
+    releases a superseded closure without ever materializing its snapshot.
+  - Both paths rely on the original generation reference counter; the resolver
+    no longer transfers ownership to the current generation on first call.
+  - Validation:
+    - The extended Release test passed in 0.23 seconds.
+    - `pure-jit-deferred-generation`, `pure-jit-lifetime-stress`, and
+      `pure-jit-eager` passed 3/3 under Windows ASan in 2.45 seconds without a
+      sanitizer or ORC collection error.
+- 2026-07-26: Distinguished additive redefinition from replacement after `clear`.
+  - The first complete Windows run fixed `test052` but exposed `test053`: an
+    uncalled closure must see rules added to the same definition.
+  - Each retained generation now records a definition epoch. Additive rules
+    publish the latest generation in that epoch and inherit its live-reference
+    dependencies; `clear` ends the epoch.
+  - First invocation resolves the newest generation of the captured epoch and
+    transfers the closure reference only within that epoch.
+  - The focused test now covers both same-epoch rule addition and cross-`clear`
+    isolation.
+  - Validation:
+    - Windows CLANG64 Release rebuild passed.
+    - `test052.pure` and `test053.pure` passed together.
+    - Three focused JIT tests passed in Release and Windows ASan; the ASan run
+      completed 3/3 in 3.23 seconds without a finding.
+- 2026-07-26: Completed native Windows validation of the epoch-aware fix.
+  - `ctest --preset windows-clang64-release --output-on-failure` passed 23/23
+    tests in 182.37 seconds.
+  - The complete regression corpus passed, including the extended `test052`
+    retained-generation case and the additive-rule behavior in `test053`.
+  - No supported local Linux WSL distribution is installed, so the remaining
+    Unix validation was delegated to GitHub-hosted runners.
+- 2026-07-26: Completed Linux and macOS LLVM 22 validation on GitHub Actions.
+  - Ubuntu 24.04 x86_64 Release passed 21/21 tests in 225.24 seconds.
+  - The Linux ASan/UBSan build passed the three focused JIT lifetime tests in
+    1.23 seconds without a sanitizer finding.
+  - macOS 15 arm64 Release passed 21/21 tests in 192.25 seconds; the focused
+    Debug suite also passed 20/20 tests in 41.93 seconds.
+  - The macOS job additionally validated arm64 Mach-O formats, installation,
+    an external pkg-config module, runtime loading, and idempotent uninstall.
+  - Linux run: https://github.com/jspitz-git/pure-lang/actions/runs/30178354588
+  - macOS run: https://github.com/jspitz-git/pure-lang/actions/runs/30178354597

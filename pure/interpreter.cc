@@ -198,6 +198,7 @@ struct CompilationUnitResources {
   struct FunctionGeneration {
     int32_t tag;
     uint64_t generation;
+    uint64_t epoch;
     uint32_t key;
     uint32_t *refp;
     string symbol;
@@ -207,12 +208,13 @@ struct CompilationUnitResources {
     map<uint32_t, uint32_t*> closure_refs;
     bool current;
 
-    FunctionGeneration(int32_t tag, uint64_t generation, uint32_t key,
+    FunctionGeneration(int32_t tag, uint64_t generation, uint64_t epoch,
+                       uint32_t key,
                        uint32_t *refp, string symbol,
                        std::unique_ptr<llvm::MemoryBuffer> snapshot,
                        void *address, llvm::orc::ResourceTrackerSP tracker,
                        const map<uint32_t, uint32_t*>& closure_refs)
-      : tag(tag), generation(generation), key(key), refp(refp),
+      : tag(tag), generation(generation), epoch(epoch), key(key), refp(refp),
         symbol(std::move(symbol)), snapshot(std::move(snapshot)),
         address(address), tracker(std::move(tracker)),
         closure_refs(closure_refs), current(false) {}
@@ -228,7 +230,9 @@ struct CompilationUnitResources {
   map<uint32_t, set<uint32_t> > key_implementations;
   set<uint32_t> pending_implementations;
   map<int32_t, uint32_t> current_implementations;
+  map<pair<int32_t, uint64_t>, uint32_t> latest_implementations;
   map<int32_t, uint64_t> next_generations;
+  map<int32_t, uint64_t> next_epochs;
 
   llvm::Error retain_host_symbol
   (PureJit& jit, llvm::StringRef name, void *address,
@@ -405,7 +409,14 @@ struct CompilationUnitResources {
     return ++next_generations[tag];
   }
 
-  void retain_generation(int32_t tag, uint64_t generation, uint32_t key,
+  uint64_t generation_epoch(int32_t tag)
+  {
+    FunctionGeneration *current = current_generation(tag);
+    return current ? current->epoch : ++next_epochs[tag];
+  }
+
+  void retain_generation(int32_t tag, uint64_t generation, uint64_t epoch,
+                         uint32_t key,
                          uint32_t *refp, string symbol,
                          std::unique_ptr<llvm::MemoryBuffer> snapshot,
                          void *address, llvm::orc::ResourceTrackerSP tracker,
@@ -417,7 +428,8 @@ struct CompilationUnitResources {
            implementations.find(key) == implementations.end() &&
            closure_refs.find(key) != closure_refs.end());
     implementations.emplace
-      (key, FunctionGeneration(tag, generation, key, refp, std::move(symbol),
+      (key, FunctionGeneration(tag, generation, epoch, key, refp,
+                               std::move(symbol),
                                std::move(snapshot), address,
                                std::move(tracker), closure_refs));
     for (map<uint32_t, uint32_t*>::const_iterator it = closure_refs.begin();
@@ -457,6 +469,11 @@ struct CompilationUnitResources {
       owners->second.erase(root_key);
       if (owners->second.empty()) key_implementations.erase(owners);
     }
+    map<pair<int32_t, uint64_t>, uint32_t>::iterator latest =
+      latest_implementations.find
+        (make_pair(implementation->second.tag, implementation->second.epoch));
+    if (latest != latest_implementations.end() && latest->second == root_key)
+      latest_implementations.erase(latest);
     implementations.erase(implementation);
   }
 
@@ -482,21 +499,33 @@ struct CompilationUnitResources {
   {
     map<int32_t, uint32_t>::iterator current =
       current_implementations.find(tag);
+    FunctionGeneration *previous = 0;
     if (current != current_implementations.end()) {
-      map<uint32_t, FunctionGeneration>::iterator previous =
-        implementations.find(current->second);
-      if (previous != implementations.end()) previous->second.current = false;
+      previous = find_generation(current->second);
+      assert(previous);
     }
     if (!key) {
+      if (previous) previous->current = false;
       current_implementations.erase(tag);
       return;
     }
     map<uint32_t, FunctionGeneration>::iterator implementation =
       implementations.find(key);
     assert(implementation != implementations.end() &&
-           implementation->second.tag == tag);
+           implementation->second.tag == tag &&
+           (!previous || previous->epoch == implementation->second.epoch));
+    if (previous) {
+      for (map<uint32_t, uint32_t*>::const_iterator
+             it = previous->closure_refs.begin();
+           it != previous->closure_refs.end(); ++it)
+        if (implementation->second.closure_refs.insert(*it).second)
+          key_implementations[it->first].insert(key);
+      previous->current = false;
+    }
     implementation->second.current = true;
     current_implementations[tag] = key;
+    latest_implementations
+      [make_pair(tag, implementation->second.epoch)] = key;
   }
 
   FunctionGeneration *current_generation(int32_t tag)
@@ -508,6 +537,26 @@ struct CompilationUnitResources {
       implementations.find(current->second);
     assert(implementation != implementations.end());
     return &implementation->second;
+  }
+
+  FunctionGeneration *find_generation(uint32_t key)
+  {
+    map<uint32_t, FunctionGeneration>::iterator implementation =
+      implementations.find(key);
+    return implementation == implementations.end()
+      ? 0 : &implementation->second;
+  }
+
+  FunctionGeneration *latest_generation(uint32_t key)
+  {
+    FunctionGeneration *captured = find_generation(key);
+    if (!captured) return 0;
+    map<pair<int32_t, uint64_t>, uint32_t>::const_iterator latest =
+      latest_implementations.find(make_pair(captured->tag, captured->epoch));
+    assert(latest != latest_implementations.end());
+    FunctionGeneration *implementation = find_generation(latest->second);
+    assert(implementation);
+    return implementation;
   }
 
   void retain(const Env *environment, llvm::orc::ResourceTrackerSP tracker)
@@ -548,6 +597,7 @@ struct CompilationUnitResources {
       errors = llvm::joinErrors(std::move(errors), tracker->remove());
     }
     current_implementations.clear();
+    latest_implementations.clear();
     pending_implementations.clear();
     key_implementations.clear();
     while (!implementations.empty()) {
@@ -1290,6 +1340,8 @@ void *interpreter::compile_global_generation(Env& environment)
          !environment.h->isDeclaration());
   uint64_t generation =
     compilation_units->next_generation(environment.tag);
+  uint64_t epoch =
+    compilation_units->generation_epoch(environment.tag);
   string entry_name = environment.h->getName().str();
   string exported_name = "$$orc.fun."+to_string(environment.tag)+"."+
     to_string(generation);
@@ -1330,7 +1382,7 @@ void *interpreter::compile_global_generation(Env& environment)
   set<const Env*> visited;
   collect_generation_closure_refs(&environment, closure_refs, visited);
   compilation_units->retain_generation
-    (environment.tag, generation, environment.getkey(), environment.refp,
+    (environment.tag, generation, epoch, environment.getkey(), environment.refp,
      exported_name, std::move(snapshot), address, std::move(tracker),
      closure_refs);
   return address;
@@ -1341,6 +1393,19 @@ void *interpreter::materialize_global_generation(int32_t tag, string *error_mess
   CompilationUnitResources::FunctionGeneration *generation =
     compilation_units->current_generation(tag);
   if (!generation) return 0;
+  return materialize_global_generation_by_key(generation->key, error_message);
+}
+
+void *interpreter::materialize_global_generation_by_key
+(uint32_t key, string *error_message)
+{
+  CompilationUnitResources::FunctionGeneration *generation =
+    compilation_units->find_generation(key);
+  if (!generation) {
+    if (error_message)
+      *error_message = "unknown retained generation key "+to_string(key);
+    return 0;
+  }
   if (generation->snapshot) {
     llvm::orc::ResourceTrackerSP tracker = ORC->create_resource_tracker();
     if (llvm::Error error = ORC->add_module_snapshot
@@ -1371,17 +1436,23 @@ void *interpreter::resolve_global_closure(pure_expr *closure)
   assert(closure && closure->data.clos && closure->tag > 0);
   pure_closure *clos = closure->data.clos;
   if (clos->fp) return clos->fp;
-  string detail;
-  void *address = materialize_global_generation(closure->tag, &detail);
-  if (!address) {
-    if (!detail.empty())
-      llvm::errs() << "failed to resolve deferred ORC function: " << detail << '\n';
+  CompilationUnitResources::FunctionGeneration *generation =
+    compilation_units->latest_generation(clos->key);
+  if (!generation) {
+    llvm::errs() << "failed to resolve deferred ORC function generation: "
+                 << "unknown retained generation key " << clos->key << '\n';
     return 0;
   }
-  CompilationUnitResources::FunctionGeneration *generation =
-    compilation_units->current_generation(closure->tag);
-  assert(generation && generation->address == address);
-
+  string detail;
+  void *address = materialize_global_generation_by_key(generation->key, &detail);
+  if (!address) {
+    if (!detail.empty())
+      llvm::errs() << "failed to resolve deferred ORC function generation: "
+                   << detail << '\n';
+    return 0;
+  }
+  assert(generation->tag == closure->tag &&
+         generation->address == address);
   if (clos->key != generation->key) {
     assert(generation->refp);
     ++*generation->refp;

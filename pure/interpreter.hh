@@ -1088,6 +1088,8 @@ public:
                               list<pure_expr*> *retired = 0);
   void *compile_global_generation(Env& environment);
   void *materialize_global_generation(int32_t tag, string *error = 0);
+  void *materialize_global_generation_by_key
+    (uint32_t key, string *error = 0);
   void *resolve_global_closure(pure_expr *closure);
   void release_closure_implementation(uint32_t key) noexcept;
   void collect_pending_generations() noexcept;
