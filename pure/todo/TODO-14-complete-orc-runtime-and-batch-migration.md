@@ -1,6 +1,6 @@
 # TODO-14 - Complete ORC Runtime and Batch Migration
 
-Status: Open
+Status: Completed
 Branch: todo/14-complete-orc-runtime-and-batch-migration
 
 ## Purpose
@@ -22,16 +22,74 @@ compatibility gates can be removed.
 
 ## Task List
 
-1. [ ] Inventory every remaining `ExecutionEngine`, MCJIT, mapping, and materialization consumer.
-2. [ ] Route `jit_now` and `pure_interp_compile` through explicit ORC units.
-3. [ ] Route retained `dodefn(keep)` initialization and batch Faust through ORC.
-4. [ ] Replace legacy mappings and fallback resolution with ORC symbols.
-5. [ ] Replace stale-module cleanup with tracker and generation ownership.
-6. [ ] Decide and document the native callable-address ABI policy.
-7. [ ] Remove `ExecutionEngine`, MCJIT linkage, obsolete headers, and `LLVM26` through
+1. [x] Inventory every remaining `ExecutionEngine`, MCJIT, mapping, and materialization consumer.
+2. [x] Route `jit_now` and `pure_interp_compile` through explicit ORC units.
+3. [x] Route retained `dodefn(keep)` initialization and batch Faust through ORC.
+4. [x] Replace legacy mappings and fallback resolution with ORC symbols.
+5. [x] Replace stale-module cleanup with tracker and generation ownership.
+6. [x] Decide and document the native callable-address ABI policy.
+7. [x] Remove `ExecutionEngine`, MCJIT linkage, obsolete headers, and `LLVM26` through
    `LLVM35` plus `NEW_USER_ITERATOR` compatibility gates.
-8. [ ] Validate eager mode, complete batch executables, batch Faust, redefinition
+8. [x] Validate eager mode, complete batch executables, batch Faust, redefinition
    lifetime, and shutdown in Debug, Release, and sanitizer builds.
+
+## Transitional Engine Inventory
+
+The remaining `ExecutionEngine` is created from the interpreter's mutable module by
+`EngineBuilder` during `interpreter::init`, configured for eager/lazy mode by
+`init_jit_mode`, given the `resolve_legacy_external` fallback, and deleted after global
+environments during interpreter shutdown. CMake links both `ExecutionEngine` and
+`MCJIT` solely for this path.
+
+Runtime consumers fall into five migration groups:
+
+| Group | Active consumers | Required ORC replacement |
+| --- | --- | --- |
+| Core host state | `$$sstk$$`, `$$fptr$$`, `register_host_global`, and `remove_host_global` mirror ORC absolute symbols into `addGlobalMapping`/`updateGlobalMapping`. | Remove the synchronized legacy half after every submitted ORC unit resolves these host addresses. |
+| Eager/native materialization | `jit_now` walks either the entire mutable module or the `check_used` closure and calls `getPointerToFunction`; `pure_interp_compile` is its public C API entry. | Materialize explicit immutable ORC generations for requested Pure functions and define whether the API promises only compilation or a stable native address. |
+| Retained batch initialization | `dodefn(keep)` invokes generated `$$init` code through MCJIT while retaining that code in the batch output module. | Execute a temporary reduced ORC initializer without consuming or removing the definition needed by later object emission. |
+| Batch Faust | The compiling path links Faust definitions into the output module, creates stable dispatch slots, obtains operation addresses with `getPointerToFunction`, patches reload slots, and unmaps removed globals. `declare_extern(..., materialize)` also uses MCJIT for Faust dispatch initialization. | Keep definitions in batch IR while materializing separate ORC snapshots for initialization/dispatch; track their slots and temporary providers explicitly. |
+| Legacy cleanup | `Env::clear` unmaps live local/global function addresses before deleting bodies; batch Faust reload unmaps old globals. | Let generation/resource trackers own machine code and remove only mutable-module IR after all ORC snapshots and closure references are accounted for. |
+
+Two `getPointerToGlobal` sites are not independent ownership requirements: the Faust
+fallback is paired with legacy batch materialization, while the global-function use is
+`DEBUG>1` diagnostics. The commented `const_defn` mapping call is dead documentation,
+not a consumer.
+
+The active compatibility/linkage residue is correspondingly bounded:
+
+- `LLVM27` controls eager-mode configuration, obsolete engine construction branches,
+  and stale body cleanup; `LLVM26`/`LLVM31` select dead engine/target alternatives;
+- `LLVM30` wraps the modern `CreatePHI` signature, `LLVM32` aliases `DataLayout`, and
+  `NEW_USER_ITERATOR` selects the modern user iterator;
+- `LLVM33` and `LLVM35` are defined but have no remaining C++ consumers;
+- four `!LLVM31` blocks in `pure.cc`, `pure_norl.cc`, and `runtime.cc` guard the dead
+  global `GuaranteedTailCallOpt` path;
+- `LLVM_VERSION` is unrelated current version metadata and remains protected by the
+  task guardrail.
+
+Migration order is therefore: add explicit eager ORC materialization and settle its
+native ABI, move retained initializers and batch Faust to ORC snapshots, remove mirrored
+legacy mappings/cleanup, then delete engine construction, resolver, linkage, headers,
+and compatibility branches. Interactive evaluation, definition units, lazy global
+snapshots, type generations, external wrappers, bitcode providers, and interactive
+Faust generations already use ORC and form the correctness baseline.
+
+## Native Callable-Address ABI Policy
+
+`pure_interp_compile` is a compilation barrier, not an address-acquisition API. It
+materializes the current global function generation and its reachable dependencies but
+returns no native pointer, does not pin that generation, and creates no stable ORC stub.
+Clearing or redefining a function may therefore supersede and eventually reclaim its
+previous generation after the last owning closure is released.
+
+Native extensions which need interactive redefinition semantics must retain and invoke
+Pure expressions through the closure/application API. The generation-specific
+`pure_closure::fp` field and internal ORC lookup addresses are implementation details, not
+a public callable-address ABI. A future stable native entry point would require a separate
+API, an ORC indirection stub with specified retargeting and teardown semantics, and tests;
+none is introduced by this migration. Batch-compiled output symbols remain governed by
+the existing separate batch ABI.
 
 ## Guardrails
 
@@ -58,3 +116,162 @@ Created from TODO-07 task 5 and TODO-13 retrospective gate 4. It also owns the
 batch-mode deferral recorded by TODO-11 and the native callable ABI question from
 TODO-09. TODO-18 supplies 11 complete-corpus reproducers for duplicate ORC
 publication and invalid continuation after a failed materialization.
+
+## Progress Log
+
+- 2026-07-25: Completed the transitional engine and compatibility-gate inventory.
+  - Classified engine ownership, host mappings, eager/C-API materialization, retained
+    batch initialization, batch Faust dispatch/reload, and stale IR cleanup.
+  - Distinguished active runtime consumers from one commented mapping and a debug-only
+    address print.
+  - Confirmed `pure_interp_compile` delegates directly to `jit_now` and that CMake's
+    `ExecutionEngine`/`MCJIT` components support the single interpreter-owned engine.
+  - Counted the active `LLVM26`/`27`/`30`/`31`/`32` and `NEW_USER_ITERATOR` gates;
+    `LLVM33` and `LLVM35` have no consumers beyond their definitions.
+  - Validation:
+    - Read-only source, header, and CMake audit; no build or runtime test was required.
+- 2026-07-25: Routed eager compilation and `pure_interp_compile` through current ORC
+  function generations.
+  - Extracted shared current-generation materialization from deferred closure resolution,
+    preserving tracker ownership, immutable snapshots, and latest-generation rebinding.
+  - Kept `jit_now`'s dependency analysis while replacing MCJIT function-pointer requests
+    with explicit ORC snapshot submission and lookup.
+  - Added the no-prelude `pure-jit-eager` regression test for eager root and dependency
+    materialization; the public C API continues to delegate directly to `jit_now`.
+  - Validation:
+    - `cmake --build --preset llvm22-release --parallel 1` passed.
+    - `pure-jit-eager`, `pure-jit-lifetime-stress`, and `pure-jit-smoke` passed in the
+      LLVM 22 Release preset.
+    - `cmake --build --preset llvm22-asan --parallel 1` and the same focused tests passed
+      under ASan/UBSan without sanitizer findings.
+    - Confirmed `jit_now` no longer calls `getPointerToFunction`; remaining calls belong
+      to retained definition and batch Faust migration in task 3.
+- 2026-07-25: Routed retained `dodefn(keep)` initialization through an immutable ORC
+  snapshot.
+  - Unified interactive and batch definition execution on reduced, uniquely renamed ORC
+    copies while leaving retained `$$init` IR in the mutable module for object emission.
+  - Attached the batch snapshot tracker to the retained definition environment so escaped
+    local closures and their machine code share the existing lifetime boundary.
+  - Removed the definition initializer's `ExecutionEngine::getPointerToFunction` use;
+    batch Faust remains before task 3 can be marked complete.
+  - Validation:
+    - LLVM 22 Release and ASan/UBSan serial builds passed.
+    - `pure-batch-object` and `pure-jit-lifetime-stress` passed in both presets without
+      sanitizer findings.
+- 2026-07-25: Completed batch Faust materialization and dispatch migration to ORC.
+  - Kept provider definitions in batch output IR while materializing every Pure-visible
+    export as a uniquely renamed, reduced ORC snapshot under one generation tracker.
+  - Prepared all export addresses and dispatch slots before atomically publishing a new
+    batch generation; reload now rebinds slots and collects the superseded tracker without
+    `getPointerToFunction` or `getPointerToGlobal`.
+  - Replaced the dormant implicit Faust dispatch materializer in `declare_extern` with an
+    ORC definition snapshot or symbol lookup.
+  - Reworked snapshot dependency discovery as an iterative graph walk with a visited set
+    for every LLVM value. The first real batch Faust run exposed the previous walk's
+    unbounded recursion on cyclic operand graphs as an ASan stack overflow.
+  - Added `pure-batch-faust`, which executes `newinit` and `getNumInputs` during retained
+    batch definition initialization, reloads an isolated provider from version A to B,
+    executes the rebound wrappers, and verifies object emission.
+  - Validation:
+    - LLVM 22 Release and ASan/UBSan serial builds passed.
+    - `pure-batch-faust`, `pure-batch-object`, `pure-faust-lifecycle`, `pure-jit-smoke`,
+      `pure-jit-lifetime-stress`, and `pure-jit-eager` passed in both presets without
+      sanitizer findings.
+    - Confirmed the isolated batch reload fixture was replaced by the version-B bitcode
+      during compile-time execution and that active Faust paths no longer request function
+      or global addresses from MCJIT.
+- 2026-07-25: Removed mirrored MCJIT host mappings and legacy fallback resolution.
+  - Made `$$sstk$$`, `$$fptr$$`, global value slots, Faust dispatch slots, and runtime
+    callables exclusively owned by tracked ORC absolute symbols.
+  - Removed `addGlobalMapping`, host-global `updateGlobalMapping`, batch Faust provider
+    unmapping, and `InstallLazyFunctionCreator`; LLJIT process symbols plus explicit runtime
+    registrations now provide the complete active external-resolution path.
+  - Switched debug-only global-address reporting to the ORC host-symbol registry and removed
+    the obsolete commented mapping guidance for detached constant storage.
+  - Validation:
+    - LLVM 22 Release and ASan/UBSan serial builds passed.
+    - `pure-jit-smoke`, `pure-jit-lifetime-stress`, `pure-jit-eager`,
+      `pure-bitcode-unresolved-dependency`, `pure-bitcode-unload`, `pure-faust-lifecycle`,
+      `pure-batch-object`, and `pure-batch-faust` passed under ASan/UBSan; the same focused
+      paths passed in Release.
+    - Confirmed only two `updateGlobalMapping` calls remain, both isolated in `Env::clear`
+      stale-function cleanup for task 5; no legacy mapping or fallback API remains elsewhere.
+- 2026-07-25: Replaced stale-function cleanup with ORC tracker and generation ownership.
+  - Removed refcount-conditioned MCJIT unmapping from `Env::clear`; escaped local and old
+    global closures now rely solely on their environment trackers or immutable generation
+    closure-ref sets for native-code lifetime.
+  - Continued reducing reusable global functions to declarations while fully erasing stale
+    local `Function` objects after nested environments drop mutable-IR references.
+  - Removed the LLVM 2.7 lazy-JIT deletion workaround and the final
+    `updateGlobalMapping` calls; no mapping, pointer-materialization, or fallback API remains.
+  - Validation:
+    - LLVM 22 Release and ASan/UBSan serial builds passed.
+    - Historical stale-pointer reproducer `test052.pure` passed in both presets after local
+      IR erasure.
+    - `pure-jit-lifetime-stress`, `pure-jit-eager`, `pure-bitcode-unload`,
+      `pure-faust-lifecycle`, and `pure-batch-faust` passed in both presets without sanitizer
+      findings.
+- 2026-07-25: Finalized the native callable-address ABI policy.
+  - Defined `pure_interp_compile` as a materialization-only barrier which neither returns
+    nor pins a generation address.
+  - Rejected a stable native callable address for interactively redefinable Pure names;
+    native clients must use Pure expressions and closure/application calls.
+  - Kept generation-specific closure addresses internal and left the existing batch output
+    symbol ABI explicitly separate.
+  - Updated the public runtime header and TODO-09's deferred disposition; no code or ABI
+    signature changed, so no build or runtime validation was required.
+- 2026-07-25: Removed the transitional `ExecutionEngine` and MCJIT linkage.
+  - Deleted engine construction, configuration, shutdown, headers, member state, and the
+    `ExecutionEngine`/`MCJIT` CMake components; the interpreter now directly owns its mutable
+    LLVM module.
+  - Preserved `--eager-jit` by immediately submitting and resolving new ORC global
+    generations instead of creating deferred snapshots.
+  - Removed the redundant native-target initialization wrapper; `PureJit::create` owns full
+    native target initialization.
+  - Task 7 remains open only for flattening the historical LLVM compatibility gates.
+  - Validation:
+    - LLVM 22 Release and ASan/UBSan serial builds linked without the removed components.
+    - Explicit `--eager-jit` execution produced `42` in both presets.
+    - `pure-jit-smoke`, `pure-jit-lifetime-stress`, `pure-jit-eager`,
+      `pure-bitcode-unload`, `pure-faust-lifecycle`, `pure-batch-object`, and
+      `pure-batch-faust` passed in both presets without sanitizer findings.
+- 2026-07-25: Completed removal of historical LLVM compatibility gates.
+  - Deleted the `LLVM26`, `LLVM27`, `LLVM30`, `LLVM31`, `LLVM32`, `LLVM33`, and `LLVM35`
+    definitions and flattened the surviving APIs to their LLVM 22 forms.
+  - Replaced the `NEW_USER_ITERATOR` shim with direct `Value::user_iterator` traversal,
+    made modern `CreatePHI` unconditional, and removed the unused `TargetData` aliases.
+  - Removed dead `GuaranteedTailCallOpt` branches and the obsolete `FAST_JIT` switch, plus
+    their generated configuration residue.
+  - Preserved `LLVM_VERSION` as current build/version and generated-output metadata.
+  - Validation:
+    - LLVM 22 Release and ASan/UBSan serial reconfigure/builds passed.
+    - Historical stale-pointer reproducer `test052.pure` passed in both presets.
+    - `pure-jit-smoke`, `pure-jit-lifetime-stress`, `pure-jit-eager`,
+      `pure-bitcode-unresolved-dependency`, `pure-bitcode-unload`,
+      `pure-faust-lifecycle`, `pure-batch-object`, and `pure-batch-faust` passed in both
+      presets without sanitizer findings.
+    - Confirmed no compatibility gate or shim identifier remains in active source/config;
+      `LLVM_VERSION` remains present at all metadata call sites.
+- 2026-07-25: Added complete batch executable integration coverage.
+  - Extended the batch test driver with an opt-in link/run phase using the built
+    `pure_main.c` object, build-tree `libpure`, platform loader path, and sanitizer link
+    flags.
+  - Added `pure-batch-executable`, which compiles `batch-smoke.pure` to an object, links a
+    standalone program, executes `__pure_main__`, and finalizes the runtime successfully.
+  - Used `-no-pie` on Linux because the supported default batch object is non-PIE unless
+    users explicitly request PIC.
+  - Validation:
+    - `pure-batch-executable` passed in LLVM 22 Release and ASan/UBSan presets with clean
+      process shutdown.
+  - Task 8 remains open for the complete Debug/Release/sanitizer regression corpus.
+- 2026-07-25: Completed cross-preset ORC runtime and batch validation.
+  - Ran all 16 registered tests in Debug, Release, and ASan/UBSan, including eager
+    materialization, redefinition lifetime stress, batch Faust, complete batch executable
+    linking/execution, the full regression corpus, and clean process shutdown.
+  - Debug passed 16/16 tests in approximately 380 seconds; Release passed 16/16 in
+    approximately 264 seconds; ASan/UBSan passed 16/16 in 887.14 seconds without sanitizer
+    findings.
+  - Confirmed no active `EngineBuilder`, MCJIT mapping/materialization API, historical LLVM
+    compatibility gate, `NEW_USER_ITERATOR`, `FAST_JIT`, or `GuaranteedTailCallOpt` remains.
+    The only source `ExecutionEngine` text is in current ORC and `JITSymbol` LLVM include
+    paths, and `LLVM_VERSION` remains current build metadata.

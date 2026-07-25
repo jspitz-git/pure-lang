@@ -69,7 +69,7 @@ using namespace std;
 --check           Syntax check only, do not actually execute scripts.\n\
 --ctags, --etags  Create a tags file in ctags (vi) or etags (emacs) format.\n\
 --disable=optname Disable source option (conditional compilation).\n\
---eager-jit       Enable eager JIT compilation (LLVM 2.7 or later).\n\
+--eager-jit       Materialize ORC function generations eagerly.\n\
 --enable=optname  Enable source option (conditional compilation).\n\
 --escape=char     Interactive commands are prefixed with the specified char.\n\
 -fPIC             Create position-independent code (batch compilation).\n\
@@ -489,12 +489,6 @@ main(int argc, char *argv[])
       break;
     }
   }
-#if USE_FASTCC && !LLVM31
-  // This global option is needed to get tail call optimization (you'll also
-  // need to have USE_FASTCC in interpreter.hh enabled).
-  if (interp.use_fastcc) llvm::GuaranteedTailCallOpt = true;
-#endif
-  interp.init_jit_mode();
   if ((env = getenv("PURE_INCLUDE")))
     add_path(interp.includedirs, unixize(env));
   if ((env = getenv("PURE_LIBRARY")))

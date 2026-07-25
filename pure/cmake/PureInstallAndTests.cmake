@@ -225,6 +225,11 @@ if(BUILD_TESTING)
       "${PURE_FAUST_FIXTURE_OUTPUT_DIR}/lifecycle.pure"
       @ONLY
     )
+    configure_file(
+      "${CMAKE_CURRENT_SOURCE_DIR}/test/faust/batch.pure.in"
+      "${PURE_FAUST_FIXTURE_OUTPUT_DIR}/batch.pure"
+      @ONLY
+    )
   endif()
 
   add_executable(
@@ -303,6 +308,25 @@ if(BUILD_TESTING)
       TIMEOUT 60
       FAIL_REGULAR_EXPRESSION
         "failed to remove ORC compilation unit;AddressSanitizer;LeakSanitizer;runtime error:"
+  )
+  add_test(
+    NAME pure-jit-eager
+    COMMAND
+      "${CMAKE_COMMAND}"
+      -DPURE_EXECUTABLE=$<TARGET_FILE:pure>
+      -DPURE_SCRIPT=${CMAKE_CURRENT_SOURCE_DIR}/test/jit-eager.pure
+      -DPURE_EXPECTED=${CMAKE_CURRENT_SOURCE_DIR}/test/jit-eager.log
+      -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunPureLifetimeStress.cmake"
+  )
+  set_tests_properties(
+    pure-jit-eager
+    PROPERTIES
+      LABELS "jit;smoke"
+      REQUIRED_FILES
+        "${CMAKE_CURRENT_SOURCE_DIR}/test/jit-eager.pure;${CMAKE_CURRENT_SOURCE_DIR}/test/jit-eager.log"
+      TIMEOUT 60
+      FAIL_REGULAR_EXPRESSION
+        "failed to;AddressSanitizer;LeakSanitizer;runtime error:"
   )
 
   function(add_pure_bitcode_test name script fixture)
@@ -450,6 +474,58 @@ if(BUILD_TESTING)
       FAIL_REGULAR_EXPRESSION
         "AddressSanitizer;LeakSanitizer;runtime error:"
   )
+  add_test(
+    NAME pure-batch-executable
+    COMMAND
+      "${CMAKE_COMMAND}"
+      -DPURE_EXECUTABLE=$<TARGET_FILE:pure>
+      -DPURE_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
+      -DPURE_BUILD_DIR=${CMAKE_CURRENT_BINARY_DIR}
+      -DPURE_LD_LIB_PATH=${LD_LIB_PATH}
+      -DPURE_SCRIPT=${CMAKE_CURRENT_SOURCE_DIR}/test/batch-smoke.pure
+      -DPURE_OUTPUT_NAME=pure-batch-program.o
+      -DPURE_RUN_EXECUTABLE=ON
+      -DPURE_CXX_COMPILER=${CMAKE_CXX_COMPILER}
+      -DPURE_MAIN_OBJECT=$<TARGET_OBJECTS:pure-main-object>
+      -DPURE_EXECUTABLE_SUFFIX=${CMAKE_EXECUTABLE_SUFFIX}
+      -DPURE_SANITIZERS=${PURE_SANITIZERS}
+      -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunPureBatchTest.cmake"
+  )
+  set_tests_properties(
+    pure-batch-executable
+    PROPERTIES
+      LABELS "batch;integration"
+      REQUIRED_FILES "${CMAKE_CURRENT_SOURCE_DIR}/test/batch-smoke.pure"
+      TIMEOUT ${batch_test_timeout}
+      FAIL_REGULAR_EXPRESSION
+        "failed;AddressSanitizer;LeakSanitizer;runtime error:"
+  )
+  if(PURE_FAUST_EXECUTABLE)
+    add_test(
+      NAME pure-batch-faust
+      COMMAND
+        "${CMAKE_COMMAND}"
+        -DPURE_EXECUTABLE=$<TARGET_FILE:pure>
+        -DPURE_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
+        -DPURE_BUILD_DIR=${CMAKE_CURRENT_BINARY_DIR}
+        -DPURE_LD_LIB_PATH=${LD_LIB_PATH}
+        -DPURE_SCRIPT=${PURE_FAUST_FIXTURE_OUTPUT_DIR}/batch.pure
+        -DPURE_OUTPUT_NAME=pure-batch-faust.o
+        -DPURE_FIXTURE_SOURCE=${PURE_FAUST_FIXTURE_OUTPUT_DIR}/reload-a.bc
+        -DPURE_FIXTURE_DESTINATION=${PURE_FAUST_FIXTURE_OUTPUT_DIR}/batch_reload.bc
+        -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunPureBatchTest.cmake"
+    )
+    set_tests_properties(
+      pure-batch-faust
+      PROPERTIES
+        LABELS "batch;faust;integration"
+        REQUIRED_FILES
+          "${reference_bc};${PURE_FAUST_FIXTURE_OUTPUT_DIR}/reload-a.bc;${PURE_FAUST_FIXTURE_OUTPUT_DIR}/reload-b.bc;${PURE_FAUST_FIXTURE_OUTPUT_DIR}/batch.pure"
+        TIMEOUT ${batch_test_timeout}
+        FAIL_REGULAR_EXPRESSION
+          "failed to;AddressSanitizer;LeakSanitizer;runtime error:"
+    )
+  endif()
 
   add_test(
     NAME pure-regression

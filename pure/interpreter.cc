@@ -58,7 +58,6 @@ char *alloca ();
 #include <llvm/Bitcode/BitcodeReader.h>
 #include <llvm/Bitcode/BitcodeWriter.h>
 #include <llvm/Analysis/ValueTracking.h>
-#include <llvm/ExecutionEngine/MCJIT.h>
 #include <llvm/IR/CallingConv.h>
 #include <llvm/Linker/Linker.h>
 #include <llvm/Support/DynamicLibrary.h>
@@ -597,19 +596,6 @@ struct NewPassManagerState {
   }
 };
 
-static void* resolve_legacy_external(const std::string& name)
-{
-  /* If we come here, the dynamic loader has already tried everything to
-     resolve the function, so instead we just print an error message and
-     return a dummy function which raises a Pure exception when called. In any
-     case that's better than aborting the program (which is what the JIT will
-     do when we return NULL here). */
-  cout.flush();
-  cerr << "error trying to resolve external: "
-       << (name.compare(0, 2, "$$") == 0?"<<anonymous>>":name) << '\n';
-  return (void*)pure_unresolved;
-}
-
 /* Check the C stack direction (pilfered from the Chicken sources). A value >0
    indicates that the stack grows upward, towards higher addresses, <0 that
    the stack grows downward, towards lower addresses, and =0 that the
@@ -639,15 +625,6 @@ void interpreter::debug_init()
   debug_info.clear();
   stoplevel = 0; tracelevel = -1;
   debug_skip = false;
-}
-
-void interpreter::init_jit_mode()
-{
-#if LLVM27
-  JIT->DisableLazyCompilation(eager_jit);
-#else
-  eager_jit = false;
-#endif
 }
 
 void interpreter::init()
@@ -702,15 +679,6 @@ void interpreter::init()
 
   using namespace llvm;
 
-#if !LLVM27
-  // LLVM 2.6 and earlier always do lazy JITing, so this flag *must* be false.
-  eager_jit = false;
-#endif
-
-  /* Accommodate the major API breakage in recent LLVM versions. This is just
-     horrible, maybe we should drop support for anything older than LLVM 2.6
-     in the future. */
-  init_llvm_target();
   Expected<std::unique_ptr<PureJit> > orc = PureJit::create();
   if (!orc)
     throw err("failed to create ORC JIT: "+toString(orc.takeError()));
@@ -718,75 +686,8 @@ void interpreter::init()
   compilation_units = new CompilationUnitResources;
   module = new Module(modname, context);
   pass_state = new NewPassManagerState;
-#if !LLVM27
-  MP = new ExistingModuleProvider(module);
-#endif
-#if LLVM31
-  string legacy_jit_error;
-  std::unique_ptr<Module> owned_module(module);
-  llvm::EngineBuilder factory(std::move(owned_module));
-  factory.setEngineKind(llvm::EngineKind::JIT);
-  factory.setErrorStr(&legacy_jit_error);
-#if USE_FASTCC || FAST_JIT
-  llvm::TargetOptions Opts;
-#if USE_FASTCC
-  Opts.GuaranteedTailCallOpt = true;
-#endif
-#if FAST_JIT
-#warning "You selected FAST_JIT. This isn't recommended!"
-  Opts.EnableFastISel = true;
-#endif
-  factory.setTargetOptions(Opts);
-#endif
-  JIT = factory.create();
-#else // LLVM 3.0 or earlier
-#if LLVM26
-  string error;
-#if LLVM27
-  JIT = ExecutionEngine::create(module, false, &error,
-#else
-  JIT = ExecutionEngine::create(MP, false, &error,
-#endif
-#if FAST_JIT
-#warning "You selected FAST_JIT. This isn't recommended!"
-				llvm::CodeGenOpt::None,
-#else
-				llvm::CodeGenOpt::Aggressive,
-#endif
-				// bool GVsWithCode is true by default which
-				// breaks freeMachineCodeForFunction, so make
-				// sure to set it to false here
-				false);
-  if (!JIT) {
-    if (error.empty()) error = "The JIT could not be created.";
-    std::cerr << "** Panic: " << error << " Giving up. **\n";
-    exit(1);
-  }
-#if LLVM27
-  /* LLVM 2.7 and later: Enable lazy compilation if requested. (With earlier
-     LLVM versions, JITing is always done lazily, so the eager_jit flag is
-     effectively ignored and this call isn't needed.) */
-  if (!eager_jit) JIT->DisableLazyCompilation(false);
-#endif
-#else // LLVM 2.5 and earlier
-#if FAST_JIT
-  JIT = ExecutionEngine::create(MP, false, 0, true);
-#else
-  JIT = ExecutionEngine::create(MP);
-#endif
-#endif // LLVM 2.5 and earlier
-#endif // LLVM 3.0 or earlier
-  if (!JIT) {
-    if (legacy_jit_error.empty()) legacy_jit_error = "unknown LLVM error";
-    throw err("failed to create transitional ExecutionEngine: "+
-              legacy_jit_error);
-  }
   module->setDataLayout(ORC->data_layout());
   module->setTargetTriple(ORC->target_triple());
-
-  // Install a fallback mechanism to resolve references to the runtime, on
-  // systems which do not allow the program to dlopen itself.
-  JIT->InstallLazyFunctionCreator(resolve_legacy_external);
 
   // LLVM 22 uses one opaque pointer type per address space. Semantic C pointer
   // distinctions are tracked separately by CAbiType.
@@ -931,12 +832,10 @@ void interpreter::init()
     (module, ExprPtrPtrTy, false, GlobalVariable::InternalLinkage,
      ConstantPointerNull::get(ExprPtrPtrTy),
      "$$sstk$$");
-  JIT->addGlobalMapping(sstkvar, &sstk);
   fptrvar = global_variable
     (module, VoidPtrTy, false, GlobalVariable::InternalLinkage,
      ConstantPointerNull::get(VoidPtrTy),
      "$$fptr$$");
-  JIT->addGlobalMapping(fptrvar, &fptr);
 
   if (llvm::Error error = compilation_units->retain_host_symbol
         (*ORC, "$$sstk$$", &sstk))
@@ -1267,7 +1166,6 @@ void interpreter::register_host_global(llvm::GlobalVariable *variable,
     throw err("failed to register ORC host global '"+
               variable->getName().str()+"': "+
               llvm::toString(std::move(error)));
-  JIT->addGlobalMapping(variable, address);
 }
 
 void interpreter::register_host_function(llvm::StringRef name, void *address)
@@ -1288,7 +1186,6 @@ void interpreter::remove_host_global(llvm::GlobalVariable *variable)
   if (llvm::Error error = compilation_units->remove_host_symbol(name))
     throw err("failed to remove ORC host global '"+name+"': "+
               llvm::toString(std::move(error)));
-  JIT->updateGlobalMapping(variable, 0);
 }
 
 bool interpreter::remove_host_global_and_report
@@ -1340,32 +1237,35 @@ void *interpreter::compile_global_generation(Env& environment)
   void *address = 0;
   llvm::orc::ResourceTrackerSP tracker;
 #if DEFER_GLOBALS
-  llvm::Expected<std::unique_ptr<llvm::MemoryBuffer> > pending =
-    ORC->snapshot_module(*module, entry_name, exported_name);
-  if (!pending)
-    throw err("failed to snapshot deferred ORC global function: "+
-              llvm::toString(pending.takeError()));
-  snapshot = std::move(*pending);
-#else
-  tracker = ORC->create_resource_tracker();
-  if (llvm::Error error = ORC->add_module_copy
-        (tracker, *module, entry_name, exported_name)) {
-    if (llvm::Error cleanup_error = tracker->remove())
-      error = llvm::joinErrors(std::move(error), std::move(cleanup_error));
-    throw err("failed to add ORC global function module: "+
-              llvm::toString(std::move(error)));
-  }
-  llvm::Expected<llvm::orc::ExecutorAddr> entry = ORC->lookup(exported_name);
-  if (!entry) {
-    llvm::Error error = entry.takeError();
-    if (llvm::Error cleanup_error = tracker->remove())
-      error = llvm::joinErrors(std::move(error), std::move(cleanup_error));
-    throw err("failed to resolve ORC global function: "+
-              llvm::toString(std::move(error)));
-  }
-  address = reinterpret_cast<void*>
-    (static_cast<uintptr_t>(entry->getValue()));
+  if (!eager_jit) {
+    llvm::Expected<std::unique_ptr<llvm::MemoryBuffer> > pending =
+      ORC->snapshot_module(*module, entry_name, exported_name);
+    if (!pending)
+      throw err("failed to snapshot deferred ORC global function: "+
+                llvm::toString(pending.takeError()));
+    snapshot = std::move(*pending);
+  } else
 #endif
+  {
+    tracker = ORC->create_resource_tracker();
+    if (llvm::Error error = ORC->add_module_copy
+          (tracker, *module, entry_name, exported_name)) {
+      if (llvm::Error cleanup_error = tracker->remove())
+        error = llvm::joinErrors(std::move(error), std::move(cleanup_error));
+      throw err("failed to add ORC global function module: "+
+                llvm::toString(std::move(error)));
+    }
+    llvm::Expected<llvm::orc::ExecutorAddr> entry = ORC->lookup(exported_name);
+    if (!entry) {
+      llvm::Error error = entry.takeError();
+      if (llvm::Error cleanup_error = tracker->remove())
+        error = llvm::joinErrors(std::move(error), std::move(cleanup_error));
+      throw err("failed to resolve ORC global function: "+
+                llvm::toString(std::move(error)));
+    }
+    address = reinterpret_cast<void*>
+      (static_cast<uintptr_t>(entry->getValue()));
+  }
   map<uint32_t, uint32_t*> closure_refs;
   set<const Env*> visited;
   collect_generation_closure_refs(&environment, closure_refs, visited);
@@ -1376,13 +1276,10 @@ void *interpreter::compile_global_generation(Env& environment)
   return address;
 }
 
-void *interpreter::resolve_global_closure(pure_expr *closure)
+void *interpreter::materialize_global_generation(int32_t tag, string *error_message)
 {
-  assert(closure && closure->data.clos && closure->tag > 0);
-  pure_closure *clos = closure->data.clos;
-  if (clos->fp) return clos->fp;
   CompilationUnitResources::FunctionGeneration *generation =
-    compilation_units->current_generation(closure->tag);
+    compilation_units->current_generation(tag);
   if (!generation) return 0;
   if (generation->snapshot) {
     llvm::orc::ResourceTrackerSP tracker = ORC->create_resource_tracker();
@@ -1390,9 +1287,8 @@ void *interpreter::resolve_global_closure(pure_expr *closure)
           (tracker, std::move(generation->snapshot))) {
       if (llvm::Error cleanup_error = tracker->remove())
         error = llvm::joinErrors(std::move(error), std::move(cleanup_error));
-      llvm::logAllUnhandledErrors
-        (std::move(error), llvm::errs(),
-         "failed to add deferred ORC function: ");
+      if (error_message) *error_message = llvm::toString(std::move(error));
+      else llvm::consumeError(std::move(error));
       return 0;
     }
     generation->tracker = std::move(tracker);
@@ -1400,13 +1296,31 @@ void *interpreter::resolve_global_closure(pure_expr *closure)
   if (!generation->address) {
     llvm::Expected<llvm::orc::ExecutorAddr> entry = ORC->lookup(generation->symbol);
     if (!entry) {
-      llvm::logAllUnhandledErrors(entry.takeError(), llvm::errs(),
-                                  "failed to resolve deferred ORC function: ");
+      if (error_message) *error_message = llvm::toString(entry.takeError());
+      else llvm::consumeError(entry.takeError());
       return 0;
     }
     generation->address = reinterpret_cast<void*>
       (static_cast<uintptr_t>(entry->getValue()));
   }
+  return generation->address;
+}
+
+void *interpreter::resolve_global_closure(pure_expr *closure)
+{
+  assert(closure && closure->data.clos && closure->tag > 0);
+  pure_closure *clos = closure->data.clos;
+  if (clos->fp) return clos->fp;
+  string detail;
+  void *address = materialize_global_generation(closure->tag, &detail);
+  if (!address) {
+    if (!detail.empty())
+      llvm::errs() << "failed to resolve deferred ORC function: " << detail << '\n';
+    return 0;
+  }
+  CompilationUnitResources::FunctionGeneration *generation =
+    compilation_units->current_generation(closure->tag);
+  assert(generation && generation->address == address);
 
   if (clos->key != generation->key) {
     assert(generation->refp);
@@ -1521,7 +1435,7 @@ interpreter::interpreter(int _argc, char **_argv)
     nerrs(0), modno(-1), modctr(0), source_s(0), output(0),
     result(0), lastres(0), mem(0), exps(0), tmps(0), freectr(0),
     orc_unit_counter(0), specials_only(false), module(0),
-    JIT(0), ORC(0), compilation_units(0), pass_state(0),
+    ORC(0), compilation_units(0), pass_state(0),
     active_jit_calls(0), astk(0), sstk(__sstk),
     stoplevel(0), tracelevel(-1), debug_skip(false), trace_skip(false),
     fptr(__fptr), tags(0), line(0), column(0), tags_init(false),
@@ -1552,7 +1466,7 @@ interpreter::interpreter(int32_t nsyms, char *syms,
     nerrs(0), modno(-1), modctr(0), source_s(0), output(0),
     result(0), lastres(0), mem(0), exps(0), tmps(0), freectr(0),
     orc_unit_counter(0), specials_only(false), module(0),
-    JIT(0), ORC(0), compilation_units(0), pass_state(0),
+    ORC(0), compilation_units(0), pass_state(0),
     active_jit_calls(0), astk(0), sstk(*_sstk),
     stoplevel(0), tracelevel(-1), debug_skip(false), trace_skip(false),
     fptr(*(Env**)_fptr), tags(0), line(0), column(0), tags_init(false),
@@ -1670,12 +1584,7 @@ interpreter::~interpreter()
     delete m;
     m = n;
   }
-  // free the execution engine and the pass manager
-#if 1
-  // If this segfaults then you're probably running an older LLVM version. Get
-  // LLVM 2.4 or later, or disable this line.
-  if (JIT) delete JIT;
-#endif
+  // Free the pass manager and all ORC-owned compilation resources.
   delete pass_state;
   if (compilation_units) {
     if (llvm::Error error = compilation_units->remove_all())
@@ -1684,6 +1593,7 @@ interpreter::~interpreter()
     delete compilation_units;
   }
   delete ORC;
+  delete module;
   // if this was the global interpreter, reset it now
   if (g_interp == this) g_interp = 0;
 }
@@ -2914,10 +2824,9 @@ bool interpreter::LoadFaustDSP(bool priv, const char *name, string *msg,
   // produce weird names when emitting LLVM assembler code in the batch
   // compiler. In the future we may want to mangle those, too, if only for
   // cosmetic purposes.
-  uint64_t faust_generation =
-    (!compiling && modified) ?
-      compilation_units->next_faust_generation(modname) : 0;
-  string generation_suffix = faust_generation ?
+  uint64_t faust_generation = modified ?
+    compilation_units->next_faust_generation(modname) : 0;
+  string generation_suffix = !compiling && faust_generation ?
     "$g"+to_string(faust_generation)+"$" : "$";
   list<string> funs, aux_funs, vars;
   map<Function*, string> export_names;
@@ -2994,13 +2903,8 @@ bool interpreter::LoadFaustDSP(bool priv, const char *name, string *msg,
       // ORC resource trackers will reclaim the corresponding machine code.
     }
     for (list<GlobalVariable*>::iterator v = varptrs.begin();
-	 v != varptrs.end(); ++v) {
-      string vname = (*v)->getName().str();
+	 v != varptrs.end(); ++v)
       (*v)->dropAllReferences();
-      // XXXFIXME: Do we have to free the pointer returned by
-      // updateGlobalMapping() here?
-      JIT->updateGlobalMapping(*v, 0);
-    }
     for (list<Function*>::iterator f = funptrs.begin();
 	 f != funptrs.end(); ++f) (*f)->eraseFromParent();
     for (list<GlobalVariable*>::iterator v = varptrs.begin();
@@ -3250,8 +3154,9 @@ bool interpreter::LoadFaustDSP(bool priv, const char *name, string *msg,
     }
   }
   if (compiling) {
-    // Preserve the legacy batch path: definitions and convenience functions
-    // remain embedded in the output module and MCJIT supplies their addresses.
+    // Definitions and convenience functions remain embedded in the output
+    // module. A modified provider is materialized as reduced ORC snapshots so
+    // compile-time wrappers can use stable host dispatch slots.
     list<Function*> funptrs;
     list<GlobalVariable*> varptrs;
     for (list<string>::iterator f = funs.begin(); f != funs.end(); ++f) {
@@ -3270,72 +3175,121 @@ bool interpreter::LoadFaustDSP(bool priv, const char *name, string *msg,
       assert(u);
       varptrs.push_back(u);
     }
-    if (symtab.current_namespace->empty())
-      namespaces.insert(modname);
-    else
-      namespaces.insert(*symtab.current_namespace+"::"+modname);
-    loaded_dsps[modname].declare(*symtab.current_namespace, priv);
-    bcmap::iterator mod = loaded_dsps.find(modname);
-    assert(mod != loaded_dsps.end());
-    mod->second.t = mtime;
-    mod->second.dbl = is_double;
-    mod->second.funptrs = funptrs;
-    mod->second.varptrs = varptrs;
-    if (mod->second.tag == 0) mod->second.tag = pure_make_tag();
-    dsp_mods[mod->second.tag] = mod;
-
-    for (list<string>::iterator it = funs.begin(), end = funs.end();
-         it != end; ++it) {
-      string fname = faust_name(*it);
-      Function *f = module->getFunction(fname);
-      assert(f);
+    for (list<string>::const_iterator it = funs.begin();
+         it != funs.end(); ++it) {
+      Function *f = module->getFunction(faust_name(*it));
+      assert(f && !f->isDeclaration());
       pass_state->optimize(*f);
-      string asname = modname+"::"+*it;
-      FunctionType *ft = f->getFunctionType();
-      string restype = dsptype_name
-        (*it, ft->getReturnType(), 0, true, is_double);
-      list<string> argtypes;
-      for (size_t i = 0; i < ft->getNumParams(); ++i)
-        argtypes.push_back(dsptype_name
-          (*it, ft->getParamType(i), i, false, is_double));
-      if (loaded && modified) {
-        GlobalVariable *v = module->getNamedGlobal("$"+fname);
-        void **fp = v ? (void**)host_global_address(v) : 0;
-        if (!fp && v) fp = (void**)JIT->getPointerToGlobal(v);
-        if (fp)
-          *fp = JIT->getPointerToFunction(f);
-        else {
-          assert(!declared);
-          symbol *sym = symtab.sym(asname);
-          assert(sym);
-          externals.erase(sym->f);
-          globalvars.erase(sym->f);
+    }
+    map<string, void*> addresses;
+    llvm::orc::ResourceTrackerSP tracker;
+    if (modified) {
+      string batch_verification_error;
+      if (!verify_module(*module, batch_verification_error))
+        return fail("Invalid linked batch dsp module: "+
+                    batch_verification_error);
+      tracker = ORC->create_resource_tracker();
+      for (list<string>::const_iterator it = funs.begin();
+           it != funs.end(); ++it) {
+        string fname = faust_name(*it);
+        string exported_name = "$$orc.batch-faust."+
+          to_string(orc_unit_counter++);
+        if (Error error = ORC->add_module_copy
+              (tracker, *module, fname, exported_name)) {
+          if (Error cleanup_error = tracker->remove())
+            error = joinErrors(std::move(error), std::move(cleanup_error));
+          return fail("Failed to submit batch ORC Faust export '"+*it+"': "+
+                      toString(std::move(error)));
         }
-      }
-      if (!declared) {
-        declare_extern(priv, fname, restype, argtypes, false, 0, asname,
-                       false, false);
-        symbol *sym = symtab.sym(asname);
-        assert(sym);
-        required.push_back(sym->f);
+        Expected<orc::ExecutorAddr> address = ORC->lookup(exported_name);
+        if (!address) {
+          Error error = address.takeError();
+          if (Error cleanup_error = tracker->remove())
+            error = joinErrors(std::move(error), std::move(cleanup_error));
+          return fail("Failed to materialize batch Faust export '"+*it+"': "+
+                      toString(std::move(error)));
+        }
+        addresses[*it] = reinterpret_cast<void*>
+          (static_cast<uintptr_t>(address->getValue()));
       }
     }
-    if (!declared) {
-      string dispatch_verification_error;
-      if (!verify_module(*module, dispatch_verification_error))
-        return fail("Invalid Faust wrapper module: "+
-                    dispatch_verification_error);
+    auto fail_batch = [&](const string& message) {
+      string detail = message;
+      if (tracker)
+        if (Error cleanup_error = tracker->remove())
+          detail += ": "+toString(std::move(cleanup_error));
+      return fail(detail);
+    };
+
+    bcdata_t& data = loaded_dsps[modname];
+    if (data.tag == 0) data.tag = pure_make_tag();
+    try {
       for (list<string>::iterator it = funs.begin(), end = funs.end();
            it != end; ++it) {
         string fname = faust_name(*it);
         Function *f = module->getFunction(fname);
-        GlobalVariable *v = module->getNamedGlobal("$"+fname);
-        void **fp = v ? (void**)host_global_address(v) : 0;
-        if (!f || !fp)
-          return fail("Missing Faust dispatch slot for '"+fname+"'");
-        *fp = JIT->getPointerToFunction(f);
+        assert(f);
+        string asname = modname+"::"+*it;
+        FunctionType *ft = f->getFunctionType();
+        string restype = dsptype_name
+          (*it, ft->getReturnType(), 0, true, is_double);
+        list<string> argtypes;
+        for (size_t i = 0; i < ft->getNumParams(); ++i)
+          argtypes.push_back(dsptype_name
+            (*it, ft->getParamType(i), i, false, is_double));
+        if (!declared) {
+          declare_extern(priv, fname, restype, argtypes, false, 0, asname,
+                         false, false);
+          symbol *sym = symtab.sym(asname);
+          assert(sym);
+          required.push_back(sym->f);
+        }
       }
+    } catch (const err& error) {
+      return fail_batch("Failed to prepare batch Faust wrappers: "+
+                        string(error.what()));
     }
+    string dispatch_verification_error;
+    if (!verify_module(*module, dispatch_verification_error))
+      return fail_batch("Invalid Faust wrapper module: "+
+                        dispatch_verification_error);
+    vector<pair<void**, void*> > bindings;
+    if (modified) {
+      for (list<string>::const_iterator it = funs.begin();
+           it != funs.end(); ++it) {
+        string fname = faust_name(*it);
+        GlobalVariable *slot = module->getNamedGlobal("$"+fname);
+        void **target = slot ? (void**)host_global_address(slot) : 0;
+        if (!target)
+          return fail_batch("Missing Faust dispatch slot for '"+fname+"'");
+        bindings.push_back(make_pair(target, addresses[*it]));
+      }
+      try {
+        compilation_units->retain_faust
+          (modname, faust_generation, tracker);
+      } catch (const std::exception& error) {
+        return fail_batch("Failed to retain batch Faust generation: "+
+                          string(error.what()));
+      }
+      for (vector<pair<void**, void*> >::const_iterator it = bindings.begin();
+           it != bindings.end(); ++it)
+        *it->first = it->second;
+      compilation_units->publish_faust(modname, faust_generation);
+    }
+
+    if (symtab.current_namespace->empty())
+      namespaces.insert(modname);
+    else
+      namespaces.insert(*symtab.current_namespace+"::"+modname);
+    data.declare(*symtab.current_namespace, priv);
+    bcmap::iterator mod = loaded_dsps.find(modname);
+    assert(mod != loaded_dsps.end());
+    data.t = mtime;
+    data.dbl = is_double;
+    data.funptrs = funptrs;
+    data.varptrs = varptrs;
+    dsp_mods[data.tag] = mod;
+    collect_pending_generations();
     return true;
   }
 
@@ -4880,9 +4834,7 @@ pure_expr *interpreter::const_defn(expr pat, expr& x, pure_expr*& e)
 	  pure_expr **x = new pure_expr*;
 	  *x = it->second.x;
 	  globalvars.erase(it);
-	  // Erasing the binding from globalvars doesn't actually affect the
-	  // LLVM mapping, so there's no need to reinstate it.
-	  //JIT->addGlobalMapping(oldv, x);
+	  // Preserve the detached host storage for older retained snapshots.
 	}
 	pure_expr **xp = new pure_expr*; *xp = 0;
 	globalvars.insert(pair<int32_t,GlobalVar>(f, GlobalVar(xp)));
@@ -5201,8 +5153,8 @@ void interpreter::compile()
 
       }
     }
-    // MCJIT optimizes the entire module, so all type function bodies must be
-    // complete before compiling any of them.
+    // Complete every type function body before creating reduced ORC snapshots,
+    // so mutually dependent predicates see a consistent module.
     string verification_error;
     if (!verify_module(*module, verification_error))
       throw err("invalid LLVM module before type JIT compilation: "+
@@ -5290,7 +5242,7 @@ void interpreter::compile()
 	publish_global_closure(f.tag, v, fv, &to_be_freed);
 #if DEBUG>1
 	std::cerr << "global " << &v.x << " (== "
-		  << JIT->getPointerToGlobal(v.v) << ") -> "
+		  << host_global_address(v.v) << ") -> "
 		  << (void*)fv << '\n';
 #endif
       }
@@ -5322,18 +5274,13 @@ void interpreter::jit_now(const set<int> fnos, bool recurse)
     compile();
     if (done) return;
   }
+  set<int32_t> targets;
   if (fnos.empty()) {
-    // Force compilation of everything. This is slow.
-    for (llvm::Module::iterator it = module->begin(), end = module->end();
-	 it != end; ++it) {
-      llvm::Function *fn = &*it;
-      JIT->getPointerToFunction(fn);
-    }
+    // Force compilation of every current global function generation.
+    for (map<int32_t,Env>::const_iterator it = globalfuns.begin();
+         it != globalfuns.end(); ++it)
+      targets.insert(it->first);
   } else {
-    /* TODO: We should cache the results of analyzing the call graph and reuse
-       these results as much as possible. But the LLVM JIT seems to take the
-       lion share of the compilation time anyway, so this isn't really worth
-       the effort until the JIT gets much faster. */
     set<llvm::Function*> used;
     map<llvm::GlobalVariable*,llvm::Function*> varmap;
     for (set<int>::const_iterator it = fnos.begin(), end = fnos.end();
@@ -5347,13 +5294,21 @@ void interpreter::jit_now(const set<int> fnos, bool recurse)
       }
     }
     check_used(used, varmap);
-    // Force compilation of the given functions and everything they might use.
-    for (llvm::Module::iterator it = module->begin(), end = module->end();
-	 it != end; ++it) {
-      llvm::Function *fn = &*it;
-      if (used.find(fn) != used.end())
-	JIT->getPointerToFunction(fn);
+    // Force compilation of the given functions and every global they might use.
+    for (map<int32_t,Env>::const_iterator it = globalfuns.begin();
+         it != globalfuns.end(); ++it) {
+      llvm::Function *f = it->second.f, *h = it->second.h;
+      if ((f && used.find(f) != used.end()) ||
+          (h && used.find(h) != used.end()))
+        targets.insert(it->first);
     }
+  }
+  for (set<int32_t>::const_iterator it = targets.begin();
+       it != targets.end(); ++it) {
+    string detail;
+    void *address = materialize_global_generation(*it, &detail);
+    if (!address && !detail.empty())
+      throw err("failed to eagerly materialize ORC function: "+detail);
   }
 }
 
@@ -11638,8 +11593,8 @@ void interpreter::check_used(set<Function*>& used,
     }
     if (f) {
       varmap[v] = f;
-      for (value_user_iterator it = value_user_begin(v),
-	     end = value_user_end(v); it != end; it++) {
+      for (Value::user_iterator it = v->user_begin(),
+	     end = v->user_end(); it != end; it++) {
 	if (Instruction *inst = dyn_cast<Instruction>(*it)) {
 	  Function *g = inst->getParent()->getParent();
 	  // Indirect reference through a variable. Note that we're not
@@ -11668,8 +11623,8 @@ void interpreter::check_used(set<Function*>& used,
       roots.insert(f);
     } else if (f->hasNUsesOrMore(1)) {
       // Look for uses of the function.
-      for (value_user_iterator it = value_user_begin(f),
-	     end = value_user_end(f); it != end; it++) {
+      for (Value::user_iterator it = f->user_begin(),
+	     end = f->user_end(); it != end; it++) {
 	if (Instruction *inst = dyn_cast<Instruction>(*it)) {
 	  Function *g = inst->getParent()->getParent();
 	  // This is a direct call.
@@ -11684,8 +11639,8 @@ void interpreter::check_used(set<Function*>& used,
 	  }
 	} else if (Constant *c = dyn_cast<Constant>(*it)) {
 	  // A function pointer. Check its uses.
-	  for (value_user_iterator jt = value_user_begin(c),
-		 end = value_user_end(c); jt != end; jt++) {
+	  for (Value::user_iterator jt = c->user_begin(),
+		 end = c->user_end(); jt != end; jt++) {
 	    if (Instruction *inst = dyn_cast<Instruction>(*jt)) {
 	      // This is a function that refers to f via a pointer.
 	      Function *g = inst->getParent()->getParent();
@@ -12530,19 +12485,8 @@ void Env::clear()
 #if DEBUG>2
     std::cerr << "clearing local '" << name << "'\n";
 #endif
-    if (!refp || *refp == 0) {
-      // The transitional execution engine retains machine code until shutdown;
-      // ORC resource trackers will reclaim local compilation units.
-    } else {
-      /* The code for this function is still used in a closure somewhere. To
-	 avoid dangling function pointers, we just unmap the function pointer
-	 instead of really freeing the code. NOTE: This effectively makes the
-	 code permanent and thus leaks memory on the code pointer. But we
-	 can't really help that because we have to get rid of the function IR
-	 at this point. */
-      if (h != f) interp.JIT->updateGlobalMapping(h, 0);
-      interp.JIT->updateGlobalMapping(f, 0);
-    }
+    // Native code is owned independently by ORC environment or generation
+    // trackers, so mutable local IR can be detached regardless of live closures.
     f->dropAllReferences(); if (h != f) h->dropAllReferences();
     fmap.clear();
     to_be_deleted.push_back(f); if (h != f) to_be_deleted.push_back(h);
@@ -12552,55 +12496,17 @@ void Env::clear()
 #endif
     bool init_code = is_init(name);
     // anonymous globals (doeval, dodefn) are taken care of elsewhere
-    if (!init_code) {
-      // get rid of the machine code
-      bool dead = !refp || *refp == 0;
-      if (!dead && *refp == 1) {
-	/* The case of global functions (which have their closures cached in
-	   global variables) is a bit more involved than the above, since refp
-	   will always be at least 1 in this case. To avoid leaking memory on
-	   redefined globals, we also check the reference counter of the
-	   closure. If it is at most 1 then the global variable (which, since
-	   we came here, is about to be cleared or redefined) is the only
-	   reference left at this point, hence the code isn't needed any more
-	   and can be freed. */
-	map<int32_t,GlobalVar>::iterator it = interp.globalvars.find(tag);
-	if (it == interp.globalvars.end())
-	  dead = true;
-	else {
-	  GlobalVar& v = it->second;
-	  dead = !v.x || v.x->refc <= 1;
-	}
-      }
-      if (dead) {
-	// The transitional execution engine retains machine code until shutdown;
-	// ORC resource trackers will reclaim superseded definitions.
-      } else {
-	/* Keep the code for a function which is still bound by a closure.
-	   See the remarks above. */
-	if (h != f) interp.JIT->updateGlobalMapping(h, 0);
-	interp.JIT->updateGlobalMapping(f, 0);
-      }
-      // only delete the body, this keeps existing references intact
+    if (!init_code)
+      // Keep the reusable declaration while ORC generations independently own
+      // native code and retain it until all captured closure refs are released.
       f->deleteBody();
-    }
     // delete all nested environments and reinitialize other body-related data
     fmap.clear(); xmap.clear(); xtab.clear(); prop.clear(); m = 0;
-    // now that all references have been removed, delete the function pointers
-    for (list<Function*>::iterator fi = to_be_deleted.begin();
-	 fi != to_be_deleted.end(); fi++) {
-#if LLVM27
-      /* XXXFIXME: This appears to be necessary to work around a bug in the
-	 lazy JIT of LLVM >=2.7, cf. http://llvm.org/bugs/show_bug.cgi?id=6360.
-	 PR#6360 has apparently been fixed since, but test052.pure still fails
-	 for me as of LLVM 3.0, so we leave this enabled for now. */
-      // LLVM >=2.7 collects the function code anyway if we erase the IR, so
-      // we just delete the body instead.
-      (*fi)->deleteBody();
-#else
+    // All ORC snapshots are independent of mutable IR. Once nested environments
+    // have dropped their references, remove the stale local declarations too.
+    for (list<Function*>::iterator fi = to_be_deleted.begin(),
+	 end = to_be_deleted.end(); fi != end; fi++)
       (*fi)->eraseFromParent();
-#endif
-    }
     to_be_deleted.clear();
   }
 }
@@ -14100,6 +14006,17 @@ Function *interpreter::declare_extern(int priv, string name, string restype,
        Faust dsp gets reloaded. (This works similar to global Pure functions
        which are also invoked indirectly through global variables.) */
     PointerType *fptype = PointerType::get(context, 0);
+    auto materialize_target = [&]() -> void* {
+      if (!materialize) return 0;
+      if (g && !g->isDeclaration())
+        return compile_orc_function(g, "faust-dispatch");
+      llvm::Expected<llvm::orc::ExecutorAddr> target = ORC->lookup(name);
+      if (!target)
+        throw err("failed to resolve ORC Faust dispatch target: "+
+                  llvm::toString(target.takeError()));
+      return reinterpret_cast<void*>
+        (static_cast<uintptr_t>(target->getValue()));
+    };
     GlobalVariable *v = module->getNamedGlobal("$"+name);
     if (!v) {
       v = global_variable
@@ -14107,7 +14024,7 @@ Function *interpreter::declare_extern(int priv, string name, string restype,
          ConstantPointerNull::get(fptype), "$"+name);
       void **fp = (void**)malloc(sizeof(void*));
       assert(fp);
-      *fp = materialize ? JIT->getPointerToFunction(g) : 0;
+      *fp = materialize_target();
       try {
         register_host_global(v, fp);
       } catch (...) {
@@ -14120,7 +14037,7 @@ Function *interpreter::declare_extern(int priv, string name, string restype,
       if (!host_global_address(v)) {
         void **fp = (void**)malloc(sizeof(void*));
         assert(fp);
-        *fp = materialize ? JIT->getPointerToFunction(g) : 0;
+        *fp = materialize_target();
         try {
           register_host_global(v, fp);
         } catch (...) {
@@ -14315,7 +14232,6 @@ Function *interpreter::declare_extern(int priv, string name, string restype,
   // first. (Note that, as of Pure 0.48, the default value may also be NULL in
   // the case of a --defined function without equations.)
   pure_expr *cv = set_defined_sym(sym.f) ? 0 : pure_new(pure_const(sym.f));
-  assert(JIT);
   GlobalVar& v = globalvars[sym.f];
   if (!v.v) {
     v.v = global_variable
@@ -14891,36 +14807,39 @@ pure_expr *interpreter::dodefn(env vars, const vinfo& vi,
   unwind();
   fun_finish();
   pop(&f);
-  // JIT and execute the function.
+  // Execute an immutable ORC copy. In batch mode the original initializer and
+  // its environment remain in the mutable module for later object emission.
+  string verification_error;
+  if (!verify_module(*module, verification_error))
+    throw err("invalid LLVM module before ORC definition: "+
+              verification_error);
+  llvm::orc::ResourceTrackerSP tracker = ORC->create_resource_tracker();
+  string entry_name = f.f->getName().str();
+  string category = keep ? "batch-defn" : "defn";
+  string exported_name = "$$orc."+category+"."+
+    to_string(orc_unit_counter++);
+  if (llvm::Error error = ORC->add_module_copy
+        (tracker, *module, entry_name, exported_name)) {
+    if (llvm::Error cleanup_error = tracker->remove())
+      error = llvm::joinErrors(std::move(error), std::move(cleanup_error));
+    throw err("failed to add ORC definition module: "+
+              llvm::toString(std::move(error)));
+  }
+  llvm::Expected<pure_expr* (*)()> entry =
+    ORC->lookup_function<pure_expr*()>(exported_name);
+  if (!entry) {
+    llvm::Error error = entry.takeError();
+    if (llvm::Error cleanup_error = tracker->remove())
+      error = llvm::joinErrors(std::move(error), std::move(cleanup_error));
+    throw err("failed to resolve ORC definition function: "+
+              llvm::toString(std::move(error)));
+  }
+  void *fp = reinterpret_cast<void*>(*entry);
+  compilation_units->retain(fptr, tracker);
+  begin_stats();
+  res = pure_invoke(fp, &e);
+  end_stats();
   if (!keep) {
-    string verification_error;
-    if (!verify_module(*module, verification_error))
-      throw err("invalid LLVM module before ORC definition: "+
-                verification_error);
-    llvm::orc::ResourceTrackerSP tracker = ORC->create_resource_tracker();
-    string entry_name = f.f->getName().str();
-    string exported_name = "$$orc.defn."+to_string(orc_unit_counter++);
-    if (llvm::Error error = ORC->add_module_copy
-          (tracker, *module, entry_name, exported_name)) {
-      if (llvm::Error cleanup_error = tracker->remove())
-        error = llvm::joinErrors(std::move(error), std::move(cleanup_error));
-      throw err("failed to add ORC definition module: "+
-                llvm::toString(std::move(error)));
-    }
-    llvm::Expected<pure_expr* (*)()> entry =
-      ORC->lookup_function<pure_expr*()>(exported_name);
-    if (!entry) {
-      llvm::Error error = entry.takeError();
-      if (llvm::Error cleanup_error = tracker->remove())
-        error = llvm::joinErrors(std::move(error), std::move(cleanup_error));
-      throw err("failed to resolve ORC definition function: "+
-                llvm::toString(std::move(error)));
-    }
-    void *fp = reinterpret_cast<void*>(*entry);
-    compilation_units->retain(fptr, tracker);
-    begin_stats();
-    res = pure_invoke(fp, &e);
-    end_stats();
     f.f->eraseFromParent();
     // If there are no more references, release the compilation unit and its
     // environment. Escaped closures retain both until their Env is released.
@@ -14931,12 +14850,6 @@ pure_expr *interpreter::dodefn(env vars, const vinfo& vi,
       delete fptr;
     } else
       fptr->refc--;
-  } else {
-    void *fp = JIT->getPointerToFunction(f.f);
-    assert(fp);
-    begin_stats();
-    res = pure_invoke(fp, &e);
-    end_stats();
   }
   fptr = save_fptr;
   if (res) {
@@ -16509,7 +16422,6 @@ Value *interpreter::fbox(Env& f, bool defer)
 Value *interpreter::cbox(int32_t tag)
 {
   pure_expr *cv = pure_const(tag);
-  assert(JIT);
   GlobalVar& v = globalvars[tag];
   if (!v.v) {
     v.v = global_variable
@@ -18292,16 +18204,3 @@ void interpreter::try_rules(matcher *pm, state *s, BasicBlock *failedbb,
   }
   if (!have_iface) f.fmap.first();
 }
-
-/* Make sure to make this the very last thing in this file. TargetSelect.h
-   pulls in LLVM's config.h file which may stomp on our own config
-   settings! */
-
-#if LLVM26
-#include <llvm/Support/TargetSelect.h>
-
-void interpreter::init_llvm_target()
-{
-  llvm::InitializeNativeTarget();
-}
-#endif

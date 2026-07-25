@@ -685,7 +685,16 @@ pure_interp *pure_unlock_interp(pure_interp *interp);
    run on each and every function of the program. This is *very* slow on
    startup, because it compiles all definitions no matter whether they are
    actually used by the running program, and thus should only be used as a
-   last resort. */
+   last resort.
+
+   This operation guarantees compilation only. It neither returns nor pins a
+   native function address. Interactive definitions can be cleared or
+   redefined, and each materialized implementation has a generation-specific
+   address whose lifetime is tied to internal closure ownership. Native
+   extensions must invoke interactively redefinable functions through Pure
+   expressions and the closure/application API; pure_closure::fp is not a
+   stable public callable-address ABI. This policy does not change the separate
+   symbol ABI of batch-compiled output modules. */
 
 void pure_interp_compile(pure_interp *interp, int32_t fno);
 

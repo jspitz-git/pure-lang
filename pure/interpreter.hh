@@ -19,11 +19,7 @@
 #ifndef INTERPRETER_HH
 #define INTERPRETER_HH
 
-#include <llvm/ExecutionEngine/ExecutionEngine.h>
 #include <llvm/ExecutionEngine/Orc/Core.h>
-
-#include <llvm/Target/TargetOptions.h>
-
 
 #include <time.h>
 #include <set>
@@ -41,15 +37,6 @@
 #include <llvm/IR/Module.h>
 #include <llvm/IR/Verifier.h>
 
-// Transitional feature gates used by code removed in the ORC migration.
-#define LLVM26 1
-#define LLVM27 1
-#define LLVM30 1
-#define LLVM31 1
-#define LLVM32 1
-#define LLVM33 1
-#define LLVM35 1
-
 #include "parserdefs.hh"
 // Get rid of silly warnings in bison-generated position.hh.
 #pragma GCC diagnostic ignored "-Wparentheses"
@@ -65,10 +52,9 @@
 #define MEMDEBUG 0
 #endif
 
-/* Support for the "fast" calling convention which is needed to get tail call
-   elimination. As of LLVM 2.6, this is still broken on some systems,
-   specifically ppc. You can also disable this through configure with the
-   --disable-fastcc option, or at runtime with the --notc option. */
+/* Support for the "fast" calling convention used for tail call elimination.
+   You can disable this through configure with the --disable-fastcc option, or
+   at runtime with the --notc option. */
 #ifndef USE_FASTCC
 #ifdef HAVE_FASTCC
 #define USE_FASTCC 1
@@ -82,13 +68,6 @@
    (negligible) runtime overhead. */
 #ifndef DEFER_GLOBALS
 #define DEFER_GLOBALS 1
-#endif
-
-/* Experimental support for fast code generation, at the expense of code
-   quality. As of LLVM 2.4, this doesn't seem to have much effect, and in LLVM
-   2.6 it doesn't seem to work at all. We recommend to leave this disabled. */
-#ifndef FAST_JIT
-#define FAST_JIT 0
 #endif
 
 /* Alternative code generation for aggregate values (currently lists, tuples
@@ -183,23 +162,6 @@ struct VarInfo {
 };
 
 using Builder = llvm::IRBuilder<>;
-
-#ifdef NEW_USER_ITERATOR
-/* Workarounds for LLVM 3.5 API breakage. */
-#define value_user_iterator Value::user_iterator
-#define value_user_begin(x) x->user_begin()
-#define value_user_end(x) x->user_end()
-#else
-#define value_user_iterator Value::use_iterator
-#define value_user_begin(x) x->use_begin()
-#define value_user_end(x) x->use_end()
-#endif
-
-#ifdef LLVM32
-/* Workarounds for LLVM 3.2 API breakage. */
-#define TargetData DataLayout
-#define getTargetData getDataLayout
-#endif
 
 #define llvm_const_Type llvm::Type
 #define llvm_const_FunctionType llvm::FunctionType
@@ -622,15 +584,13 @@ public:
   void init_sys_vars(const string& version = "",
 		     const string& host = "",
 		     const list<string>& argv = list<string>());
-  // Configure the JIT according to the setting of the eager_jit member.
-  void init_jit_mode();
 
   // Option data. You can modify these according to your needs.
   uint8_t verbose;   // debugging output from interpreter
   bool compat;       // enable backward compatibility warnings
   bool compat2;      // enable forward compatibility hints
   bool compiling;    // batch compiler mode
-  bool eager_jit;    // eager JIT (LLVM 2.7 or later)
+  bool eager_jit;    // eagerly materialize ORC global generations
   bool interactive;  // interactive mode
   bool debugging;    // debugging mode
   bool texmacs;      // texmacs mode (http://www.texmacs.org/)
@@ -1033,7 +993,6 @@ public:
 
   llvm::LLVMContext context;
   llvm::Module *module;
-  llvm::ExecutionEngine *JIT;
   PureJit *ORC;
   CompilationUnitResources *compilation_units;
   NewPassManagerState *pass_state;
@@ -1128,6 +1087,7 @@ public:
                               pure_expr *closure,
                               list<pure_expr*> *retired = 0);
   void *compile_global_generation(Env& environment);
+  void *materialize_global_generation(int32_t tag, string *error = 0);
   void *resolve_global_closure(pure_expr *closure);
   void release_closure_implementation(uint32_t key) noexcept;
   void collect_pending_generations() noexcept;
@@ -1137,11 +1097,7 @@ public:
 
   llvm::PHINode *phi_node(Builder &b, llvm_const_Type *ty,
 			  unsigned n, const char *name = "")
-#ifdef LLVM30
   { return b.CreatePHI(ty, n, name); }
-#else
-  { return b.CreatePHI(ty); }
-#endif
 
   map<string,int> pointer_tags;
   map<int,map<string,int>::iterator> pointer_type_with_tag;
@@ -1252,7 +1208,6 @@ public:
   void swap_interpreters(interpreter *interp);
 private:
   void init();
-  void init_llvm_target();
   char *__baseptr_save;
   int nwrapped;
   Env *__fptr, **__fptr_save;

@@ -201,9 +201,12 @@ implementations[key]          FunctionGeneration owning that closure key
 ## Native Callable ABI Disposition
 
 Language-level calls use the existing stable closure slot and require no ORC
-indirection stub. No stable callable address for an interactively redefinable Pure
-name is currently promised to native extension clients. TODO-14 owns the explicit
-decision to reject that guarantee or define and test an ORC-backed native ABI.
+indirection stub. TODO-14 resolved the native extension policy explicitly: no stable
+callable address is promised for an interactively redefinable Pure name.
+`pure_interp_compile` guarantees materialization only and does not return or pin an
+address. Native clients must call through Pure expressions and the closure/application
+API; internal generation addresses remain valid only for their tracked closure lifetime.
+The symbol ABI of batch-compiled output modules is a separate contract.
 
 ## Progress Log
 

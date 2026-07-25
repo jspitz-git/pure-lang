@@ -44,8 +44,6 @@ llvm_map_components_to_libnames(
   OrcJIT
   OrcDebugging
   Object
-  ExecutionEngine
-  MCJIT
   native
   nativecodegen
   Passes
