@@ -59,6 +59,7 @@ char *alloca ();
 #include <llvm/Bitcode/BitcodeWriter.h>
 #include <llvm/Analysis/ValueTracking.h>
 #include <llvm/IR/CallingConv.h>
+#include <llvm/IR/Metadata.h>
 #include <llvm/Linker/Linker.h>
 #include <llvm/Support/DynamicLibrary.h>
 #include <llvm/Support/Error.h>
@@ -89,6 +90,59 @@ int interpreter::stackdir = 0;
 int interpreter::brkflag = 0;
 int interpreter::brkmask = 0;
 bool interpreter::g_init = false;
+
+static string encode_abi_dump_token(const string& type)
+{
+  bool encode = false;
+  for (size_t i = 0; i < type.size(); ++i)
+    if (type[i] == '%' || type[i] == ' ' || type[i] == '\t' ||
+        type[i] == '\n' || type[i] == '\r') {
+      encode = true;
+      break;
+    }
+  if (!encode) return type;
+  static const char hex[] = "0123456789ABCDEF";
+  string encoded(1, '%');
+  for (size_t i = 0; i < type.size(); ++i) {
+    unsigned char c = type[i];
+    if (c == '%' || c == ' ' || c == '\t' || c == '\n' || c == '\r') {
+      encoded += '%';
+      encoded += hex[c >> 4];
+      encoded += hex[c & 0xf];
+    } else {
+      encoded += c;
+    }
+  }
+  return encoded;
+}
+
+static int abi_dump_hex_digit(char c)
+{
+  if (c >= '0' && c <= '9') return c-'0';
+  if (c >= 'A' && c <= 'F') return c-'A'+10;
+  if (c >= 'a' && c <= 'f') return c-'a'+10;
+  return -1;
+}
+
+static bool decode_abi_dump_token(string& type)
+{
+  if (type.empty() || type[0] != '%') return true;
+  string decoded;
+  for (size_t i = 1; i < type.size(); ++i) {
+    if (type[i] != '%') {
+      decoded += type[i];
+      continue;
+    }
+    if (i+2 >= type.size()) return false;
+    int high = abi_dump_hex_digit(type[i+1]);
+    int low = abi_dump_hex_digit(type[i+2]);
+    if (high < 0 || low < 0) return false;
+    decoded += char((high << 4) | low);
+    i += 2;
+  }
+  type = decoded;
+  return true;
+}
 
 llvm::LLVMContext& pure_llvm_context()
 {
@@ -1493,7 +1547,7 @@ interpreter::interpreter(int32_t nsyms, char *syms,
   size_t n_args;
   while (1) {
     sin >> f >> s_name >> s_type >> n_args;
-    if (sin.fail()) break;
+    if (sin.fail() || !decode_abi_dump_token(s_type)) break;
     CAbiType abi_type(s_type);
     llvm_const_Type* rettype = named_type(s_type);
     vector<llvm_const_Type*> argtypes(n_args);
@@ -1501,6 +1555,10 @@ interpreter::interpreter(int32_t nsyms, char *syms,
     abi_argtypes.reserve(n_args);
     for (size_t i = 0; i < n_args; i++) {
       sin >> s_type;
+      if (!decode_abi_dump_token(s_type)) {
+        sin.setstate(ios::failbit);
+        break;
+      }
       abi_argtypes.push_back(CAbiType(s_type));
       argtypes[i] = named_type(s_type);
     }
@@ -3429,6 +3487,265 @@ static void bc_errmsg(string name, string* msg)
     *msg = name+": Error linking bitcode file";
 }
 
+struct bc_abi_type_t {
+  string name;
+  string base;
+  unsigned pointer_depth;
+  bool base_const;
+  vector<bool> pointer_const;
+
+  bc_abi_type_t() : pointer_depth(0), base_const(false) {}
+};
+
+struct bc_abi_record_t {
+  string function_name;
+  bc_abi_type_t result;
+  vector<bc_abi_type_t> arguments;
+};
+
+typedef map<string, bc_abi_record_t> bc_abi_metadata_t;
+
+static bool is_abi_identifier_start(char c)
+{
+  return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || c == '_';
+}
+
+static bool is_abi_identifier_char(char c)
+{
+  return is_abi_identifier_start(c) || (c >= '0' && c <= '9') ||
+    c == ':' || c == '.';
+}
+
+static bool parse_bc_abi_type(llvm::StringRef text, bc_abi_type_t& type,
+                              string& error)
+{
+  llvm::StringRef input = text;
+  type = bc_abi_type_t();
+  type.name = text.str();
+  if (text.consume_front("const ")) type.base_const = true;
+  if (text.empty() || !is_abi_identifier_start(text.front())) {
+    error = "invalid ABI type '"+input.str()+"'";
+    return false;
+  }
+  size_t base_end = 1;
+  while (base_end < text.size() && is_abi_identifier_char(text[base_end]))
+    ++base_end;
+  type.base = text.take_front(base_end).str();
+  text = text.drop_front(base_end);
+  while (!text.empty()) {
+    if (!text.consume_front("*")) {
+      error = "non-canonical ABI type '"+input.str()+"'";
+      return false;
+    }
+    ++type.pointer_depth;
+    type.pointer_const.push_back(text.consume_front(" const"));
+  }
+  return true;
+}
+
+static const llvm::MDString *bc_abi_string(const llvm::MDNode& record,
+                                           unsigned index)
+{
+  return llvm::dyn_cast_or_null<llvm::MDString>(record.getOperand(index).get());
+}
+
+static bool parse_bc_abi_metadata(const llvm::Module& module,
+                                  bc_abi_metadata_t& metadata, string& error)
+{
+  using namespace llvm;
+  metadata.clear();
+  const NamedMDNode *node = module.getNamedMetadata("pure.abi");
+  if (!node) return true;
+  if (node->getNumOperands() == 0) {
+    error = "Invalid pure.abi metadata: missing version record";
+    return false;
+  }
+  const MDNode *version_record = node->getOperand(0);
+  const MDString *version_kind = version_record &&
+    version_record->getNumOperands() == 2 ?
+    bc_abi_string(*version_record, 0) : 0;
+  const ConstantAsMetadata *version_metadata = version_record &&
+    version_record->getNumOperands() == 2 ?
+    dyn_cast_or_null<ConstantAsMetadata>
+      (version_record->getOperand(1).get()) : 0;
+  const ConstantInt *version = version_metadata ?
+    dyn_cast<ConstantInt>(version_metadata->getValue()) : 0;
+  if (!version_kind || version_kind->getString() != "version" || !version ||
+      !version->getType()->isIntegerTy(32)) {
+    error = "Invalid pure.abi metadata: malformed version record";
+    return false;
+  }
+  if (version->getZExtValue() != 1) {
+    error = "Unsupported pure.abi metadata version "+
+      to_string(version->getZExtValue());
+    return false;
+  }
+  for (unsigned i = 1; i < node->getNumOperands(); ++i) {
+    const MDNode *record = node->getOperand(i);
+    const MDString *kind = record && record->getNumOperands() >= 3 ?
+      bc_abi_string(*record, 0) : 0;
+    if (!kind || kind->getString() != "function") {
+      error = "Invalid pure.abi metadata: malformed function record "+
+        to_string(i);
+      return false;
+    }
+    const MDString *function_name = bc_abi_string(*record, 1);
+    const MDString *result_name = bc_abi_string(*record, 2);
+    if (!function_name || function_name->getString().empty() || !result_name) {
+      error = "Invalid pure.abi metadata: malformed function record "+
+        to_string(i);
+      return false;
+    }
+    bc_abi_record_t entry;
+    entry.function_name = function_name->getString().str();
+    if (!parse_bc_abi_type(result_name->getString(), entry.result, error)) {
+      error = "Invalid pure.abi metadata for function '"+
+        entry.function_name+"': "+error;
+      return false;
+    }
+    for (unsigned j = 3; j < record->getNumOperands(); ++j) {
+      const MDString *argument_name = bc_abi_string(*record, j);
+      bc_abi_type_t argument;
+      if (!argument_name ||
+          !parse_bc_abi_type(argument_name->getString(), argument, error)) {
+        if (!argument_name) error = "argument type is not a string";
+        error = "Invalid pure.abi metadata for function '"+
+          entry.function_name+"': "+error;
+        return false;
+      }
+      entry.arguments.push_back(std::move(argument));
+    }
+    if (!metadata.emplace(entry.function_name, std::move(entry)).second) {
+      error = "Invalid pure.abi metadata: duplicate function record '"+
+        function_name->getString().str()+"'";
+      return false;
+    }
+  }
+  return true;
+}
+
+static bool is_bc_abi_builtin(llvm::StringRef base)
+{
+  return base == "void" || base == "bool" || base == "char" ||
+    base == "short" || base == "int" || base == "int64" ||
+    base == "long" || base == "size_t" || base == "float" ||
+    base == "double";
+}
+
+static bool is_bc_abi_role(llvm::StringRef base)
+{
+  return base == "expr" || base == "matrix" || base == "dmatrix" ||
+    base == "cmatrix" || base == "imatrix";
+}
+
+static string llvm_type_string(llvm::Type *type)
+{
+  string text;
+  llvm::raw_string_ostream out(text);
+  type->print(out);
+  return out.str();
+}
+
+static bool bc_abi_type_matches(const bc_abi_type_t& abi, llvm::Type *type,
+                                bool result, string& reason)
+{
+  if (abi.pointer_depth > 0) {
+    llvm::PointerType *pointer = llvm::dyn_cast<llvm::PointerType>(type);
+    if (!pointer || pointer->getAddressSpace() != 0) {
+      reason = "semantic type '"+abi.name+"' requires an address-space-zero "
+        "LLVM pointer, found '"+llvm_type_string(type)+"'";
+      return false;
+    }
+    return true;
+  }
+  if (abi.base_const) {
+    reason = "const requires a pointer type in '"+abi.name+"'";
+    return false;
+  }
+  if (!is_bc_abi_builtin(abi.base)) {
+    reason = string(is_bc_abi_role(abi.base) ? "role" : "custom role")+
+      " '"+abi.base+"' requires a pointer type";
+    return false;
+  }
+  if (abi.base == "void") {
+    if (!result) {
+      reason = "void is not permitted as an argument type";
+      return false;
+    }
+    if (type->isVoidTy()) return true;
+  } else if (abi.base == "bool" && type->isIntegerTy(1)) {
+    return true;
+  } else if (abi.base == "char" && type->isIntegerTy(8)) {
+    return true;
+  } else if (abi.base == "short" && type->isIntegerTy(16)) {
+    return true;
+  } else if (abi.base == "int" && type->isIntegerTy(32)) {
+    return true;
+  } else if (abi.base == "int64" && type->isIntegerTy(64)) {
+    return true;
+  } else if (abi.base == "long" &&
+             type->isIntegerTy(sizeof(long)*CHAR_BIT)) {
+    return true;
+  } else if (abi.base == "size_t" &&
+             type->isIntegerTy(sizeof(size_t)*CHAR_BIT)) {
+    return true;
+  } else if (abi.base == "float" && type->isFloatTy()) {
+    return true;
+  } else if (abi.base == "double" && type->isDoubleTy()) {
+    return true;
+  }
+  reason = "semantic type '"+abi.name+"' does not match LLVM type '"+
+    llvm_type_string(type)+"'";
+  return false;
+}
+
+static bool validate_bc_abi_metadata(const llvm::Module& module,
+                                     const bc_abi_metadata_t& metadata,
+                                     string& error)
+{
+  using namespace llvm;
+  for (bc_abi_metadata_t::const_iterator it = metadata.begin();
+       it != metadata.end(); ++it) {
+    const bc_abi_record_t& abi = it->second;
+    const Function *function = module.getFunction(abi.function_name);
+    if (!function || function->isDeclaration() ||
+        function->getLinkage() != GlobalValue::ExternalLinkage) {
+      error = "Invalid pure.abi metadata: function record '"+
+        abi.function_name+"' does not name an external definition";
+      return false;
+    }
+    if (function->getCallingConv() != CallingConv::C) {
+      error = "Invalid pure.abi metadata for function '"+abi.function_name+
+        "': unsupported LLVM calling convention "+
+        to_string(function->getCallingConv());
+      return false;
+    }
+    const FunctionType *function_type = function->getFunctionType();
+    if (abi.arguments.size() != function_type->getNumParams()) {
+      error = "Invalid pure.abi metadata for function '"+abi.function_name+
+        "': metadata has "+to_string(abi.arguments.size())+
+        " fixed arguments, LLVM has "+
+        to_string(function_type->getNumParams());
+      return false;
+    }
+    string reason;
+    if (!bc_abi_type_matches(abi.result, function_type->getReturnType(),
+                             true, reason)) {
+      error = "Invalid pure.abi metadata for function '"+abi.function_name+
+        "' result: "+reason;
+      return false;
+    }
+    for (size_t i = 0; i < abi.arguments.size(); ++i)
+      if (!bc_abi_type_matches(abi.arguments[i],
+                               function_type->getParamType(i), false, reason)) {
+        error = "Invalid pure.abi metadata for function '"+abi.function_name+
+          "' argument "+to_string(i)+": "+reason;
+        return false;
+      }
+  }
+  return true;
+}
+
 static const char *incompatible_triple_component
 (const llvm::Triple& module_triple, const llvm::Triple& target_triple)
 {
@@ -3486,6 +3803,13 @@ bool interpreter::LoadBitcode(bool priv, const char *name, string *msg)
     bc_errmsg(name, msg);
     return false;
   }
+  bc_abi_metadata_t abi_metadata;
+  string abi_error;
+  if (!parse_bc_abi_metadata(*M, abi_metadata, abi_error)) {
+    if (msg) *msg = abi_error;
+    bc_errmsg(name, msg);
+    return false;
+  }
   // Empty target metadata is unspecified and can be filled in. Explicit
   // metadata must already describe the LLJIT ABI; assignment below only
   // canonicalizes a compatible module and never converts an incompatible one.
@@ -3510,6 +3834,11 @@ bool interpreter::LoadBitcode(bool priv, const char *name, string *msg)
     bc_errmsg(name, msg);
     return false;
   }
+  if (!validate_bc_abi_metadata(*M, abi_metadata, abi_error)) {
+    if (msg) *msg = abi_error;
+    bc_errmsg(name, msg);
+    return false;
+  }
   M->setDataLayout(target_layout);
   M->setTargetTriple(target_triple);
   // Inspect and rename definitions before the linker consumes the source
@@ -3529,11 +3858,14 @@ bool interpreter::LoadBitcode(bool priv, const char *name, string *msg)
     f.setName(linked_name);
     function_symbols.push_back(linked_name);
     llvm_const_FunctionType *ft = f.getFunctionType();
-    string restype = bctype_name(ft->getReturnType());
+    bc_abi_metadata_t::const_iterator abi = abi_metadata.find(source_name);
+    string restype = abi == abi_metadata.end() ?
+      bctype_name(ft->getReturnType()) : abi->second.result.name;
     list<string> argtypes;
     bool wrappable = restype != "<unknown C type>";
     for (size_t i = 0; i < ft->getNumParams(); ++i) {
-      string argtype = bctype_name(ft->getParamType(i));
+      string argtype = abi == abi_metadata.end() ?
+        bctype_name(ft->getParamType(i)) : abi->second.arguments[i].name;
       if (argtype == "<unknown C type>") wrappable = false;
       argtypes.push_back(argtype);
     }
@@ -3548,6 +3880,11 @@ bool interpreter::LoadBitcode(bool priv, const char *name, string *msg)
       (bc_export_t(source_name, linked_name, restype, argtypes,
                    ft->isVarArg()));
   }
+  if (compiling)
+    if (NamedMDNode *metadata = M->getNamedMetadata("pure.abi"))
+      // Source records no longer name definitions after private renaming. The
+      // validated semantic types now live in the batch extern table instead.
+      M->eraseNamedMetadata(metadata);
   // Non-function definitions are private implementation details of this load;
   // qualify them as well so independent bitcode modules cannot interpose them.
   for (Module::global_iterator it = M->global_begin(), end = M->global_end();
@@ -11923,16 +12260,18 @@ int interpreter::compiler(string out, list<string> libnames, string llcopts)
 	    ExternInfo& info = kt->second;
 	    if (!strip || used.find(info.f) != used.end()) {
 	      externs[f] = ConstantExpr::getPointerCast(info.f, VoidPtrTy);
+	      const string& result_name = info.abi_type.name.empty() ?
+		type_name(info.type) : info.abi_type.name;
 	      sout << info.tag << " " << info.name << " "
-                   << (info.abi_type.name.empty() ? type_name(info.type)
-                                                  : info.abi_type.name)
+		   << encode_abi_dump_token(result_name)
 		   << " " << info.argtypes.size();
-	      for (size_t i = 0; i < info.argtypes.size(); i++)
-		sout << " "
-                     << (i < info.abi_argtypes.size() &&
-                         !info.abi_argtypes[i].name.empty()
-                         ? info.abi_argtypes[i].name
-                         : type_name(info.argtypes[i]));
+	      for (size_t i = 0; i < info.argtypes.size(); i++) {
+		const string& argument_name =
+		  i < info.abi_argtypes.size() &&
+		  !info.abi_argtypes[i].name.empty() ?
+		  info.abi_argtypes[i].name : type_name(info.argtypes[i]);
+		sout << " " << encode_abi_dump_token(argument_name);
+	      }
 	      sout << '\n';
 	      vars[f] = v.v;
 	    }
@@ -12259,9 +12598,21 @@ CAbiType::CAbiType(const string& type_name)
   : base(unknown), pointer_depth(0)
 {
   string base_name = type_name;
-  while (!base_name.empty() && base_name[base_name.size()-1] == '*') {
-    ++pointer_depth;
-    base_name.erase(base_name.size()-1);
+  bc_abi_type_t metadata_type;
+  string metadata_error;
+  bool qualified = false;
+  if (parse_bc_abi_type(type_name, metadata_type, metadata_error)) {
+    base_name = metadata_type.base;
+    pointer_depth = metadata_type.pointer_depth;
+    qualified = metadata_type.base_const;
+    for (size_t i = 0; i < metadata_type.pointer_const.size(); ++i)
+      qualified |= metadata_type.pointer_const[i];
+  } else {
+    // Preserve the permissive legacy declaration syntax outside pure.abi.
+    while (!base_name.empty() && base_name[base_name.size()-1] == '*') {
+      ++pointer_depth;
+      base_name.erase(base_name.size()-1);
+    }
   }
 
   if (base_name == "int8") base_name = "char";
@@ -12285,8 +12636,12 @@ CAbiType::CAbiType(const string& type_name)
   else if (base_name == "imatrix") base = integer_matrix;
   else base = custom;
 
-  name = base_name;
-  name.append(pointer_depth, '*');
+  if (qualified)
+    name = type_name;
+  else {
+    name = base_name;
+    name.append(pointer_depth, '*');
+  }
 }
 
 ostream &operator<< (ostream& os, const ExternInfo& info)
