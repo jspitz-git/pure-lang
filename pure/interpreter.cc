@@ -4111,7 +4111,11 @@ static string lang_tag(string &code, string &modname)
 #define TOOL_PREFIX ""
 #endif
 
+#ifdef _WIN32
+static string tool_prefix = pure_default_tooldir()+"/";
+#else
 static string tool_prefix = TOOL_PREFIX;
+#endif
 
 #ifndef EXEEXT
 #define EXEEXT ""
@@ -4124,6 +4128,8 @@ static string shell_tool(string tool)
      command participates in a pipeline. */
   for (size_t i = 0; i < tool.size(); ++i)
     if (tool[i] == '/') tool[i] = '\\';
+  if (tool.find_first_of(" \t") != string::npos)
+    tool = "call \""+tool+"\"";
 #endif
   return tool;
 }
@@ -4146,7 +4152,7 @@ void interpreter::inline_code(bool priv, string &code)
   // Check to see where we can find clang (used for C, C++ and ATS). If it's
   // not under the tool prefix then assume that it's somewhere on the PATH.
   string clang = llvm_tool("clang");
-  string clangpp = clang+"++";
+  string clangpp = llvm_tool("clang++");
   if (tag == "c") {
     static char *cc = NULL;
     if (!cc) cc = strdup(clang.c_str());
@@ -4224,8 +4230,9 @@ void interpreter::inline_code(bool priv, string &code)
 	      "' in inline code (try one of c, fortran, ats, dsp:name)");
   }
   // LLVM tools used in the build process.
-  string llvm_as = (chkfile(libdir+"/llvm-as"+EXEEXT)?
-		    libdir:tool_prefix)+"llvm-as";
+  string llvm_as = chkfile(libdir+"llvm-as"+EXEEXT)
+    ? shell_tool(libdir+"llvm-as")
+    : llvm_tool("llvm-as");
   // Create a temporary file holding the code.
   size_t n = code.size();
   string src = modname;
@@ -12112,10 +12119,10 @@ int interpreter::compiler(string out, list<string> libnames, string llcopts)
   // LLVM tools used in the build process.
   /* We allow the user to install his own custom builds of the llc and opt
      tools into the /usr/lib/pure directory. */
-  string llc = shell_tool(
-    (chkfile(libdir+"llc"+EXEEXT)?libdir:tool_prefix)+"llc");
-  string opt = shell_tool(
-    (chkfile(libdir+"opt"+EXEEXT)?libdir:tool_prefix)+"opt");
+  string llc = chkfile(libdir+"llc"+EXEEXT)
+    ? shell_tool(libdir+"llc") : llvm_tool("llc");
+  string opt = chkfile(libdir+"opt"+EXEEXT)
+    ? shell_tool(libdir+"opt") : llvm_tool("opt");
   /* Everything is already compiled at this point, so all we have to do here
      is to emit the code. We also prepare a main entry point, void
      __pure_main__ (int argc, char **argv), which initializes the interpreter
@@ -12472,7 +12479,7 @@ int interpreter::compiler(string out, list<string> libnames, string llcopts)
   if (target != out) {
     assert(bc_target);
     string cc = llvm_tool("clang");
-    string cxx = cc+"++";
+    string cxx = llvm_tool("clang++");
     const char *env;
     if ((env = getenv("CC"))) cc = env;
     if ((env = getenv("CXX"))) cxx = env;

@@ -51,9 +51,9 @@
 #include <vector>
 #endif
 
-std::string pure_default_libdir()
-{
 #ifdef _WIN32
+static std::string pure_module_relative_dir(const char *relative_path)
+{
   static const int module_anchor = 0;
   HMODULE module = 0;
   if (GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
@@ -70,8 +70,8 @@ std::string pure_default_libdir()
 	size_t sep = runtime_path.find_last_of(L"\\/");
 	if (sep == std::wstring::npos)
 	  break;
-	std::string relative_path = PURELIB_RELATIVE_FROM_RUNTIME;
-	std::wstring relative_path_w(relative_path.begin(), relative_path.end());
+	std::string relative_path_s = relative_path;
+	std::wstring relative_path_w(relative_path_s.begin(), relative_path_s.end());
 	std::wstring lib_path =
 	  runtime_path.substr(0, sep+1) +
 	  relative_path_w;
@@ -104,8 +104,26 @@ std::string pure_default_libdir()
       path.resize(path.size()*2);
     }
   }
+  return "";
+}
+#endif
+
+std::string pure_default_libdir()
+{
+#ifdef _WIN32
+  std::string dir = pure_module_relative_dir(PURELIB_RELATIVE_FROM_RUNTIME);
+  if (!dir.empty()) return dir;
 #endif
   return PURELIB;
+}
+
+std::string pure_default_tooldir()
+{
+#ifdef _WIN32
+  return pure_module_relative_dir(PURETOOLS_RELATIVE_FROM_RUNTIME);
+#else
+  return TOOL_PREFIX;
+#endif
 }
 
 // Windows doesn't have this. Fake it.

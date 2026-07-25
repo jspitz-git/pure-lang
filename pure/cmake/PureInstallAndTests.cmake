@@ -568,6 +568,11 @@ if(BUILD_TESTING)
       FAIL_REGULAR_EXPRESSION
         "AddressSanitizer;LeakSanitizer;runtime error:"
   )
+  if(WIN32)
+    set(PURE_EXPECTED_BATCH_CXX "clang++")
+  else()
+    set(PURE_EXPECTED_BATCH_CXX "${LLVM_TOOLS_BINARY_DIR}/clang++")
+  endif()
   add_test(
     NAME pure-batch-executable
     COMMAND
@@ -579,7 +584,7 @@ if(BUILD_TESTING)
       -DPURE_SCRIPT=${CMAKE_CURRENT_SOURCE_DIR}/test/batch-smoke.pure
       -DPURE_OUTPUT_NAME=pure-batch-program.o
       -DPURE_RUN_EXECUTABLE=ON
-      -DPURE_EXPECTED_CXX_COMPILER=${LLVM_TOOLS_BINARY_DIR}/clang++
+      -DPURE_EXPECTED_CXX_COMPILER=${PURE_EXPECTED_BATCH_CXX}
       -DPURE_MAIN_OBJECT=$<TARGET_OBJECTS:pure-main-object>
       -DPURE_EXECUTABLE_SUFFIX=${CMAKE_EXECUTABLE_SUFFIX}
       -DPURE_SANITIZERS=${PURE_SANITIZERS}
@@ -647,14 +652,25 @@ endif()
 set(PURE_INSTALL_INCLUDE_DIR "${CMAKE_INSTALL_INCLUDEDIR}/pure")
 set(PURE_INSTALL_LIBRARY_DIR "${CMAKE_INSTALL_LIBDIR}/${PURE_LIBRARY_DIRECTORY}")
 
-set(prefix "${CMAKE_INSTALL_PREFIX}")
-set(exec_prefix "${CMAKE_INSTALL_PREFIX}")
-set(bindir "${CMAKE_INSTALL_FULL_BINDIR}")
-set(libdir "${CMAKE_INSTALL_FULL_LIBDIR}")
-set(includedir "${CMAKE_INSTALL_FULL_INCLUDEDIR}")
 set(LLVM_EXE_LIBS "")
-set(LLVM_LDFLAGS "-L${LLVM_LIBRARY_DIRS}")
 set(LIBS "")
+if(WIN32)
+  set(prefix "\${pcfiledir}/../..")
+  set(exec_prefix "\${prefix}")
+  set(bindir "\${prefix}/${CMAKE_INSTALL_BINDIR}")
+  set(libdir "\${prefix}/${CMAKE_INSTALL_LIBDIR}")
+  set(includedir "\${prefix}/${CMAKE_INSTALL_INCLUDEDIR}")
+  set(PC_TOOL_PREFIX "\${prefix}/tools/bin/")
+  set(LLVM_LDFLAGS "")
+else()
+  set(prefix "${CMAKE_INSTALL_PREFIX}")
+  set(exec_prefix "${CMAKE_INSTALL_PREFIX}")
+  set(bindir "${CMAKE_INSTALL_FULL_BINDIR}")
+  set(libdir "${CMAKE_INSTALL_FULL_LIBDIR}")
+  set(includedir "${CMAKE_INSTALL_FULL_INCLUDEDIR}")
+  set(PC_TOOL_PREFIX "${TOOL_PREFIX}")
+  set(LLVM_LDFLAGS "-L${LLVM_LIBRARY_DIRS}")
+endif()
 if(APPLE)
   set(shared "-dynamiclib")
   set(PIC "-fPIC")

@@ -19,7 +19,7 @@ MSYS2, MinGW, a fixed installation prefix, or machine-wide environment variables
 
 1. [x] Implement executable-relative runtime and library discovery.
 2. [x] Define and create the portable runtime staging layout.
-3. [ ] Audit all direct and transitive PE imports.
+3. [x] Audit all direct and transitive PE imports.
 4. [ ] Validate interpreter, JIT, module loading, and paths containing spaces.
 5. [ ] Document the runtime/developer-tool boundary and close the TODO.
 
@@ -65,3 +65,17 @@ MSYS2, MinGW, a fixed installation prefix, or machine-wide environment variables
     - `pure --version` and `examples/hello.pure` passed with `PATH` limited to
       staged `bin` and Windows system directories and with `PURELIB` unset.
     - No `msys-2.0.dll` or Windows system DLL was copied into the stage.
+- 2026-07-25: Added repeatable PE dependency and forbidden-path auditing.
+  - The audit recursively resolves every staged executable and DLL import,
+    rejects unresolved, conflicting, external non-system, and MSYS dependencies,
+    and scans every staged file for MSYS2 and caller-supplied build paths.
+  - Windows `pure.pc` now uses `${pcfiledir}`-relative paths and no LLVM build
+    library path; runtime tools resolve from sibling `tools/bin` and then `PATH`.
+  - Tool paths containing spaces are quoted safely for `cmd.exe` pipelines.
+  - Validation:
+    - A fresh 40-file stage passed with 12 DLLs and 12 resolved non-system paths.
+    - Removing `libgmp-10.dll` produced the expected unresolved-dependency failure.
+    - Adding a file containing `C:\msys64` produced the expected forbidden-path failure.
+    - The 21 focused CLANG64 tests passed in 43.96 seconds.
+    - A complete `tools/` junction in a spaced stage compiled and ran a batch
+      executable using stage-relative `opt`, `llc`, and `clang++`.

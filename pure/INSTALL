@@ -141,7 +141,16 @@ Windows installation bundles the complete non-system DLL dependency closure in
 Set ``PURE_INSTALL_WINDOWS_RUNTIME_DEPENDENCIES=OFF`` only for a development
 prefix which deliberately obtains its DLLs elsewhere. ``DESTDIR`` is not
 supported for a Windows drive-letter installation; choose the final or staging
-prefix at configure time instead. Remove the installation with the same build tree::
+prefix at configure time instead.
+
+Audit a staged prefix before packaging it; add any local build roots to the
+forbidden-path list::
+
+  $ cmake -DPURE_PREFIX="$PWD/build/windows-clang64-prefix" \
+      -DPURE_TOOL_DIR=/clang64/bin -DPURE_FORBIDDEN_PATHS="$PWD/build" \
+      -P cmake/AuditWindowsPortableInstall.cmake
+
+Remove the installation with the same build tree::
 
   $ cmake --build build/windows-clang64-release --target uninstall
 

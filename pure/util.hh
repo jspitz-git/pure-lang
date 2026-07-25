@@ -28,6 +28,7 @@
    relocatable. Other systems retain the configured installation path. */
 
 std::string pure_default_libdir();
+std::string pure_default_tooldir();
 
 /* Exception handling utility class. */
 
