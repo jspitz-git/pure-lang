@@ -54,12 +54,13 @@ on its first invocation.
 - Run the complete Release regression corpus on Windows and Linux.
 - Run the focused lifetime tests under ASan/UBSan before closure.
 
-## Open Questions
+## Decisions
 
-- Should a missing generation key be a hard internal error or a reported Pure
-  runtime exception? Decide before changing the resolution failure path.
-- What is the narrowest observable hook for proving that the final obsolete
-  tracker was collected without exposing ORC internals as public API?
+- A missing retained key emits a specific JIT resolution diagnostic and fails
+  resolution; it never falls back to a different generation.
+- Collection remains an internal invariant. The focused test exercises both
+  snapshot and materialized cleanup paths, while ASan checks their lifetime
+  without adding a public introspection API.
 
 ## Progress Log
 
@@ -116,3 +117,9 @@ on its first invocation.
     - `test052.pure` and `test053.pure` passed together.
     - Three focused JIT tests passed in Release and Windows ASan; the ASan run
       completed 3/3 in 3.23 seconds without a finding.
+- 2026-07-26: Completed native Windows validation of the epoch-aware fix.
+  - `ctest --preset windows-clang64-release --output-on-failure` passed 23/23
+    tests in 182.37 seconds.
+  - The complete regression corpus passed, including the extended `test052`
+    retained-generation case and the additive-rule behavior in `test053`.
+  - No supported local Linux WSL distribution is installed; only the Podman
