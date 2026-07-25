@@ -30,7 +30,7 @@ on its first invocation.
 2. [x] Implement generation lookup and materialization by closure key.
    - Reject or diagnose a missing retained generation instead of falling back
      silently to the current definition.
-3. [ ] Verify generation reference counting and ORC tracker collection.
+3. [x] Verify generation reference counting and ORC tracker collection.
    - Exercise both never-materialized and already-materialized closures.
    - Confirm superseded generations are reclaimed after their final reference.
 4. [ ] Run focused, complete, and sanitizer regression tests and close the TODO.
@@ -91,3 +91,13 @@ on its first invocation.
     - `pure-jit-deferred-generation`, `pure-jit-lifetime-stress`, and
       `pure-jit-eager` passed 3/3 in 1.45 seconds.
     - The isolated extended `test052.pure` passed in 4.88 seconds.
+- 2026-07-25: Covered both retained-generation collection paths.
+  - The focused test now releases materialized generations out of order and
+    releases a superseded closure without ever materializing its snapshot.
+  - Both paths rely on the original generation reference counter; the resolver
+    no longer transfers ownership to the current generation on first call.
+  - Validation:
+    - The extended Release test passed in 0.23 seconds.
+    - `pure-jit-deferred-generation`, `pure-jit-lifetime-stress`, and
+      `pure-jit-eager` passed 3/3 under Windows ASan in 2.45 seconds without a
+      sanitizer or ORC collection error.

@@ -24,3 +24,13 @@ f1 3;
 
 clear f1
 clear foo
+
+// An uncalled superseded generation must be collectible as a snapshot.
+
+bar x = 401;
+let dormant = bar;
+clear bar
+bar x = 402;
+clear dormant
+bar 0;
+clear bar
