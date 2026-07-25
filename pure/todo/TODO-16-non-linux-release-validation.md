@@ -1,6 +1,6 @@
 # TODO-16 - Non-Linux Release Validation
 
-Status: Open
+Status: Completed
 Branch: todo/16-non-linux-release-validation
 
 ## Purpose
@@ -19,10 +19,10 @@ reproducible CMake/Ninja build, test, install, uninstall, and installed-program 
 ## Task List
 
 1. [x] Define required operating systems, architectures, and host toolchains.
-2. [ ] Configure and build each supported matrix entry from a clean tree.
-3. [ ] Run focused integration and complete regression tests.
-4. [ ] Validate batch object/link execution and platform library lookup behavior.
-5. [ ] Validate install manifests, pkg-config where applicable, and idempotent uninstall.
+2. [x] Configure and build each supported matrix entry from a clean tree.
+3. [x] Run focused integration and complete regression tests.
+4. [x] Validate batch object/link execution and platform library lookup behavior.
+5. [x] Validate install manifests, pkg-config where applicable, and idempotent uninstall.
 6. [x] Document unsupported combinations and any platform-specific prerequisites.
 
 ## Required Release Matrix
@@ -41,7 +41,7 @@ Clang paired with a different LLVM ABI. `PURE_STRICT_TOOLCHAIN=ON` remains manda
 now rejects mismatched host/target systems, effective target architectures, compiler/LLVM
 architectures, Windows frontends, and mixed CLANG64 dependency prefixes during configure.
 The `windows-clang64-release` and `windows-clang64-debug` presets encode the validated
-standard `C:\msys64` installation; macOS still uses the explicit native-host runbook.
+standard `C:\msys64` installation; the macOS CI workflow encodes its native-host runbook.
 
 A matrix entry becomes release-supported only after preserving complete logs for a clean
 Release configure/build, focused and complete CTest runs, batch object/link execution,
@@ -69,19 +69,19 @@ inventory, not evidence that these combinations currently pass.
 - The batch executable test now exercises the actual `pure -c ... -o program` path. Batch
   assembly and linkage default to `clang` and `clang++` from the configured LLVM prefix,
   retain `CC`/`CXX` overrides, locate `pure_main.o` and the runtime from the active `PURELIB`,
-  and keep ELF- and Mach-O-specific link options scoped to their hosts. COFF output passed
-  native Windows validation; Mach-O output remains pending on macOS.
+  and keep ELF- and Mach-O-specific link options scoped to their hosts. Native x86_64 COFF
+  and arm64 Mach-O object and executable output passed their respective host validation.
 - Installed macOS executables have loader paths for the sibling library directory;
-  `pure.pc` advertises `-dynamiclib` on macOS and omits `-fPIC` on Windows. These settings
-  remain provisional until native install and module-consumer runs pass.
+  `pure.pc` advertises `-dynamiclib` on macOS and omits `-fPIC` on Windows. Native install,
+  execution, and module-consumer validation passed on both supported hosts.
 - Staged Unix installs can be uninstalled with the same `DESTDIR`; native Windows validation
   uses a dedicated configured prefix because CMake does not support drive-letter `DESTDIR`.
 - Linux presets retain their compiler names and `/usr/lib/llvm-22`. The Windows presets use
   the standard `C:\msys64` CLANG64 prefix and an explicit standard Faust path;
   nonstandard installations should continue to use the explicit cache arguments below.
-- A manually dispatched `macos-15` arm64 workflow now encodes the macOS runbook and uploads
-  its complete validation logs. It has not run yet and no Windows job exists yet; the local
-  native Windows run is recorded below, but macOS still has no preserved native-host log.
+- A manually dispatched `macos-15` arm64 workflow encodes the macOS runbook and uploads its
+  complete validation logs. GitHub Actions run 30167622744 passed every native gate; the
+  native Windows validation is recorded below.
 
 ## Native Validation Runbook
 
@@ -305,3 +305,20 @@ and TODO-13's unresolved release-matrix question.
   - Windows remains provisional at the overall TODO level until its logs are archived and
     the required macOS 15 arm64 entry passes. The current broad DLL auto-export surface is
     functional but should be narrowed by a separately reviewed public export definition.
+- 2026-07-25: Completed native macOS 15 arm64 validation and closed the release matrix.
+  - GitHub Actions run [30167622744](https://github.com/jspitz-git/pure-lang/actions/runs/30167622744)
+    passed on the native `macos-15` arm64 runner with Homebrew Clang/LLVM 22.1.8.
+  - Fixed imported macOS SDK include ordering, unsupported LLVM debug-only diagnostics,
+    public GMP/MPFR include propagation, equivalent `macosx`/`darwin` target triples, and
+    unambiguous loading of the selected Homebrew PCRE POSIX library.
+  - The clean Release build passed all 19 focused tests and all 20 complete CTest entries,
+    including the 96-input regression corpus, bitcode ABI checks, formatted I/O, native
+    batch object generation, and batch executable linkage and execution.
+  - Installed `pure` ran its version check and hello program without `DYLD_LIBRARY_PATH`,
+    compiled and ran an arm64 Mach-O batch executable, and used the expected loader-relative
+    runtime path. The installed `pure.pc` built and loaded `examples/hellomod`.
+  - The clean Debug build and focused tests passed. Manifest containment checks and two
+    uninstall invocations succeeded without leaving any manifest path behind.
+  - The workflow uploaded its complete native validation logs as the
+    `macos-15-arm64-native-validation` artifact. Together with the recorded native Windows
+    run, this satisfies every task and required entry in the non-Linux release matrix.
