@@ -264,7 +264,7 @@ main(int argc, char *argv[])
     if (!s.empty() && s[s.size()-1] != '/') s.append("/");
     interp.libdir = s;
   } else
-    interp.libdir = string(PURELIB)+"/";
+    interp.libdir = pure_default_libdir()+"/";
   string prelude = interp.libdir+string("prelude.pure");
   // scan the command line options
   list<string> myargs;

@@ -23,6 +23,12 @@
 #include <string.h>
 #include <string>
 
+/* Determine the default Pure library directory. On Windows this is resolved
+   relative to the loaded Pure runtime DLL so that installed runtimes remain
+   relocatable. Other systems retain the configured installation path. */
+
+std::string pure_default_libdir();
+
 /* Exception handling utility class. */
 
 class err {

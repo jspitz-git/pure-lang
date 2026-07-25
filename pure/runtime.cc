@@ -3752,7 +3752,7 @@ pure_interp *pure_create_interp(int argc, char *argv[])
     if (!s.empty() && s[s.size()-1] != '/') s.append("/");
     interp.libdir = s;
   } else
-    interp.libdir = string(PURELIB)+"/";
+    interp.libdir = pure_default_libdir()+"/";
   string prelude = interp.libdir+string("prelude.pure");
   // scan the command line options
   list<string> myargs;
@@ -4177,7 +4177,7 @@ pure_interp *pure_interp_main(int argc, char *argv[],
     if (!s.empty() && s[s.size()-1] != '/') s.append("/");
     interp.libdir = s;
   } else
-    interp.libdir = string(PURELIB)+"/";
+    interp.libdir = pure_default_libdir()+"/";
   if ((env = getenv("PURE_INCLUDE")))
     add_path(interp.includedirs, unixize(env));
   if ((env = getenv("PURE_LIBRARY")))

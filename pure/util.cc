@@ -48,7 +48,65 @@
 #endif
 #else
 #include <windows.h>
+#include <vector>
 #endif
+
+std::string pure_default_libdir()
+{
+#ifdef _WIN32
+  static const int module_anchor = 0;
+  HMODULE module = 0;
+  if (GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+			 GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+			 reinterpret_cast<LPCWSTR>(&module_anchor), &module)) {
+    std::vector<wchar_t> path(512);
+    for (;;) {
+      DWORD n = GetModuleFileNameW(module, path.data(),
+				   static_cast<DWORD>(path.size()));
+      if (!n)
+	break;
+      if (n < path.size()-1) {
+	std::wstring runtime_path(path.data(), n);
+	size_t sep = runtime_path.find_last_of(L"\\/");
+	if (sep == std::wstring::npos)
+	  break;
+	std::string relative_path = PURELIB_RELATIVE_FROM_RUNTIME;
+	std::wstring relative_path_w(relative_path.begin(), relative_path.end());
+	std::wstring lib_path =
+	  runtime_path.substr(0, sep+1) +
+	  relative_path_w;
+	std::vector<wchar_t> full_path(512);
+	for (;;) {
+	  DWORD full_n = GetFullPathNameW(lib_path.c_str(),
+					  static_cast<DWORD>(full_path.size()),
+					  full_path.data(), 0);
+	  if (!full_n)
+	    break;
+	  if (full_n < full_path.size()) {
+	    int utf8_n = WideCharToMultiByte(CP_UTF8, 0, full_path.data(),
+					     static_cast<int>(full_n), 0, 0,
+					     0, 0);
+	    if (utf8_n > 0) {
+	      std::string result(utf8_n, '\0');
+	      WideCharToMultiByte(CP_UTF8, 0, full_path.data(),
+				  static_cast<int>(full_n), &result[0],
+				  utf8_n, 0, 0);
+	      for (size_t i = 0; i < result.size(); ++i)
+		if (result[i] == '\\') result[i] = '/';
+	      return result;
+	    }
+	    break;
+	  }
+	  full_path.resize(static_cast<size_t>(full_n)+1);
+	}
+	break;
+      }
+      path.resize(path.size()*2);
+    }
+  }
+#endif
+  return PURELIB;
+}
 
 // Windows doesn't have this. Fake it.
 

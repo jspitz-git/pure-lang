@@ -17,7 +17,7 @@ MSYS2, MinGW, a fixed installation prefix, or machine-wide environment variables
 
 ## Task List
 
-1. [ ] Implement executable-relative runtime and library discovery.
+1. [x] Implement executable-relative runtime and library discovery.
 2. [ ] Define and create the portable runtime staging layout.
 3. [ ] Audit all direct and transitive PE imports.
 4. [ ] Validate interpreter, JIT, module loading, and paths containing spaces.
@@ -38,3 +38,17 @@ MSYS2, MinGW, a fixed installation prefix, or machine-wide environment variables
 ## Progress Log
 
 - 2026-07-25: Created from the Windows distribution inventory.
+- 2026-07-25: Made the default Windows Pure library lookup runtime-relative.
+  - `libpure.dll` resolves `../lib/pure` from its loaded module path using
+    wide-character Windows APIs; `PURELIB` remains an explicit override.
+  - The interpreter, embedding API, and relocated batch executables share the
+    lookup, while non-Windows hosts retain their configured installation path.
+  - Windows binaries no longer embed the configured installation prefix.
+  - Validation:
+    - Windows CLANG64 Release configure and build passed.
+    - `ctest --preset windows-clang64-release -E pure-regression` passed 21/21
+      focused tests in 46.94 seconds.
+    - A copied prefix in a spaced `C:\tmp` path ran `pure --version` and
+      `examples/hello.pure` without `PURELIB` from `C:\Windows`.
+    - A batch executable in a spaced path outside the prefix ran without
+      `PURELIB`; binary string audit found no configured installation prefix.
