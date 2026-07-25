@@ -120,7 +120,11 @@ target_link_libraries(
     m
 )
 
-if(NOT Iconv_IS_BUILT_IN)
+if(APPLE)
+  # The SDK include directory is already part of Clang's sysroot. Linking the
+  # imported target would add it before libc++ and break wrapper include_next.
+  target_link_libraries(pure-runtime PRIVATE ${Iconv_LIBRARIES})
+elseif(NOT Iconv_IS_BUILT_IN)
   target_link_libraries(pure-runtime PRIVATE Iconv::Iconv)
 endif()
 
