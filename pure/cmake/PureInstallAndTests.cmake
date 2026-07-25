@@ -344,6 +344,25 @@ if(BUILD_TESTING)
         "failed to remove ORC compilation unit;AddressSanitizer;LeakSanitizer;runtime error:"
   )
   add_test(
+    NAME pure-jit-deferred-generation
+    COMMAND
+      "${CMAKE_COMMAND}"
+      -DPURE_EXECUTABLE=$<TARGET_FILE:pure>
+      -DPURE_SCRIPT=${CMAKE_CURRENT_SOURCE_DIR}/test/jit-deferred-generation.pure
+      -DPURE_EXPECTED=${CMAKE_CURRENT_SOURCE_DIR}/test/jit-deferred-generation.log
+      -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunPureLifetimeStress.cmake"
+  )
+  set_tests_properties(
+    pure-jit-deferred-generation
+    PROPERTIES
+      LABELS "jit;stress"
+      REQUIRED_FILES
+        "${CMAKE_CURRENT_SOURCE_DIR}/test/jit-deferred-generation.pure;${CMAKE_CURRENT_SOURCE_DIR}/test/jit-deferred-generation.log"
+      TIMEOUT 60
+      FAIL_REGULAR_EXPRESSION
+        "failed to remove ORC compilation unit;AddressSanitizer;LeakSanitizer;runtime error:"
+  )
+  add_test(
     NAME pure-jit-eager
     COMMAND
       "${CMAKE_COMMAND}"

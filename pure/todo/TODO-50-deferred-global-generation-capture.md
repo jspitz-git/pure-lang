@@ -24,7 +24,7 @@ on its first invocation.
 
 ## Task List
 
-1. [ ] Add a focused reproducer for deferred capture before first invocation.
+1. [x] Add a focused reproducer for deferred capture before first invocation.
    - Confirm `f1`, `f2`, and `f3` retain three distinct generations.
    - Cover out-of-order release of newer closures before invoking the oldest.
 2. [ ] Implement generation lookup and materialization by closure key.
@@ -72,3 +72,10 @@ on its first invocation.
     returned the third generation because `resolve_global_closure` selected
     `current_generation(closure->tag)` at first invocation.
   - No implementation change has been made yet.
+- 2026-07-25: Added the focused `pure-jit-deferred-generation` test.
+  - The no-prelude test retains three uncalled closures, invokes them only after
+    the third redefinition, and releases newer closures before reusing the first.
+  - Validation:
+    - Windows CLANG64 Release configure and build passed.
+    - The focused test produced six third-generation results instead of the
+      expected per-generation sequence, reproducing the defect in 0.13 seconds.
