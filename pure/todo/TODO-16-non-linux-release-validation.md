@@ -40,7 +40,8 @@ Both entries must use native binaries throughout: no Rosetta translation, WSL, C
 Clang paired with a different LLVM ABI. `PURE_STRICT_TOOLCHAIN=ON` remains mandatory and
 now rejects mismatched host/target systems, effective target architectures, compiler/LLVM
 architectures, Windows frontends, and mixed CLANG64 dependency prefixes during configure.
-Repository presets remain Linux-specific until exercised target-host presets can be added.
+The `windows-clang64-release` and `windows-clang64-debug` presets encode the validated
+standard `C:\msys64` installation; macOS still uses the explicit native-host runbook.
 
 A matrix entry becomes release-supported only after preserving complete logs for a clean
 Release configure/build, focused and complete CTest runs, batch object/link execution,
@@ -68,18 +69,19 @@ inventory, not evidence that these combinations currently pass.
 - The batch executable test now exercises the actual `pure -c ... -o program` path. Batch
   assembly and linkage default to `clang` and `clang++` from the configured LLVM prefix,
   retain `CC`/`CXX` overrides, locate `pure_main.o` and the runtime from the active `PURELIB`,
-  and keep ELF- and Mach-O-specific link options scoped to their hosts. Mach-O and COFF
-  output still must be observed on their native hosts.
+  and keep ELF- and Mach-O-specific link options scoped to their hosts. COFF output passed
+  native Windows validation; Mach-O output remains pending on macOS.
 - Installed macOS executables have loader paths for the sibling library directory;
   `pure.pc` advertises `-dynamiclib` on macOS and omits `-fPIC` on Windows. These settings
   remain provisional until native install and module-consumer runs pass.
 - Staged Unix installs can be uninstalled with the same `DESTDIR`; native Windows validation
   uses a dedicated configured prefix because CMake does not support drive-letter `DESTDIR`.
-- All repository presets contain Linux compiler names and `/usr/lib/llvm-22`; target-host
-  commands must initially use explicit cache arguments and must not copy these presets.
+- Linux presets retain their compiler names and `/usr/lib/llvm-22`. The Windows presets use
+  the standard `C:\msys64` CLANG64 prefix and an explicit standard Faust path;
+  nonstandard installations should continue to use the explicit cache arguments below.
 - A manually dispatched `macos-15` arm64 workflow now encodes the macOS runbook and uploads
-  its complete validation logs. It has not run yet, no Windows job exists yet, and there is
-  still no preserved LLVM 22 native-host log.
+  its complete validation logs. It has not run yet and no Windows job exists yet; the local
+  native Windows run is recorded below, but macOS still has no preserved native-host log.
 
 ## Native Validation Runbook
 
@@ -157,6 +159,11 @@ llvm-readobj --file-headers build/native-batch.exe
 cmake --build build/native-release --target uninstall
 cmake --build build/native-release --target uninstall
 ```
+
+With MSYS2 installed at `C:\msys64` and Faust at `C:\Program Files\Faust`, the
+equivalent exercised Release entry point is `cmake --preset windows-clang64-release`,
+followed by the matching build and test presets. The explicit commands remain the runbook
+for nonstandard installation locations and for producing archived validation logs.
 
 Repeat configure/build and focused CTest in Debug. Run tests once with the parent shell's
 `PATH` stripped of the build directory, verify every DLL/import library in the install
@@ -265,3 +272,36 @@ and TODO-13's unresolved release-matrix question.
       matching-host-and-target-system guard.
     - Zed CMake diagnostics and `git diff --check` reported no errors.
     - Native macOS/Windows branches remain unexecuted pending the manual macOS workflow.
+- 2026-07-25: Completed the native Windows 11 x86_64 implementation and local validation.
+  - Vendored the user-provided MinGW `glob`/`fnmatch` sources, corrected their Win64 size
+    accounting, installed their headers, and linked them directly into `libpure.dll`.
+  - Fixed Clang/MinGW header ordering, non-SEH setjmp selection, Windows DLL exports, CRT
+    allocator and `puts` resolution in ORC, batch tool paths, locale handling, CRLF output,
+    and cmd.exe-incompatible test commands. Added explicit Flang 22 discovery and repaired
+    readline feature checks with the required headers and include paths.
+  - Added `windows-clang64-release` and `windows-clang64-debug` configure, build, and test
+    presets for the validated standard MSYS2/Faust installation paths.
+  - Validation:
+    - A clean explicit Release configure and build passed with Clang/LLVM 22.1.8 targeting
+      `x86_64-w64-windows-gnu`, Bison 3.8.2, Flex 2.6.4, CLANG64 GMP/MPFR/readline/PCRE/iconv,
+      Faust, Flang, and strict toolchain checks enabled.
+    - `ctest --test-dir build/native-release --output-on-failure --parallel 4` passed all
+      22 tests, including the full regression corpus, formatted I/O, Faust lifecycle, JIT,
+      bitcode, batch object, batch executable, and batch Faust coverage in 152 seconds.
+    - The clean `windows-clang64-release` preset configured, built, found Faust, and passed
+      all 22 tests through its test preset in 154 seconds.
+    - A clean explicit Debug configure/build and focused `ctest -E pure-regression` run
+      passed all 21 selected tests in 27 seconds.
+    - The 29-entry native install manifest included `pure.exe`, `libpure.dll`, the import
+      library, runtime and compatibility headers, `pure_main.o`, libraries, `pure.pc`, and
+      the manual. The installed interpreter reported Pure 0.68/LLVM 22.1.8, ran hello,
+      compiled and ran the batch smoke program, and `pkgconf` reported version 0.68.
+    - `examples/hellomod` built against the installed `pure.pc` and loaded successfully.
+      Semicolon-separated `PURE_INCLUDE`/`PURE_LIBRARY` values whose working entries used
+      paths containing spaces also loaded the module successfully.
+    - LLVM inspection identified `libpure.dll` and the installed batch program as x86_64
+      COFF, and the installed import library exposed the sampled public runtime symbols.
+      Two uninstall runs succeeded and left all 29 manifest paths absent.
+  - Windows remains provisional at the overall TODO level until its logs are archived and
+    the required macOS 15 arm64 entry passes. The current broad DLL auto-export surface is
+    functional but should be narrowed by a separately reviewed public export definition.

@@ -62,6 +62,9 @@ char *alloca ();
 
 #ifdef __MINGW32__
 #include <process.h>
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
+#include <windows.h>
 #endif
 
 #ifndef P_WAIT
@@ -84,8 +87,8 @@ typedef std::complex<double> Complex;
 #undef longjmp
 #define setjmp  _setjmp
 #define longjmp  _longjmp
-#elif defined(__MINGW64__)
-// setjmp/longjmp crash with mingw64, use gcc builtins instead
+#elif defined(__MINGW64__) && !defined(__clang__)
+// setjmp/longjmp crash with mingw64 GCC, use compiler builtins instead.
 #undef setjmp
 #undef longjmp
 #define setjmp  __builtin_setjmp
@@ -13082,7 +13085,6 @@ double pure_gettimeofday(void)
 #endif
 
 #ifdef __MINGW32__
-#include <windows.h>
 double pure_nanosleep(double t)
 {
   if (t > 0.0) {
@@ -13214,19 +13216,19 @@ int spawnve(int mode, const char *prog, char * const argv[],
 #ifdef __MINGW32__
 /* Windows compatibility. */
 
-extern "C"
+extern "C" __declspec(dllexport)
 int execv(const char* prog, char* const argv[])
 {
   return _execv(prog, argv);
 }
 
-extern "C"
+extern "C" __declspec(dllexport)
 int execvp(const char* prog, char* const argv[])
 {
   return _execvp(prog, argv);
 }
 
-extern "C"
+extern "C" __declspec(dllexport)
 int execve(const char* prog, char* const argv[], char* const envp[])
 {
   return _execve(prog, argv, envp);
@@ -13234,38 +13236,38 @@ int execve(const char* prog, char* const argv[], char* const envp[])
 
 #ifdef __MINGW64__
 // for reasons unknown to mankind, these return intptr_t instead of an int
-extern "C"
+extern "C" __declspec(dllexport)
 intptr_t spawnv(int mode, const char* prog, char* const argv[])
 {
   return _spawnv(mode, prog, argv);
 }
 
-extern "C"
+extern "C" __declspec(dllexport)
 intptr_t spawnvp(int mode, const char* prog, char* const argv[])
 {
   return _spawnvp(mode, prog, argv);
 }
 
-extern "C"
+extern "C" __declspec(dllexport)
 intptr_t spawnve(int mode, const char* prog, char* const argv[],
 	    char* const envp[])
 {
   return _spawnve(mode, prog, argv, envp);
 }
 #else
-extern "C"
+extern "C" __declspec(dllexport)
 int spawnv(int mode, const char* prog, char* const argv[])
 {
   return _spawnv(mode, prog, argv);
 }
 
-extern "C"
+extern "C" __declspec(dllexport)
 int spawnvp(int mode, const char* prog, char* const argv[])
 {
   return _spawnvp(mode, prog, argv);
 }
 
-extern "C"
+extern "C" __declspec(dllexport)
 int spawnve(int mode, const char* prog, char* const argv[],
 	    char* const envp[])
 {
@@ -13275,13 +13277,13 @@ int spawnve(int mode, const char* prog, char* const argv[],
 
 #undef fileno
 
-extern "C"
+extern "C" __declspec(dllexport)
 int fileno(FILE *fp)
 {
   return _fileno(fp);
 }
 
-extern "C"
+extern "C" __declspec(dllexport)
 FILE *fdopen(int fd, const char *mode)
 {
   return _fdopen(fd, mode);
@@ -13290,19 +13292,19 @@ FILE *fdopen(int fd, const char *mode)
 #undef popen
 #undef pclose
 
-extern "C"
+extern "C" __declspec(dllexport)
 FILE *popen(const char *command, const char *type)
 {
   return _popen(command, type);
 }
 
-extern "C"
+extern "C" __declspec(dllexport)
 int pclose(FILE *stream)
 {
   return _pclose(stream);
 }
 
-extern "C"
+extern "C" __declspec(dllexport)
 unsigned int sleep(unsigned int secs)
 {
   Sleep(secs*1000);
@@ -17667,29 +17669,29 @@ void faust_free_ui(void *p)
 static struct stack_elem_t {
   int i, n;
   pure_expr **xv;
-} *stack = NULL; // TLD
+} *ui_stack = NULL; // TLD
 
 static int astacksz = 0, stacksz = 0; // TLD
 
 static void clear()
 {
   for (int i = 0; i < stacksz; i++)
-    if (stack[i].xv) free(stack[i].xv);
-  free(stack); stack = NULL; astacksz = stacksz = 0;
+    if (ui_stack[i].xv) free(ui_stack[i].xv);
+  free(ui_stack); ui_stack = NULL; astacksz = stacksz = 0;
 }
 
 static int push(int i, int n, pure_expr **xv)
 {
   if (stacksz+1 >= astacksz) {
     stack_elem_t *stack1 =
-      (stack_elem_t*)realloc(stack, (astacksz+100)*sizeof(stack_elem_t));
+      (stack_elem_t*)realloc(ui_stack, (astacksz+100)*sizeof(stack_elem_t));
     if (!stack1) return 0;
-    stack = stack1;
+    ui_stack = stack1;
     astacksz += 100;
   }
-  stack[stacksz].i = i;
-  stack[stacksz].n = n;
-  stack[stacksz].xv = xv;
+  ui_stack[stacksz].i = i;
+  ui_stack[stacksz].n = n;
+  ui_stack[stacksz].xv = xv;
   stacksz++;
   return 1;
 }
@@ -17698,9 +17700,9 @@ static int pop(int &i, int &n, pure_expr **&xv)
 {
   if (stacksz <= 0) return 0;
   stacksz--;
-  i = stack[stacksz].i;
-  n = stack[stacksz].n;
-  xv = stack[stacksz].xv;
+  i = ui_stack[stacksz].i;
+  n = ui_stack[stacksz].n;
+  xv = ui_stack[stacksz].xv;
   return 1;
 }
 

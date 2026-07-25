@@ -34,6 +34,21 @@ set(PURE_RUNTIME_SOURCES
   ${FLEX_PureLexer_OUTPUTS}
 )
 
+if(WIN32)
+  list(
+    APPEND PURE_RUNTIME_SOURCES
+      compat/libglob/glob.c
+      compat/libglob/fnmatch.c
+  )
+  set_source_files_properties(
+    compat/libglob/glob.c
+    compat/libglob/fnmatch.c
+    PROPERTIES
+      COMPILE_DEFINITIONS
+        "STDC_HEADERS=1;HAVE_STRING_H=1;HAVE_ALLOCA_H=1;HAVE_ALLOCA=1;HAVE_DIRENT_H=1;WINDOWS32=1;__glob_pattern_p=glob_pattern_p"
+  )
+endif()
+
 if(NOT HAVE_STRPTIME)
   list(APPEND PURE_RUNTIME_SOURCES strptime.c)
 endif()
@@ -65,6 +80,11 @@ set_target_properties(
     POSITION_INDEPENDENT_CODE ON
 )
 
+if(WIN32)
+  set_property(TARGET pure-runtime PROPERTY WINDOWS_EXPORT_ALL_SYMBOLS ON)
+  target_link_options(pure-runtime PRIVATE "-Wl,--export-all-symbols")
+endif()
+
 target_include_directories(
   pure-runtime
   PUBLIC
@@ -74,6 +94,13 @@ target_include_directories(
   PRIVATE
     ${LLVM_INCLUDE_DIRS}
 )
+
+if(WIN32)
+  target_include_directories(
+    pure-runtime
+    PUBLIC "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/compat/libglob>"
+  )
+endif()
 
 target_compile_definitions(
   pure-runtime

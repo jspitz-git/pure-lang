@@ -39,7 +39,7 @@ endif()
 
 pkg_check_modules(GSL QUIET IMPORTED_TARGET gsl)
 find_program(PURE_FAUST_EXECUTABLE NAMES faust)
-find_program(PURE_FLANG_EXECUTABLE NAMES flang-22 flang-new-22)
+find_program(PURE_FLANG_EXECUTABLE NAMES flang flang-new flang-22 flang-new-22)
 find_program(PURE_GFORTRAN_EXECUTABLE NAMES gfortran)
 find_program(PURE_SPHINX_BUILD NAMES sphinx-build)
 

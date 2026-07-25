@@ -29,6 +29,9 @@
 
 #include <stdint.h>
 #include <stdbool.h>
+#if defined(__MINGW64__) && defined(__clang__)
+#define __USE_MINGW_SETJMP_NON_SEH
+#endif
 #include <setjmp.h>
 #ifdef USE_MPIR
 #include <mpir.h>

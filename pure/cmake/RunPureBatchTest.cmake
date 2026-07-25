@@ -87,7 +87,11 @@ if(PURE_RUN_EXECUTABLE)
   if(NOT link_result EQUAL 0 OR NOT EXISTS "${executable}")
     message(FATAL_ERROR "Pure batch executable link failed with status ${link_result}")
   endif()
-  string(FIND "${link_output}" "${PURE_EXPECTED_CXX_COMPILER}" compiler_position)
+  set(normalized_link_output "${link_output}")
+  set(normalized_expected_cxx "${PURE_EXPECTED_CXX_COMPILER}")
+  string(REPLACE "\\" "/" normalized_link_output "${normalized_link_output}")
+  string(REPLACE "\\" "/" normalized_expected_cxx "${normalized_expected_cxx}")
+  string(FIND "${normalized_link_output}" "${normalized_expected_cxx}" compiler_position)
   if(compiler_position EQUAL -1)
     message(FATAL_ERROR
       "Pure batch executable did not use ${PURE_EXPECTED_CXX_COMPILER}"

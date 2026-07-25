@@ -103,6 +103,7 @@ run_one()
   then
     echo 2 > "$work/status"
   elif ./run-test ${pufs} < "$work/input" 2>&1 |
+       sed 's/\r$//' |
        ${DIFF} -u "$work/expected" - > "$work/diff"
   then
     echo 0 > "$work/status"

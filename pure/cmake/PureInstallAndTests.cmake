@@ -400,7 +400,9 @@ if(BUILD_TESTING)
   add_pure_bitcode_test(malformed-input malformed-input.pure malformed.bc)
   set_tests_properties(
     pure-bitcode-malformed-input
-    PROPERTIES PASS_REGULAR_EXPRESSION "Invalid bitcode signature(.|\n)*42"
+    PROPERTIES
+      PASS_REGULAR_EXPRESSION
+        "(Invalid bitcode signature|file doesn't start with bitcode header)(.|\n)*42"
   )
 
   add_pure_bitcode_test(abi-mismatch abi-mismatch.pure abi-mismatch.bc)
@@ -680,6 +682,12 @@ install(
   FILES runtime.h
   DESTINATION "${PURE_INSTALL_INCLUDE_DIR}"
 )
+if(WIN32)
+  install(
+    FILES compat/libglob/glob.h compat/libglob/fnmatch.h
+    DESTINATION "${PURE_INSTALL_INCLUDE_DIR}"
+  )
+endif()
 install(
   FILES pure_main.c
   DESTINATION "${PURE_INSTALL_LIBRARY_DIR}"

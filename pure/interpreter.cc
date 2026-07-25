@@ -909,8 +909,14 @@ void interpreter::init()
 
   declare_extern((void*)malloc,
 		 "malloc",          "void*",  1, "size_t");
+  declare_extern((void*)calloc,
+		 "calloc",          "void*",  2, "size_t", "size_t");
+  declare_extern((void*)realloc,
+		 "realloc",         "void*",  2, "void*", "size_t");
   declare_extern((void*)free,
 		 "free",            "void",   1, "void*");
+  declare_extern((void*)puts,
+		 "puts",            "int",    1, "char*");
   /* KLUDGE: This is needed on FC12 Rawhide to correctly resolve the strcmp()
      function from the C library. (For some reason, dlsym() returns the wrong
      address for this function, dynamic linker bug?) */
@@ -4110,11 +4116,22 @@ static string tool_prefix = TOOL_PREFIX;
 #define EXEEXT ""
 #endif
 
+static string shell_tool(string tool)
+{
+#ifdef __MINGW32__
+  /* cmd.exe misparses drive-letter paths using forward slashes when the
+     command participates in a pipeline. */
+  for (size_t i = 0; i < tool.size(); ++i)
+    if (tool[i] == '/') tool[i] = '\\';
+#endif
+  return tool;
+}
+
 static string llvm_tool(const string& name)
 {
   string tool = tool_prefix+name;
   if (!chkfile(tool+EXEEXT)) tool = name;
-  return tool;
+  return shell_tool(tool);
 }
 
 void interpreter::inline_code(bool priv, string &code)
@@ -12088,8 +12105,10 @@ int interpreter::compiler(string out, list<string> libnames, string llcopts)
   // LLVM tools used in the build process.
   /* We allow the user to install his own custom builds of the llc and opt
      tools into the /usr/lib/pure directory. */
-  string llc = (chkfile(libdir+"llc"+EXEEXT)?libdir:tool_prefix)+"llc";
-  string opt = (chkfile(libdir+"opt"+EXEEXT)?libdir:tool_prefix)+"opt";
+  string llc = shell_tool(
+    (chkfile(libdir+"llc"+EXEEXT)?libdir:tool_prefix)+"llc");
+  string opt = shell_tool(
+    (chkfile(libdir+"opt"+EXEEXT)?libdir:tool_prefix)+"opt");
   /* Everything is already compiled at this point, so all we have to do here
      is to emit the code. We also prepare a main entry point, void
      __pure_main__ (int argc, char **argv), which initializes the interpreter
@@ -12524,7 +12543,7 @@ int interpreter::compiler(string out, list<string> libnames, string llcopts)
 	string linkopts = quote(obj)+extra_linkopts+libs+
 #ifdef __MINGW32__
 	  /* Link some extra libs and beef up the stack size on Windows. */
-	  " -Wl,--stack=0x800000 -lglob"+
+	  " -Wl,--stack=0x800000"+
 #if !USE_PCRE
 	  " -lregex"+
 #endif

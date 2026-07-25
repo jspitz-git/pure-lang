@@ -47,6 +47,48 @@
         "CMAKE_BUILD_TYPE": "Debug",
         "PURE_SANITIZERS": "address,undefined"
       }
+    },
+    {
+      "name": "windows-clang64-base",
+      "hidden": true,
+      "generator": "Ninja",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Windows"
+      },
+      "environment": {
+        "PATH": "C:/msys64/clang64/bin;C:/msys64/usr/bin;$penv{PATH}"
+      },
+      "cacheVariables": {
+        "CMAKE_C_COMPILER": "C:/msys64/clang64/bin/clang.exe",
+        "CMAKE_CXX_COMPILER": "C:/msys64/clang64/bin/clang++.exe",
+        "LLVM_DIR": "C:/msys64/clang64/lib/cmake/llvm",
+        "PURE_FAUST_EXECUTABLE": "C:/Program Files/Faust/bin/faust.exe",
+        "PURE_STRICT_TOOLCHAIN": "ON"
+      }
+    },
+    {
+      "name": "windows-clang64-debug",
+      "displayName": "Windows CLANG64 Debug",
+      "description": "Native Windows x86_64 MSYS2 CLANG64 debug build",
+      "inherits": "windows-clang64-base",
+      "binaryDir": "${sourceDir}/build/windows-clang64-debug",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_INSTALL_PREFIX": "${sourceDir}/build/windows-clang64-debug-prefix"
+      }
+    },
+    {
+      "name": "windows-clang64-release",
+      "displayName": "Windows CLANG64 Release",
+      "description": "Native Windows x86_64 MSYS2 CLANG64 release build",
+      "inherits": "windows-clang64-base",
+      "binaryDir": "${sourceDir}/build/windows-clang64-release",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_INSTALL_PREFIX": "${sourceDir}/build/windows-clang64-prefix"
+      }
     }
   ],
   "buildPresets": [
@@ -61,6 +103,14 @@
     {
       "name": "llvm22-asan",
       "configurePreset": "llvm22-asan"
+    },
+    {
+      "name": "windows-clang64-debug",
+      "configurePreset": "windows-clang64-debug"
+    },
+    {
+      "name": "windows-clang64-release",
+      "configurePreset": "windows-clang64-release"
     }
   ],
   "testPresets": [
@@ -105,6 +155,26 @@
       "inherits": "llvm22-asan",
       "environment": {
         "ASAN_OPTIONS": "detect_leaks=1:halt_on_error=1:strict_string_checks=1:quarantine_size_mb=64"
+      }
+    },
+    {
+      "name": "windows-clang64-debug",
+      "configurePreset": "windows-clang64-debug",
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "noTestsAction": "error"
+      }
+    },
+    {
+      "name": "windows-clang64-release",
+      "configurePreset": "windows-clang64-release",
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "noTestsAction": "error"
       }
     }
   ]
