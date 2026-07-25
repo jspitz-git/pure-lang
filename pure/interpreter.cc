@@ -909,8 +909,14 @@ void interpreter::init()
 
   declare_extern((void*)malloc,
 		 "malloc",          "void*",  1, "size_t");
+  declare_extern((void*)calloc,
+		 "calloc",          "void*",  2, "size_t", "size_t");
+  declare_extern((void*)realloc,
+		 "realloc",         "void*",  2, "void*", "size_t");
   declare_extern((void*)free,
 		 "free",            "void",   1, "void*");
+  declare_extern((void*)puts,
+		 "puts",            "int",    1, "char*");
   /* KLUDGE: This is needed on FC12 Rawhide to correctly resolve the strcmp()
      function from the C library. (For some reason, dlsym() returns the wrong
      address for this function, dynamic linker bug?) */
@@ -3755,7 +3761,8 @@ static const char *incompatible_triple_component
     return "architecture";
   if (module_triple.getSubArch() != target_triple.getSubArch())
     return "subarchitecture";
-  if (module_triple.getOSName() != target_triple.getOSName())
+  if (module_triple.getOS() != target_triple.getOS() &&
+      !(module_triple.isMacOSX() && target_triple.isMacOSX()))
     return "operating system";
   if (module_triple.getEnvironmentName() != target_triple.getEnvironmentName())
     return "environment";
@@ -4110,6 +4117,24 @@ static string tool_prefix = TOOL_PREFIX;
 #define EXEEXT ""
 #endif
 
+static string shell_tool(string tool)
+{
+#ifdef __MINGW32__
+  /* cmd.exe misparses drive-letter paths using forward slashes when the
+     command participates in a pipeline. */
+  for (size_t i = 0; i < tool.size(); ++i)
+    if (tool[i] == '/') tool[i] = '\\';
+#endif
+  return tool;
+}
+
+static string llvm_tool(const string& name)
+{
+  string tool = tool_prefix+name;
+  if (!chkfile(tool+EXEEXT)) tool = name;
+  return shell_tool(tool);
+}
+
 void interpreter::inline_code(bool priv, string &code)
 {
   // Get the language tag and configure accordingly.
@@ -4120,8 +4145,7 @@ void interpreter::inline_code(bool priv, string &code)
   bool remove_intermediate = false;
   // Check to see where we can find clang (used for C, C++ and ATS). If it's
   // not under the tool prefix then assume that it's somewhere on the PATH.
-  string clang = tool_prefix + "clang";
-  if (!chkfile(clang+EXEEXT)) clang = "clang";
+  string clang = llvm_tool("clang");
   string clangpp = clang+"++";
   if (tag == "c") {
     static char *cc = NULL;
@@ -11775,6 +11799,12 @@ using namespace llvm;
 #include <sstream>
 #include <time.h>
 
+static void print_llvm_value(const Value *value)
+{
+  value->print(llvm::errs());
+  llvm::errs() << '\n';
+}
+
 static LoadInst *create_load_gep(Builder& builder, Type *source_type,
 				 Value *pointer, ArrayRef<Value*> indices,
 				 const Twine& name = "")
@@ -12082,8 +12112,10 @@ int interpreter::compiler(string out, list<string> libnames, string llcopts)
   // LLVM tools used in the build process.
   /* We allow the user to install his own custom builds of the llc and opt
      tools into the /usr/lib/pure directory. */
-  string llc = (chkfile(libdir+"llc"+EXEEXT)?libdir:tool_prefix)+"llc";
-  string opt = (chkfile(libdir+"opt"+EXEEXT)?libdir:tool_prefix)+"opt";
+  string llc = shell_tool(
+    (chkfile(libdir+"llc"+EXEEXT)?libdir:tool_prefix)+"llc");
+  string opt = shell_tool(
+    (chkfile(libdir+"opt"+EXEEXT)?libdir:tool_prefix)+"opt");
   /* Everything is already compiled at this point, so all we have to do here
      is to emit the code. We also prepare a main entry point, void
      __pure_main__ (int argc, char **argv), which initializes the interpreter
@@ -12439,8 +12471,8 @@ int interpreter::compiler(string out, list<string> libnames, string llcopts)
   // Compile and link, if requested.
   if (target != out) {
     assert(bc_target);
-    string cc = "gcc";
-    string cxx = "g++";
+    string cc = llvm_tool("clang");
+    string cxx = cc+"++";
     const char *env;
     if ((env = getenv("CC"))) cc = env;
     if ((env = getenv("CXX"))) cxx = env;
@@ -12506,31 +12538,24 @@ int interpreter::compiler(string out, list<string> libnames, string llcopts)
       }
       if (WIFEXITED(status) && WEXITSTATUS(status) == 0) {
 	// Link.
+	string auxlibdir = dirname(libdir.substr(0, libdir.size()-1));
 #ifdef __linux__
-	string extra_linkopts = (cxx=="g++")?
-	  // XXXFIXME: This used to be the default, but some Linux
-	  // distributions have started shipping gcc versions which have the
-	  // --as-needed linker option enabled by default, which breaks some
-	  // Pure modules. Thus we always enforce --no-as-needed now in order
-	  // to get back the old behaviour. This might change in the future.
-	  " -Wl,--no-as-needed":"";
+	// Pure's batch objects are not PIE, and --as-needed breaks some modules.
+	string extra_linkopts = " -no-pie -Wl,--no-as-needed";
+#elif defined(__APPLE__)
+	string extra_linkopts = " -Wl,-rpath,"+quote(auxlibdir);
 #else
 	string extra_linkopts = "";
-#endif
-#ifdef LIBDIR
-	string auxlibdir = LIBDIR;
 #endif
 	string linkopts = quote(obj)+extra_linkopts+libs+
 #ifdef __MINGW32__
 	  /* Link some extra libs and beef up the stack size on Windows. */
-	  " -Wl,--stack=0x800000 -lglob"+
+	  " -Wl,--stack=0x800000"+
 #if !USE_PCRE
 	  " -lregex"+
 #endif
 #endif
-#ifdef LIBDIR
 	  " -L"+quote(auxlibdir)+
-#endif
 	  " -lpure";
 	if (ext != ".o") {
 	  // Link.
@@ -12877,8 +12902,10 @@ CallInst *Env::CreateCall(Function *f, const vector<Value*>& args)
     Value* c = *b;
     if (a->getType() != c->getType()) {
       std::cerr << "** argument mismatch!\n";
-      std::cerr << "function parameter #" << i << ": "; a->dump();
-      std::cerr << "provided argument  #" << i << ": "; c->dump();
+      std::cerr << "function parameter #" << i << ": ";
+      print_llvm_value(&*a);
+      std::cerr << "provided argument  #" << i << ": ";
+      print_llvm_value(c);
       ok = false;
     }
   }
@@ -12892,7 +12919,7 @@ CallInst *Env::CreateCall(Function *f, const vector<Value*>& args)
   }
   if (!ok) {
     std::cerr << "** calling function: " << f->getName().data() << '\n';
-    f->dump();
+    print_llvm_value(f);
     assert(0 && "bad function call");
   }
 #endif
@@ -15516,8 +15543,8 @@ Value *interpreter::builtin_codegen(expr x)
       if (u->getType() != v->getType()) {
 	std::cerr << "** operand mismatch!\n";
 	std::cerr << "operator:      " << symtab.sym(f.tag()).s << '\n';
-	std::cerr << "left operand:  "; u->dump();
-	std::cerr << "right operand: "; v->dump();
+	std::cerr << "left operand:  "; print_llvm_value(u);
+	std::cerr << "right operand: "; print_llvm_value(v);
 	assert(0 && "operand mismatch");
       }
 #endif
@@ -15544,8 +15571,8 @@ Value *interpreter::builtin_codegen(expr x)
       if (u->getType() != v->getType()) {
 	std::cerr << "** operand mismatch!\n";
 	std::cerr << "operator:      " << symtab.sym(f.tag()).s << '\n';
-	std::cerr << "left operand:  "; u->dump();
-	std::cerr << "right operand: "; v->dump();
+	std::cerr << "left operand:  "; print_llvm_value(u);
+	std::cerr << "right operand: "; print_llvm_value(v);
 	assert(0 && "operand mismatch");
       }
 #endif
@@ -15566,8 +15593,8 @@ Value *interpreter::builtin_codegen(expr x)
     if (u->getType() != v->getType()) {
       std::cerr << "** operand mismatch!\n";
       std::cerr << "operator:      " << symtab.sym(f.tag()).s << '\n';
-      std::cerr << "left operand:  "; u->dump();
-      std::cerr << "right operand: "; v->dump();
+      std::cerr << "left operand:  "; print_llvm_value(u);
+      std::cerr << "right operand: "; print_llvm_value(v);
       assert(0 && "operand mismatch");
     }
 #endif
@@ -15667,8 +15694,8 @@ Value *interpreter::builtin_codegen(expr x)
     if (u->getType() != v->getType()) {
       std::cerr << "** operand mismatch!\n";
       std::cerr << "operator:      " << symtab.sym(f.tag()).s << '\n';
-      std::cerr << "left operand:  "; u->dump();
-      std::cerr << "right operand: "; v->dump();
+      std::cerr << "left operand:  "; print_llvm_value(u);
+      std::cerr << "right operand: "; print_llvm_value(v);
       assert(0 && "operand mismatch");
     }
 #endif

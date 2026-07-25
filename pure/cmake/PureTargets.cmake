@@ -34,6 +34,21 @@ set(PURE_RUNTIME_SOURCES
   ${FLEX_PureLexer_OUTPUTS}
 )
 
+if(WIN32)
+  list(
+    APPEND PURE_RUNTIME_SOURCES
+      compat/libglob/glob.c
+      compat/libglob/fnmatch.c
+  )
+  set_source_files_properties(
+    compat/libglob/glob.c
+    compat/libglob/fnmatch.c
+    PROPERTIES
+      COMPILE_DEFINITIONS
+        "STDC_HEADERS=1;HAVE_STRING_H=1;HAVE_ALLOCA_H=1;HAVE_ALLOCA=1;HAVE_DIRENT_H=1;WINDOWS32=1;__glob_pattern_p=glob_pattern_p"
+  )
+endif()
+
 if(NOT HAVE_STRPTIME)
   list(APPEND PURE_RUNTIME_SOURCES strptime.c)
 endif()
@@ -65,6 +80,15 @@ set_target_properties(
     POSITION_INDEPENDENT_CODE ON
 )
 
+if(WIN32)
+  set_property(TARGET pure-runtime PROPERTY WINDOWS_EXPORT_ALL_SYMBOLS ON)
+  target_link_options(pure-runtime PRIVATE "-Wl,--export-all-symbols")
+elseif(APPLE)
+  target_compile_definitions(
+    pure-runtime PRIVATE LIBPCRE="${PURE_PCREPOSIX_LIBRARY}"
+  )
+endif()
+
 target_include_directories(
   pure-runtime
   PUBLIC
@@ -75,6 +99,13 @@ target_include_directories(
     ${LLVM_INCLUDE_DIRS}
 )
 
+if(WIN32)
+  target_include_directories(
+    pure-runtime
+    PUBLIC "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/compat/libglob>"
+  )
+endif()
+
 target_compile_definitions(
   pure-runtime
   PRIVATE
@@ -83,10 +114,11 @@ target_compile_definitions(
 
 target_link_libraries(
   pure-runtime
-  PRIVATE
-    ${PURE_LLVM_LIBRARIES}
+  PUBLIC
     PkgConfig::GMP
     PkgConfig::MPFR
+  PRIVATE
+    ${PURE_LLVM_LIBRARIES}
     PkgConfig::PCREPOSIX
     Threads::Threads
     Iconv::Iconv
@@ -110,6 +142,19 @@ target_link_libraries(
     PkgConfig::PCREPOSIX
     Threads::Threads
 )
+
+if(APPLE)
+  file(
+    RELATIVE_PATH PURE_INSTALL_LIBDIR_FROM_BINDIR
+    "/${CMAKE_INSTALL_BINDIR}"
+    "/${CMAKE_INSTALL_LIBDIR}"
+  )
+  set_target_properties(
+    pure
+    PROPERTIES
+      INSTALL_RPATH "@loader_path/${PURE_INSTALL_LIBDIR_FROM_BINDIR}"
+  )
+endif()
 
 add_library(pure-main-object OBJECT pure_main.c)
 target_include_directories(

@@ -32,8 +32,8 @@
 #undef longjmp
 #define setjmp  _setjmp
 #define longjmp  _longjmp
-#elif defined(__MINGW64__)
-// setjmp/longjmp crash with mingw64, use gcc builtins instead
+#elif defined(__MINGW64__) && !defined(__clang__)
+// setjmp/longjmp crash with mingw64 GCC, use compiler builtins instead.
 #undef setjmp
 #undef longjmp
 #define setjmp  __builtin_setjmp

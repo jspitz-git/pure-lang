@@ -84,6 +84,12 @@
 #endif /* USE_READLINE */
 #endif /* HAVE_LIBREADLINE */
 
+#ifdef _WIN32
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
+#include <windows.h>
+#endif
+
 using namespace std;
 
 #ifndef HOST
@@ -435,8 +441,6 @@ static void my_exit_handler()
 /* Windows doesn't have kill, so we need to set up a special kind of "console"
    event handler for Ctrl+C. That at least enables PurePad to signal us. */
 
-#include <windows.h>
-
 static HANDLE hSigInt, hSigTerm, hSignalHandler;
 
 static DWORD WINAPI SignalHandler(LPVOID dummy)
@@ -549,7 +553,12 @@ main(int argc, char *argv[]) try
   // set up an exit function which saves the history if needed
   atexit(my_exit_handler);
   // set the system locale
-  setlocale(LC_ALL, "");
+  const char *locale_env = getenv("LC_ALL");
+  setlocale(LC_ALL, locale_env && *locale_env ? locale_env : "");
+#ifdef _WIN32
+  // Keep C and C++ output ordered when stdout is redirected by test runners.
+  setvbuf(stdout, NULL, _IONBF, 0);
+#endif
   // get some settings from the environment
   const char *env;
   if ((env = getenv("HOME"))) {

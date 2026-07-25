@@ -566,9 +566,10 @@ resulting program (if requested). You can also specify additional libraries to
 be linked into the executable with the :option:`-l` option. If the output
 filename is omitted, it defaults to a.out (a.exe on Windows).
 
-The C/C++ compiler invoked by the batch compiler is normally :program:`gcc` by
-default, but you can change this with the :envvar:`CC` and :envvar:`CXX`
-environment variables. The LLVM tools :program:`opt` and :program:`llc` are
+The C/C++ compilers invoked by the batch compiler default to :program:`clang`
+and :program:`clang++` from the configured LLVM toolchain, but you can change
+them with the :envvar:`CC` and :envvar:`CXX` environment variables. The LLVM
+tools :program:`opt` and :program:`llc` are
 usually located on the :envvar:`PATH` or in a system-specific directory
 determined at installation time. It is also possible to use custom versions of
 these programs with the batch compiler, by placing them into the Pure library
@@ -1194,8 +1195,8 @@ shell environment variables:
    	    CXX
 
    C and C++ compiler used by the Pure batch compiler (``pure -c``) to compile
-   and link native executables. Defaults to :program:`gcc` and :program:`g++`,
-   respectively.
+   and link native executables. Defaults to :program:`clang` and
+   :program:`clang++` from the configured LLVM toolchain, respectively.
 
 .. envvar:: BROWSER
 

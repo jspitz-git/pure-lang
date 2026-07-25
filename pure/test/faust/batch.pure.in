@@ -5,6 +5,7 @@ batch_faust_inputs = reference::getNumInputs (reference::newinit 48000);
 
 using "dsp:@PURE_FAUST_FIXTURE_OUTPUT_DIR@/batch_reload";
 batch_reload_before = batch_reload::getNumInputs (batch_reload::newinit 48000);
-batch_reload_copy = system "sleep 1; cp @PURE_FAUST_FIXTURE_OUTPUT_DIR@/reload-b.bc @PURE_FAUST_FIXTURE_OUTPUT_DIR@/batch_reload.bc";
+batch_reload_wait = system "sleep 1";
+batch_reload_copy = system "cp @PURE_FAUST_FIXTURE_OUTPUT_DIR@/reload-b.bc @PURE_FAUST_FIXTURE_OUTPUT_DIR@/batch_reload.bc";
 using "dsp:@PURE_FAUST_FIXTURE_OUTPUT_DIR@/batch_reload";
 batch_reload_after = batch_reload::getNumInputs (batch_reload::newinit 48000);
