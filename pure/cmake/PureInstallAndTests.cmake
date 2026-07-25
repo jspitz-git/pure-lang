@@ -624,7 +624,7 @@ if(BUILD_TESTING)
   add_test(
     NAME pure-regression
     COMMAND
-      "${PURE_SH_EXECUTABLE}" "${CMAKE_CURRENT_BINARY_DIR}/run-tests"
+      "${PURE_SH_EXECUTABLE}" "${CMAKE_CURRENT_BINARY_DIR}/run-tests" -v
     WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
   )
   set(regression_timeout 600)
