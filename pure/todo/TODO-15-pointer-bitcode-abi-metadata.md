@@ -22,7 +22,7 @@ guessing pointee types, while malformed or incomplete metadata is rejected safel
 
 1. [x] Specify and document the metadata schema and versioning policy.
 2. [x] Parse metadata without relying on removed typed-pointer information.
-3. [ ] Validate semantic ABI entries against each exported LLVM function.
+3. [x] Validate semantic ABI entries against each exported LLVM function.
 4. [ ] Publish pointer-bearing exports only after complete validation.
 5. [ ] Preserve metadata across cached imports and batch output.
 6. [ ] Test valid pointers, missing metadata, malformed metadata, signature mismatch,
@@ -127,3 +127,19 @@ Created from TODO-04's explicit opaque-pointer deferral and TODO-13 retrospectiv
     - All five existing `pure-bitcode-*` integration tests passed in Release.
     - A verifier-accepted temporary bitcode module with version 2 was rejected before load
       while the interpreter continued safely with the following expression.
+- 2026-07-25: Validated semantic ABI records against their LLVM definitions.
+  - Required every record to name an external definition with the C calling convention and
+    exactly one descriptor per fixed LLVM parameter.
+  - Matched builtin scalar descriptors by concrete LLVM kind and host ABI width, rejected
+    scalar `void` arguments and non-pointer semantic roles, and required every pointer role
+    to correspond to an address-space-zero opaque LLVM pointer.
+  - Kept pointer depth, pointee role, and const qualifiers metadata-authoritative while
+    validating every distinction which remains observable in LLVM 22.
+  - Performed validation after target triple/layout compatibility checks but before target
+    canonicalization, symbol renaming, linking, ORC submission, or declaration publication.
+  - Validation:
+    - LLVM 22 Release serial build passed.
+    - A temporary valid scalar metadata export executed and returned `42`.
+    - A temporary `char*` result record over an LLVM `i32` definition was rejected with the
+      function name, semantic type, and concrete LLVM type; execution then continued safely.
+    - All five existing `pure-bitcode-*` integration tests passed in Release.

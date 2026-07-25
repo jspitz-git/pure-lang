@@ -3567,6 +3567,128 @@ static bool parse_bc_abi_metadata(const llvm::Module& module,
   return true;
 }
 
+static bool is_bc_abi_builtin(llvm::StringRef base)
+{
+  return base == "void" || base == "bool" || base == "char" ||
+    base == "short" || base == "int" || base == "int64" ||
+    base == "long" || base == "size_t" || base == "float" ||
+    base == "double";
+}
+
+static bool is_bc_abi_role(llvm::StringRef base)
+{
+  return base == "expr" || base == "matrix" || base == "dmatrix" ||
+    base == "cmatrix" || base == "imatrix";
+}
+
+static string llvm_type_string(llvm::Type *type)
+{
+  string text;
+  llvm::raw_string_ostream out(text);
+  type->print(out);
+  return out.str();
+}
+
+static bool bc_abi_type_matches(const bc_abi_type_t& abi, llvm::Type *type,
+                                bool result, string& reason)
+{
+  if (abi.pointer_depth > 0) {
+    llvm::PointerType *pointer = llvm::dyn_cast<llvm::PointerType>(type);
+    if (!pointer || pointer->getAddressSpace() != 0) {
+      reason = "semantic type '"+abi.name+"' requires an address-space-zero "
+        "LLVM pointer, found '"+llvm_type_string(type)+"'";
+      return false;
+    }
+    return true;
+  }
+  if (abi.base_const) {
+    reason = "const requires a pointer type in '"+abi.name+"'";
+    return false;
+  }
+  if (!is_bc_abi_builtin(abi.base)) {
+    reason = string(is_bc_abi_role(abi.base) ? "role" : "custom role")+
+      " '"+abi.base+"' requires a pointer type";
+    return false;
+  }
+  if (abi.base == "void") {
+    if (!result) {
+      reason = "void is not permitted as an argument type";
+      return false;
+    }
+    if (type->isVoidTy()) return true;
+  } else if (abi.base == "bool" && type->isIntegerTy(1)) {
+    return true;
+  } else if (abi.base == "char" && type->isIntegerTy(8)) {
+    return true;
+  } else if (abi.base == "short" && type->isIntegerTy(16)) {
+    return true;
+  } else if (abi.base == "int" && type->isIntegerTy(32)) {
+    return true;
+  } else if (abi.base == "int64" && type->isIntegerTy(64)) {
+    return true;
+  } else if (abi.base == "long" &&
+             type->isIntegerTy(sizeof(long)*CHAR_BIT)) {
+    return true;
+  } else if (abi.base == "size_t" &&
+             type->isIntegerTy(sizeof(size_t)*CHAR_BIT)) {
+    return true;
+  } else if (abi.base == "float" && type->isFloatTy()) {
+    return true;
+  } else if (abi.base == "double" && type->isDoubleTy()) {
+    return true;
+  }
+  reason = "semantic type '"+abi.name+"' does not match LLVM type '"+
+    llvm_type_string(type)+"'";
+  return false;
+}
+
+static bool validate_bc_abi_metadata(const llvm::Module& module,
+                                     const bc_abi_metadata_t& metadata,
+                                     string& error)
+{
+  using namespace llvm;
+  for (bc_abi_metadata_t::const_iterator it = metadata.begin();
+       it != metadata.end(); ++it) {
+    const bc_abi_record_t& abi = it->second;
+    const Function *function = module.getFunction(abi.function_name);
+    if (!function || function->isDeclaration() ||
+        function->getLinkage() != GlobalValue::ExternalLinkage) {
+      error = "Invalid pure.abi metadata: function record '"+
+        abi.function_name+"' does not name an external definition";
+      return false;
+    }
+    if (function->getCallingConv() != CallingConv::C) {
+      error = "Invalid pure.abi metadata for function '"+abi.function_name+
+        "': unsupported LLVM calling convention "+
+        to_string(function->getCallingConv());
+      return false;
+    }
+    const FunctionType *function_type = function->getFunctionType();
+    if (abi.arguments.size() != function_type->getNumParams()) {
+      error = "Invalid pure.abi metadata for function '"+abi.function_name+
+        "': metadata has "+to_string(abi.arguments.size())+
+        " fixed arguments, LLVM has "+
+        to_string(function_type->getNumParams());
+      return false;
+    }
+    string reason;
+    if (!bc_abi_type_matches(abi.result, function_type->getReturnType(),
+                             true, reason)) {
+      error = "Invalid pure.abi metadata for function '"+abi.function_name+
+        "' result: "+reason;
+      return false;
+    }
+    for (size_t i = 0; i < abi.arguments.size(); ++i)
+      if (!bc_abi_type_matches(abi.arguments[i],
+                               function_type->getParamType(i), false, reason)) {
+        error = "Invalid pure.abi metadata for function '"+abi.function_name+
+          "' argument "+to_string(i)+": "+reason;
+        return false;
+      }
+  }
+  return true;
+}
+
 static const char *incompatible_triple_component
 (const llvm::Triple& module_triple, const llvm::Triple& target_triple)
 {
@@ -3652,6 +3774,11 @@ bool interpreter::LoadBitcode(bool priv, const char *name, string *msg)
     if (msg)
       *msg = "Incompatible data layout: module '"+M->getDataLayoutStr()+
         "', JIT '"+target_layout.getStringRepresentation()+"'";
+    bc_errmsg(name, msg);
+    return false;
+  }
+  if (!validate_bc_abi_metadata(*M, abi_metadata, abi_error)) {
+    if (msg) *msg = abi_error;
     bc_errmsg(name, msg);
     return false;
   }
