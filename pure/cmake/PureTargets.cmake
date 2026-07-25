@@ -83,6 +83,10 @@ set_target_properties(
 if(WIN32)
   set_property(TARGET pure-runtime PROPERTY WINDOWS_EXPORT_ALL_SYMBOLS ON)
   target_link_options(pure-runtime PRIVATE "-Wl,--export-all-symbols")
+elseif(APPLE)
+  target_compile_definitions(
+    pure-runtime PRIVATE LIBPCRE="${PURE_PCREPOSIX_LIBRARY}"
+  )
 endif()
 
 target_include_directories(

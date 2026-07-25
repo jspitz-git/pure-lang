@@ -11,6 +11,16 @@ pkg_check_modules(MPFR REQUIRED IMPORTED_TARGET mpfr)
 pkg_check_modules(READLINE REQUIRED IMPORTED_TARGET readline)
 pkg_check_modules(PCREPOSIX REQUIRED IMPORTED_TARGET libpcreposix)
 
+if(APPLE)
+  find_library(
+    PURE_PCREPOSIX_LIBRARY
+    NAMES pcreposix
+    HINTS ${PCREPOSIX_LIBRARY_DIRS}
+    REQUIRED
+    NO_DEFAULT_PATH
+  )
+endif()
+
 if(PURE_STRICT_TOOLCHAIN AND WIN32)
   pure_require_clang64_path("${PKG_CONFIG_EXECUTABLE}" "pkg-config")
 
