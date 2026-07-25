@@ -38,6 +38,30 @@ if(PURE_STRICT_TOOLCHAIN AND WIN32)
 endif()
 
 pkg_check_modules(GSL QUIET IMPORTED_TARGET gsl)
+
+if(APPLE)
+  # The SDK's usr/include is already searched through Clang's sysroot. Some
+  # imported system-library targets add it explicitly, which places the C
+  # headers before libc++ and breaks the wrapper headers' include_next calls.
+  get_property(PURE_IMPORTED_TARGETS DIRECTORY PROPERTY IMPORTED_TARGETS)
+  foreach(imported_target IN LISTS PURE_IMPORTED_TARGETS)
+    get_target_property(
+      imported_includes "${imported_target}" INTERFACE_INCLUDE_DIRECTORIES
+    )
+    if(imported_includes)
+      set(filtered_includes ${imported_includes})
+      list(
+        FILTER filtered_includes EXCLUDE
+        REGEX "/MacOSX[^/]*\\.sdk/usr/include/?$"
+      )
+      set_property(
+        TARGET "${imported_target}"
+        PROPERTY INTERFACE_INCLUDE_DIRECTORIES "${filtered_includes}"
+      )
+    endif()
+  endforeach()
+endif()
+
 find_program(PURE_FAUST_EXECUTABLE NAMES faust)
 find_program(PURE_FLANG_EXECUTABLE NAMES flang flang-new flang-22 flang-new-22)
 find_program(PURE_GFORTRAN_EXECUTABLE NAMES gfortran)
