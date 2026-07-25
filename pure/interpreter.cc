@@ -59,6 +59,7 @@ char *alloca ();
 #include <llvm/Bitcode/BitcodeWriter.h>
 #include <llvm/Analysis/ValueTracking.h>
 #include <llvm/IR/CallingConv.h>
+#include <llvm/IR/Metadata.h>
 #include <llvm/Linker/Linker.h>
 #include <llvm/Support/DynamicLibrary.h>
 #include <llvm/Support/Error.h>
@@ -3429,6 +3430,143 @@ static void bc_errmsg(string name, string* msg)
     *msg = name+": Error linking bitcode file";
 }
 
+struct bc_abi_type_t {
+  string name;
+  string base;
+  unsigned pointer_depth;
+  bool base_const;
+  vector<bool> pointer_const;
+
+  bc_abi_type_t() : pointer_depth(0), base_const(false) {}
+};
+
+struct bc_abi_record_t {
+  string function_name;
+  bc_abi_type_t result;
+  vector<bc_abi_type_t> arguments;
+};
+
+typedef map<string, bc_abi_record_t> bc_abi_metadata_t;
+
+static bool is_abi_identifier_start(char c)
+{
+  return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || c == '_';
+}
+
+static bool is_abi_identifier_char(char c)
+{
+  return is_abi_identifier_start(c) || (c >= '0' && c <= '9') ||
+    c == ':' || c == '.';
+}
+
+static bool parse_bc_abi_type(llvm::StringRef text, bc_abi_type_t& type,
+                              string& error)
+{
+  llvm::StringRef input = text;
+  type = bc_abi_type_t();
+  type.name = text.str();
+  if (text.consume_front("const ")) type.base_const = true;
+  if (text.empty() || !is_abi_identifier_start(text.front())) {
+    error = "invalid ABI type '"+input.str()+"'";
+    return false;
+  }
+  size_t base_end = 1;
+  while (base_end < text.size() && is_abi_identifier_char(text[base_end]))
+    ++base_end;
+  type.base = text.take_front(base_end).str();
+  text = text.drop_front(base_end);
+  while (!text.empty()) {
+    if (!text.consume_front("*")) {
+      error = "non-canonical ABI type '"+input.str()+"'";
+      return false;
+    }
+    ++type.pointer_depth;
+    type.pointer_const.push_back(text.consume_front(" const"));
+  }
+  return true;
+}
+
+static const llvm::MDString *bc_abi_string(const llvm::MDNode& record,
+                                           unsigned index)
+{
+  return llvm::dyn_cast_or_null<llvm::MDString>(record.getOperand(index).get());
+}
+
+static bool parse_bc_abi_metadata(const llvm::Module& module,
+                                  bc_abi_metadata_t& metadata, string& error)
+{
+  using namespace llvm;
+  metadata.clear();
+  const NamedMDNode *node = module.getNamedMetadata("pure.abi");
+  if (!node) return true;
+  if (node->getNumOperands() == 0) {
+    error = "Invalid pure.abi metadata: missing version record";
+    return false;
+  }
+  const MDNode *version_record = node->getOperand(0);
+  const MDString *version_kind = version_record &&
+    version_record->getNumOperands() == 2 ?
+    bc_abi_string(*version_record, 0) : 0;
+  const ConstantAsMetadata *version_metadata = version_record &&
+    version_record->getNumOperands() == 2 ?
+    dyn_cast_or_null<ConstantAsMetadata>
+      (version_record->getOperand(1).get()) : 0;
+  const ConstantInt *version = version_metadata ?
+    dyn_cast<ConstantInt>(version_metadata->getValue()) : 0;
+  if (!version_kind || version_kind->getString() != "version" || !version ||
+      !version->getType()->isIntegerTy(32)) {
+    error = "Invalid pure.abi metadata: malformed version record";
+    return false;
+  }
+  if (version->getZExtValue() != 1) {
+    error = "Unsupported pure.abi metadata version "+
+      to_string(version->getZExtValue());
+    return false;
+  }
+  for (unsigned i = 1; i < node->getNumOperands(); ++i) {
+    const MDNode *record = node->getOperand(i);
+    const MDString *kind = record && record->getNumOperands() >= 3 ?
+      bc_abi_string(*record, 0) : 0;
+    if (!kind || kind->getString() != "function") {
+      error = "Invalid pure.abi metadata: malformed function record "+
+        to_string(i);
+      return false;
+    }
+    const MDString *function_name = bc_abi_string(*record, 1);
+    const MDString *result_name = bc_abi_string(*record, 2);
+    if (!function_name || function_name->getString().empty() || !result_name) {
+      error = "Invalid pure.abi metadata: malformed function record "+
+        to_string(i);
+      return false;
+    }
+    bc_abi_record_t entry;
+    entry.function_name = function_name->getString().str();
+    if (!parse_bc_abi_type(result_name->getString(), entry.result, error)) {
+      error = "Invalid pure.abi metadata for function '"+
+        entry.function_name+"': "+error;
+      return false;
+    }
+    for (unsigned j = 3; j < record->getNumOperands(); ++j) {
+      const MDString *argument_name = bc_abi_string(*record, j);
+      bc_abi_type_t argument;
+      if (!argument_name ||
+          !parse_bc_abi_type(argument_name->getString(), argument, error)) {
+        if (!argument_name) error = "argument type is not a string";
+        error = "Invalid pure.abi metadata for function '"+
+          entry.function_name+"': "+error;
+        return false;
+      }
+      entry.arguments.push_back(std::move(argument));
+    }
+    if (!metadata.emplace(entry.function_name, std::move(entry)).second) {
+      error = "Invalid pure.abi metadata: duplicate function record '"+
+        function_name->getString().str()+"'";
+      return false;
+    }
+  }
+  return true;
+}
+
 static const char *incompatible_triple_component
 (const llvm::Triple& module_triple, const llvm::Triple& target_triple)
 {
@@ -3483,6 +3621,13 @@ bool interpreter::LoadBitcode(bool priv, const char *name, string *msg)
   }
   std::unique_ptr<Module> M = ParseBitcodeFile(*buf, context, msg);
   if (!M) {
+    bc_errmsg(name, msg);
+    return false;
+  }
+  bc_abi_metadata_t abi_metadata;
+  string abi_error;
+  if (!parse_bc_abi_metadata(*M, abi_metadata, abi_error)) {
+    if (msg) *msg = abi_error;
     bc_errmsg(name, msg);
     return false;
   }

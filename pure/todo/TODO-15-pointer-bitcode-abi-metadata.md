@@ -21,7 +21,7 @@ guessing pointee types, while malformed or incomplete metadata is rejected safel
 ## Task List
 
 1. [x] Specify and document the metadata schema and versioning policy.
-2. [ ] Parse metadata without relying on removed typed-pointer information.
+2. [x] Parse metadata without relying on removed typed-pointer information.
 3. [ ] Validate semantic ABI entries against each exported LLVM function.
 4. [ ] Publish pointer-bearing exports only after complete validation.
 5. [ ] Preserve metadata across cached imports and batch output.
@@ -112,3 +112,18 @@ Created from TODO-04's explicit opaque-pointer deferral and TODO-13 retrospectiv
   - Validation:
     - Read-only audit of `LoadBitcode`, `bc_export_t`, `CAbiType`, `bctype_name`, and
       `declare_extern`; no source build or runtime test was required for this design step.
+- 2026-07-25: Implemented transactional parsing of version-1 `pure.abi` metadata.
+  - Added internal records for semantic result/argument descriptors, exact pointer depth,
+    base constness, and constness on every pointer level.
+  - Parsed the named metadata immediately after bitcode decoding and before target metadata
+    canonicalization, symbol renaming, linking, ORC submission, or declaration publication.
+  - Rejects empty/malformed version records, unsupported versions, malformed function
+    records, non-string operands, duplicate function records, and non-canonical type strings
+    with actionable `pure.abi` diagnostics.
+  - Kept metadata absence behavior unchanged; semantic-to-LLVM signature validation and
+    pointer export publication remain tasks 3 and 4.
+  - Validation:
+    - LLVM 22 Release serial build passed.
+    - All five existing `pure-bitcode-*` integration tests passed in Release.
+    - A verifier-accepted temporary bitcode module with version 2 was rejected before load
+      while the interpreter continued safely with the following expression.
