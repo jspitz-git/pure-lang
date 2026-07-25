@@ -17,7 +17,7 @@ with the portable Pure runtime.
 
 ## Task List
 
-1. [ ] Create and validate a 64-bit MFC build.
+1. [x] Create and validate a 64-bit MFC build.
 2. [ ] Fix compiler, Unicode, path-length, and ownership issues found by the build.
 3. [ ] Launch the sibling `pure.exe` without depending on global `PATH`.
 4. [ ] Move per-user state to an appropriate Windows application-data directory.
@@ -38,3 +38,14 @@ with the portable Pure runtime.
 ## Progress Log
 
 - 2026-07-25: Created from the PurePad source and dependency inventory.
+- 2026-07-26: Added and validated a Visual Studio 2022 x64 MFC build.
+  - Added CMake configure and Release/Debug build presets using shared MFC.
+  - Removed the fixed HTML Help Workshop include and library paths inherited
+    from the Visual C++ 6 project.
+  - Fixed two blocking modern-MSVC compatibility errors: const-correct path
+    scanning and selection of the global Win32 `HtmlHelp` function.
+  - Release and Debug builds completed with MSVC 19.44 and Windows SDK 10.0.26100.
+  - `dumpbin` confirmed a PE32+ x64 Windows GUI executable depending on
+    `mfc140.dll`.
+  - Remaining secure-CRT, narrowing, and path-size warnings are retained for
+    task 2 rather than hidden with a global warning suppression.

@@ -166,7 +166,7 @@ void CQpadApp::OnAppAbout()
 
 void CQpadApp::OnHelpFinder() 
 {
-	HtmlHelp(NULL, CMainFrame::m_strAppPath+"\\puredoc.chm",
+	::HtmlHelp(NULL, CMainFrame::m_strAppPath+"\\puredoc.chm",
 		HH_DISPLAY_TOPIC, 0);	
 }
 

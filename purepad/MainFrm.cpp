@@ -729,7 +729,7 @@ static char *expand(char *s1, const char *s2)
 static char *searchlib(char *s1, const char *s2, const char *qpath)
 {
   const char *s;
-  char *t;
+  const char *t;
 
   if (tilde(s2))
     return expand(s1, s2);
