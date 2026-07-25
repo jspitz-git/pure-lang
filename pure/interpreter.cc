@@ -3761,7 +3761,8 @@ static const char *incompatible_triple_component
     return "architecture";
   if (module_triple.getSubArch() != target_triple.getSubArch())
     return "subarchitecture";
-  if (module_triple.getOSName() != target_triple.getOSName())
+  if (module_triple.getOS() != target_triple.getOS() &&
+      !(module_triple.isMacOSX() && target_triple.isMacOSX()))
     return "operating system";
   if (module_triple.getEnvironmentName() != target_triple.getEnvironmentName())
     return "environment";
