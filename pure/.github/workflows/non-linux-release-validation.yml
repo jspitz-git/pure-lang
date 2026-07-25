@@ -2,6 +2,9 @@ name: macOS release validation
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - todo/16-non-linux-release-validation
 
 permissions:
   contents: read
