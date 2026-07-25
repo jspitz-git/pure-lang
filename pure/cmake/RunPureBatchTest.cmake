@@ -44,3 +44,45 @@ file(SIZE "${output}" output_size)
 if(output_size EQUAL 0)
   message(FATAL_ERROR "Pure batch compilation created an empty object")
 endif()
+
+if(PURE_RUN_EXECUTABLE)
+  if(NOT DEFINED PURE_CXX_COMPILER OR NOT DEFINED PURE_MAIN_OBJECT OR
+     NOT DEFINED PURE_EXECUTABLE_SUFFIX)
+    message(FATAL_ERROR "Missing Pure batch executable link arguments")
+  endif()
+  set(executable "${PURE_BUILD_DIR}/test/pure-batch-program${PURE_EXECUTABLE_SUFFIX}")
+  file(REMOVE "${executable}")
+  set(link_options)
+  if(CMAKE_HOST_SYSTEM_NAME STREQUAL "Linux")
+    list(APPEND link_options -no-pie)
+  endif()
+  if(PURE_SANITIZERS)
+    list(APPEND link_options "-fsanitize=${PURE_SANITIZERS}")
+  endif()
+  execute_process(
+    COMMAND
+      "${PURE_CXX_COMPILER}" ${link_options}
+      -o "${executable}" "${PURE_MAIN_OBJECT}" "${output}"
+      -L "${PURE_BUILD_DIR}" -Wl,--no-as-needed -lpure
+    RESULT_VARIABLE link_result
+    OUTPUT_VARIABLE link_output
+    ERROR_VARIABLE link_output
+  )
+  message("${link_output}")
+  if(NOT link_result EQUAL 0 OR NOT EXISTS "${executable}")
+    message(FATAL_ERROR "Pure batch executable link failed with status ${link_result}")
+  endif()
+  execute_process(
+    COMMAND
+      "${CMAKE_COMMAND}" -E env
+      "${PURE_LD_LIB_PATH}=${PURE_BUILD_DIR}"
+      "${executable}"
+    RESULT_VARIABLE run_result
+    OUTPUT_VARIABLE run_output
+    ERROR_VARIABLE run_output
+  )
+  message("${run_output}")
+  if(NOT run_result EQUAL 0)
+    message(FATAL_ERROR "Pure batch executable exited with status ${run_result}")
+  endif()
+endif()

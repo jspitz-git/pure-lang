@@ -252,3 +252,15 @@ publication and invalid continuation after a failed materialization.
       presets without sanitizer findings.
     - Confirmed no compatibility gate or shim identifier remains in active source/config;
       `LLVM_VERSION` remains present at all metadata call sites.
+- 2026-07-25: Added complete batch executable integration coverage.
+  - Extended the batch test driver with an opt-in link/run phase using the built
+    `pure_main.c` object, build-tree `libpure`, platform loader path, and sanitizer link
+    flags.
+  - Added `pure-batch-executable`, which compiles `batch-smoke.pure` to an object, links a
+    standalone program, executes `__pure_main__`, and finalizes the runtime successfully.
+  - Used `-no-pie` on Linux because the supported default batch object is non-PIE unless
+    users explicitly request PIC.
+  - Validation:
+    - `pure-batch-executable` passed in LLVM 22 Release and ASan/UBSan presets with clean
+      process shutdown.
+  - Task 8 remains open for the complete Debug/Release/sanitizer regression corpus.

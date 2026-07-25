@@ -474,6 +474,32 @@ if(BUILD_TESTING)
       FAIL_REGULAR_EXPRESSION
         "AddressSanitizer;LeakSanitizer;runtime error:"
   )
+  add_test(
+    NAME pure-batch-executable
+    COMMAND
+      "${CMAKE_COMMAND}"
+      -DPURE_EXECUTABLE=$<TARGET_FILE:pure>
+      -DPURE_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
+      -DPURE_BUILD_DIR=${CMAKE_CURRENT_BINARY_DIR}
+      -DPURE_LD_LIB_PATH=${LD_LIB_PATH}
+      -DPURE_SCRIPT=${CMAKE_CURRENT_SOURCE_DIR}/test/batch-smoke.pure
+      -DPURE_OUTPUT_NAME=pure-batch-program.o
+      -DPURE_RUN_EXECUTABLE=ON
+      -DPURE_CXX_COMPILER=${CMAKE_CXX_COMPILER}
+      -DPURE_MAIN_OBJECT=$<TARGET_OBJECTS:pure-main-object>
+      -DPURE_EXECUTABLE_SUFFIX=${CMAKE_EXECUTABLE_SUFFIX}
+      -DPURE_SANITIZERS=${PURE_SANITIZERS}
+      -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunPureBatchTest.cmake"
+  )
+  set_tests_properties(
+    pure-batch-executable
+    PROPERTIES
+      LABELS "batch;integration"
+      REQUIRED_FILES "${CMAKE_CURRENT_SOURCE_DIR}/test/batch-smoke.pure"
+      TIMEOUT ${batch_test_timeout}
+      FAIL_REGULAR_EXPRESSION
+        "failed;AddressSanitizer;LeakSanitizer;runtime error:"
+  )
   if(PURE_FAUST_EXECUTABLE)
     add_test(
       NAME pure-batch-faust

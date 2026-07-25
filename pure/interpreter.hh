@@ -70,8 +70,6 @@
 #define DEFER_GLOBALS 1
 #endif
 
-/* Alternative code generation
-
 /* Alternative code generation for aggregate values (currently lists, tuples
    and matrices are supported). This works around performance issues with the
    JIT which (as of LLVM 2.3) gets very slow with deeply nested call graphs.
