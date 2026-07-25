@@ -23,7 +23,7 @@ guessing pointee types, while malformed or incomplete metadata is rejected safel
 1. [x] Specify and document the metadata schema and versioning policy.
 2. [x] Parse metadata without relying on removed typed-pointer information.
 3. [x] Validate semantic ABI entries against each exported LLVM function.
-4. [ ] Publish pointer-bearing exports only after complete validation.
+4. [x] Publish pointer-bearing exports only after complete validation.
 5. [ ] Preserve metadata across cached imports and batch output.
 6. [ ] Test valid pointers, missing metadata, malformed metadata, signature mismatch,
    duplicate exports, unload, and rollback.
@@ -142,4 +142,18 @@ Created from TODO-04's explicit opaque-pointer deferral and TODO-13 retrospectiv
     - A temporary valid scalar metadata export executed and returned `42`.
     - A temporary `char*` result record over an LLVM `i32` definition was rejected with the
       function name, semantic type, and concrete LLVM type; execution then continued safely.
+    - All five existing `pure-bitcode-*` integration tests passed in Release.
+- 2026-07-25: Published pointer-bearing exports from fully validated metadata.
+  - Selected validated semantic result and argument names before source symbols are renamed,
+    replacing opaque-pointer rejection only for functions with a matching `pure.abi` record.
+  - Extended `CAbiType` to recover the unqualified base role and exact pointer depth from
+    canonical metadata while retaining the complete const-qualified name in `ExternInfo`.
+  - Preserved legacy permissive external declaration parsing outside `pure.abi` and kept
+    pointer definitions without metadata unpublished with their existing warning.
+  - Validation:
+    - LLVM 22 Release serial build passed.
+    - A metadata-backed `const char* -> const char*` identity export accepted a Pure string
+      and returned `"pointer metadata"`.
+    - The equivalent opaque pointer definition without metadata remained unpublished and
+      emitted the unsupported-prototype warning.
     - All five existing `pure-bitcode-*` integration tests passed in Release.

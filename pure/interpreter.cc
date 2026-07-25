@@ -3801,11 +3801,14 @@ bool interpreter::LoadBitcode(bool priv, const char *name, string *msg)
     f.setName(linked_name);
     function_symbols.push_back(linked_name);
     llvm_const_FunctionType *ft = f.getFunctionType();
-    string restype = bctype_name(ft->getReturnType());
+    bc_abi_metadata_t::const_iterator abi = abi_metadata.find(source_name);
+    string restype = abi == abi_metadata.end() ?
+      bctype_name(ft->getReturnType()) : abi->second.result.name;
     list<string> argtypes;
     bool wrappable = restype != "<unknown C type>";
     for (size_t i = 0; i < ft->getNumParams(); ++i) {
-      string argtype = bctype_name(ft->getParamType(i));
+      string argtype = abi == abi_metadata.end() ?
+        bctype_name(ft->getParamType(i)) : abi->second.arguments[i].name;
       if (argtype == "<unknown C type>") wrappable = false;
       argtypes.push_back(argtype);
     }
@@ -12531,9 +12534,21 @@ CAbiType::CAbiType(const string& type_name)
   : base(unknown), pointer_depth(0)
 {
   string base_name = type_name;
-  while (!base_name.empty() && base_name[base_name.size()-1] == '*') {
-    ++pointer_depth;
-    base_name.erase(base_name.size()-1);
+  bc_abi_type_t metadata_type;
+  string metadata_error;
+  bool qualified = false;
+  if (parse_bc_abi_type(type_name, metadata_type, metadata_error)) {
+    base_name = metadata_type.base;
+    pointer_depth = metadata_type.pointer_depth;
+    qualified = metadata_type.base_const;
+    for (size_t i = 0; i < metadata_type.pointer_const.size(); ++i)
+      qualified |= metadata_type.pointer_const[i];
+  } else {
+    // Preserve the permissive legacy declaration syntax outside pure.abi.
+    while (!base_name.empty() && base_name[base_name.size()-1] == '*') {
+      ++pointer_depth;
+      base_name.erase(base_name.size()-1);
+    }
   }
 
   if (base_name == "int8") base_name = "char";
@@ -12557,8 +12572,12 @@ CAbiType::CAbiType(const string& type_name)
   else if (base_name == "imatrix") base = integer_matrix;
   else base = custom;
 
-  name = base_name;
-  name.append(pointer_depth, '*');
+  if (qualified)
+    name = type_name;
+  else {
+    name = base_name;
+    name.append(pointer_depth, '*');
+  }
 }
 
 ostream &operator<< (ostream& os, const ExternInfo& info)
