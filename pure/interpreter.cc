@@ -11798,6 +11798,12 @@ using namespace llvm;
 #include <sstream>
 #include <time.h>
 
+static void print_llvm_value(const Value *value)
+{
+  value->print(llvm::errs());
+  llvm::errs() << '\n';
+}
+
 static LoadInst *create_load_gep(Builder& builder, Type *source_type,
 				 Value *pointer, ArrayRef<Value*> indices,
 				 const Twine& name = "")
@@ -12895,8 +12901,10 @@ CallInst *Env::CreateCall(Function *f, const vector<Value*>& args)
     Value* c = *b;
     if (a->getType() != c->getType()) {
       std::cerr << "** argument mismatch!\n";
-      std::cerr << "function parameter #" << i << ": "; a->dump();
-      std::cerr << "provided argument  #" << i << ": "; c->dump();
+      std::cerr << "function parameter #" << i << ": ";
+      print_llvm_value(&*a);
+      std::cerr << "provided argument  #" << i << ": ";
+      print_llvm_value(c);
       ok = false;
     }
   }
@@ -12910,7 +12918,7 @@ CallInst *Env::CreateCall(Function *f, const vector<Value*>& args)
   }
   if (!ok) {
     std::cerr << "** calling function: " << f->getName().data() << '\n';
-    f->dump();
+    print_llvm_value(f);
     assert(0 && "bad function call");
   }
 #endif
@@ -15534,8 +15542,8 @@ Value *interpreter::builtin_codegen(expr x)
       if (u->getType() != v->getType()) {
 	std::cerr << "** operand mismatch!\n";
 	std::cerr << "operator:      " << symtab.sym(f.tag()).s << '\n';
-	std::cerr << "left operand:  "; u->dump();
-	std::cerr << "right operand: "; v->dump();
+	std::cerr << "left operand:  "; print_llvm_value(u);
+	std::cerr << "right operand: "; print_llvm_value(v);
 	assert(0 && "operand mismatch");
       }
 #endif
@@ -15562,8 +15570,8 @@ Value *interpreter::builtin_codegen(expr x)
       if (u->getType() != v->getType()) {
 	std::cerr << "** operand mismatch!\n";
 	std::cerr << "operator:      " << symtab.sym(f.tag()).s << '\n';
-	std::cerr << "left operand:  "; u->dump();
-	std::cerr << "right operand: "; v->dump();
+	std::cerr << "left operand:  "; print_llvm_value(u);
+	std::cerr << "right operand: "; print_llvm_value(v);
 	assert(0 && "operand mismatch");
       }
 #endif
@@ -15584,8 +15592,8 @@ Value *interpreter::builtin_codegen(expr x)
     if (u->getType() != v->getType()) {
       std::cerr << "** operand mismatch!\n";
       std::cerr << "operator:      " << symtab.sym(f.tag()).s << '\n';
-      std::cerr << "left operand:  "; u->dump();
-      std::cerr << "right operand: "; v->dump();
+      std::cerr << "left operand:  "; print_llvm_value(u);
+      std::cerr << "right operand: "; print_llvm_value(v);
       assert(0 && "operand mismatch");
     }
 #endif
@@ -15685,8 +15693,8 @@ Value *interpreter::builtin_codegen(expr x)
     if (u->getType() != v->getType()) {
       std::cerr << "** operand mismatch!\n";
       std::cerr << "operator:      " << symtab.sym(f.tag()).s << '\n';
-      std::cerr << "left operand:  "; u->dump();
-      std::cerr << "right operand: "; v->dump();
+      std::cerr << "left operand:  "; print_llvm_value(u);
+      std::cerr << "right operand: "; print_llvm_value(v);
       assert(0 && "operand mismatch");
     }
 #endif
