@@ -9,6 +9,10 @@ on:
 permissions:
   contents: read
 
+defaults:
+  run:
+    working-directory: pure
+
 jobs:
   macos-15-arm64:
     name: macOS 15 arm64
@@ -163,7 +167,7 @@ jobs:
           } 2>&1 | tee "$LOG_DIR/installed-programs.log"
 
       - name: Build and load pkg-config module
-        working-directory: examples/hellomod
+        working-directory: pure/examples/hellomod
         run: |
           set -euxo pipefail
           installed_pkg_config="$INSTALL_PREFIX/lib/pkgconfig:$PKG_CONFIG_PATH"
@@ -220,5 +224,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: macos-15-arm64-native-validation
-          path: build/native-logs/macos-15-arm64
+          path: pure/build/native-logs/macos-15-arm64
           if-no-files-found: warn
