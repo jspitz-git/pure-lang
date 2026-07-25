@@ -124,7 +124,7 @@ other recognized LLVM and native code formats) with the
 option (use
 .B -o
 to specify the output filename); this requires that you have some parts of the
-LLVM toolchain (llc, opt) as well as gcc installed. Last but not least, you
+LLVM toolchain (llc, opt, clang) installed. Last but not least, you
 can create a tags file for use with
 .BR emacs (1)
 or
@@ -165,7 +165,8 @@ was specified.
 .TP
 \fBCC\fP, \fBCXX\fP
 C and C++ compiler used by the Pure batch compiler (\fBpure -c\fP) to compile
-and link native executables. Defaults to \fBgcc\fP and \fBg++\fP, respectively.
+and link native executables. Defaults to \fBclang\fP and \fBclang++\fP from
+the configured LLVM toolchain, respectively.
 .TP
 .B BROWSER
 If the

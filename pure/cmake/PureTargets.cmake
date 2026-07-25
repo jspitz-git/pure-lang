@@ -111,6 +111,19 @@ target_link_libraries(
     Threads::Threads
 )
 
+if(APPLE)
+  file(
+    RELATIVE_PATH PURE_INSTALL_LIBDIR_FROM_BINDIR
+    "/${CMAKE_INSTALL_BINDIR}"
+    "/${CMAKE_INSTALL_LIBDIR}"
+  )
+  set_target_properties(
+    pure
+    PROPERTIES
+      INSTALL_RPATH "@loader_path/${PURE_INSTALL_LIBDIR_FROM_BINDIR}"
+  )
+endif()
+
 add_library(pure-main-object OBJECT pure_main.c)
 target_include_directories(
   pure-main-object

@@ -21,10 +21,20 @@ endif()
 set(output "${PURE_BUILD_DIR}/test/${PURE_OUTPUT_NAME}")
 file(REMOVE "${output}")
 
+set(loader_path "${PURE_BUILD_DIR}")
+if(DEFINED ENV{${PURE_LD_LIB_PATH}} AND
+   NOT "$ENV{${PURE_LD_LIB_PATH}}" STREQUAL "")
+  if(CMAKE_HOST_WIN32)
+    string(APPEND loader_path ";$ENV{${PURE_LD_LIB_PATH}}")
+  else()
+    string(APPEND loader_path ":$ENV{${PURE_LD_LIB_PATH}}")
+  endif()
+endif()
+
 execute_process(
   COMMAND
     "${CMAKE_COMMAND}" -E env
-    "${PURE_LD_LIB_PATH}=${PURE_BUILD_DIR}"
+    "${PURE_LD_LIB_PATH}=${loader_path}"
     "PURELIB=${PURE_SOURCE_DIR}/lib"
     "${PURE_EXECUTABLE}" --norc --noprelude -c
     "${PURE_SCRIPT}" -o "${output}"
@@ -46,24 +56,29 @@ if(output_size EQUAL 0)
 endif()
 
 if(PURE_RUN_EXECUTABLE)
-  if(NOT DEFINED PURE_CXX_COMPILER OR NOT DEFINED PURE_MAIN_OBJECT OR
-     NOT DEFINED PURE_EXECUTABLE_SUFFIX)
-    message(FATAL_ERROR "Missing Pure batch executable link arguments")
+  if(NOT DEFINED PURE_EXECUTABLE_SUFFIX OR
+     NOT DEFINED PURE_EXPECTED_CXX_COMPILER OR
+     NOT DEFINED PURE_MAIN_OBJECT)
+    message(FATAL_ERROR "Missing Pure batch executable arguments")
   endif()
+  file(COPY_FILE "${PURE_MAIN_OBJECT}" "${PURE_BUILD_DIR}/test/pure_main.o")
   set(executable "${PURE_BUILD_DIR}/test/pure-batch-program${PURE_EXECUTABLE_SUFFIX}")
   file(REMOVE "${executable}")
-  set(link_options)
-  if(CMAKE_HOST_SYSTEM_NAME STREQUAL "Linux")
-    list(APPEND link_options -no-pie)
-  endif()
   if(PURE_SANITIZERS)
-    list(APPEND link_options "-fsanitize=${PURE_SANITIZERS}")
+    set(
+      compiler_environment
+      "CXX=${PURE_EXPECTED_CXX_COMPILER} -fsanitize=${PURE_SANITIZERS}"
+    )
+  else()
+    set(compiler_environment --unset=CC --unset=CXX)
   endif()
   execute_process(
     COMMAND
-      "${PURE_CXX_COMPILER}" ${link_options}
-      -o "${executable}" "${PURE_MAIN_OBJECT}" "${output}"
-      -L "${PURE_BUILD_DIR}" -Wl,--no-as-needed -lpure
+      "${CMAKE_COMMAND}" -E env ${compiler_environment}
+      "${PURE_LD_LIB_PATH}=${loader_path}"
+      "PURELIB=${PURE_BUILD_DIR}/test"
+      "${PURE_EXECUTABLE}" --norc --noprelude -v0100 -c
+      "${PURE_SCRIPT}" -o "${executable}"
     RESULT_VARIABLE link_result
     OUTPUT_VARIABLE link_output
     ERROR_VARIABLE link_output
@@ -72,10 +87,16 @@ if(PURE_RUN_EXECUTABLE)
   if(NOT link_result EQUAL 0 OR NOT EXISTS "${executable}")
     message(FATAL_ERROR "Pure batch executable link failed with status ${link_result}")
   endif()
+  string(FIND "${link_output}" "${PURE_EXPECTED_CXX_COMPILER}" compiler_position)
+  if(compiler_position EQUAL -1)
+    message(FATAL_ERROR
+      "Pure batch executable did not use ${PURE_EXPECTED_CXX_COMPILER}"
+    )
+  endif()
   execute_process(
     COMMAND
       "${CMAKE_COMMAND}" -E env
-      "${PURE_LD_LIB_PATH}=${PURE_BUILD_DIR}"
+      "${PURE_LD_LIB_PATH}=${loader_path}"
       "${executable}"
     RESULT_VARIABLE run_result
     OUTPUT_VARIABLE run_output

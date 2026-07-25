@@ -11,16 +11,6 @@ include(TestBigEndian)
 option(PURE_ENABLE_FASTCC "Enable fast calling conventions and tail calls" ON)
 option(PURE_VERSIONED_INSTALL "Install the Pure library in a versioned directory" OFF)
 
-execute_process(
-  COMMAND "${CMAKE_C_COMPILER}" -dumpmachine
-  OUTPUT_VARIABLE PURE_HOST_TRIPLE
-  OUTPUT_STRIP_TRAILING_WHITESPACE
-  ERROR_QUIET
-)
-if(NOT PURE_HOST_TRIPLE)
-  set(PURE_HOST_TRIPLE "${CMAKE_SYSTEM_PROCESSOR}-${CMAKE_SYSTEM_NAME}")
-endif()
-
 check_type_size("long" SIZEOF_LONG LANGUAGE C)
 check_type_size("size_t" SIZEOF_SIZE_T LANGUAGE C)
 set(SIZEOF_VOID_P "${CMAKE_SIZEOF_VOID_P}")

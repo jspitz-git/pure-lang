@@ -10,7 +10,9 @@ set(ECHO_C "")
 set(ECHO_T "")
 set(srcdir "${CMAKE_CURRENT_SOURCE_DIR}")
 
-if(APPLE)
+if(WIN32)
+  set(LD_LIB_PATH "PATH")
+elseif(APPLE)
   set(LD_LIB_PATH "DYLD_LIBRARY_PATH")
 else()
   set(LD_LIB_PATH "LD_LIBRARY_PATH")
@@ -37,6 +39,7 @@ file(
 )
 
 if(BUILD_TESTING)
+  find_program(PURE_SH_EXECUTABLE NAMES sh REQUIRED)
   find_program(
     PURE_LLVM_AS_EXECUTABLE
     NAMES llvm-as-22 llvm-as
@@ -370,6 +373,7 @@ if(BUILD_TESTING)
       NAME "pure-bitcode-${name}"
       COMMAND
         "${CMAKE_COMMAND}"
+        -DPURE_SH_EXECUTABLE=${PURE_SH_EXECUTABLE}
         -DPURE_RUN_TEST=${CMAKE_CURRENT_BINARY_DIR}/run-test
         -DPURE_FIXTURE_DIR=${PURE_BITCODE_FIXTURE_OUTPUT_DIR}
         -DPURE_SCRIPT=${CMAKE_CURRENT_SOURCE_DIR}/test/bitcode/${script}
@@ -484,6 +488,7 @@ if(BUILD_TESTING)
       NAME pure-faust-lifecycle
       COMMAND
         "${CMAKE_COMMAND}"
+        -DPURE_SH_EXECUTABLE=${PURE_SH_EXECUTABLE}
         -DPURE_RUN_TEST=${CMAKE_CURRENT_BINARY_DIR}/run-test
         -DPURE_FIXTURE_DIR=${PURE_FAUST_FIXTURE_OUTPUT_DIR}
         -DPURE_SCRIPT=${PURE_FAUST_FIXTURE_OUTPUT_DIR}/lifecycle.pure
@@ -516,6 +521,7 @@ if(BUILD_TESTING)
   add_test(
     NAME pure-formatted-io
     COMMAND
+      "${PURE_SH_EXECUTABLE}"
       "${CMAKE_CURRENT_BINARY_DIR}/run-test"
       "${CMAKE_CURRENT_SOURCE_DIR}/test/formatted-io-smoke.pure"
     WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
@@ -571,7 +577,7 @@ if(BUILD_TESTING)
       -DPURE_SCRIPT=${CMAKE_CURRENT_SOURCE_DIR}/test/batch-smoke.pure
       -DPURE_OUTPUT_NAME=pure-batch-program.o
       -DPURE_RUN_EXECUTABLE=ON
-      -DPURE_CXX_COMPILER=${CMAKE_CXX_COMPILER}
+      -DPURE_EXPECTED_CXX_COMPILER=${LLVM_TOOLS_BINARY_DIR}/clang++
       -DPURE_MAIN_OBJECT=$<TARGET_OBJECTS:pure-main-object>
       -DPURE_EXECUTABLE_SUFFIX=${CMAKE_EXECUTABLE_SUFFIX}
       -DPURE_SANITIZERS=${PURE_SANITIZERS}
@@ -615,7 +621,8 @@ if(BUILD_TESTING)
 
   add_test(
     NAME pure-regression
-    COMMAND "${CMAKE_CURRENT_BINARY_DIR}/run-tests"
+    COMMAND
+      "${PURE_SH_EXECUTABLE}" "${CMAKE_CURRENT_BINARY_DIR}/run-tests"
     WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
   )
   set(regression_timeout 600)
@@ -646,8 +653,16 @@ set(includedir "${CMAKE_INSTALL_FULL_INCLUDEDIR}")
 set(LLVM_EXE_LIBS "")
 set(LLVM_LDFLAGS "-L${LLVM_LIBRARY_DIRS}")
 set(LIBS "")
-set(shared "-shared")
-set(PIC "-fPIC")
+if(APPLE)
+  set(shared "-dynamiclib")
+  set(PIC "-fPIC")
+elseif(WIN32)
+  set(shared "-shared")
+  set(PIC "")
+else()
+  set(shared "-shared")
+  set(PIC "-fPIC")
+endif()
 set(PACKAGE_VERSION "${PROJECT_VERSION}")
 configure_file(
   "${CMAKE_CURRENT_SOURCE_DIR}/pure.pc.in"

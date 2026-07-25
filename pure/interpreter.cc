@@ -4110,6 +4110,13 @@ static string tool_prefix = TOOL_PREFIX;
 #define EXEEXT ""
 #endif
 
+static string llvm_tool(const string& name)
+{
+  string tool = tool_prefix+name;
+  if (!chkfile(tool+EXEEXT)) tool = name;
+  return tool;
+}
+
 void interpreter::inline_code(bool priv, string &code)
 {
   // Get the language tag and configure accordingly.
@@ -4120,8 +4127,7 @@ void interpreter::inline_code(bool priv, string &code)
   bool remove_intermediate = false;
   // Check to see where we can find clang (used for C, C++ and ATS). If it's
   // not under the tool prefix then assume that it's somewhere on the PATH.
-  string clang = tool_prefix + "clang";
-  if (!chkfile(clang+EXEEXT)) clang = "clang";
+  string clang = llvm_tool("clang");
   string clangpp = clang+"++";
   if (tag == "c") {
     static char *cc = NULL;
@@ -12439,8 +12445,8 @@ int interpreter::compiler(string out, list<string> libnames, string llcopts)
   // Compile and link, if requested.
   if (target != out) {
     assert(bc_target);
-    string cc = "gcc";
-    string cxx = "g++";
+    string cc = llvm_tool("clang");
+    string cxx = cc+"++";
     const char *env;
     if ((env = getenv("CC"))) cc = env;
     if ((env = getenv("CXX"))) cxx = env;
@@ -12506,19 +12512,14 @@ int interpreter::compiler(string out, list<string> libnames, string llcopts)
       }
       if (WIFEXITED(status) && WEXITSTATUS(status) == 0) {
 	// Link.
+	string auxlibdir = dirname(libdir.substr(0, libdir.size()-1));
 #ifdef __linux__
-	string extra_linkopts = (cxx=="g++")?
-	  // XXXFIXME: This used to be the default, but some Linux
-	  // distributions have started shipping gcc versions which have the
-	  // --as-needed linker option enabled by default, which breaks some
-	  // Pure modules. Thus we always enforce --no-as-needed now in order
-	  // to get back the old behaviour. This might change in the future.
-	  " -Wl,--no-as-needed":"";
+	// Pure's batch objects are not PIE, and --as-needed breaks some modules.
+	string extra_linkopts = " -no-pie -Wl,--no-as-needed";
+#elif defined(__APPLE__)
+	string extra_linkopts = " -Wl,-rpath,"+quote(auxlibdir);
 #else
 	string extra_linkopts = "";
-#endif
-#ifdef LIBDIR
-	string auxlibdir = LIBDIR;
 #endif
 	string linkopts = quote(obj)+extra_linkopts+libs+
 #ifdef __MINGW32__
@@ -12528,9 +12529,7 @@ int interpreter::compiler(string out, list<string> libnames, string llcopts)
 	  " -lregex"+
 #endif
 #endif
-#ifdef LIBDIR
 	  " -L"+quote(auxlibdir)+
-#endif
 	  " -lpure";
 	if (ext != ".o") {
 	  // Link.

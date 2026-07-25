@@ -1,0 +1,221 @@
+name: macOS release validation
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  macos-15-arm64:
+    name: macOS 15 arm64
+    runs-on: macos-15
+    timeout-minutes: 90
+    env:
+      RELEASE_BUILD: build/native-release
+      DEBUG_BUILD: build/native-debug
+      INSTALL_PREFIX: ${{ github.workspace }}/build/native-prefix
+      LOG_DIR: build/native-logs/macos-15-arm64
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Initialize validation logs
+        run: mkdir -p "$LOG_DIR"
+
+      - name: Install LLVM 22 and dependencies
+        run: |
+          set -euxo pipefail
+          {
+            brew update
+            brew install llvm@22 bison flex pkgconf gmp mpfr readline pcre
+            echo "LLVM_PREFIX=$(brew --prefix llvm@22)" >> "$GITHUB_ENV"
+            echo "HOMEBREW_PREFIX=$(brew --prefix)" >> "$GITHUB_ENV"
+            echo "PATH=$(brew --prefix llvm@22)/bin:$(brew --prefix bison)/bin:$(brew --prefix flex)/bin:$PATH" >> "$GITHUB_ENV"
+            echo "CMAKE_PREFIX_PATH=$(brew --prefix llvm@22);$(brew --prefix gmp);$(brew --prefix mpfr);$(brew --prefix readline);$(brew --prefix pcre)" >> "$GITHUB_ENV"
+            echo "PKG_CONFIG_PATH=$(brew --prefix gmp)/lib/pkgconfig:$(brew --prefix mpfr)/lib/pkgconfig:$(brew --prefix readline)/lib/pkgconfig:$(brew --prefix pcre)/lib/pkgconfig" >> "$GITHUB_ENV"
+          } 2>&1 | tee "$LOG_DIR/homebrew-setup.log"
+
+      - name: Record host and toolchain evidence
+        run: |
+          set -euxo pipefail
+          {
+            uname -a
+            uname -m
+            sw_vers
+            brew config
+            clang --version
+            clang -dumpmachine
+            llvm-config --version
+            llvm-config --host-target
+            llvm-config --bindir
+            pkg-config --version
+            for package in gmp mpfr readline libpcreposix; do
+              pkg-config --modversion "$package"
+              pkg-config --variable=prefix "$package"
+            done
+            test "$(uname -m)" = arm64
+            case "$(clang -dumpmachine)" in
+              arm64-apple-*|aarch64-apple-*) ;;
+              *) exit 1 ;;
+            esac
+            case "$(llvm-config --host-target)" in
+              arm64-apple-*|aarch64-apple-*) ;;
+              *) exit 1 ;;
+            esac
+            case "$(llvm-config --version)" in
+              22.*) ;;
+              *) exit 1 ;;
+            esac
+            case "$LLVM_PREFIX" in
+              /opt/homebrew/*) ;;
+              *) exit 1 ;;
+            esac
+          } 2>&1 | tee "$LOG_DIR/host-toolchain.log"
+
+      - name: Configure Release
+        run: |
+          set -euxo pipefail
+          cmake -S . -B "$RELEASE_BUILD" -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_COMPILER="$LLVM_PREFIX/bin/clang" \
+            -DCMAKE_CXX_COMPILER="$LLVM_PREFIX/bin/clang++" \
+            -DLLVM_DIR="$LLVM_PREFIX/lib/cmake/llvm" \
+            -DCMAKE_PREFIX_PATH="$CMAKE_PREFIX_PATH" \
+            -DCMAKE_INSTALL_PREFIX="$INSTALL_PREFIX" \
+            -DPURE_STRICT_TOOLCHAIN=ON \
+            2>&1 | tee "$LOG_DIR/configure-release.log"
+
+      - name: Build Release
+        run: |
+          set -euxo pipefail
+          cmake --build "$RELEASE_BUILD" --parallel 1 \
+            2>&1 | tee "$LOG_DIR/build-release.log"
+
+      - name: Run focused Release tests
+        run: |
+          set -euxo pipefail
+          ctest --test-dir "$RELEASE_BUILD" -E pure-regression \
+            --output-on-failure 2>&1 | tee "$LOG_DIR/ctest-release-focused.log"
+
+      - name: Run complete Release tests
+        run: |
+          set -euxo pipefail
+          ctest --test-dir "$RELEASE_BUILD" --output-on-failure \
+            2>&1 | tee "$LOG_DIR/ctest-release-complete.log"
+
+      - name: Validate Release object formats
+        run: |
+          set -euxo pipefail
+          assert_arm64_macho() {
+            file -L "$1" | grep -F "Mach-O"
+            test "$(lipo -archs "$1")" = arm64
+          }
+          {
+            assert_arm64_macho "$RELEASE_BUILD/pure"
+            for runtime in "$RELEASE_BUILD"/libpure*.dylib; do
+              assert_arm64_macho "$runtime"
+            done
+            assert_arm64_macho "$RELEASE_BUILD/test/pure-batch-smoke.o"
+            assert_arm64_macho "$RELEASE_BUILD/test/pure-batch-program.o"
+            assert_arm64_macho "$RELEASE_BUILD/test/pure-batch-program"
+          } 2>&1 | tee "$LOG_DIR/release-object-formats.log"
+
+      - name: Install and validate programs
+        run: |
+          set -euxo pipefail
+          cmake --install "$RELEASE_BUILD" \
+            2>&1 | tee "$LOG_DIR/install.log"
+          installed_pkg_config="$INSTALL_PREFIX/lib/pkgconfig:$PKG_CONFIG_PATH"
+          {
+            env -u DYLD_LIBRARY_PATH "$INSTALL_PREFIX/bin/pure" --version
+            env -u DYLD_LIBRARY_PATH "$INSTALL_PREFIX/bin/pure" examples/hello.pure
+            env -u DYLD_LIBRARY_PATH "$INSTALL_PREFIX/bin/pure" -v0100 \
+              -c test/batch-smoke.pure -o build/native-batch
+            env -u DYLD_LIBRARY_PATH build/native-batch
+            file build/native-batch | grep -F "Mach-O"
+            test "$(lipo -archs build/native-batch)" = arm64
+            otool -L "$INSTALL_PREFIX/bin/pure"
+            otool -l "$INSTALL_PREFIX/bin/pure"
+            otool -L "$INSTALL_PREFIX/lib/libpure.8.dylib"
+            otool -L build/native-batch
+            otool -L "$INSTALL_PREFIX/bin/pure" | grep -F "@rpath/libpure.8.dylib"
+            otool -l "$INSTALL_PREFIX/bin/pure" | grep -A2 LC_RPATH | \
+              grep -F "@loader_path/../lib"
+            otool -l build/native-batch | grep -A2 LC_RPATH | \
+              grep -F "path $INSTALL_PREFIX/lib (offset"
+            ! otool -L "$INSTALL_PREFIX/bin/pure" | grep -F "/usr/local/"
+            ! otool -L "$INSTALL_PREFIX/lib/libpure.8.dylib" | grep -F "/usr/local/"
+            ! otool -L "$INSTALL_PREFIX/bin/pure" | grep -F "$RELEASE_BUILD"
+            ! otool -L "$INSTALL_PREFIX/lib/libpure.8.dylib" | grep -F "$RELEASE_BUILD"
+            ! otool -L build/native-batch | grep -F "$RELEASE_BUILD"
+            PKG_CONFIG_PATH="$installed_pkg_config" pkg-config --modversion pure
+            PKG_CONFIG_PATH="$installed_pkg_config" pkg-config --variable=DLL pure
+            PKG_CONFIG_PATH="$installed_pkg_config" pkg-config --variable=shared pure
+            PKG_CONFIG_PATH="$installed_pkg_config" pkg-config --variable=PIC pure
+            test "$(PKG_CONFIG_PATH="$installed_pkg_config" pkg-config --variable=DLL pure)" = .dylib
+            test "$(PKG_CONFIG_PATH="$installed_pkg_config" pkg-config --variable=shared pure)" = -dynamiclib
+            test "$(PKG_CONFIG_PATH="$installed_pkg_config" pkg-config --variable=PIC pure)" = -fPIC
+          } 2>&1 | tee "$LOG_DIR/installed-programs.log"
+
+      - name: Build and load pkg-config module
+        working-directory: examples/hellomod
+        run: |
+          set -euxo pipefail
+          installed_pkg_config="$INSTALL_PREFIX/lib/pkgconfig:$PKG_CONFIG_PATH"
+          PKG_CONFIG_PATH="$installed_pkg_config" make clean
+          PKG_CONFIG_PATH="$installed_pkg_config" \
+            make CC="$LLVM_PREFIX/bin/clang" \
+            2>&1 | tee "../../$LOG_DIR/pkg-config-module.log"
+          env -u DYLD_LIBRARY_PATH PATH="$INSTALL_PREFIX/bin:$PATH" \
+            "$INSTALL_PREFIX/bin/pure" -L . hello.pure \
+            2>&1 | tee -a "../../$LOG_DIR/pkg-config-module.log"
+          PKG_CONFIG_PATH="$installed_pkg_config" make clean
+
+      - name: Configure and test Debug
+        run: |
+          set -euxo pipefail
+          cmake -S . -B "$DEBUG_BUILD" -G Ninja \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DCMAKE_C_COMPILER="$LLVM_PREFIX/bin/clang" \
+            -DCMAKE_CXX_COMPILER="$LLVM_PREFIX/bin/clang++" \
+            -DLLVM_DIR="$LLVM_PREFIX/lib/cmake/llvm" \
+            -DCMAKE_PREFIX_PATH="$CMAKE_PREFIX_PATH" \
+            -DPURE_STRICT_TOOLCHAIN=ON \
+            2>&1 | tee "$LOG_DIR/configure-debug.log"
+          cmake --build "$DEBUG_BUILD" --parallel 1 \
+            2>&1 | tee "$LOG_DIR/build-debug.log"
+          ctest --test-dir "$DEBUG_BUILD" -E pure-regression \
+            --output-on-failure 2>&1 | tee "$LOG_DIR/ctest-debug-focused.log"
+
+      - name: Validate manifest and idempotent uninstall
+        run: |
+          set -euxo pipefail
+          cp "$RELEASE_BUILD/install_manifest.txt" "$LOG_DIR/install_manifest.txt"
+          awk -v prefix="$INSTALL_PREFIX/" \
+            'index($0, prefix) != 1 { print "Path escapes prefix: " $0; bad=1 } END { exit bad }' \
+            "$RELEASE_BUILD/install_manifest.txt"
+          for required in \
+            "$INSTALL_PREFIX/bin/pure" \
+            "$INSTALL_PREFIX/lib/libpure.8.dylib" \
+            "$INSTALL_PREFIX/include/pure/runtime.h" \
+            "$INSTALL_PREFIX/lib/pure/pure_main.o" \
+            "$INSTALL_PREFIX/lib/pure/prelude.pure" \
+            "$INSTALL_PREFIX/lib/pkgconfig/pure.pc"; do
+            test -e "$required"
+            grep -Fx "$required" "$RELEASE_BUILD/install_manifest.txt"
+          done
+          cmake --build "$RELEASE_BUILD" --target uninstall \
+            2>&1 | tee "$LOG_DIR/uninstall-first.log"
+          cmake --build "$RELEASE_BUILD" --target uninstall \
+            2>&1 | tee "$LOG_DIR/uninstall-second.log"
+          test -z "$(find "$INSTALL_PREFIX" \( -type f -o -type l \) -print)"
+
+      - name: Upload native validation logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-15-arm64-native-validation
+          path: build/native-logs/macos-15-arm64
+          if-no-files-found: warn
