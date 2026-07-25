@@ -68,3 +68,49 @@ f (-12);
 12
 g (-12);
 12
+evalcmd "clear foo";
+""
+foo x/*0:1*/ = x/*0:1*/+100;
+{
+  rule #0: foo x = x+100
+  state 0: #0
+	<var> state 1
+  state 1: #0
+}
+let f1 = foo;
+evalcmd "clear foo";
+""
+foo x/*0:1*/ = x/*0:1*/+200;
+{
+  rule #0: foo x = x+200
+  state 0: #0
+	<var> state 1
+  state 1: #0
+}
+let f2 = foo;
+evalcmd "clear foo";
+""
+foo x/*0:1*/ = x/*0:1*/+300;
+{
+  rule #0: foo x = x+300
+  state 0: #0
+	<var> state 1
+  state 1: #0
+}
+let f3 = foo;
+f1 1;
+101
+f2 1;
+201
+f3 1;
+301
+evalcmd "clear f2";
+""
+f3 2;
+302
+f1 2;
+102
+evalcmd "clear f3";
+""
+f1 3;
+103
