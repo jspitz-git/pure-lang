@@ -1,6 +1,6 @@
 # TODO-14 - Complete ORC Runtime and Batch Migration
 
-Status: Open
+Status: Completed
 Branch: todo/14-complete-orc-runtime-and-batch-migration
 
 ## Purpose
@@ -30,7 +30,7 @@ compatibility gates can be removed.
 6. [x] Decide and document the native callable-address ABI policy.
 7. [x] Remove `ExecutionEngine`, MCJIT linkage, obsolete headers, and `LLVM26` through
    `LLVM35` plus `NEW_USER_ITERATOR` compatibility gates.
-8. [ ] Validate eager mode, complete batch executables, batch Faust, redefinition
+8. [x] Validate eager mode, complete batch executables, batch Faust, redefinition
    lifetime, and shutdown in Debug, Release, and sanitizer builds.
 
 ## Transitional Engine Inventory
@@ -264,3 +264,14 @@ publication and invalid continuation after a failed materialization.
     - `pure-batch-executable` passed in LLVM 22 Release and ASan/UBSan presets with clean
       process shutdown.
   - Task 8 remains open for the complete Debug/Release/sanitizer regression corpus.
+- 2026-07-25: Completed cross-preset ORC runtime and batch validation.
+  - Ran all 16 registered tests in Debug, Release, and ASan/UBSan, including eager
+    materialization, redefinition lifetime stress, batch Faust, complete batch executable
+    linking/execution, the full regression corpus, and clean process shutdown.
+  - Debug passed 16/16 tests in approximately 380 seconds; Release passed 16/16 in
+    approximately 264 seconds; ASan/UBSan passed 16/16 in 887.14 seconds without sanitizer
+    findings.
+  - Confirmed no active `EngineBuilder`, MCJIT mapping/materialization API, historical LLVM
+    compatibility gate, `NEW_USER_ITERATOR`, `FAST_JIT`, or `GuaranteedTailCallOpt` remains.
+    The only source `ExecutionEngine` text is in current ORC and `JITSymbol` LLVM include
+    paths, and `LLVM_VERSION` remains current build metadata.
