@@ -1,0 +1,3 @@
+using "bc:metadata-malformed";
+using "bc:basic";
+bc_add_one 41;

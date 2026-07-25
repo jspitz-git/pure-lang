@@ -38,6 +38,12 @@ file(
 
 if(BUILD_TESTING)
   find_program(
+    PURE_LLVM_AS_EXECUTABLE
+    NAMES llvm-as-22 llvm-as
+    HINTS "${LLVM_TOOLS_BINARY_DIR}"
+    REQUIRED
+  )
+  find_program(
     PURE_LLVM_DIS_EXECUTABLE
     NAMES llvm-dis-22 llvm-dis
     HINTS "${LLVM_TOOLS_BINARY_DIR}"
@@ -70,6 +76,31 @@ if(BUILD_TESTING)
         "${PURE_OPT_EXECUTABLE}" -passes=verify -disable-output "${output}"
       DEPENDS "${source}"
       COMMENT "Generating LLVM bitcode fixture ${fixture}.bc"
+      VERBATIM
+    )
+    list(APPEND PURE_BITCODE_FIXTURE_OUTPUTS "${output}")
+  endforeach()
+
+  foreach(fixture
+      pointer-valid pointer-missing metadata-malformed metadata-mismatch
+      metadata-duplicate pointer-duplicate-a pointer-duplicate-b)
+    set(source "${CMAKE_CURRENT_SOURCE_DIR}/test/bitcode/${fixture}.ll")
+    set(output "${PURE_BITCODE_FIXTURE_OUTPUT_DIR}/${fixture}.bc")
+    set(disassembly "${PURE_BITCODE_FIXTURE_OUTPUT_DIR}/${fixture}.ll")
+    add_custom_command(
+      OUTPUT "${output}"
+      BYPRODUCTS "${disassembly}"
+      COMMAND
+        "${CMAKE_COMMAND}" -E make_directory
+        "${PURE_BITCODE_FIXTURE_OUTPUT_DIR}"
+      COMMAND
+        "${PURE_LLVM_AS_EXECUTABLE}" "${source}" -o "${output}"
+      COMMAND
+        "${PURE_LLVM_DIS_EXECUTABLE}" "${output}" -o "${disassembly}"
+      COMMAND
+        "${PURE_OPT_EXECUTABLE}" -passes=verify -disable-output "${output}"
+      DEPENDS "${source}"
+      COMMENT "Generating LLVM ABI metadata fixture ${fixture}.bc"
       VERBATIM
     )
     list(APPEND PURE_BITCODE_FIXTURE_OUTPUTS "${output}")
@@ -351,6 +382,8 @@ if(BUILD_TESTING)
         REQUIRED_FILES
           "${PURE_BITCODE_FIXTURE_OUTPUT_DIR}/${fixture};${CMAKE_CURRENT_SOURCE_DIR}/test/bitcode/${script}"
         TIMEOUT ${test_timeout}
+        FAIL_REGULAR_EXPRESSION
+          "AddressSanitizer;LeakSanitizer;runtime error:"
     )
   endfunction()
 
@@ -391,6 +424,59 @@ if(BUILD_TESTING)
       PASS_REGULAR_EXPRESSION "42"
       FAIL_REGULAR_EXPRESSION
         "failed to remove ORC compilation unit;AddressSanitizer;LeakSanitizer;runtime error:"
+  )
+
+  add_pure_bitcode_test(pointer-valid pointer-valid.pure pointer-valid.bc)
+  set_tests_properties(
+    pure-bitcode-pointer-valid
+    PROPERTIES
+      PASS_REGULAR_EXPRESSION "\"first cache\"(.|\n)*\"second cache\""
+      FAIL_REGULAR_EXPRESSION
+        "failed to remove ORC compilation unit;AddressSanitizer;LeakSanitizer;runtime error:"
+  )
+
+  add_pure_bitcode_test(pointer-missing pointer-missing.pure pointer-missing.bc)
+  set_tests_properties(
+    pure-bitcode-pointer-missing
+    PROPERTIES
+      PASS_REGULAR_EXPRESSION "unsupported prototype(.|\n)*42"
+  )
+
+  add_pure_bitcode_test(
+    metadata-malformed metadata-malformed.pure metadata-malformed.bc
+  )
+  set_tests_properties(
+    pure-bitcode-metadata-malformed
+    PROPERTIES
+      PASS_REGULAR_EXPRESSION "Unsupported pure.abi metadata version 2(.|\n)*42"
+  )
+
+  add_pure_bitcode_test(
+    metadata-mismatch metadata-mismatch.pure metadata-mismatch.bc
+  )
+  set_tests_properties(
+    pure-bitcode-metadata-mismatch
+    PROPERTIES
+      PASS_REGULAR_EXPRESSION
+        "Invalid pure.abi metadata for function 'bc_metadata_mismatch' result:(.|\n)*42"
+  )
+
+  add_pure_bitcode_test(
+    metadata-duplicate metadata-duplicate.pure metadata-duplicate.bc
+  )
+  set_tests_properties(
+    pure-bitcode-metadata-duplicate
+    PROPERTIES
+      PASS_REGULAR_EXPRESSION
+        "duplicate function record 'bc_metadata_duplicate'(.|\n)*42"
+  )
+
+  add_pure_bitcode_test(
+    pointer-duplicate-exports pointer-duplicate-exports.pure pointer-duplicate-a.bc
+  )
+  set_tests_properties(
+    pure-bitcode-pointer-duplicate-exports
+    PROPERTIES PASS_REGULAR_EXPRESSION "11(.|\n)*101"
   )
 
   if(PURE_FAUST_EXECUTABLE)

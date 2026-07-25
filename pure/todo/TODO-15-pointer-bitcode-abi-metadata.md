@@ -1,6 +1,6 @@
 # TODO-15 - Pointer Bitcode ABI Metadata
 
-Status: Open
+Status: Completed
 Branch: todo/15-pointer-bitcode-abi-metadata
 
 ## Purpose
@@ -25,7 +25,7 @@ guessing pointee types, while malformed or incomplete metadata is rejected safel
 3. [x] Validate semantic ABI entries against each exported LLVM function.
 4. [x] Publish pointer-bearing exports only after complete validation.
 5. [x] Preserve metadata across cached imports and batch output.
-6. [ ] Test valid pointers, missing metadata, malformed metadata, signature mismatch,
+6. [x] Test valid pointers, missing metadata, malformed metadata, signature mismatch,
    duplicate exports, unload, and rollback.
 
 ## Metadata Schema and Versioning
@@ -174,3 +174,22 @@ Created from TODO-04's explicit opaque-pointer deferral and TODO-13 retrospectiv
       named metadata.
     - A complete metadata-backed batch object linked and executed with clean shutdown.
     - All five `pure-bitcode-*` tests and `pure-batch-executable` passed in Release.
+- 2026-07-25: Completed permanent pointer ABI metadata regression coverage.
+  - Added LLVM IR source fixtures for a valid const-qualified pointer export, a pointer
+    export without metadata, unsupported metadata version, pointer/scalar mismatch,
+    duplicate function records, and two independent pointer-bearing providers exporting the
+    same source name.
+  - Added `llvm-as` fixture generation beside disassembly and verifier steps, so every
+    metadata test input is reproducible and verifier-accepted LLVM 22 bitcode.
+  - Covered cached declarations in two namespaces, successful pointer calls, missing
+    metadata compatibility, malformed and mismatched transactional rejection, duplicate
+    metadata rejection, duplicate namespaced exports, provider unload, and clean shutdown.
+  - Every negative metadata test loads and executes the known scalar provider afterward,
+    proving that rejection occurs before link, ORC, declaration, or cache publication.
+  - Applied sanitizer failure expressions to the complete bitcode test family.
+  - Validation:
+    - Release passed all 11 `pure-bitcode-*` tests in 70.93 seconds.
+    - Debug passed all 11 tests in 113.29 seconds.
+    - ASan/UBSan passed all 11 tests in 270.99 seconds without sanitizer findings.
+    - Serial builds generated, disassembled, and verified every new fixture in all three
+      presets.

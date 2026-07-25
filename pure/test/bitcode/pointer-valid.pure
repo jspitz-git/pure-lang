@@ -1,0 +1,7 @@
+namespace pointer_first;
+using "bc:pointer-valid";
+namespace pointer_second;
+using "bc:pointer-valid";
+namespace;
+pointer_first::bc_pointer_echo "first cache";
+pointer_second::bc_pointer_echo "second cache";

@@ -1,0 +1,7 @@
+namespace pointer_duplicate_a;
+using "bc:pointer-duplicate-a";
+namespace pointer_duplicate_b;
+using "bc:pointer-duplicate-b";
+namespace;
+pointer_duplicate_a::bc_pointer_duplicate "a";
+pointer_duplicate_b::bc_pointer_duplicate "b";
