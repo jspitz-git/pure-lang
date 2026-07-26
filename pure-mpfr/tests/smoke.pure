@@ -1,0 +1,64 @@
+using mpfr, system;
+
+smoke_check name condition
+  = () if condition;
+  = fprintf stderr "FAIL: %s\n" name $$ exit 1 otherwise;
+
+mpfr_set_default_prec 128;
+mpfr_set_default_rounding_mode MPFR_RNDN;
+
+let smoke_value = mpfr "0.1";
+smoke_check "default precision"
+  (mpfr_get_default_prec == 128 && mpfr_get_prec smoke_value == 128);
+smoke_check "explicit precision"
+  (mpfr_get_prec (mpfr (smoke_value,256)) == 256);
+
+let smoke_positive_nearest = mpfr ("1.1",2,MPFR_RNDN);
+let smoke_positive_zero = mpfr ("1.1",2,MPFR_RNDZ);
+let smoke_positive_up = mpfr ("1.1",2,MPFR_RNDU);
+let smoke_positive_down = mpfr ("1.1",2,MPFR_RNDD);
+let smoke_positive_away = mpfr ("1.1",2,MPFR_RNDA);
+smoke_check "positive rounding modes"
+  (double smoke_positive_nearest == 1.0 &&
+   double smoke_positive_zero == 1.0 &&
+   double smoke_positive_up == 1.5 &&
+   double smoke_positive_down == 1.0 &&
+   double smoke_positive_away == 1.5);
+
+let smoke_negative_zero = mpfr ("-1.1",2,MPFR_RNDZ);
+let smoke_negative_up = mpfr ("-1.1",2,MPFR_RNDU);
+let smoke_negative_down = mpfr ("-1.1",2,MPFR_RNDD);
+let smoke_negative_away = mpfr ("-1.1",2,MPFR_RNDA);
+smoke_check "negative rounding modes"
+  (double smoke_negative_zero == -1.0 &&
+   double smoke_negative_up == -1.0 &&
+   double smoke_negative_down == -1.5 &&
+   double smoke_negative_away == -1.5);
+
+mpfr_set_default_rounding_mode MPFR_RNDU;
+smoke_check "default rounding mode"
+  (mpfr_get_default_rounding_mode == MPFR_RNDU &&
+   double (mpfr ("1.1",2)) == 1.5);
+mpfr_set_default_rounding_mode MPFR_RNDN;
+
+let smoke_bigint = 123456789012345678901234567890L;
+smoke_check "bigint round trip"
+  (bigint (mpfr (smoke_bigint,256,MPFR_RNDN)) == smoke_bigint);
+smoke_check "integer and double conversion"
+  (int (mpfr "-42.75") == -42 && double (mpfr "1.25") == 1.25);
+
+let smoke_root = sqrt (mpfr (2,128));
+smoke_check "multiprecision arithmetic"
+  (mpfr_get_prec smoke_root == 128 &&
+   abs (double (smoke_root*smoke_root-mpfr 2)) < 1.0e-30);
+
+let smoke_positive_inf = mpfr 1 / mpfr 0;
+let smoke_negative_inf = -smoke_positive_inf;
+let smoke_nan = mpfr 0 / mpfr 0;
+smoke_check "positive and negative infinity"
+  (infp smoke_positive_inf && double smoke_positive_inf == inf &&
+   infp smoke_negative_inf && double smoke_negative_inf == -inf);
+smoke_check "not a number"
+  (nanp smoke_nan && nanp (double smoke_nan));
+
+puts "PURE_MPFR_SMOKE_OK";

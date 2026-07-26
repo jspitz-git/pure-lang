@@ -18,7 +18,7 @@ used by the Windows runtime.
 
 1. [x] Build the module against the portable runtime.
 2. [x] Confirm compatible GMP/MPFR headers and runtime DLL versions.
-3. [ ] Add numerical smoke tests and staged import coverage.
+3. [x] Add numerical smoke tests and staged import coverage.
 4. [ ] Record the package manifest and close the TODO.
 
 ## Guardrails
@@ -76,3 +76,21 @@ used by the Windows runtime.
     - `llvm-readobj --file-headers --coff-imports --coff-exports` confirmed both
       staged DLL architectures, the MPFR-to-GMP import, and the
       `mpfr_get_version` and `__gmp_version` exports.
+- 2026-07-27: Added repeatable numerical and staged-import smoke tests.
+  - The test covers default and explicit 128/256-bit precision, all five
+    supported rounding modes for positive and negative inputs, default
+    rounding-mode changes, bigint/int/double conversions, multiprecision
+    arithmetic, positive and negative infinity, and NaN.
+  - Added a CTest runner which unsets `PURELIB`, uses explicit source and module
+    paths, and requires the standalone `PURE_MPFR_SMOKE_OK` marker.
+  - Validation:
+    - A clean Ninja configuration in
+      `C:\tmp\pure-mpfr-build-step3-20260727` found Pure 0.68, MPFR 4.2.2, and
+      GMP 6.3.0 and built `mpfr.dll` with CLANG64 Clang 22.1.8.
+    - With `PATH` restricted to the portable runtime and Windows system
+      directories, `ctest --output-on-failure -V` passed `pure-mpfr-smoke`
+      (1/1) in 12.05 seconds.
+    - A fresh stage at `C:\tmp\pure-mpfr-stage-step3-20260727` contained only
+      `lib/pure/mpfr.pure` and `lib/pure/mpfr.dll`. Pointing both runner module
+      paths there passed the same complete marker-checked test without MSYS2
+      in `PATH`.
