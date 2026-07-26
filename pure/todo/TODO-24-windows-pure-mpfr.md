@@ -17,7 +17,7 @@ used by the Windows runtime.
 ## Task List
 
 1. [x] Build the module against the portable runtime.
-2. [ ] Confirm compatible GMP/MPFR headers and runtime DLL versions.
+2. [x] Confirm compatible GMP/MPFR headers and runtime DLL versions.
 3. [ ] Add numerical smoke tests and staged import coverage.
 4. [ ] Record the package manifest and close the TODO.
 
@@ -53,3 +53,26 @@ used by the Windows runtime.
       portable runtime plus Windows system directories, `pure.exe` loaded the
       CMake-built module, created an MPFR value, and emitted
       `PURE_MPFR_LOAD_OK`.
+- 2026-07-27: Confirmed header, runtime, and ABI compatibility for MPFR and GMP.
+  - The CLANG64 headers declare MPFR 4.2.2 and GMP 6.3.0. A compiled probe
+    loaded the portable runtime DLLs and reported the same two runtime versions.
+  - The GMP ABI uses 8-byte limbs with 64 value bits and no nail bits. The
+    probe also exercised 128-bit MPFR initialization, parsing, conversion, and
+    cleanup successfully.
+  - Both staged DLLs are PE32+ x86-64. `libmpfr-6.dll` directly imports the
+    staged `libgmp-10.dll`; GMP adds only Windows system and UCRT imports.
+  - SHA-256 comparison showed that the staged and CLANG64 copies are identical:
+    - `libmpfr-6.dll`:
+      `253A0C7CC5551CC893DA7D3147736D9C568EB5C9D8466A9477D20066C330FBE7`
+    - `libgmp-10.dll`:
+      `3F3482CC32744FBDFA8F816E9345AB29F75DB0B14EE50FB0F429B6B7F85310E8`
+  - Validation:
+    - A CLANG64 probe compiled against `mpfr.h` and `gmp.h`, then ran from
+      `C:\Windows` with `PATH` restricted to the portable runtime and Windows
+      system directories.
+    - It reported `MPFR_HEADER=MPFR_RUNTIME=4.2.2`,
+      `GMP_HEADER=GMP_RUNTIME=6.3.0`, `ABI=limb:8,numb:64,prec:4,exp:4`, and
+      emitted `PURE_MPFR_ABI_OK`.
+    - `llvm-readobj --file-headers --coff-imports --coff-exports` confirmed both
+      staged DLL architectures, the MPFR-to-GMP import, and the
+      `mpfr_get_version` and `__gmp_version` exports.
