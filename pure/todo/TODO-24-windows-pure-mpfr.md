@@ -1,6 +1,6 @@
 # TODO-24 - Windows pure-mpfr Package
 
-Status: Open
+Status: Closed on 2026-07-27
 Branch: todo/24-windows-pure-mpfr
 
 ## Purpose
@@ -19,7 +19,7 @@ used by the Windows runtime.
 1. [x] Build the module against the portable runtime.
 2. [x] Confirm compatible GMP/MPFR headers and runtime DLL versions.
 3. [x] Add numerical smoke tests and staged import coverage.
-4. [ ] Record the package manifest and close the TODO.
+4. [x] Record the package manifest and close the TODO.
 
 ## Guardrails
 
@@ -30,6 +30,25 @@ used by the Windows runtime.
 
 - Exercise configurable precision, all supported rounding modes, NaN, and infinity.
 - Run from the installed tree with no MSYS2 directory on `PATH`.
+
+## Installed Package Manifest
+
+- `lib/pure/mpfr.dll`
+- `lib/pure/mpfr.pure`
+- `share/doc/pure-mpfr/README`
+- `share/doc/pure-mpfr/COPYING`
+- `share/doc/pure-mpfr/COPYING.LESSER`
+- `share/doc/pure-mpfr/examples/contfrac.pure`
+- `share/doc/pure-mpfr/examples/mpfr_example.pure`
+
+## Runtime Dependencies
+
+- `mpfr.pure` loads `lib/pure/mpfr.dll`.
+- `mpfr.dll` directly imports `libpure.dll`, `libmpfr-6.dll`, and
+  `libgmp-10.dll`, plus Windows system and UCRT libraries.
+- `libmpfr-6.dll` imports `libgmp-10.dll`.
+- The base portable runtime already contains the compatible MPFR and GMP DLLs.
+  The package therefore adds no duplicate dependency DLLs.
 
 ## Progress Log
 
@@ -94,3 +113,24 @@ used by the Windows runtime.
       `lib/pure/mpfr.pure` and `lib/pure/mpfr.dll`. Pointing both runner module
       paths there passed the same complete marker-checked test without MSYS2
       in `PATH`.
+- 2026-07-27: Added a prefix-contained CMake installation and closed TODO-24.
+  - The installation adds exactly the seven files listed in the package
+    manifest: the Pure source and native module, generated README, both license
+    files, and two examples.
+  - The README records version 0.5 and the installation date, with no remaining
+    template markers or build-machine paths.
+  - A file-by-file comparison with the base portable runtime confirmed that no
+    existing files were removed and neither `libmpfr-6.dll` nor
+    `libgmp-10.dll` was duplicated.
+  - CMake rejects absolute install destinations and destinations containing a
+    parent-directory component, keeping all package files inside
+    `CMAKE_INSTALL_PREFIX`.
+  - Validation:
+    - A clean Release build in
+      `C:\tmp\pure-mpfr-package-build-step4-20260727` passed the numerical
+      CTest and installed into a fresh copy of the portable runtime.
+    - From `C:\Windows`, with `PURELIB` unset and `PATH` restricted to that
+      installed runtime plus Windows system directories, the complete
+      marker-checked smoke test passed.
+    - `llvm-readobj` confirmed that the installed `mpfr.dll` has only the three
+      expected nonsystem direct imports, all provided by the portable runtime.
