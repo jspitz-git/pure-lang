@@ -1,0 +1,90 @@
+using csv, system;
+using namespace csv;
+
+extern char *getenv(char*);
+
+smoke_check name condition
+  = () if condition;
+  = fprintf stderr "FAIL: %s\n" name $$ exit 1 otherwise;
+
+smoke_csv_error expected (csv::error message)
+  = message == expected;
+smoke_csv_error _ _
+  = false;
+
+let smoke_directory = getenv "PURE_CSV_TEST_DIRECTORY";
+smoke_check "explicit test directory"
+  (stringp smoke_directory && ~null smoke_directory);
+
+let smoke_records = [
+  ["plain", "comma,value", "a \"quote\"", "line one\nline two", "",
+   "Příliš žluťoučký kůň", "😀"],
+  ["", " leading and trailing spaces ", "tail"]
+];
+
+let smoke_lf_path = smoke_directory + "/quoted multiline unicode LF.csv";
+let smoke_lf_dialect = dialect {quote_flag=>MINIMAL, terminator=>"\n"};
+let smoke_lf_output =
+  open (smoke_lf_path, "w", smoke_lf_dialect, [LIST]);
+fputr smoke_lf_output smoke_records;
+close smoke_lf_output;
+let smoke_lf_input =
+  open (smoke_lf_path, "r", smoke_lf_dialect, [LIST]);
+let smoke_lf_records = fgetr smoke_lf_input;
+close smoke_lf_input;
+smoke_check "quoted multiline empty and Unicode round-trip"
+  (smoke_lf_records == smoke_records);
+
+let smoke_newline_records = [["alpha", "beta"], ["gamma", "delta"]];
+
+let smoke_explicit_lf_path = smoke_directory + "/explicit LF.csv";
+let smoke_explicit_lf_output =
+  open (smoke_explicit_lf_path, "w", smoke_lf_dialect, [LIST]);
+fputr smoke_explicit_lf_output smoke_newline_records;
+close smoke_explicit_lf_output;
+let smoke_raw_lf = fopen smoke_explicit_lf_path "rb";
+let smoke_first_lf_line = fgets smoke_raw_lf;
+fclose smoke_raw_lf;
+smoke_check "explicit LF bytes" (smoke_first_lf_line == "alpha,beta\n");
+
+let smoke_crlf_path = smoke_directory + "/explicit CRLF.csv";
+let smoke_crlf_dialect = dialect {quote_flag=>MINIMAL, terminator=>"\r\n"};
+let smoke_crlf_output =
+  open (smoke_crlf_path, "w", smoke_crlf_dialect, [LIST]);
+fputr smoke_crlf_output smoke_newline_records;
+close smoke_crlf_output;
+let smoke_raw_crlf = fopen smoke_crlf_path "rb";
+let smoke_first_crlf_line = fgets smoke_raw_crlf;
+fclose smoke_raw_crlf;
+smoke_check "explicit CRLF bytes"
+  (smoke_first_crlf_line == "alpha,beta\r\n");
+
+let smoke_native_path = smoke_directory + "/native newline.csv";
+let smoke_native_output = open (smoke_native_path, "w", DEFAULT, [LIST]);
+fputr smoke_native_output smoke_newline_records;
+close smoke_native_output;
+let smoke_raw_native = fopen smoke_native_path "rb";
+let smoke_first_native_line = fgets smoke_raw_native;
+fclose smoke_raw_native;
+let smoke_native_terminator =
+  if getenv "PURE_CSV_NATIVE_NEWLINE" == "CRLF" then "\r\n" else "\n";
+smoke_check "native default newline bytes"
+  (smoke_first_native_line == "\"alpha\",\"beta\"" + smoke_native_terminator);
+
+let smoke_invalid_path = smoke_directory + "/invalid.csv";
+let smoke_invalid_output = fopen smoke_invalid_path "wb";
+fputs "\"alpha\",   \"beta\"\n" smoke_invalid_output;
+fclose smoke_invalid_output;
+let smoke_invalid_input =
+  open (smoke_invalid_path, "r", smoke_lf_dialect, [LIST]);
+let smoke_parse_result = getr smoke_invalid_input;
+close smoke_invalid_input;
+smoke_check "malformed input error"
+  (smoke_csv_error "parse error at line 1" smoke_parse_result);
+
+let smoke_flag_result =
+  catch id (open (smoke_lf_path, "invalid", smoke_lf_dialect, [LIST]));
+smoke_check "invalid mode error"
+  (smoke_csv_error "bad read/write/append flag" smoke_flag_result);
+
+puts "PURE_CSV_SMOKE_OK";

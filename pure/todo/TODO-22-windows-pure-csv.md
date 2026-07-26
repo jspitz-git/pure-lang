@@ -17,7 +17,7 @@ Build, validate, and package `pure-csv` for the portable Windows distribution.
 
 1. [x] Configure and build the native module on Windows.
 2. [x] Resolve and document its complete runtime dependency set.
-3. [ ] Add CSV read/write and error-handling smoke tests.
+3. [x] Add CSV read/write and error-handling smoke tests.
 4. [ ] Validate the staged package outside MSYS2.
 
 ## Runtime Dependencies
@@ -78,3 +78,24 @@ Build, validate, and package `pure-csv` for the portable Windows distribution.
       twelve-file closure documented above, found zero unresolved nonsystem
       imports, and left zero staged DLLs outside the `pure.exe + csv.dll`
       static-import walk.
+- 2026-07-26: Added focused CSV round-trip, newline, and error smoke tests.
+  - The first raw-byte probe exposed Windows CRT text translation: explicit LF
+    was written as CRLF and explicit CRLF as invalid `CR CR LF`.
+  - Windows CSV streams now use binary mode, and `_WIN32` selects CRLF only for
+    the native default. Explicit LF and CRLF terminators are preserved byte for
+    byte without changing non-Windows behavior.
+  - The smoke test round-trips quoted delimiters and quotes, multiline, empty,
+    leading/trailing-space, Czech Unicode, and emoji fields. It also checks raw
+    LF, CRLF, and native newline bytes plus malformed-input and invalid-mode
+    errors.
+  - The CTest runner feeds the script through stdin and requires an explicit
+    success marker, because the interpreter can return status 0 after a Pure
+    syntax error.
+  - Validation:
+    - With `PKG_CONFIG_PATH=C:\tmp\pure-csv-sdk-step1-20260726\lib\pkgconfig`, `C:\msys64\clang64\bin\cmake.exe -S C:\pure-lang\pure-csv -B "C:\tmp\pure csv smoke build step3 20260726" -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=C:/msys64/clang64/bin/clang.exe -DPKG_CONFIG_EXECUTABLE=C:/msys64/clang64/bin/pkg-config.exe -DPURE_EXECUTABLE=C:\tmp\pure-csv-sdk-step1-20260726\bin\pure.exe` and `C:\msys64\clang64\bin\cmake.exe --build "C:\tmp\pure csv smoke build step3 20260726" --verbose` passed.
+    - With `PURELIB` unset and `PATH` limited to the staged runtime and Windows
+      system directories, `C:\msys64\clang64\bin\ctest.exe --test-dir "C:\tmp\pure csv smoke build step3 20260726" --output-on-failure` passed 1/1 test in 6.43 seconds.
+    - Raw-byte inspection found `0A` for explicit LF and `0D 0A` for both
+      explicit CRLF and the native Windows default, with no doubled `CR`.
+    - Running the CMake test runner with a syntactically invalid Pure script
+      failed on the missing success marker as expected.
