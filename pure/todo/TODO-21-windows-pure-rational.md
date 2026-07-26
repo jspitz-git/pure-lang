@@ -17,7 +17,7 @@ Validate and package `pure-rational` for the portable Windows distribution.
 
 1. [x] Reproduce package installation in a clean CLANG64 build environment.
 2. [x] Stage the package without build-prefix references.
-3. [ ] Add focused import and rational-arithmetic smoke tests.
+3. [x] Add focused import and rational-arithmetic smoke tests.
 4. [ ] Record installed files and runtime dependencies.
 
 ## Guardrails
@@ -57,3 +57,19 @@ Validate and package `pure-rational` for the portable Windows distribution.
       CLANG64, or MSYS2 prefix; `@version@` was expanded to `0.1`.
     - Configuring with `PURE_LIBRARY_INSTALL_DIR=../escape` failed with the
       expected prefix-containment diagnostic.
+- 2026-07-26: Added a focused CTest smoke test for the staged package.
+  - The test imports both `rational` and `rat_interval`, then checks rational
+    normalization, addition, comparison, mixed-fraction formatting and parsing,
+    and interval arithmetic.
+  - Tests are enabled only with an explicit `PURE_EXECUTABLE`, preventing CMake
+    from silently selecting an unrelated interpreter from `PATH`; `--norc`
+    excludes user startup configuration.
+  - Validation:
+    - `C:\msys64\clang64\bin\cmake.exe -S C:\pure-lang\pure-rational -B C:\tmp\pure-rational-smoke-build-step3-20260726 -DCMAKE_INSTALL_PREFIX=C:\tmp\pure-rational-smoke-step3-20260726 -DPURE_EXECUTABLE=C:\tmp\pure-rational-smoke-step3-20260726\bin\pure.exe` passed.
+    - `C:\msys64\clang64\bin\cmake.exe --install C:\tmp\pure-rational-smoke-build-step3-20260726` installed the package into a copy of the portable runtime.
+    - With `PURELIB` unset and `PATH` limited to the staged `bin` and Windows
+      system directories, `C:\msys64\clang64\bin\ctest.exe --test-dir C:\tmp\pure-rational-smoke-build-step3-20260726 --output-on-failure`
+      passed 1/1 test in 11.33 seconds.
+    - The generated CTest command references
+      `C:\tmp\pure-rational-smoke-step3-20260726\bin\pure.exe`, confirming that
+      the staged interpreter was tested.
