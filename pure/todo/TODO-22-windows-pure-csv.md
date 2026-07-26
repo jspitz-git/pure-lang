@@ -16,9 +16,24 @@ Build, validate, and package `pure-csv` for the portable Windows distribution.
 ## Task List
 
 1. [x] Configure and build the native module on Windows.
-2. [ ] Resolve and document its complete runtime dependency set.
+2. [x] Resolve and document its complete runtime dependency set.
 3. [ ] Add CSV read/write and error-handling smoke tests.
 4. [ ] Validate the staged package outside MSYS2.
+
+## Runtime Dependencies
+
+- `csv.pure` dynamically loads the package module `csv.dll`.
+- `csv.dll` directly imports only `libpure.dll` from the bundle. Its remaining
+  direct imports are `KERNEL32.dll` and Windows UCRT API-set contracts for
+  conversion, heap, private CRT, runtime, standard I/O, and strings.
+- The complete bundled DLL closure for `pure.exe` plus `csv.dll` is:
+  `libc++.dll`, `libgmp-10.dll`, `libiconv-2.dll`, `libmpfr-6.dll`,
+  `libpcre-1.dll`, `libpcreposix-0.dll`, `libpure.dll`, `libreadline8.dll`,
+  `libtermcap-0.dll`, `libwinpthread-1.dll`, `libzstd.dll`, and `zlib1.dll`.
+- All twelve DLLs are already part of the portable Pure runtime. The CSV package
+  adds no third-party native runtime dependency.
+- Other transitive imports resolve to Windows system DLLs or Windows API-set
+  contracts; no unresolved nonsystem import remains.
 
 ## Guardrails
 
@@ -52,3 +67,14 @@ Build, validate, and package `pure-csv` for the portable Windows distribution.
     - `C:\msys64\clang64\bin\llvm-readobj.exe --file-headers --coff-imports --coff-exports C:\tmp\pure-csv-build-step1-final-20260726\csv.dll` reported COFF x86-64 and exports for `csv_open`, `csv_close`, `csv_read`, `csv_write`, and `csv_getheader`.
     - With `PURELIB` unset and `PATH` limited to the staged runtime and Windows
       system directories, staged `pure.exe --norc -I C:\pure-lang\pure-csv -L C:\tmp\pure-csv-build-step1-final-20260726 -x C:\tmp\pure-csv-load-step1-20260726.pure` loaded the module and exited with status 0.
+- 2026-07-26: Resolved the complete Windows runtime dependency closure.
+  - The CSV DLL adds only a direct dependency on the existing `libpure.dll`;
+    its C runtime imports use Windows UCRT API-set contracts.
+  - A recursive PE import walk starting from both `pure.exe` and `csv.dll`
+    reached exactly the twelve DLLs already staged by the portable Pure runtime.
+  - Validation:
+    - `C:\msys64\clang64\bin\llvm-readobj.exe --coff-imports C:\tmp\pure-csv-build-step1-final-20260726\csv.dll` reported `libpure.dll`, `KERNEL32.dll`, and six UCRT API-set contracts as the complete direct import set.
+    - Applying the same command recursively to each bundled import produced the
+      twelve-file closure documented above, found zero unresolved nonsystem
+      imports, and left zero staged DLLs outside the `pure.exe + csv.dll`
+      static-import walk.
