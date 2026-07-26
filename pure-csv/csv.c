@@ -135,15 +135,21 @@ static char *sniff_quoted(char *fname, char *rw, char *quote)
 {
   int qf = 0;
   if (*rw == 'w') { // check for platform
-#ifdef WINDOWS
+#ifdef _WIN32
     return "\r\n";
 #else
     return "\n";
 #endif
   } else {
-    FILE *fp = fopen(fname, "r");
+    FILE *fp = fopen(fname,
+#ifdef _WIN32
+                     "rb"
+#else
+                     "r"
+#endif
+                     );
     if (fp == NULL) {
-#ifdef WINDOWS
+#ifdef _WIN32
       return "\r\n";
 #else
       return "\n";
@@ -387,7 +393,12 @@ csv_t *csv_open(char *fname,
     t->header = NULL;
     if ((t->buffer = buffer_new())) {
       t->rw = *rw; // get first char since rw is one of "r", "w", "a".
-      if ((t->fp = fopen(fname, rw)) != NULL) {
+#ifdef _WIN32
+      char mode[3] = {*rw, 'b', '\0'};
+#else
+      char *mode = rw;
+#endif
+      if ((t->fp = fopen(fname, mode)) != NULL) {
 	if ((t->record = record_new())) {
 	  t->dialect = d;
 	  if ((opts & HEADER) && rw[0] == 'r') {
