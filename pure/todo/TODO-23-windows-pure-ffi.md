@@ -17,7 +17,7 @@ the portable runtime.
 ## Task List
 
 1. [x] Build the module against the staged Pure runtime and CLANG64 `libffi`.
-2. [ ] Audit calling-convention and symbol-loading assumptions.
+2. [x] Audit calling-convention and symbol-loading assumptions.
 3. [ ] Add native-call and callback smoke tests.
 4. [ ] Stage and validate the package outside MSYS2.
 
@@ -51,4 +51,24 @@ the portable runtime.
       interpreter loaded `ffi.pure` plus the CMake-built `ffi.dll` and emitted a
       marker-checked success result.
   - `libffi-8.dll` still comes from the CLANG64 PATH in this build-only step;
-    its explicit staging and the MSYS2-independent run remain tasks 2 and 4.
+    its explicit staging and the MSYS2-independent run remain task 4.
+- 2026-07-26: Audited the Windows x86-64 ABI and symbol resolver.
+  - CLANG64 libffi defines `FFI_DEFAULT_ABI` as `FFI_GNUW64` (value 2) and
+    `FFI_WIN64` as value 1. The distinction is relevant to `long double`:
+    CLANG64/MinGW uses 16 bytes while the Microsoft ABI uses 8 bytes.
+  - Exported both `FFI_GNUW64` and `FFI_WIN64` to Pure. Ordinary scalar,
+    pointer, and structure calls use the single Windows x64 calling convention;
+    the 32-bit `cdecl`/`stdcall` distinction and decorated names do not apply.
+  - `fcall` resolves its name through `addr`, which reaches LLVM
+    `SearchForAddressOfSymbol`. A nonresident DLL must therefore be loaded
+    first with `using "lib:..."`; `fcall` does not open a library itself.
+  - Validation:
+    - Rebuilding `C:\tmp\pure-ffi-build-step1-20260726` with
+      `C:\msys64\clang64\bin\cmake.exe --build ... --verbose` passed.
+    - A temporary x86-64 DLL compiled with CLANG64 exported
+      `pure_ffi_audit_cdecl` and `pure_ffi_audit_stdcall` without decoration,
+      as reported by `llvm-readobj --file-headers --coff-exports`.
+    - The portable interpreter loaded that DLL with
+      `using "lib:C:/tmp/pure-ffi-abi-audit-20260726"` and called the two
+      exports through `FFI_DEFAULT_ABI` and `FFI_WIN64`. The marker-checked
+      result was `PURE_FFI_ABI_OK:2:2:1:42:42`.

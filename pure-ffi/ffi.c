@@ -27,7 +27,10 @@ void ffi_defs(void)
      values listed below were gleaned from the ffitarget.h file on a Linux
      system. Add other values as required. */
   pure_def(pure_sym("FFI_DEFAULT_ABI"), pure_int(FFI_DEFAULT_ABI));
-#ifdef X86_WIN32
+#ifdef X86_WIN64
+  pure_def(pure_sym("FFI_WIN64"), pure_int(FFI_WIN64));
+  pure_def(pure_sym("FFI_GNUW64"), pure_int(FFI_GNUW64));
+#elif defined(X86_WIN32)
   pure_def(pure_sym("FFI_SYSV"), pure_int(FFI_SYSV));
   pure_def(pure_sym("FFI_STDCALL"), pure_int(FFI_STDCALL));
 #else
