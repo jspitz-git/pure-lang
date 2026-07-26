@@ -46,12 +46,13 @@ CPipe::~CPipe()
 
 BOOL CPipe::Run(LPCTSTR name, LPCTSTR pname)
 {
-	return Run2(CMainFrame::m_strRunCommand, name, pname);
+	return Run2(CMainFrame::m_strPurePath, _T("-i -q"), name, pname);
 }
 
 BOOL CPipe::Debug(LPCTSTR name, LPCTSTR pname)
 {
-	return Run2(CMainFrame::m_strDebugCommand, name, pname);
+	return Run2(CMainFrame::m_strPurePath, _T("-i -q -g"), name,
+		pname);
 }
 
 void CPipe::Write(LPCTSTR lpszBuf)
@@ -244,18 +245,26 @@ static DWORD WINAPI CompileRun(LPVOID pParam)
 	cmd += prompt;
 #else
 	BOOL res;
-	CString cmd, filearg = ti->file;
-	cmd.Format(ti->run, filearg);
+	CString cmd, apparg = ti->application, filearg = ti->file;
+	QuoteArg(apparg);
+	QuoteArg(filearg);
+	cmd = apparg;
+	if (*ti->arguments) {
+		cmd += _T(" ");
+		cmd += ti->arguments;
+	}
+	if (!filearg.IsEmpty())
+		cmd += _T(" ") + filearg;
 	CString prompt = CMainFrame::m_strQPS;
 	SetEnvironmentVariable(_T("PURE_PS"), prompt);
 #endif
-	res = CreateProcess(NULL, cmd.GetBuffer(cmd.GetLength()+1),
+	res = CreateProcess(ti->application, cmd.GetBuffer(cmd.GetLength()+1),
 			NULL, NULL, TRUE,
 			CREATE_NEW_CONSOLE,
 			NULL, *ti->path?ti->path:NULL, &si, &ti->pi);
 	cmd.ReleaseBuffer();
-	ASSERT(ti->pi.hProcess != NULL);
 	if (!res) { ReleaseMutex(ti->hMutex); return 1; }
+	ASSERT(ti->pi.hProcess != NULL);
 	CloseHandle(ti->pi.hThread); ti->pi.hThread = NULL;
 	MakeEvents(ti);
 
@@ -263,10 +272,23 @@ static DWORD WINAPI CompileRun(LPVOID pParam)
 	return 0;
 }
 
-BOOL CPipe::Run2(LPCTSTR command, LPCTSTR name, LPCTSTR pname)
+BOOL CPipe::Run2(LPCTSTR applicationName, LPCTSTR argumentsValue,
+	LPCTSTR name, LPCTSTR pname)
 {
 	// kill running process if it exists
 	Kill();
+	application = applicationName ? applicationName : _T("");
+	arguments = argumentsValue ? argumentsValue : _T("");
+	DWORD attributes = GetFileAttributes(application);
+	if (attributes == INVALID_FILE_ATTRIBUTES ||
+		(attributes & FILE_ATTRIBUTE_DIRECTORY)) {
+		CString message;
+		message.Format(_T("Pure interpreter not found:\n%s"),
+			static_cast<LPCTSTR>(application));
+		AfxMessageBox(message, MB_OK | MB_ICONERROR);
+		return FALSE;
+	}
+
 
 	// show script name
  	if (!CMainFrame::m_bLogReset) {
@@ -341,11 +363,12 @@ BOOL CPipe::Run2(LPCTSTR command, LPCTSTR name, LPCTSTR pname)
 	m_ti.hOutput = hOutput;
 	m_ti.pInput = &m_bufInput;
 	m_ti.pOutput = &m_bufOutput;
+	m_ti.application = application;
+	m_ti.arguments = arguments;
 	m_ti.path = path; m_ti.file = file; m_ti.code = code;
 #if 0
 	m_ti.compile = CMainFrame::m_strCompileCommand;
 #endif
-	m_ti.run = command;
 	hReader = CreateThread(NULL, 0, Reader, &m_ti, 0, &idReader);
 	hWriter = CreateThread(NULL, 0, Writer, &m_ti, 0, &idWriter);
 	ASSERT(hReader != NULL && hWriter != NULL);
@@ -376,6 +399,7 @@ fail:
 		CloseHandle(hChildStdoutRdDup);
 	hChildStdinRd = hChildStdinWr = INVALID_HANDLE_VALUE;
 	hChildStdoutRd = hChildStdoutWr = INVALID_HANDLE_VALUE;
+	AfxMessageBox(IDS_RUN_FAILED, MB_OK | MB_ICONERROR);
 	return FALSE;
 }
 

@@ -77,8 +77,7 @@ CString CMainFrame::m_strHistFile;
 #if 0
 CString CMainFrame::m_strCompileCommand;
 #endif
-CString CMainFrame::m_strRunCommand;
-CString CMainFrame::m_strDebugCommand;
+CString CMainFrame::m_strPurePath;
 CString CMainFrame::m_strAppPath;
 CString CMainFrame::m_strVersion;
 CString CMainFrame::m_strQPATH;
@@ -115,8 +114,6 @@ static TCHAR BASED_CODE szLogMaxLines[] = _T("LogMaxLines");
 #if 0
 static TCHAR BASED_CODE szCompileCommand[] = _T("CompileCommand");
 #endif
-static TCHAR BASED_CODE szRunCommand[] = _T("RunCommand");
-static TCHAR BASED_CODE szDebugCommand[] = _T("DebugCommand");
 static TCHAR BASED_CODE szAppPath[] = _T("AppPath");
 #if 0
 static TCHAR BASED_CODE szQPATH[] = _T("QPATH");
@@ -217,9 +214,9 @@ static CString DirectoryName(const CString& name)
 	if (backslash > slash)
 		slash = backslash;
 	if (slash < 0)
+		return CString();
 	if (slash == 2 && name.GetLength() > 2 && name[1] == _T(':'))
 		return name.Left(3);
-		return CString();
 	return name.Left(slash);
 }
 
@@ -342,18 +339,12 @@ void CMainFrame::Initialize()
 		m_strCompileCommand = AfxGetApp()->GetProfileString(szSettings,
 			szCompileCommand, "qc -n -o %s %s");
 #endif
-		m_strRunCommand = AfxGetApp()->GetProfileString(szSettings,
-			szRunCommand, _T("pure -i -q %s"));
-		m_strDebugCommand = AfxGetApp()->GetProfileString(szSettings,
-			szDebugCommand, _T("pure -i -q -g %s"));
 	} else {
 		// update registry entries to current version
 		m_strQPS = _T("> ");
 #if 0
 		m_strCompileCommand = "qc -n -o %s %s";
 #endif
-		m_strRunCommand = _T("pure -i -q %s");
-		m_strDebugCommand = _T("pure -i -q -g %s");
 	}
 	CMainFrame::m_strQPSX = LastLine(m_strQPS);
 	m_strVersion = _T("1.1");
@@ -367,6 +358,12 @@ void CMainFrame::Initialize()
 #endif
 	if (app_path.IsEmpty())
 		app_path = DirectoryName(AfxGetApp()->m_pszHelpFilePath);
+	m_strPurePath = app_path;
+	if (!m_strPurePath.IsEmpty() &&
+		m_strPurePath[m_strPurePath.GetLength()-1] != _T('\\') &&
+		m_strPurePath[m_strPurePath.GetLength()-1] != _T('/'))
+		m_strPurePath += _T('\\');
+	m_strPurePath += _T("pure.exe");
 #if 0
 	// NOTE: As of version 4.6, the directory layout has changed:
 	// The executable is now in the bin subdir. We want the actual
@@ -481,11 +478,7 @@ void CMainFrame::Terminate()
 	AfxGetApp()->WriteProfileString(szSettings,
 		szCompileCommand, m_strCompileCommand);
 #endif
-	AfxGetApp()->WriteProfileString(szSettings,
-		szRunCommand, m_strRunCommand);
 #if 0
-	AfxGetApp()->WriteProfileString(szSettings,
-		szDebugCommand, m_strDebugCommand);
 	AfxGetApp()->WriteProfileString(szSettings,
 		szQPATH, m_strQPATH);
 #endif
@@ -622,12 +615,8 @@ void CMainFrame::OnScriptRun()
 	CQpadDoc* pDoc = (CQpadDoc*)GetActiveDocument();
 	LPCTSTR name = pDoc->GetPathName();
 	ASSERT(name != NULL);
-	if (!GetEvalView()->Run(name, *name?name:pDoc->GetTitle())) {
-		CString msg;
-		msg.LoadString(IDS_RUN_FAILED);
-		AfxMessageBox(msg);
+	if (!GetEvalView()->Run(name, *name?name:pDoc->GetTitle()))
 		return;
-	}
 	// update status info
 	if (!*name || name != m_strRunPathName) SetStatusInfo();
 	UpdateTitle();
@@ -646,12 +635,8 @@ void CMainFrame::OnScriptDebug()
 	CQpadDoc* pDoc = (CQpadDoc*)GetActiveDocument();
 	LPCTSTR name = pDoc->GetPathName();
 	ASSERT(name != NULL);
-	if (!GetEvalView()->Debug(name, *name?name:pDoc->GetTitle())) {
-		CString msg;
-		msg.LoadString(IDS_RUN_FAILED);
-		AfxMessageBox(msg);
+	if (!GetEvalView()->Debug(name, *name?name:pDoc->GetTitle()))
 		return;
-	}
 	// update status info
 	if (!*name || name != m_strRunPathName) SetStatusInfo();
 	UpdateTitle();

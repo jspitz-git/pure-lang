@@ -19,7 +19,7 @@ with the portable Pure runtime.
 
 1. [x] Create and validate a 64-bit MFC build.
 2. [x] Fix compiler, Unicode, path-length, and ownership issues found by the build.
-3. [ ] Launch the sibling `pure.exe` without depending on global `PATH`.
+3. [x] Launch the sibling `pure.exe` without depending on global `PATH`.
 4. [ ] Move per-user state to an appropriate Windows application-data directory.
 5. [ ] Validate editing, execution, interruption, diagnostics, help, and shutdown.
 
@@ -69,3 +69,15 @@ with the portable Pure runtime.
   - Release and Debug x64 builds pass without compiler or linker warnings;
     `dumpbin` still identifies the Release artifact as an x64 Windows GUI
     executable.
+- 2026-07-26: Made interpreter launch executable-relative.
+  - PurePad now derives an absolute sibling `pure.exe` path from its own module
+    path and no longer loads or persists the legacy PATH-dependent run command.
+  - `CreateProcess` receives the absolute executable as `applicationName`; its
+    command line separately quotes the executable and script arguments and
+    retains the existing Run and Debug switches.
+  - Missing sibling and pipe-setup failures are reported synchronously without
+    leaving partially initialized worker state.
+  - A staged Release PurePad in `C:\tmp\PurePad sibling probe` invoked a sibling
+    probe executable for both Run (`-i -q`) and Debug (`-i -q -g`) with `PATH`
+    restricted to `C:\Windows\System32;C:\Windows`.
+  - Release and Debug x64 builds pass without warnings.
