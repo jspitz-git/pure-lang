@@ -1,6 +1,6 @@
 # TODO-21 - Windows pure-rational Package
 
-Status: Open
+Status: Closed on 2026-07-26
 Branch: todo/21-windows-pure-rational
 
 ## Purpose
@@ -18,7 +18,24 @@ Validate and package `pure-rational` for the portable Windows distribution.
 1. [x] Reproduce package installation in a clean CLANG64 build environment.
 2. [x] Stage the package without build-prefix references.
 3. [x] Add focused import and rational-arithmetic smoke tests.
-4. [ ] Record installed files and runtime dependencies.
+4. [x] Record installed files and runtime dependencies.
+
+## Installed Package Manifest
+
+- `lib/pure/rational.pure`
+- `lib/pure/rat_interval.pure`
+- `share/doc/pure-rational/README`
+- `share/doc/pure-rational/COPYING`
+
+## Runtime Dependencies
+
+- `rational.pure` imports the package module `rat_interval.pure` and the standard
+  Pure modules `math.pure` and `dict.pure`.
+- `rat_interval.pure` imports the standard Pure module `math.pure`.
+- The package is Pure source only. It adds no executable, DLL, import library,
+  static library, or third-party native runtime dependency to the bundle.
+- The existing portable Pure runtime and its baseline DLL set provide everything
+  else required to interpret these modules.
 
 ## Guardrails
 
@@ -73,3 +90,16 @@ Validate and package `pure-rational` for the portable Windows distribution.
     - The generated CTest command references
       `C:\tmp\pure-rational-smoke-step3-20260726\bin\pure.exe`, confirming that
       the staged interpreter was tested.
+- 2026-07-26: Recorded the final package manifest and runtime dependencies.
+  - A clean install into an empty prefix contained exactly the two Pure modules,
+    the version-expanded README, and the GPL license listed above.
+  - A source scan found only `rat_interval`, `math`, and `dict` imports and no
+    foreign-library declarations; the package-only prefix contained zero binary
+    files.
+  - Validation:
+    - `C:\msys64\clang64\bin\cmake.exe -S C:\pure-lang\pure-rational -B "C:\tmp\pure-rational manifest build step4 20260726" -DCMAKE_INSTALL_PREFIX="C:\tmp\pure-rational manifest step4 20260726" -DBUILD_TESTING=OFF` passed.
+    - `C:\msys64\clang64\bin\cmake.exe --install "C:\tmp\pure-rational manifest build step4 20260726"` produced exactly the four documented relative paths; SHA-256 hashes were successfully calculated for every installed file.
+    - Installing the same build into a fresh copy of the portable runtime found
+      `math.pure`, `dict.pure`, `rat_interval.pure`, and `rational.pure` under
+      `lib/pure`.
+    - `$env:PURELIB=$null; $env:PATH="C:\tmp\pure-rational runtime step4 20260726\bin;$env:SystemRoot\System32;$env:SystemRoot"; & "C:\tmp\pure-rational runtime step4 20260726\bin\pure.exe" --norc -x "C:\pure-lang\pure-rational\tests\smoke.pure"` exited with status 0 outside MSYS2.
