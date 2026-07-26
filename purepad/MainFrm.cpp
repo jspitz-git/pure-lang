@@ -320,18 +320,26 @@ void CMainFrame::Initialize()
 		szHistSize, 100);
 	m_nLogMaxLines = AfxGetApp()->GetProfileInt(szSettings,
 		szLogMaxLines, 500);
-#if 0
-	m_strHistFile = AfxGetApp()->GetProfileString(szSettings,
-		szHistFile, "PurePadHistory");
-#else
+	CQpadApp* app = static_cast<CQpadApp*>(AfxGetApp());
+	CString defaultHistory = app->m_strUserDataPath + _T("\\history.txt");
 	CString home = GetEnvironment(_T("HOME"));
 	if (home.IsEmpty())
 		home = GetEnvironment(_T("USERPROFILE"));
-	CString defaultHistory = home.IsEmpty() ? _T("PurePadHistory") :
+	CString legacyHistory = home.IsEmpty() ? _T("PurePadHistory") :
 		home + _T("\\PurePadHistory");
-	m_strHistFile = AfxGetApp()->GetProfileString(szSettings,
+	DWORD targetAttributes = GetFileAttributes(defaultHistory);
+	DWORD legacyAttributes = GetFileAttributes(legacyHistory);
+	if (targetAttributes == INVALID_FILE_ATTRIBUTES &&
+		legacyAttributes != INVALID_FILE_ATTRIBUTES &&
+		!(legacyAttributes & FILE_ATTRIBUTE_DIRECTORY))
+		CopyFile(legacyHistory, defaultHistory, TRUE);
+	CString configuredHistory = AfxGetApp()->GetProfileString(szSettings,
 		szHistFile, defaultHistory);
-#endif
+	if (configuredHistory.CompareNoCase(legacyHistory) == 0 ||
+		configuredHistory.CompareNoCase(_T("PurePadHistory")) == 0)
+		m_strHistFile = defaultHistory;
+	else
+		m_strHistFile = configuredHistory;
 	if (m_strVersion == _T("1.1")) {
 		m_strQPS = AfxGetApp()->GetProfileString(szSettings,
 			szQPS, _T("> "));

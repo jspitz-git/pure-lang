@@ -20,7 +20,7 @@ with the portable Pure runtime.
 1. [x] Create and validate a 64-bit MFC build.
 2. [x] Fix compiler, Unicode, path-length, and ownership issues found by the build.
 3. [x] Launch the sibling `pure.exe` without depending on global `PATH`.
-4. [ ] Move per-user state to an appropriate Windows application-data directory.
+4. [x] Move per-user state to an appropriate Windows application-data directory.
 5. [ ] Validate editing, execution, interruption, diagnostics, help, and shutdown.
 
 ## Guardrails
@@ -80,4 +80,14 @@ with the portable Pure runtime.
   - A staged Release PurePad in `C:\tmp\PurePad sibling probe` invoked a sibling
     probe executable for both Run (`-i -q`) and Debug (`-i -q -g`) with `PATH`
     restricted to `C:\Windows\System32;C:\Windows`.
+  - Release and Debug x64 builds pass without warnings.
+- 2026-07-26: Moved per-user state to roaming AppData.
+  - PurePad now stores its MFC profile in the UTF-16
+    `%APPDATA%\Pure\PurePad\PurePad.ini` file and command history in
+    `%APPDATA%\Pure\PurePad\history.txt`.
+  - A fresh profile imports all supported string and DWORD values from the
+    legacy HKCU profile; the old registry data and history file are retained.
+  - `PUREPAD_USER_DATA` provides an explicit isolated test/development override.
+  - An isolated fresh-profile run migrated Settings, Font, and toolbar sections,
+    redirected history, exited cleanly, and left the legacy registry unchanged.
   - Release and Debug x64 builds pass without warnings.
