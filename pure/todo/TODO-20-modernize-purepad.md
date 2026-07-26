@@ -1,6 +1,6 @@
 # TODO-20 - Modernize PurePad
 
-Status: Open
+Status: Closed on 2026-07-26
 Branch: todo/20-modernize-purepad
 
 ## Purpose
@@ -21,7 +21,7 @@ with the portable Pure runtime.
 2. [x] Fix compiler, Unicode, path-length, and ownership issues found by the build.
 3. [x] Launch the sibling `pure.exe` without depending on global `PATH`.
 4. [x] Move per-user state to an appropriate Windows application-data directory.
-5. [ ] Validate editing, execution, interruption, diagnostics, help, and shutdown.
+5. [x] Validate editing, execution, interruption, diagnostics, help, and shutdown.
 
 ## Guardrails
 
@@ -91,3 +91,18 @@ with the portable Pure runtime.
   - An isolated fresh-profile run migrated Settings, Font, and toolbar sections,
     redirected history, exited cleanly, and left the legacy registry unchanged.
   - Release and Debug x64 builds pass without warnings.
+- 2026-07-26: Completed end-to-end functional validation.
+  - Replaced Unicode MFC raw serialization with UTF-8 output and decoding for
+    UTF-8, legacy ANSI, and BOM-marked UTF-16 source files.
+  - Initialized OLE before modern MFC recent-file handling, fixing a fast-fail
+    when PurePad opened a document from its command line.
+  - Made missing or unusable `puredoc.chm` help report its executable-relative
+    path instead of failing silently.
+  - Replaced lossy `PulseEvent` signalling and removed the child-start race by
+    creating named auto-reset events while `pure.exe` is still suspended.
+  - An automated x64 Release workflow in a path containing spaces verified
+    editing and UTF-8 saving, real interpreter output, a line-2 syntax error,
+    source navigation, interactive Break, missing-help diagnostics, and clean
+    shutdown with no remaining child process.
+  - Break reduced the allocating interpreter loop from about 1,000 ms CPU per
+    second to 0 ms; Release and Debug x64 builds pass without warnings.

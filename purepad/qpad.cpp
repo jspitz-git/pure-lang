@@ -188,6 +188,11 @@ static BOOL ConfigureUserData(CQpadApp& app)
 
 BOOL CQpadApp::InitInstance()
 {
+	if (!AfxOleInit()) {
+		AfxMessageBox(_T("Unable to initialize OLE support."),
+			MB_OK | MB_ICONERROR);
+		return FALSE;
+	}
 	AfxEnableControlContainer();
 
 	// Standard initialization
@@ -300,8 +305,22 @@ void CQpadApp::OnAppAbout()
 
 void CQpadApp::OnHelpFinder() 
 {
-	::HtmlHelp(NULL, CMainFrame::m_strAppPath+_T("\\puredoc.chm"),
-		HH_DISPLAY_TOPIC, 0);	
+	CString helpPath = CMainFrame::m_strAppPath + _T("\\puredoc.chm");
+	DWORD attributes = GetFileAttributes(helpPath);
+	if (attributes == INVALID_FILE_ATTRIBUTES ||
+		(attributes & FILE_ATTRIBUTE_DIRECTORY)) {
+		CString message;
+		message.Format(_T("Pure documentation not found:\n%s"),
+			static_cast<LPCTSTR>(helpPath));
+		AfxMessageBox(message, MB_OK | MB_ICONERROR);
+		return;
+	}
+	if (!::HtmlHelp(NULL, helpPath, HH_DISPLAY_TOPIC, 0)) {
+		CString message;
+		message.Format(_T("Unable to open Pure documentation:\n%s"),
+			static_cast<LPCTSTR>(helpPath));
+		AfxMessageBox(message, MB_OK | MB_ICONERROR);
+	}
 }
 
 /////////////////////////////////////////////////////////////////////////////

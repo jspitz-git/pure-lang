@@ -158,8 +158,8 @@ static void MakeEvents(ThreadInfo* ti)
 		_T("PURE_SIGINT-%u"), ti->pi.dwProcessId);
 	_stprintf_s(ti->szKill, _countof(ti->szKill),
 		_T("PURE_SIGTERM-%u"), ti->pi.dwProcessId);
-	ti->hBreak = CreateEvent(&saAttr, TRUE, FALSE, ti->szBreak);
-	ti->hKill = CreateEvent(&saAttr, TRUE, FALSE, ti->szKill);
+	ti->hBreak = CreateEvent(&saAttr, FALSE, FALSE, ti->szBreak);
+	ti->hKill = CreateEvent(&saAttr, FALSE, FALSE, ti->szKill);
 }
 
 
@@ -260,13 +260,27 @@ static DWORD WINAPI CompileRun(LPVOID pParam)
 #endif
 	res = CreateProcess(ti->application, cmd.GetBuffer(cmd.GetLength()+1),
 			NULL, NULL, TRUE,
-			CREATE_NEW_CONSOLE,
+			CREATE_NEW_CONSOLE | CREATE_SUSPENDED,
 			NULL, *ti->path?ti->path:NULL, &si, &ti->pi);
 	cmd.ReleaseBuffer();
 	if (!res) { ReleaseMutex(ti->hMutex); return 1; }
 	ASSERT(ti->pi.hProcess != NULL);
-	CloseHandle(ti->pi.hThread); ti->pi.hThread = NULL;
 	MakeEvents(ti);
+	BOOL ready = ti->hBreak != NULL && ti->hKill != NULL &&
+		ResumeThread(ti->pi.hThread) != static_cast<DWORD>(-1);
+	CloseHandle(ti->pi.hThread); ti->pi.hThread = NULL;
+	if (!ready) {
+		TerminateProcess(ti->pi.hProcess, 0);
+		CloseHandle(ti->pi.hProcess); ti->pi.hProcess = NULL;
+		if (ti->hBreak != NULL) {
+			CloseHandle(ti->hBreak); ti->hBreak = NULL;
+		}
+		if (ti->hKill != NULL) {
+			CloseHandle(ti->hKill); ti->hKill = NULL;
+		}
+		ReleaseMutex(ti->hMutex);
+		return 1;
+	}
 
 	ReleaseMutex(ti->hMutex);
 	return 0;
@@ -410,7 +424,7 @@ void CPipe::Break()
 		WAIT_OBJECT_0 &&
 		m_ti.pi.hProcess != NULL) {
 		ASSERT(m_ti.hBreak != NULL);
-		PulseEvent(m_ti.hBreak);
+		SetEvent(m_ti.hBreak);
 		ResetEvent(hOutput);
 		ReleaseMutex(hMutex);
 	}
@@ -424,7 +438,7 @@ void CPipe::Kill()
 		m_ti.pi.hProcess != NULL) {
 		// signal the process
 		ASSERT(m_ti.hKill != NULL);
-		PulseEvent(m_ti.hKill);
+		SetEvent(m_ti.hKill);
 		// give it some time to arrive
 		Sleep(100);
 		// close our side of the stdin handle (in case
@@ -493,7 +507,7 @@ BOOL CPipe::IsRunning()
 void CPipe::KillThreads()
 {
 	// kill the worker threads
-	PulseEvent(hKillThreads);
+	SetEvent(hKillThreads);
 	if (hCompileRun != NULL) {
 		if (WaitForSingleObject(hCompileRun, 100) !=
 			WAIT_OBJECT_0)
@@ -514,6 +528,7 @@ void CPipe::KillThreads()
 		CloseHandle(hWriter);
 	}
 	hReader = hWriter = hCompileRun = NULL;
+	ResetEvent(hKillThreads);
 	ResetEvent(hOutput);
 	// close all open handles
 	if (hChildStdinRd != INVALID_HANDLE_VALUE)
