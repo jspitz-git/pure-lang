@@ -739,7 +739,7 @@ install(
 if(WIN32)
   install(
     FILES compat/libglob/glob.h compat/libglob/fnmatch.h
-    DESTINATION "${PURE_INSTALL_INCLUDE_DIR}"
+    DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}"
   )
 endif()
 install(
