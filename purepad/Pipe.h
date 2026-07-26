@@ -30,7 +30,7 @@ struct ThreadInfo {
 	HANDLE hChildStdinWr, hChildStdoutRd;
 	HANDLE hOutput, hKillThreads;
 	CBuffer *pInput, *pOutput;
-	LPCTSTR file, path, compile, run, code;
+	LPCTSTR application, arguments, file, path, code;
 	PROCESS_INFORMATION pi;
 	HANDLE hBreak, hKill;
 	TCHAR szBreak[MAX_PATH], szKill[MAX_PATH];
@@ -67,13 +67,11 @@ public:
 	void Write(LPCTSTR lpszBuf);
 	// send a string to the child's stdin
 
-	LPTSTR Read();
+	CString Read();
 	// get the currently available output from the child's stdout
-	// and empty the buffer; the string is allocated dynamically
-	// using new and should be deallocated by the caller using
-	// delete
+	// and empty the buffer
 
-	LPTSTR Peek();
+	CString Peek();
 	// like Read(), but does not empty the buffer
 
 	void Empty();
@@ -89,8 +87,9 @@ private:
 	void KillThreads();
 	void KillChild();
 	void Clean();
-	BOOL Run2(LPCTSTR command, LPCTSTR name, LPCTSTR pname);
-	char path[_MAX_PATH], file[_MAX_PATH], code[_MAX_FNAME];
+	BOOL Run2(LPCTSTR applicationName, LPCTSTR argumentsValue,
+		LPCTSTR name, LPCTSTR pname);
+	CString application, arguments, path, file, code;
 	CBuffer m_bufInput, m_bufOutput;
 	ThreadInfo m_ti;
 	BOOL m_bRunning;

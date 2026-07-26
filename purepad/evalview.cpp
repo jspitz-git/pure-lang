@@ -52,7 +52,7 @@ CEvalView::CEvalView() : m_hist(CMainFrame::m_nHistSize)
 	// TODO: add construction code here
 	m_pGotoDialog = new CGotoDlg;
 	m_nTabStops = CMainFrame::m_nLogTabStops;
-	m_strPMark = "";
+	m_strPMark.Empty();
 	m_hist.Read(CMainFrame::m_strHistFile);
 }
 
@@ -171,7 +171,7 @@ void CEvalView::OnEditGoto()
 void CEvalView::Reset()
 {
 	CEvalView::SetWindowText(NULL);
-	m_strPMark = "";
+	m_strPMark.Empty();
 }
 
 static int count_lines(LPCTSTR s)
@@ -207,7 +207,7 @@ void CEvalView::Append(LPCTSTR lpszText, BOOL mark)
 	if (lpszText) {
 		edit.ReplaceSel(lpszText);
 		if (mark && lpszText) {
-			LPCTSTR p = strrchr(lpszText, '\n');
+			LPCTSTR p = _tcsrchr(lpszText, _T('\n'));
 			if (p)
 				m_strPMark = p+1;
 			else
@@ -249,8 +249,8 @@ void CEvalView::SetCmd(CString str)
 		n1 = edit.LineIndex(l-1);
 		CString line;
 		PeekLine(l-1, line);
-		l = strlen(m_strPMark);
-		if (strncmp(m_strPMark, line, l) == 0)
+		l = m_strPMark.GetLength();
+		if (_tcsncmp(m_strPMark, line, l) == 0)
 			n1 += l;
 	}
 	int m1, m2;
@@ -271,7 +271,7 @@ void CEvalView::PeekLine(int lineno, int len, CString& str,
 {
 	CEdit& edit = GetEditCtrl();
 	if (edit.LineIndex(lineno) == -1) {
-		str = "";
+		str.Empty();
 		return;
 	}
 	int ofs = 0;
@@ -281,19 +281,19 @@ void CEvalView::PeekLine(int lineno, int len, CString& str,
 	line[len] = '\0';
 	if (remove_prompt) {
 		if (edit.LineIndex(lineno+1) < 0) {
-			int l = strlen(m_strPMark);
-			if (strncmp(m_strPMark, line, l) == 0)
+			int l = m_strPMark.GetLength();
+			if (_tcsncmp(m_strPMark, line, l) == 0)
 				ofs = l;
 		} else {
-			if (strncmp(CMainFrame::m_strQPSX, line,
-				strlen(CMainFrame::m_strQPSX)) == 0)
-				ofs = strlen(CMainFrame::m_strQPSX);
-			else if (strncmp(CMainFrame::m_strQPS2, line,
-				strlen(CMainFrame::m_strQPS2)) == 0)
-				ofs	= strlen(CMainFrame::m_strQPS2);
-			else if (strncmp(CMainFrame::m_strDPS, line,
-				strlen(CMainFrame::m_strDPS)) == 0)
-				ofs	= strlen(CMainFrame::m_strDPS);
+			if (_tcsncmp(CMainFrame::m_strQPSX, line,
+				CMainFrame::m_strQPSX.GetLength()) == 0)
+				ofs = CMainFrame::m_strQPSX.GetLength();
+			else if (_tcsncmp(CMainFrame::m_strQPS2, line,
+				CMainFrame::m_strQPS2.GetLength()) == 0)
+				ofs	= CMainFrame::m_strQPS2.GetLength();
+			else if (_tcsncmp(CMainFrame::m_strDPS, line,
+				CMainFrame::m_strDPS.GetLength()) == 0)
+				ofs	= CMainFrame::m_strDPS.GetLength();
 		}
 	}
 	str = line+ofs;
@@ -313,7 +313,7 @@ void CEvalView::PeekLine(int lineno, CString& str,
 			p2 -= 2; // CR/LF
 		PeekLine(lineno, p2-p, str, remove_prompt);
 	} else
-		str = "";
+		str.Empty();
 }
 
 void CEvalView::GotoLine(int lineno)
@@ -340,19 +340,19 @@ void CEvalView::MarkLine(int lineno)
 
 static BOOL match_ws(LPCTSTR& p)
 {
-	while (*p && isspace(*p)) p++;
+	while (*p && _istspace(*p)) p++;
 	return TRUE;
 }
 
 static BOOL match_num(LPCTSTR& p, int& num)
 {
 	LPCTSTR p1 = p;
-	while (*p1 && isdigit(*p1)) p1++;
+	while (*p1 && _istdigit(*p1)) p1++;
 	if (p1 > p) {
 		LPTSTR numstr = new TCHAR[p1-p+1];
-		strncpy(numstr, p, p1-p);
+		_tcsncpy_s(numstr, p1-p+1, p, p1-p);
 		numstr[p1-p] = '\0';
-		num = atoi(numstr);
+		num = _ttoi(numstr);
 		p = p1;
 		delete[] numstr;
 		return TRUE;
@@ -365,7 +365,7 @@ static BOOL match_fname(LPCTSTR& p, LPTSTR fname)
 	LPCTSTR p1 = p;
 	while (*p1 && *p1 != ',') p1++;
 	if (p1 > p && fname) {
-		strncpy(fname, p, p1-p);
+		_tcsncpy_s(fname, p1-p+1, p, p1-p);
 		fname[p1-p] = '\0';
 		p = p1;
 		return TRUE;
@@ -375,8 +375,8 @@ static BOOL match_fname(LPCTSTR& p, LPTSTR fname)
 
 static BOOL match(LPCTSTR s, LPCTSTR& p)
 {
-	if (strncmp(s, p, strlen(s)) == 0) {
-		p += strlen(s);
+	if (_tcsncmp(s, p, _tcslen(s)) == 0) {
+		p += _tcslen(s);
 		return TRUE;
 	} else
 		return FALSE;
@@ -395,10 +395,10 @@ static BOOL match_error(LPCTSTR line, LPTSTR fname, LPCTSTR& msg,
 		match_num(p, stacknum) && match(">", p) && match_ws(p)))
 		p = p1;
 #endif
-	if (!(match_fname(p, fname) && match(", line ", p) &&
+	if (!(match_fname(p, fname) && match(_T(", line "), p) &&
 		match_num(p, lineno) &&
-		match(":", p) && match_ws(p) &&
-		strcmp(fname, "<stdin>")))
+		match(_T(":"), p) && match_ws(p) &&
+		_tcscmp(fname, _T("<stdin>"))))
 		return FALSE;
 	else {
 		msg = p;
@@ -491,24 +491,24 @@ void CEvalView::OnChar(UINT nChar, UINT nRepCnt, UINT nFlags)
 		// looks like we can assume this
 		ASSERT(nRepCnt == 1);
 		// get the current line
-		edit.ReplaceSel("");
+		edit.ReplaceSel(_T(""));
 		int lineno = edit.LineFromChar();
 		CString line;
 		PeekLine(lineno, line, TRUE);
 		if (edit.LineIndex(lineno+1) != -1)
 			// copy the line down to the end of the buffer
 			SetCmd(line);
-		Append("\r\n");
+		Append(_T("\r\n"));
 		CQpadDoc* pDoc = GetDocument();
 		// send the line to the interpreter process
 		if (IsRunning()) {
 			m_pipe.Write(line);
-			m_pipe.Write("\n");
+			m_pipe.Write(_T("\n"));
 		}
 		// add the line to the command history
 		m_hist.Append(line);
 		// reset the process marker
-		m_strPMark = "";
+		m_strPMark.Empty();
 	} else
 		CEditView::OnChar(nChar, nRepCnt, nFlags);
 }
@@ -525,7 +525,7 @@ BOOL CEvalView::Run(LPCTSTR name, LPCTSTR pname)
 {
 	if (IsRunning())
 		AppendNewLine();
-	m_strPMark = "";
+	m_strPMark.Empty();
 	return m_pipe.Run(name, pname);
 }
 
@@ -533,7 +533,7 @@ BOOL CEvalView::Debug(LPCTSTR name, LPCTSTR pname)
 {
 	if (IsRunning())
 		AppendNewLine();
-	m_strPMark = "";
+	m_strPMark.Empty();
 	return m_pipe.Debug(name, pname);
 }
 
@@ -541,7 +541,7 @@ void CEvalView::Break()
 {
 	if (IsRunning()) {
 		AppendNewLine();
-		m_strPMark = "";
+		m_strPMark.Empty();
 		m_pipe.Break();
 	}
 }
@@ -550,16 +550,15 @@ void CEvalView::Kill()
 {
 	if (IsRunning()) {
 		AppendNewLine();
-		m_strPMark = "";
+		m_strPMark.Empty();
 		m_pipe.Kill();
 	}
 }
 
 void CEvalView::ProcessInput()
 {
-	LPTSTR s = m_pipe.Read();
+	CString s = m_pipe.Read();
 	Append(s, TRUE);
-	delete[] s;
 }
 
 void CEvalView::OnViewFont() 

@@ -7,7 +7,7 @@
 #include "Pipe.h"
 #include "Buffer.h"
 #include "MainFrm.h"
-#include <stdlib.h> // for _split_path()
+#include <atlconv.h>
 
 #ifdef _DEBUG
 #undef THIS_FILE
@@ -34,19 +34,25 @@ CPipe::CPipe()
 CPipe::~CPipe()
 {
 	Kill();
-	CloseHandle(hOutput);
+	if (hOutput)
+		CloseHandle(hOutput);
+	if (hKillThreads)
+		CloseHandle(hKillThreads);
+	if (hMutex)
+		CloseHandle(hMutex);
 }
 
 // public member functions
 
 BOOL CPipe::Run(LPCTSTR name, LPCTSTR pname)
 {
-	return Run2(CMainFrame::m_strRunCommand, name, pname);
+	return Run2(CMainFrame::m_strPurePath, _T("-i -q"), name, pname);
 }
 
 BOOL CPipe::Debug(LPCTSTR name, LPCTSTR pname)
 {
-	return Run2(CMainFrame::m_strDebugCommand, name, pname);
+	return Run2(CMainFrame::m_strPurePath, _T("-i -q -g"), name,
+		pname);
 }
 
 void CPipe::Write(LPCTSTR lpszBuf)
@@ -55,12 +61,12 @@ void CPipe::Write(LPCTSTR lpszBuf)
 		SetEvent(hOutput);
 }
 
-LPTSTR CPipe::Read()
+CString CPipe::Read()
 {
 	return m_bufInput.Read();
 }
 
-LPTSTR CPipe::Peek()
+CString CPipe::Peek()
 {
 	return m_bufInput.Peek();
 }
@@ -108,7 +114,8 @@ static DWORD WINAPI Reader(LPVOID pParam)
 		ReadFile(ti->hChildStdoutRd, buf, 1024, &n, NULL)) {
 		if (n > 0) {
 			buf[n] = 0;
-			if (ti->pInput->Write(buf))
+			CString text(CA2W(buf, CP_UTF8));
+			if (ti->pInput->Write(text))
 				PostMessage(ti->hWnd, WM_USER_INPUT, 0, 0);
 		}
 	}
@@ -123,14 +130,17 @@ static DWORD WINAPI Writer(LPVOID pParam)
 	while (WaitForMultipleObjects(2, hEvents, FALSE, INFINITE) ==
 		WAIT_OBJECT_0) {
 		BOOL success = TRUE;
-		LPTSTR buf = ti->pOutput->Read();
-		if (*buf) {
-			DWORD n, len = strlen(buf);
-			success =
-				WriteFile(ti->hChildStdinWr, buf, len, &n, NULL)
-				&& n == len;
+		CString buf = ti->pOutput->Read();
+		CStringA bytes(CW2A(buf, CP_UTF8));
+		LPCSTR data = bytes;
+		DWORD remaining = static_cast<DWORD>(bytes.GetLength());
+		while (success && remaining > 0) {
+			DWORD written = 0;
+			success = WriteFile(ti->hChildStdinWr, data, remaining,
+				&written, NULL) && written > 0;
+			data += written;
+			remaining -= written;
 		}
-		delete[] buf;
 		if (!success) break;
 	}
 	return 0;
@@ -144,35 +154,20 @@ static void MakeEvents(ThreadInfo* ti)
 	saAttr.bInheritHandle = TRUE;
 	saAttr.lpSecurityDescriptor = NULL; 
 
-	sprintf(ti->szBreak, "PURE_SIGINT-%u", ti->pi.dwProcessId);
-	sprintf(ti->szKill, "PURE_SIGTERM-%u", ti->pi.dwProcessId);
-	ti->hBreak = CreateEvent(&saAttr, TRUE, FALSE, ti->szBreak);
-	ti->hKill = CreateEvent(&saAttr, TRUE, FALSE, ti->szKill);
+	_stprintf_s(ti->szBreak, _countof(ti->szBreak),
+		_T("PURE_SIGINT-%u"), ti->pi.dwProcessId);
+	_stprintf_s(ti->szKill, _countof(ti->szKill),
+		_T("PURE_SIGTERM-%u"), ti->pi.dwProcessId);
+	ti->hBreak = CreateEvent(&saAttr, FALSE, FALSE, ti->szBreak);
+	ti->hKill = CreateEvent(&saAttr, FALSE, FALSE, ti->szKill);
 }
 
-static BOOL MakeTempName(CString& name)
-{
-	DWORD len = GetTempPath(0, NULL);
-	LPTSTR tmppath = new TCHAR[len];
-	DWORD res = GetTempPath(len, tmppath);
-	if (res == 0 || res > len) {
-		// this can't happen??
-		delete[] tmppath;
-		return FALSE;
-	}
-	LPTSTR tmpname = new TCHAR[MAX_PATH];
-	UINT res2 = GetTempFileName(tmppath, "Q", 0, tmpname);
-	delete[] tmppath;
-	if (res2) name = tmpname;
-	delete[] tmpname;
-	return res2;
-}
 
 static void QuoteArg(CString& s)
 {
-	if (s.FindOneOf(" \t") >= 0) {
-		s.Replace("\"", "\\\"");
-		s = "\"" + s + "\"";
+	if (s.FindOneOf(_T(" \t")) >= 0) {
+		s.Replace(_T("\""), _T("\\\""));
+		s = _T("\"") + s + _T("\"");
 	}
 }
 
@@ -211,6 +206,7 @@ static DWORD WINAPI CompileRun(LPVOID pParam)
 	cmd.ReleaseBuffer();
 	if (!res) { ReleaseMutex(ti->hMutex); return 1; }
 	ASSERT(ti->pi.hProcess != NULL);
+	CloseHandle(ti->pi.hThread); ti->pi.hThread = NULL;
 	MakeEvents(ti);
 
 	// now save to let the main thread take over until the
@@ -249,51 +245,87 @@ static DWORD WINAPI CompileRun(LPVOID pParam)
 	cmd += prompt;
 #else
 	BOOL res;
-	CString cmd, filearg = ti->file;
-	cmd.Format(ti->run, filearg);
+	CString cmd, apparg = ti->application, filearg = ti->file;
+	QuoteArg(apparg);
+	QuoteArg(filearg);
+	cmd = apparg;
+	if (*ti->arguments) {
+		cmd += _T(" ");
+		cmd += ti->arguments;
+	}
+	if (!filearg.IsEmpty())
+		cmd += _T(" ") + filearg;
 	CString prompt = CMainFrame::m_strQPS;
-	CString set_prompt;
-	set_prompt.Format("PURE_PS=%s", prompt);
-	_putenv(set_prompt);
+	SetEnvironmentVariable(_T("PURE_PS"), prompt);
 #endif
-	res = CreateProcess(NULL, cmd.GetBuffer(cmd.GetLength()+1),
+	res = CreateProcess(ti->application, cmd.GetBuffer(cmd.GetLength()+1),
 			NULL, NULL, TRUE,
-			CREATE_NEW_CONSOLE,
+			CREATE_NEW_CONSOLE | CREATE_SUSPENDED,
 			NULL, *ti->path?ti->path:NULL, &si, &ti->pi);
 	cmd.ReleaseBuffer();
-	ASSERT(ti->pi.hProcess != NULL);
 	if (!res) { ReleaseMutex(ti->hMutex); return 1; }
+	ASSERT(ti->pi.hProcess != NULL);
 	MakeEvents(ti);
+	BOOL ready = ti->hBreak != NULL && ti->hKill != NULL &&
+		ResumeThread(ti->pi.hThread) != static_cast<DWORD>(-1);
+	CloseHandle(ti->pi.hThread); ti->pi.hThread = NULL;
+	if (!ready) {
+		TerminateProcess(ti->pi.hProcess, 0);
+		CloseHandle(ti->pi.hProcess); ti->pi.hProcess = NULL;
+		if (ti->hBreak != NULL) {
+			CloseHandle(ti->hBreak); ti->hBreak = NULL;
+		}
+		if (ti->hKill != NULL) {
+			CloseHandle(ti->hKill); ti->hKill = NULL;
+		}
+		ReleaseMutex(ti->hMutex);
+		return 1;
+	}
 
 	ReleaseMutex(ti->hMutex);
 	return 0;
 }
 
-BOOL CPipe::Run2(LPCTSTR command, LPCTSTR name, LPCTSTR pname)
+BOOL CPipe::Run2(LPCTSTR applicationName, LPCTSTR argumentsValue,
+	LPCTSTR name, LPCTSTR pname)
 {
 	// kill running process if it exists
 	Kill();
+	application = applicationName ? applicationName : _T("");
+	arguments = argumentsValue ? argumentsValue : _T("");
+	DWORD attributes = GetFileAttributes(application);
+	if (attributes == INVALID_FILE_ATTRIBUTES ||
+		(attributes & FILE_ATTRIBUTE_DIRECTORY)) {
+		CString message;
+		message.Format(_T("Pure interpreter not found:\n%s"),
+			static_cast<LPCTSTR>(application));
+		AfxMessageBox(message, MB_OK | MB_ICONERROR);
+		return FALSE;
+	}
+
 
 	// show script name
  	if (!CMainFrame::m_bLogReset) {
  		CString msg;
- 		msg.Format("// %s\r\n", pname);
+		msg.Format(_T("// %s\r\n"), pname);
 		m_bufInput.Write(msg);
 		PostMessage(AfxGetMainWnd()->m_hWnd, WM_USER_INPUT, 0, 0);
  	}
 
 	// get filename/directory info
-	char drive[_MAX_DRIVE], dir[_MAX_DIR], fname[_MAX_FNAME],
-		ext[_MAX_EXT];
-	_splitpath(name, drive, dir, fname, ext);
-	strcat(strcpy(path, drive), dir);
-	strcat(strcpy(file, fname), ext);
-
-	// create a temporary code file name
-	CString tmpname;
-	if (!MakeTempName(tmpname) || tmpname.GetLength()+1 > _MAX_PATH)
-		return FALSE;
-	strcpy(code, tmpname);
+	CString fullName(name ? name : _T(""));
+	int slash = fullName.ReverseFind(_T('/'));
+	int backslash = fullName.ReverseFind(_T('\\'));
+	if (backslash > slash)
+		slash = backslash;
+	if (slash >= 0) {
+		path = fullName.Left(slash + 1);
+		file = fullName.Mid(slash + 1);
+	} else {
+		path.Empty();
+		file = fullName;
+	}
+	code.Empty();
 
 	// set up the pipes
 
@@ -345,11 +377,12 @@ BOOL CPipe::Run2(LPCTSTR command, LPCTSTR name, LPCTSTR pname)
 	m_ti.hOutput = hOutput;
 	m_ti.pInput = &m_bufInput;
 	m_ti.pOutput = &m_bufOutput;
+	m_ti.application = application;
+	m_ti.arguments = arguments;
 	m_ti.path = path; m_ti.file = file; m_ti.code = code;
 #if 0
 	m_ti.compile = CMainFrame::m_strCompileCommand;
 #endif
-	m_ti.run = command;
 	hReader = CreateThread(NULL, 0, Reader, &m_ti, 0, &idReader);
 	hWriter = CreateThread(NULL, 0, Writer, &m_ti, 0, &idWriter);
 	ASSERT(hReader != NULL && hWriter != NULL);
@@ -380,6 +413,7 @@ fail:
 		CloseHandle(hChildStdoutRdDup);
 	hChildStdinRd = hChildStdinWr = INVALID_HANDLE_VALUE;
 	hChildStdoutRd = hChildStdoutWr = INVALID_HANDLE_VALUE;
+	AfxMessageBox(IDS_RUN_FAILED, MB_OK | MB_ICONERROR);
 	return FALSE;
 }
 
@@ -390,7 +424,7 @@ void CPipe::Break()
 		WAIT_OBJECT_0 &&
 		m_ti.pi.hProcess != NULL) {
 		ASSERT(m_ti.hBreak != NULL);
-		PulseEvent(m_ti.hBreak);
+		SetEvent(m_ti.hBreak);
 		ResetEvent(hOutput);
 		ReleaseMutex(hMutex);
 	}
@@ -404,7 +438,7 @@ void CPipe::Kill()
 		m_ti.pi.hProcess != NULL) {
 		// signal the process
 		ASSERT(m_ti.hKill != NULL);
-		PulseEvent(m_ti.hKill);
+		SetEvent(m_ti.hKill);
 		// give it some time to arrive
 		Sleep(100);
 		// close our side of the stdin handle (in case
@@ -473,7 +507,7 @@ BOOL CPipe::IsRunning()
 void CPipe::KillThreads()
 {
 	// kill the worker threads
-	PulseEvent(hKillThreads);
+	SetEvent(hKillThreads);
 	if (hCompileRun != NULL) {
 		if (WaitForSingleObject(hCompileRun, 100) !=
 			WAIT_OBJECT_0)
@@ -494,6 +528,7 @@ void CPipe::KillThreads()
 		CloseHandle(hWriter);
 	}
 	hReader = hWriter = hCompileRun = NULL;
+	ResetEvent(hKillThreads);
 	ResetEvent(hOutput);
 	// close all open handles
 	if (hChildStdinRd != INVALID_HANDLE_VALUE)

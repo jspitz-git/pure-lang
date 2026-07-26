@@ -53,12 +53,8 @@ public:
 	// for the script filename (if any); default: "qc -n -o %s %s"
 #endif
 
-	static CString m_strRunCommand;
-	// the command to run the interpreter; default: "q -i -q -o %s %s"
-
-	static CString m_strDebugCommand;
-	// the command to run the interpreter in debug mode;
-	// default: "q -d -i -q -o %s %s"
+	static CString m_strPurePath;
+	// absolute path to the sibling pure.exe
 
 	static CString m_strAppPath;
 	// the path to the running application

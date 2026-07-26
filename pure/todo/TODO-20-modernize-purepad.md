@@ -1,6 +1,6 @@
 # TODO-20 - Modernize PurePad
 
-Status: Open
+Status: Closed on 2026-07-26
 Branch: todo/20-modernize-purepad
 
 ## Purpose
@@ -17,11 +17,11 @@ with the portable Pure runtime.
 
 ## Task List
 
-1. [ ] Create and validate a 64-bit MFC build.
-2. [ ] Fix compiler, Unicode, path-length, and ownership issues found by the build.
-3. [ ] Launch the sibling `pure.exe` without depending on global `PATH`.
-4. [ ] Move per-user state to an appropriate Windows application-data directory.
-5. [ ] Validate editing, execution, interruption, diagnostics, help, and shutdown.
+1. [x] Create and validate a 64-bit MFC build.
+2. [x] Fix compiler, Unicode, path-length, and ownership issues found by the build.
+3. [x] Launch the sibling `pure.exe` without depending on global `PATH`.
+4. [x] Move per-user state to an appropriate Windows application-data directory.
+5. [x] Validate editing, execution, interruption, diagnostics, help, and shutdown.
 
 ## Guardrails
 
@@ -38,3 +38,71 @@ with the portable Pure runtime.
 ## Progress Log
 
 - 2026-07-25: Created from the PurePad source and dependency inventory.
+- 2026-07-26: Added and validated a Visual Studio 2022 x64 MFC build.
+  - Added CMake configure and Release/Debug build presets using shared MFC.
+  - Removed the fixed HTML Help Workshop include and library paths inherited
+    from the Visual C++ 6 project.
+  - Fixed two blocking modern-MSVC compatibility errors: const-correct path
+    scanning and selection of the global Win32 `HtmlHelp` function.
+  - Release and Debug builds completed with MSVC 19.44 and Windows SDK 10.0.26100.
+  - `dumpbin` confirmed a PE32+ x64 Windows GUI executable depending on
+    `mfc140.dll`.
+  - Remaining secure-CRT, narrowing, and path-size warnings are retained for
+    task 2 rather than hidden with a global warning suppression.
+- 2026-07-26: Removed the first set of ownership hazards.
+  - `CBuffer` and `CPipe` now return `CString` values, removing caller-owned
+    arrays and their manual `delete[]` contract.
+  - `CPipe` closes all three persistent synchronization handles and closes the
+    thread handles returned by successful `CreateProcess` calls.
+  - Pipe writes now handle partial `WriteFile` results; the home-directory
+    fallback uses mutable storage instead of modifying a string literal.
+  - Release and Debug x64 builds passed after the changes; the remaining
+    warnings are confined to the text and path modernization work.
+- 2026-07-26: Completed the Unicode and path-length modernization.
+  - Switched the MFC target from MBCS to Unicode and converted the editor,
+    history, process-pipe, prompt, diagnostics, and settings paths to `TCHAR`
+    and `CString`.
+  - Replaced fixed-size path splitting and the legacy ANSI `QPATH` search with
+    dynamically sized executable-relative and Unicode path handling.
+  - Added an embedded `longPathAware` manifest; the extracted Release manifest
+    confirms the setting alongside per-monitor DPI awareness.
+  - Release and Debug x64 builds pass without compiler or linker warnings;
+    `dumpbin` still identifies the Release artifact as an x64 Windows GUI
+    executable.
+- 2026-07-26: Made interpreter launch executable-relative.
+  - PurePad now derives an absolute sibling `pure.exe` path from its own module
+    path and no longer loads or persists the legacy PATH-dependent run command.
+  - `CreateProcess` receives the absolute executable as `applicationName`; its
+    command line separately quotes the executable and script arguments and
+    retains the existing Run and Debug switches.
+  - Missing sibling and pipe-setup failures are reported synchronously without
+    leaving partially initialized worker state.
+  - A staged Release PurePad in `C:\tmp\PurePad sibling probe` invoked a sibling
+    probe executable for both Run (`-i -q`) and Debug (`-i -q -g`) with `PATH`
+    restricted to `C:\Windows\System32;C:\Windows`.
+  - Release and Debug x64 builds pass without warnings.
+- 2026-07-26: Moved per-user state to roaming AppData.
+  - PurePad now stores its MFC profile in the UTF-16
+    `%APPDATA%\Pure\PurePad\PurePad.ini` file and command history in
+    `%APPDATA%\Pure\PurePad\history.txt`.
+  - A fresh profile imports all supported string and DWORD values from the
+    legacy HKCU profile; the old registry data and history file are retained.
+  - `PUREPAD_USER_DATA` provides an explicit isolated test/development override.
+  - An isolated fresh-profile run migrated Settings, Font, and toolbar sections,
+    redirected history, exited cleanly, and left the legacy registry unchanged.
+  - Release and Debug x64 builds pass without warnings.
+- 2026-07-26: Completed end-to-end functional validation.
+  - Replaced Unicode MFC raw serialization with UTF-8 output and decoding for
+    UTF-8, legacy ANSI, and BOM-marked UTF-16 source files.
+  - Initialized OLE before modern MFC recent-file handling, fixing a fast-fail
+    when PurePad opened a document from its command line.
+  - Made missing or unusable `puredoc.chm` help report its executable-relative
+    path instead of failing silently.
+  - Replaced lossy `PulseEvent` signalling and removed the child-start race by
+    creating named auto-reset events while `pure.exe` is still suspended.
+  - An automated x64 Release workflow in a path containing spaces verified
+    editing and UTF-8 saving, real interpreter output, a line-2 syntax error,
+    source navigation, interactive Break, missing-help diagnostics, and clean
+    shutdown with no remaining child process.
+  - Break reduced the allocating interpreter loop from about 1,000 ms CPU per
+    second to 0 ms; Release and Debug x64 builds pass without warnings.

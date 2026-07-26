@@ -25,6 +25,7 @@
 class CQpadApp : public CWinApp
 {
 public:
+	CString m_strUserDataPath;
 	CQpadApp();
 
 // Overrides

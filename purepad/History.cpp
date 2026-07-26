@@ -67,7 +67,7 @@ BOOL CHistory::GetLast(CString &strLine)
 {
 	if (m_nSize) {
 		m_rPos = NULL;
-		strLine = "";
+		strLine = _T("");
 		return TRUE;
 	} else
 		return FALSE;
@@ -94,7 +94,7 @@ BOOL CHistory::GetNext(CString &strLine)
 		if (m_rPos)
 			strLine = m_lLine.GetAt(m_rPos);
 		else
-			strLine = "";
+			strLine = _T("");
 		return TRUE;
 	} else
 		return FALSE;
@@ -105,7 +105,7 @@ BOOL CHistory::SearchPrev(CString &strLine, CString strSearch)
 	POSITION pos = m_rPos;
 	CString str;
 	while (GetPrev(str))
-		if (strncmp(str, strSearch, strSearch.GetLength()) == 0) {
+		if (_tcsncmp(str, strSearch, strSearch.GetLength()) == 0) {
 			strLine = str;
 			return TRUE;
 		}
@@ -118,7 +118,7 @@ BOOL CHistory::SearchNext(CString &strLine, CString strSearch)
 	POSITION pos = m_rPos;
 	CString str;
 	while (GetNext(str))
-		if (strncmp(str, strSearch, strSearch.GetLength()) == 0) {
+		if (_tcsncmp(str, strSearch, strSearch.GetLength()) == 0) {
 			strLine = str;
 			return TRUE;
 		}
@@ -187,7 +187,7 @@ BOOL CHistory::Write(CString strFile)
 		try {
 			POSITION pos;
 			for (pos = m_lLine.GetHeadPosition(); pos != NULL;) {
-				f.WriteString(m_lLine.GetNext(pos) + "\n");
+				f.WriteString(m_lLine.GetNext(pos) + _T("\n"));
 			}
 			return TRUE;
 		}

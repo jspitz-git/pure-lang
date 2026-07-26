@@ -22,11 +22,9 @@ public:
 	BOOL Write(LPCTSTR lpszStr);
 	// append a string to the buffer (return TRUE if buffer is
 	// currently empty)
-	LPTSTR Read();
+	CString Read();
 	// get the current buffer contents and empty the buffer
-	// (the result is allocated dynamically using new and should
-	// be deallocated using delete by the caller)
-	LPTSTR Peek();
+	CString Peek();
 	// same as ReadBuffer, but retains the buffer contents
 	void Empty();
 	// empty the buffer
