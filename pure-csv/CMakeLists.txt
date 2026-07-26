@@ -7,6 +7,37 @@ include(CTest)
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(PURE REQUIRED IMPORTED_TARGET "pure>=0.68")
 
+set(
+  PURE_LIBRARY_INSTALL_DIR "lib/pure"
+  CACHE STRING "Relative install directory for Pure modules"
+)
+set(
+  PURE_DOCUMENTATION_INSTALL_DIR "share/doc/${PROJECT_NAME}"
+  CACHE STRING "Relative install directory for package documentation"
+)
+foreach(destination_var IN ITEMS
+    PURE_LIBRARY_INSTALL_DIR
+    PURE_DOCUMENTATION_INSTALL_DIR)
+  set(destination "${${destination_var}}")
+  if(IS_ABSOLUTE "${destination}" OR
+      destination MATCHES "(^|[/\\\\])\\.\\.([/\\\\]|$)")
+    message(FATAL_ERROR
+      "${destination_var} must remain within the installation prefix: ${destination}")
+  endif()
+endforeach()
+
+set(version "${PROJECT_VERSION}")
+string(TIMESTAMP today "%B %d, %Y")
+configure_file(
+  README
+  "${CMAKE_CURRENT_BINARY_DIR}/README.configured"
+  @ONLY
+  NEWLINE_STYLE UNIX
+)
+file(READ "${CMAKE_CURRENT_BINARY_DIR}/README.configured" readme)
+string(REPLACE "|today|" "${today}" readme "${readme}")
+file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/README" "${readme}")
+
 add_library(csv MODULE csv.c)
 target_link_libraries(csv PRIVATE PkgConfig::PURE)
 set_target_properties(
@@ -45,3 +76,19 @@ if(BUILD_TESTING)
     message(STATUS "PURE_EXECUTABLE is not set; pure-csv smoke test is disabled")
   endif()
 endif()
+install(
+  TARGETS csv
+  RUNTIME DESTINATION "${PURE_LIBRARY_INSTALL_DIR}"
+  LIBRARY DESTINATION "${PURE_LIBRARY_INSTALL_DIR}"
+  COMPONENT runtime
+)
+install(
+  FILES csv.pure
+  DESTINATION "${PURE_LIBRARY_INSTALL_DIR}"
+  COMPONENT runtime
+)
+install(
+  FILES "${CMAKE_CURRENT_BINARY_DIR}/README" COPYING
+  DESTINATION "${PURE_DOCUMENTATION_INSTALL_DIR}"
+  COMPONENT documentation
+)

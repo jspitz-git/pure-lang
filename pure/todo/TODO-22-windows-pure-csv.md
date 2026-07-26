@@ -1,6 +1,6 @@
 # TODO-22 - Windows pure-csv Package
 
-Status: Open
+Status: Closed on 2026-07-26
 Branch: todo/22-windows-pure-csv
 
 ## Purpose
@@ -18,7 +18,18 @@ Build, validate, and package `pure-csv` for the portable Windows distribution.
 1. [x] Configure and build the native module on Windows.
 2. [x] Resolve and document its complete runtime dependency set.
 3. [x] Add CSV read/write and error-handling smoke tests.
-4. [ ] Validate the staged package outside MSYS2.
+4. [x] Validate the staged package outside MSYS2.
+
+## Installed Package Manifest
+
+- `lib/pure/csv.dll`
+- `lib/pure/csv.pure`
+- `share/doc/pure-csv/README`
+- `share/doc/pure-csv/COPYING`
+
+The installed README contains the package's user examples with the version and
+build date expanded. The existing portable runtime supplies the twelve DLLs
+listed below; `pure-csv` does not duplicate them in its package manifest.
 
 ## Runtime Dependencies
 
@@ -99,3 +110,23 @@ Build, validate, and package `pure-csv` for the portable Windows distribution.
       explicit CRLF and the native Windows default, with no doubled `CR`.
     - Running the CMake test runner with a syntactically invalid Pure script
       failed on the missing success marker as expected.
+- 2026-07-26: Staged and validated the complete portable Windows package.
+  - Prefix-contained CMake install rules add only `csv.dll`, `csv.pure`, the
+    versioned README with its user examples, and `COPYING`; absolute paths and
+    parent traversals are rejected.
+  - The package was installed into a fresh copy of the portable runtime in a
+    path containing spaces. A literal scan found no source, build, temporary,
+    CLANG64, or MSYS2 prefix in any package file.
+  - The final smoke run uses staged `csv.pure` and `csv.dll`, an explicit data
+    directory, and a marker-checked stdin runner. This supersedes the weaker
+    step-1 `-x` load probe, whose status alone cannot detect Pure syntax errors.
+  - Validation:
+    - With `PKG_CONFIG_PATH=C:\tmp\pure-csv-sdk-step1-20260726\lib\pkgconfig`, `C:\msys64\clang64\bin\cmake.exe -S C:\pure-lang\pure-csv -B "C:\tmp\pure csv package build step4 20260726" -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=C:/msys64/clang64/bin/clang.exe -DPKG_CONFIG_EXECUTABLE=C:/msys64/clang64/bin/pkg-config.exe -DPURE_EXECUTABLE="C:\tmp\Pure CSV portable package step4 20260726\bin\pure.exe" -DCMAKE_INSTALL_PREFIX="C:\tmp\Pure CSV portable package step4 20260726"`, `cmake --build`, and `cmake --install` passed.
+    - Comparing the copied runtime before and after installation found exactly
+      the four relative paths in the installed package manifest. The installed
+      README header is `Version 1.6, July 26, 2026` and contains no unexpanded
+      placeholder.
+    - Configuring with `PURE_LIBRARY_INSTALL_DIR=../escape` failed with the
+      expected prefix-containment diagnostic.
+    - From `C:\Windows`, with `PURELIB` unset and `PATH` restricted to the staged
+      `bin` and Windows system directories, `C:\msys64\clang64\bin\cmake.exe -DPURE_EXECUTABLE="C:\tmp\Pure CSV portable package step4 20260726\bin\pure.exe" -DPURE_SOURCE_DIR="C:\tmp\Pure CSV portable package step4 20260726\lib\pure" -DPURE_MODULE_DIR="C:\tmp\Pure CSV portable package step4 20260726\lib\pure" -DTEST_SCRIPT=C:\pure-lang\pure-csv\tests\smoke.pure -DTEST_DIRECTORY="C:\tmp\Pure CSV cwd-independent smoke data step4 20260726" -DNATIVE_NEWLINE=CRLF -P C:\pure-lang\pure-csv\cmake\RunSmokeTest.cmake` passed.
