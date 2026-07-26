@@ -1,0 +1,37 @@
+using "lib:ffi-smoke-native";
+using ffi, system;
+
+smoke_check name condition
+  = () if condition;
+  = fprintf stderr "FAIL: %s\n" name $$ exit 1 otherwise;
+
+let smoke_add =
+  fcall "ffi_smoke_add" FFI_DEFAULT_ABI sint32_t (sint32_t,sint32_t);
+smoke_check "scalar call" (smoke_add (19,23) == 42);
+
+let smoke_pointer =
+  fcall "ffi_smoke_pointer" FFI_DEFAULT_ABI pointer_t ();
+let smoke_read_pointer =
+  fcall "ffi_smoke_read_pointer" FFI_DEFAULT_ABI sint32_t pointer_t;
+smoke_check "pointer return and argument"
+  (smoke_read_pointer (smoke_pointer ()) == 37);
+
+let smoke_record_t = struct_t (sint32_t,double_t);
+let smoke_transform_record =
+  fcall "ffi_smoke_transform_record" FFI_DEFAULT_ABI
+    smoke_record_t smoke_record_t;
+let smoke_record =
+  smoke_transform_record (struct smoke_record_t (7,1.25));
+smoke_check "structure by value"
+  (members smoke_record == (12,2.5));
+
+let smoke_callback =
+  fclos (\(x,y) -> 10*x+y) FFI_DEFAULT_ABI
+    sint32_t (sint32_t,sint32_t);
+let smoke_invoke_callback =
+  fcall "ffi_smoke_invoke_callback" FFI_DEFAULT_ABI
+    sint32_t (pointer_t,sint32_t,sint32_t);
+smoke_check "callback into Pure"
+  (smoke_invoke_callback (smoke_callback,4,2) == 42);
+
+puts "PURE_FFI_SMOKE_OK";
