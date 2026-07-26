@@ -18,7 +18,7 @@ the portable runtime.
 
 1. [x] Build the module against the staged Pure runtime and CLANG64 `libffi`.
 2. [x] Audit calling-convention and symbol-loading assumptions.
-3. [ ] Add native-call and callback smoke tests.
+3. [x] Add native-call and callback smoke tests.
 4. [ ] Stage and validate the package outside MSYS2.
 
 ## Guardrails
@@ -72,3 +72,18 @@ the portable runtime.
       `using "lib:C:/tmp/pure-ffi-abi-audit-20260726"` and called the two
       exports through `FFI_DEFAULT_ABI` and `FFI_WIN64`. The marker-checked
       result was `PURE_FFI_ABI_OK:2:2:1:42:42`.
+- 2026-07-26: Added repeatable native-call and callback smoke tests.
+  - Added a CTest-only `ffi-smoke-native` helper library and a marker-checked
+    Pure test; the helper is not installed with the package.
+  - The helper exports scalar, pointer, structure-by-value, and callback entry
+    points and is explicitly loaded by `using "lib:ffi-smoke-native"`.
+  - The Pure test checks an integer call, a returned and passed pointer, a
+    mixed integer/double structure, and a libffi closure callback into Pure.
+  - The CMake runner unsets `PURELIB`, supplies only explicit module paths, and
+    requires the standalone `PURE_FFI_SMOKE_OK` marker.
+  - Validation:
+    - A clean Ninja configuration in
+      `C:\tmp\pure-ffi-build-step3-20260726` found Pure 0.68, libffi 3.7.1,
+      and GMP 6.3.0 and built both DLLs with CLANG64 Clang 22.1.8.
+    - `C:\msys64\clang64\bin\ctest.exe --test-dir C:\tmp\pure-ffi-build-step3-20260726 --output-on-failure -V`
+      passed `pure-ffi-smoke` (1/1) in 5.44 seconds.
