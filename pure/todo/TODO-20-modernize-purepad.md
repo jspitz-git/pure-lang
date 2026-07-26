@@ -18,7 +18,7 @@ with the portable Pure runtime.
 ## Task List
 
 1. [x] Create and validate a 64-bit MFC build.
-2. [ ] Fix compiler, Unicode, path-length, and ownership issues found by the build.
+2. [x] Fix compiler, Unicode, path-length, and ownership issues found by the build.
 3. [ ] Launch the sibling `pure.exe` without depending on global `PATH`.
 4. [ ] Move per-user state to an appropriate Windows application-data directory.
 5. [ ] Validate editing, execution, interruption, diagnostics, help, and shutdown.
@@ -58,3 +58,14 @@ with the portable Pure runtime.
     fallback uses mutable storage instead of modifying a string literal.
   - Release and Debug x64 builds passed after the changes; the remaining
     warnings are confined to the text and path modernization work.
+- 2026-07-26: Completed the Unicode and path-length modernization.
+  - Switched the MFC target from MBCS to Unicode and converted the editor,
+    history, process-pipe, prompt, diagnostics, and settings paths to `TCHAR`
+    and `CString`.
+  - Replaced fixed-size path splitting and the legacy ANSI `QPATH` search with
+    dynamically sized executable-relative and Unicode path handling.
+  - Added an embedded `longPathAware` manifest; the extracted Release manifest
+    confirms the setting alongside per-monitor DPI awareness.
+  - Release and Debug x64 builds pass without compiler or linker warnings;
+    `dumpbin` still identifies the Release artifact as an x64 Windows GUI
+    executable.

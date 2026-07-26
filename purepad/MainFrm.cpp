@@ -13,7 +13,7 @@
 #include "HistfileDlg.h"
 #include "HistsizeDlg.h"
 
-#include <direct.h>
+#include <vector>
 
 #ifdef _DEBUG
 #define new DEBUG_NEW
@@ -99,13 +99,6 @@ CMainFrame::~CMainFrame()
 {
 }
 
-static TCHAR BASED_CODE szSetup[] = _T("Software\\Microsoft\\Windows\\CurrentVersion\\App Paths\\purepad.exe");
-static TCHAR BASED_CODE szPath[] = _T("Path");
-
-#if 0
-static TCHAR BASED_CODE szTclSetup[] = _T("Software\\ActiveState\\ActiveTcl");
-static TCHAR BASED_CODE szCurrentVersion[] = _T("CurrentVersion");
-#endif
 
 static TCHAR BASED_CODE szSettings[] = _T("Settings");
 
@@ -155,8 +148,8 @@ static void GetProfileFont(LPCTSTR szSec, LOGFONT* plf)
 		plf->lfPitchAndFamily = (BYTE)pApp->GetProfileInt(szSec, szPitchAndFamily, 0);
 		plf->lfCharSet = (BYTE)pApp->GetProfileInt(szSec, szCharSet, DEFAULT_CHARSET);
 		CString strFont = pApp->GetProfileString(szSec, szFaceName, szSystem);
-		lstrcpyn((TCHAR*)plf->lfFaceName, strFont, sizeof plf->lfFaceName);
-		plf->lfFaceName[sizeof plf->lfFaceName-1] = 0;
+		lstrcpyn(plf->lfFaceName, strFont, _countof(plf->lfFaceName));
+		plf->lfFaceName[_countof(plf->lfFaceName)-1] = 0;
 	}
 }
 
@@ -187,7 +180,7 @@ static BOOL ReadWindowPlacement(LPWINDOWPLACEMENT pwp)
 		return FALSE;
 
 	WINDOWPLACEMENT wp;
-	int nRead = _stscanf(strBuffer, szFormat,
+	int nRead = _stscanf_s(strBuffer, szFormat,
 		&wp.flags, &wp.showCmd,
 		&wp.ptMinPosition.x, &wp.ptMinPosition.y,
 		&wp.ptMaxPosition.x, &wp.ptMaxPosition.y,
@@ -205,9 +198,9 @@ static BOOL ReadWindowPlacement(LPWINDOWPLACEMENT pwp)
 static void WriteWindowPlacement(LPWINDOWPLACEMENT pwp)
 	// write a window placement to settings section of app's ini file
 {
-	TCHAR szBuffer[sizeof("-32767")*8 + sizeof("65535")*2];
+	TCHAR szBuffer[256];
 
-	wsprintf(szBuffer, szFormat,
+	_stprintf_s(szBuffer, _countof(szBuffer), szFormat,
 		pwp->flags, pwp->showCmd,
 		pwp->ptMinPosition.x, pwp->ptMinPosition.y,
 		pwp->ptMaxPosition.x, pwp->ptMaxPosition.y,
@@ -217,22 +210,55 @@ static void WriteWindowPlacement(LPWINDOWPLACEMENT pwp)
 		szBuffer);
 }
 
+static CString DirectoryName(const CString& name)
+{
+	int slash = name.ReverseFind(_T('/'));
+	int backslash = name.ReverseFind(_T('\\'));
+	if (backslash > slash)
+		slash = backslash;
+	if (slash < 0)
+	if (slash == 2 && name.GetLength() > 2 && name[1] == _T(':'))
+		return name.Left(3);
+		return CString();
+	return name.Left(slash);
+}
+
+static CString GetEnvironment(LPCTSTR name)
+{
+	DWORD required = GetEnvironmentVariable(name, NULL, 0);
+	if (!required)
+		return CString();
+	CString value;
+	LPTSTR buffer = value.GetBuffer(static_cast<int>(required));
+	DWORD copied = GetEnvironmentVariable(name, buffer, required);
+	if (!copied || copied >= required) {
+		value.ReleaseBuffer(0);
+		return CString();
+	}
+	value.ReleaseBuffer(static_cast<int>(copied));
+	return value;
+}
+
 static void GetAppPath(CString& app_path)
 {
-	app_path = "";
-	HKEY hSetup;
-	DWORD dwType, dwSize;
-	if (RegOpenKeyEx(HKEY_LOCAL_MACHINE, szSetup,
-		0, KEY_READ, &hSetup) == ERROR_SUCCESS &&
-		RegQueryValueEx(hSetup, szPath, NULL, &dwType, NULL,
-			&dwSize) == ERROR_SUCCESS && dwType == REG_SZ) {
-		unsigned char *path = new unsigned char[dwSize];
-		if (RegQueryValueEx(hSetup, "Path", NULL, &dwType, path,
-			&dwSize) == ERROR_SUCCESS) {
-			app_path = path;
-			delete[] path;
+	std::vector<TCHAR> buffer(256);
+	for (;;) {
+		DWORD length = GetModuleFileName(NULL, buffer.data(),
+			static_cast<DWORD>(buffer.size()));
+		if (!length) {
+			app_path.Empty();
+			return;
 		}
-		RegCloseKey(hSetup);
+		if (length < buffer.size()) {
+			app_path = CString(buffer.data(), static_cast<int>(length));
+			app_path = DirectoryName(app_path);
+			return;
+		}
+		if (buffer.size() >= 32768) {
+			app_path.Empty();
+			return;
+		}
+		buffer.resize(buffer.size() * 2);
 	}
 }
 
@@ -275,7 +301,7 @@ static void GetTclPathAndVersion(CString& tcl_path, CString& tcl_version)
 
 static CString LastLine(CString str)
 {
-	int pos = str.ReverseFind('\n');
+	int pos = str.ReverseFind(_T('\n'));
 	if (pos >= 0)
 		return str.Right(str.GetLength()-pos-1);
 	else
@@ -286,7 +312,7 @@ void CMainFrame::Initialize()
 {
 	// get our settings
 	m_strVersion = AfxGetApp()->GetProfileString(szSettings,
-		szVersion, "");
+		szVersion, _T(""));
 	m_bLogReset = AfxGetApp()->GetProfileInt(szSettings,
 		szLogReset, FALSE);
 	m_nTabStops = AfxGetApp()->GetProfileInt(szSettings,
@@ -301,38 +327,36 @@ void CMainFrame::Initialize()
 	m_strHistFile = AfxGetApp()->GetProfileString(szSettings,
 		szHistFile, "PurePadHistory");
 #else
-	char *home = getenv("HOME");
-	if (home) {
-		char *p = strchr(home, '=');
-		if (p) home = p+1;
-		m_strHistFile = AfxGetApp()->GetProfileString(szSettings,
-			szHistFile, CString(home) + "\\PurePadHistory");
-	} else
-		m_strHistFile = AfxGetApp()->GetProfileString(szSettings,
-			szHistFile, "PurePadHistory");
+	CString home = GetEnvironment(_T("HOME"));
+	if (home.IsEmpty())
+		home = GetEnvironment(_T("USERPROFILE"));
+	CString defaultHistory = home.IsEmpty() ? _T("PurePadHistory") :
+		home + _T("\\PurePadHistory");
+	m_strHistFile = AfxGetApp()->GetProfileString(szSettings,
+		szHistFile, defaultHistory);
 #endif
-	if (m_strVersion == "1.1") {
+	if (m_strVersion == _T("1.1")) {
 		m_strQPS = AfxGetApp()->GetProfileString(szSettings,
-			szQPS, "> ");
+			szQPS, _T("> "));
 #if 0
 		m_strCompileCommand = AfxGetApp()->GetProfileString(szSettings,
 			szCompileCommand, "qc -n -o %s %s");
 #endif
 		m_strRunCommand = AfxGetApp()->GetProfileString(szSettings,
-			szRunCommand, "pure -i -q %s");
+			szRunCommand, _T("pure -i -q %s"));
 		m_strDebugCommand = AfxGetApp()->GetProfileString(szSettings,
-			szDebugCommand, "pure -i -q -g %s");
+			szDebugCommand, _T("pure -i -q -g %s"));
 	} else {
 		// update registry entries to current version
-		m_strQPS = "> ";
+		m_strQPS = _T("> ");
 #if 0
 		m_strCompileCommand = "qc -n -o %s %s";
 #endif
-		m_strRunCommand = "pure -i -q %s";
-		m_strDebugCommand = "pure -i -q -g %s";
+		m_strRunCommand = _T("pure -i -q %s");
+		m_strDebugCommand = _T("pure -i -q -g %s");
 	}
 	CMainFrame::m_strQPSX = LastLine(m_strQPS);
-	m_strVersion = "1.1";
+	m_strVersion = _T("1.1");
 	CString	app_path;
 	GetAppPath(app_path);
 	m_strAppPath = AfxGetApp()->GetProfileString(szSettings,
@@ -341,18 +365,8 @@ void CMainFrame::Initialize()
 #if 0
 	GetTclPathAndVersion(tcl_path, tcl_version);
 #endif
-	if (app_path.IsEmpty()) {
-		// no install yet; assume help path of application
-		// (should be same location as executable)
-		char drive[_MAX_DRIVE], dir[_MAX_DIR], fname[_MAX_FNAME],
-			ext[_MAX_EXT], path[_MAX_PATH];
-		_splitpath(AfxGetApp()->m_pszHelpFilePath, drive, dir, fname, ext);
-		strcat(strcpy(path, drive), dir);
-		int l = strlen(path);
-		if (l > 1 && (path[l-1] == '\\' || path[l-1] == '/'))
-			path[l-1] = 0;
-		app_path = _T(path);
-	}
+	if (app_path.IsEmpty())
+		app_path = DirectoryName(AfxGetApp()->m_pszHelpFilePath);
 #if 0
 	// NOTE: As of version 4.6, the directory layout has changed:
 	// The executable is now in the bin subdir. We want the actual
@@ -368,9 +382,9 @@ void CMainFrame::Initialize()
 		app_path = _T(path);
 	}
 #endif
-	CString def_qpath = ".";
+	CString def_qpath = _T(".");
 	if (!app_path.IsEmpty())
-		def_qpath.Format(".;%s\\lib", app_path);
+		def_qpath.Format(_T(".;%s\\lib"), app_path);
 	if (m_strAppPath != app_path) {
 		// looks like Qpad has been reinstalled in a different
 		// location; reset QPATH to its default
@@ -385,13 +399,10 @@ void CMainFrame::Initialize()
 		m_strQPATH = AfxGetApp()->GetProfileString(szSettings,
 			szQPATH, def_qpath);
 #else
-	char *purelib = getenv("PURELIB");
-	if (purelib) {
-		char *p = strchr(purelib, '=');
-		if (p) purelib = p+1;
-	}
+	CString purelib = GetEnvironment(_T("PURELIB"));
 #endif
-	if (!purelib) purelib = "/progra~1/pure/lib";
+	if (purelib.IsEmpty())
+		purelib = app_path.IsEmpty() ? _T(".") : app_path + _T("\\lib");
 	m_strQPATH = purelib;
 	GetProfileFont(szFont, &m_lfFont);
 	if (m_lfFont.lfHeight == 0)
@@ -681,107 +692,83 @@ void CMainFrame::OnUpdateScriptReset(CCmdUI* pCmdUI)
 	pCmdUI->SetCheck(m_bLogReset);
 }
 
-// path searching subroutines from qbase.c in the Q distribution
+// Unicode path searching without fixed-size buffers
 
-static char *dirstr = "/\\:", *volstr = ":";
-#define PATHDELIM ';'
-
-static char	*home()
+static BOOL IsPathSeparator(TCHAR ch)
 {
-	static char *homedir = NULL;
-	if (!homedir && !(homedir = getenv("HOME"))) {
-		static char root[] = "\\";
-		homedir = root;
+	return ch == _T('\\') || ch == _T('/');
+}
+
+static BOOL IsAbsolutePath(const CString& name)
+{
+	return !name.IsEmpty() && (IsPathSeparator(name[0]) ||
+		(name.GetLength() > 1 && name[1] == _T(':')));
+}
+
+static CString ExpandHome(const CString& name)
+{
+	if (name.IsEmpty() || name[0] != _T('~') ||
+		(name.GetLength() > 1 && !IsPathSeparator(name[1])))
+		return name;
+	CString home = GetEnvironment(_T("HOME"));
+	if (home.IsEmpty())
+		home = GetEnvironment(_T("USERPROFILE"));
+	if (home.IsEmpty())
+		return name;
+	if (name.GetLength() == 1)
+		return home;
+	if (!home.IsEmpty() && IsPathSeparator(home[home.GetLength()-1]))
+		return home + name.Mid(2);
+	return home + name.Mid(1);
+}
+
+static CString AppendPath(const CString& directory, const CString& name)
+{
+	if (directory.IsEmpty())
+		return name;
+	if (name.IsEmpty())
+		return directory;
+	if (IsPathSeparator(directory[directory.GetLength()-1]))
+		return directory + name;
+	return directory + _T("\\") + name;
+}
+
+static BOOL FileExists(const CString& name)
+{
+	DWORD attributes = GetFileAttributes(name);
+	return attributes != INVALID_FILE_ATTRIBUTES &&
+		!(attributes & FILE_ATTRIBUTE_DIRECTORY);
+}
+
+static void MakePathName(const CString& path, CString& name)
+{
+	name = ExpandHome(name);
+	if (IsAbsolutePath(name))
+		return;
+
+	int position = 0;
+	CString entry = CMainFrame::m_strQPATH.Tokenize(_T(";"), position);
+	while (!entry.IsEmpty()) {
+		CString directory;
+		if (entry == _T("."))
+			directory = path;
+		else if (entry.GetLength() > 1 && entry[0] == _T('.') &&
+			IsPathSeparator(entry[1]))
+			directory = AppendPath(path, entry.Mid(2));
+		else
+			directory = ExpandHome(entry);
+		CString candidate = AppendPath(directory, name);
+		if (FileExists(candidate)) {
+			name = candidate;
+			return;
+		}
+		entry = CMainFrame::m_strQPATH.Tokenize(_T(";"), position);
 	}
-	return homedir;
+
+	if (name.Find(_T('\\')) < 0 && name.Find(_T('/')) < 0 &&
+		name.Find(_T(':')) < 0)
+		name = AppendPath(path, name);
 }
-
-#define tilde(s) (s[0] == '~' && (!s[1] || strchr(dirstr, s[1]) && !strchr(volstr, s[1])))
-
-static int absolute(const char *s)
-{
-  const char *t = s;
-  if (!s || !*s)
-    return 0;
-  else if (tilde(s))
-    return 1;
-  else {
-    while (*s && !strchr(dirstr, *s)) ++s;
-    return *s && (s == t || strchr(volstr, *s));
-  }
-}
-
-static char *expand(char *s1, const char *s2)
-{
-  if (tilde(s2)) {
-    char *h = home();
-    int l = strlen(h);
-    strcpy(s1, h);
-    if (l > 1 && strchr(dirstr, h[l-1]))
-      strcpy(s1+l, s2+2);
-    else
-      strcpy(s1+l, s2+1);
-  } else
-    strcpy(s1, s2);
-  return s1;
-}
-
-static char *searchlib(char *s1, const char *s2, const char *qpath)
-{
-  const char *s;
-  const char *t;
-
-  if (tilde(s2))
-    return expand(s1, s2);
-  else if (absolute(s2))
-    return strcpy(s1, s2);
-  for (s = qpath; *s; s = t) {
-    int l;
-    FILE *fp;
-    char p[_MAX_PATH];
-    if (!(t = strchr(s, PATHDELIM)))
-      t = strchr(s, 0);
-    if (s == t) goto next;
-    if (s[0] == '.')
-      if (t == s+1)
-	s = t;
-      else if (strchr(dirstr, s[1]) &&
-	       !strchr(volstr, s[1]))
-	s += 2;
-    l = t-s;
-    strncpy(p, s, l);
-    p[l] = 0;
-    expand(s1, p);
-    l = strlen(s1);
-    if (l > 0 && (!strchr(dirstr, s1[l-1]) || 
-		  strchr(volstr, s1[l-1])))
-      s1[l] = *dirstr, l++;
-    strcpy(s1+l, s2);
-    if (fp = fopen(s1, "rb")) {
-      fclose(fp);
-      return s1;
-    }
-  next:
-    if (*t) t++;
-  }
-  return strcpy(s1, s2);
-}
-
-static void MakePathName(CString path, CString& name)
-{
-	char *realname = new char[_MAX_PATH+CMainFrame::m_strQPATH.GetLength()];
-	ASSERT(realname != NULL);
-	searchlib(realname, name, CMainFrame::m_strQPATH);
-	name = realname;
-	delete[] realname;
-	char drive[_MAX_DRIVE];
-	char dir[_MAX_DIR];
-	char fname[_MAX_FNAME];
-	char ext[_MAX_EXT];
-	_splitpath(name, drive, dir, fname, ext);
-	if (!*drive && !*dir) name = path+name;
-}
-
 static void Trim(CString& str, int len)
 {
 	if (str.GetLength() > len) str = str.Left(len-3) + "...";
@@ -802,7 +789,7 @@ void CMainFrame::OnErr(CString& fname, int& lineno,
 		GetQpadView()->GotoLine(lineno-1);
 		UpdateTitle();
 		// show fname, line instead of actual text of message
-		msg.Format("%s, line %d", fname, lineno);
+		msg.Format(_T("%s, line %d"), fname, lineno);
 		if (!msg.IsEmpty()) SetMessageText(msg);
 	}
 }
@@ -904,7 +891,7 @@ void CMainFrame::OnScriptOpen()
 void CMainFrame::OnUpdateScriptOpen(CCmdUI* pCmdUI) 
 {
 	CDocument* pDoc = GetQpadView()->GetDocument();
-	pCmdUI->Enable(m_strRunPathName != "" &&
+	pCmdUI->Enable(!m_strRunPathName.IsEmpty() &&
 		m_strRunPathName != pDoc->GetPathName());
 }
 
@@ -915,9 +902,7 @@ void CMainFrame::OnScriptPath()
 	if (dlg.DoModal() == IDOK)
 	{
 		m_strQPATH = dlg.m_strPath;
-		CString set_qpath;
-		set_qpath.Format("QPATH=%s", m_strQPATH);
-		if (_putenv(set_qpath))
+		if (!SetEnvironmentVariable(_T("QPATH"), m_strQPATH))
 			AfxMessageBox(IDS_ENV_FULL);
 	}
 }
@@ -1014,14 +999,20 @@ void CMainFrame::SetStatusInfo()
 	m_strRunTitle = pDoc->GetTitle();
 	m_strRunPathName = pDoc->GetPathName();
 	if (m_strRunPathName.IsEmpty()) {
-		m_strRunPath = "";
+		m_strRunPath.Empty();
 		m_strRunFile = m_strRunTitle;
 	} else {
-		char drive[_MAX_DRIVE], dir[_MAX_DIR];
-		char fname[_MAX_FNAME], ext[_MAX_EXT];
-		_splitpath(m_strRunPathName, drive, dir, fname, ext);
-		m_strRunPath = drive; m_strRunPath += dir;
-		m_strRunFile = fname; m_strRunFile += ext;
+		int slash = m_strRunPathName.ReverseFind(_T('/'));
+		int backslash = m_strRunPathName.ReverseFind(_T('\\'));
+		if (backslash > slash)
+			slash = backslash;
+		if (slash >= 0) {
+			m_strRunPath = m_strRunPathName.Left(slash + 1);
+			m_strRunFile = m_strRunPathName.Mid(slash + 1);
+		} else {
+			m_strRunPath.Empty();
+			m_strRunFile = m_strRunPathName;
+		}
 	}
 }
 
@@ -1029,15 +1020,16 @@ void CMainFrame::UpdateTitle()
 {
 	CString str;
 	CQpadDoc* pDoc = (CQpadDoc*)GetActiveDocument();
-	if (m_strRunTitle != "") {
+	if (!m_strRunTitle.IsEmpty()) {
 		CString termmsg;
 		termmsg.LoadString(IDS_TERMINATED);
 		str.Format(_T("%s%s - purepad [%s%s]"), pDoc->GetTitle(),
-			_T(pDoc->IsModified()?"*":""),
-			IsRunning()?"":termmsg, m_strRunTitle);
+			pDoc->IsModified() ? _T("*") : _T(""),
+			IsRunning() ? _T("") : static_cast<LPCTSTR>(termmsg),
+			m_strRunTitle);
 	} else {
 		str.Format(_T("%s%s - purepad"), pDoc->GetTitle(),
-			_T(pDoc->IsModified()?"*":""));
+			pDoc->IsModified() ? _T("*") : _T(""));
 	}
 	CString old;
 	GetWindowText(old);

@@ -86,7 +86,7 @@ BOOL CQpadDoc::OnOpenDocument(LPCTSTR lpszPathName)
 	int n = s.Find(_T('\r'));
 	if (n < 0) {
 		// Not a single CR in this file, probably a UNIX file (LF endings).
-		s.Replace("\n", "\r\n");
+		s.Replace(_T("\n"), _T("\r\n"));
 		edit->SetWindowText(s);
 	}
 

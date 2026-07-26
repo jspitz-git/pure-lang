@@ -40,8 +40,8 @@ CString CBuffer::Read()
 	CSingleLock sLock(&m_mutex, TRUE);
 	CString strBuf = m_strBuf;
 	// normalize line ends
-	strBuf.Replace("\r\n", "\n");
-	strBuf.Replace("\n", "\r\n");
+	strBuf.Replace(_T("\r\n"), _T("\n"));
+	strBuf.Replace(_T("\n"), _T("\r\n"));
 	m_strBuf.Empty();
 	return strBuf;
 }
@@ -50,8 +50,8 @@ CString CBuffer::Peek()
 {
 	CSingleLock sLock(&m_mutex, TRUE);
 	CString strBuf = m_strBuf;
-	strBuf.Replace("\r\n", "\n");
-	strBuf.Replace("\n", "\r\n");
+	strBuf.Replace(_T("\r\n"), _T("\n"));
+	strBuf.Replace(_T("\n"), _T("\r\n"));
 	return strBuf;
 }
 

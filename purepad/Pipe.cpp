@@ -7,7 +7,7 @@
 #include "Pipe.h"
 #include "Buffer.h"
 #include "MainFrm.h"
-#include <stdlib.h> // for _split_path()
+#include <atlconv.h>
 
 #ifdef _DEBUG
 #undef THIS_FILE
@@ -113,7 +113,8 @@ static DWORD WINAPI Reader(LPVOID pParam)
 		ReadFile(ti->hChildStdoutRd, buf, 1024, &n, NULL)) {
 		if (n > 0) {
 			buf[n] = 0;
-			if (ti->pInput->Write(buf))
+			CString text(CA2W(buf, CP_UTF8));
+			if (ti->pInput->Write(text))
 				PostMessage(ti->hWnd, WM_USER_INPUT, 0, 0);
 		}
 	}
@@ -129,8 +130,9 @@ static DWORD WINAPI Writer(LPVOID pParam)
 		WAIT_OBJECT_0) {
 		BOOL success = TRUE;
 		CString buf = ti->pOutput->Read();
-		LPCTSTR data = buf;
-		DWORD remaining = static_cast<DWORD>(buf.GetLength());
+		CStringA bytes(CW2A(buf, CP_UTF8));
+		LPCSTR data = bytes;
+		DWORD remaining = static_cast<DWORD>(bytes.GetLength());
 		while (success && remaining > 0) {
 			DWORD written = 0;
 			success = WriteFile(ti->hChildStdinWr, data, remaining,
@@ -151,35 +153,20 @@ static void MakeEvents(ThreadInfo* ti)
 	saAttr.bInheritHandle = TRUE;
 	saAttr.lpSecurityDescriptor = NULL; 
 
-	sprintf(ti->szBreak, "PURE_SIGINT-%u", ti->pi.dwProcessId);
-	sprintf(ti->szKill, "PURE_SIGTERM-%u", ti->pi.dwProcessId);
+	_stprintf_s(ti->szBreak, _countof(ti->szBreak),
+		_T("PURE_SIGINT-%u"), ti->pi.dwProcessId);
+	_stprintf_s(ti->szKill, _countof(ti->szKill),
+		_T("PURE_SIGTERM-%u"), ti->pi.dwProcessId);
 	ti->hBreak = CreateEvent(&saAttr, TRUE, FALSE, ti->szBreak);
 	ti->hKill = CreateEvent(&saAttr, TRUE, FALSE, ti->szKill);
 }
 
-static BOOL MakeTempName(CString& name)
-{
-	DWORD len = GetTempPath(0, NULL);
-	LPTSTR tmppath = new TCHAR[len];
-	DWORD res = GetTempPath(len, tmppath);
-	if (res == 0 || res > len) {
-		// this can't happen??
-		delete[] tmppath;
-		return FALSE;
-	}
-	LPTSTR tmpname = new TCHAR[MAX_PATH];
-	UINT res2 = GetTempFileName(tmppath, "Q", 0, tmpname);
-	delete[] tmppath;
-	if (res2) name = tmpname;
-	delete[] tmpname;
-	return res2;
-}
 
 static void QuoteArg(CString& s)
 {
-	if (s.FindOneOf(" \t") >= 0) {
-		s.Replace("\"", "\\\"");
-		s = "\"" + s + "\"";
+	if (s.FindOneOf(_T(" \t")) >= 0) {
+		s.Replace(_T("\""), _T("\\\""));
+		s = _T("\"") + s + _T("\"");
 	}
 }
 
@@ -260,9 +247,7 @@ static DWORD WINAPI CompileRun(LPVOID pParam)
 	CString cmd, filearg = ti->file;
 	cmd.Format(ti->run, filearg);
 	CString prompt = CMainFrame::m_strQPS;
-	CString set_prompt;
-	set_prompt.Format("PURE_PS=%s", prompt);
-	_putenv(set_prompt);
+	SetEnvironmentVariable(_T("PURE_PS"), prompt);
 #endif
 	res = CreateProcess(NULL, cmd.GetBuffer(cmd.GetLength()+1),
 			NULL, NULL, TRUE,
@@ -286,23 +271,25 @@ BOOL CPipe::Run2(LPCTSTR command, LPCTSTR name, LPCTSTR pname)
 	// show script name
  	if (!CMainFrame::m_bLogReset) {
  		CString msg;
- 		msg.Format("// %s\r\n", pname);
+		msg.Format(_T("// %s\r\n"), pname);
 		m_bufInput.Write(msg);
 		PostMessage(AfxGetMainWnd()->m_hWnd, WM_USER_INPUT, 0, 0);
  	}
 
 	// get filename/directory info
-	char drive[_MAX_DRIVE], dir[_MAX_DIR], fname[_MAX_FNAME],
-		ext[_MAX_EXT];
-	_splitpath(name, drive, dir, fname, ext);
-	strcat(strcpy(path, drive), dir);
-	strcat(strcpy(file, fname), ext);
-
-	// create a temporary code file name
-	CString tmpname;
-	if (!MakeTempName(tmpname) || tmpname.GetLength()+1 > _MAX_PATH)
-		return FALSE;
-	strcpy(code, tmpname);
+	CString fullName(name ? name : _T(""));
+	int slash = fullName.ReverseFind(_T('/'));
+	int backslash = fullName.ReverseFind(_T('\\'));
+	if (backslash > slash)
+		slash = backslash;
+	if (slash >= 0) {
+		path = fullName.Left(slash + 1);
+		file = fullName.Mid(slash + 1);
+	} else {
+		path.Empty();
+		file = fullName;
+	}
+	code.Empty();
 
 	// set up the pipes
 

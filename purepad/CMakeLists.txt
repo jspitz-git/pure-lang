@@ -24,6 +24,7 @@ add_executable(purepad WIN32
   PromptDlg.cpp
   qpad.cpp
   qpadDoc.cpp
+  purepad.manifest
   qpadView.cpp
   QPathDlg.cpp
   StdAfx.cpp
@@ -33,8 +34,13 @@ add_executable(purepad WIN32
 
 target_compile_definitions(purepad PRIVATE
   _AFXDLL
-  _MBCS
+  UNICODE
+  _UNICODE
+  WINVER=0x0A00
+  _WIN32_WINNT=0x0A00
 )
+
+target_compile_features(purepad PRIVATE cxx_std_17)
 
 target_compile_options(purepad PRIVATE
   /W3
@@ -47,4 +53,8 @@ target_link_libraries(purepad PRIVATE
 
 set_property(TARGET purepad PROPERTY
   VS_DPI_AWARE "PerMonitor"
+)
+
+target_link_options(purepad PRIVATE
+  "/MANIFESTINPUT:${CMAKE_CURRENT_SOURCE_DIR}/purepad.manifest"
 )

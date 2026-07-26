@@ -88,7 +88,7 @@ private:
 	void KillChild();
 	void Clean();
 	BOOL Run2(LPCTSTR command, LPCTSTR name, LPCTSTR pname);
-	char path[_MAX_PATH], file[_MAX_PATH], code[_MAX_FNAME];
+	CString path, file, code;
 	CBuffer m_bufInput, m_bufOutput;
 	ThreadInfo m_ti;
 	BOOL m_bRunning;
