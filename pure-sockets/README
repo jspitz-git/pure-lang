@@ -151,6 +151,29 @@ Creating and Closing Sockets
    This is provided for Windows compatibility. On POSIX systems this is just
    ``close``.
 
+Socket handles are opaque integers. In particular, they use a 64 bit
+representation on 64 bit Windows so that the native Winsock ``SOCKET`` value
+is never truncated. Applications should only compare a returned handle with
+zero to detect the ``-1`` error result and pass successful handles back to the
+functions in this module.
+
+Error Reporting
+---------------
+
+.. function:: socket_errno
+
+   Return the platform socket error for the calling thread. This is
+   ``WSAGetLastError()`` on Windows and ``errno`` on POSIX systems.
+
+.. function:: socket_strerror error
+
+   Return a readable message for a platform socket error code.
+
+Socket functions which return a handle or byte count preserve the conventional
+``-1`` error result on every platform. On Windows, use :func:`socket_errno`
+and :func:`socket_strerror` after a failed operation; Winsock errors are not
+reliably reported through the POSIX ``errno`` and ``perror`` interfaces.
+
 Establishing Connections
 ------------------------
 

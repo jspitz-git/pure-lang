@@ -38,65 +38,68 @@ let __socket_defs;
 
 /* Socket functions from the C library. */
 
-extern int pure_socket(int domain, int ty, int protocol) = socket;
+extern int64 pure_socket(int domain, int ty, int protocol) = socket;
 extern int pure_socketpair(int domain, int ty, int protocol, int *sv) = socketpair;
-extern int pure_shutdown(int fd, int how) = shutdown;
+extern int pure_shutdown(int64 fd, int how) = shutdown;
 // Windows uses this to close a socket. On POSIX systems this is just the same
 // as close().
-extern int pure_closesocket(int fd) = closesocket;
+extern int pure_closesocket(int64 fd) = closesocket;
+
+extern int pure_socket_errno() = socket_errno;
+extern char* pure_socket_strerror(int error) = socket_strerror;
 
 // Establish connections.
 
-extern int pure_listen(int sockfd, int backlog) = listen;
+extern int pure_listen(int64 sockfd, int backlog) = listen;
 namespace __C;
 // We provide convenience wrappers around these below.
-extern int pure_accept(int sockfd, sockaddr *addr, int *addrlen) = accept;
-extern int pure_bind(int sockfd, sockaddr *addr, int addrlen) = bind;
-extern int pure_connect(int sockfd, sockaddr *addr, int addrlen) = connect;
+extern int64 pure_accept(int64 sockfd, sockaddr *addr, int *addrlen) = accept;
+extern int pure_bind(int64 sockfd, sockaddr *addr, int addrlen) = bind;
+extern int pure_connect(int64 sockfd, sockaddr *addr, int addrlen) = connect;
 namespace;
 
-accept fd::int addr::pointer = __C::accept fd addr {sockaddr_len addr};
-bind fd::int addr::pointer = __C::bind fd addr (sockaddr_len addr);
-connect fd::int addr::pointer = __C::connect fd addr (sockaddr_len addr);
+accept fd addr::pointer = __C::accept fd addr {sockaddr_len addr};
+bind fd addr::pointer = __C::bind fd addr (sockaddr_len addr);
+connect fd addr::pointer = __C::connect fd addr (sockaddr_len addr);
 
 // Socket I/O. Note that on POSIX systems you can also just fdopen the socket
 // descriptor and use the standard file I/O operations from the system module
 // instead.
 
-extern size_t pure_recv(int fd, void *buf, size_t len, int flags) = recv;
-extern size_t pure_send(int fd, void *buf, size_t len, int flags) = send;
+extern int64 pure_recv(int64 fd, void *buf, size_t len, int flags) = recv;
+extern int64 pure_send(int64 fd, void *buf, size_t len, int flags) = send;
 namespace __C;
 // We provide convenience wrappers around these below.
-extern size_t pure_recvfrom(int fd, void *buf, size_t len, int flags,
-			    sockaddr *addr, int *addrlen) = recvfrom;
-extern size_t pure_sendto(int fd, void *buf, size_t len, int flags,
-			  sockaddr *addr, int addrlen) = sendto;
+extern int64 pure_recvfrom(int64 fd, void *buf, size_t len, int flags,
+			   sockaddr *addr, int *addrlen) = recvfrom;
+extern int64 pure_sendto(int64 fd, void *buf, size_t len, int flags,
+			 sockaddr *addr, int addrlen) = sendto;
 namespace;
 
-recvfrom fd::int buf::pointer len::int flags::int addr::pointer |
-recvfrom fd::int buf::pointer len::bigint flags::int addr::pointer
+recvfrom fd buf::pointer len::int flags::int addr::pointer |
+recvfrom fd buf::pointer len::bigint flags::int addr::pointer
   = __C::recvfrom fd buf len flags addr {sockaddr_len addr};
 
-sendto fd::int buf::pointer len::int flags::int addr::pointer |
-sendto fd::int buf::pointer len::bigint flags::int addr::pointer
+sendto fd buf::pointer len::int flags::int addr::pointer |
+sendto fd buf::pointer len::bigint flags::int addr::pointer
   = __C::sendto fd buf len flags addr (sockaddr_len addr);
 
 // Socket information.
 
 namespace __C;
 // We provide convenience wrappers around these below.
-extern int pure_getsockname(int fd, sockaddr *addr, int *addrlen) = getsockname;
-extern int pure_getpeername(int fd, sockaddr *addr, int *addrlen) = getpeername;
+extern int pure_getsockname(int64 fd, sockaddr *addr, int *addrlen) = getsockname;
+extern int pure_getpeername(int64 fd, sockaddr *addr, int *addrlen) = getpeername;
 namespace;
 
-getsockname fd::int addr::pointer
+getsockname fd addr::pointer
   = __C::getsockname fd addr {sockaddr_len addr};
 
-getpeername fd::int addr::pointer
+getpeername fd addr::pointer
   = __C::getpeername fd addr {sockaddr_len addr};
 
-extern int pure_getsockopt(int fd, int level, int name, void *val, int *len)  = getsockopt;
-extern int pure_setsockopt(int fd, int level, int name, void *val, int len) = setsockopt;
+extern int pure_getsockopt(int64 fd, int level, int name, void *val, int *len) = getsockopt;
+extern int pure_setsockopt(int64 fd, int level, int name, void *val, int len) = setsockopt;
 
 /* Construction of socket addresses for bind et al. */
 
