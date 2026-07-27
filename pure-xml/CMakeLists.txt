@@ -27,3 +27,35 @@ set_target_properties(
     PREFIX ""
     WINDOWS_EXPORT_ALL_SYMBOLS ON
 )
+
+if(WIN32)
+  pkg_get_variable(LIBXML2_PREFIX libxml-2.0 prefix)
+  pkg_get_variable(LIBXSLT_PREFIX libxslt prefix)
+  find_file(
+    LIBXML2_RUNTIME_DLL
+    NAMES libxml2-16.dll
+    HINTS "${LIBXML2_PREFIX}/bin"
+    NO_DEFAULT_PATH
+    REQUIRED
+  )
+  find_file(
+    LIBXSLT_RUNTIME_DLL
+    NAMES libxslt-1.dll
+    HINTS "${LIBXSLT_PREFIX}/bin"
+    NO_DEFAULT_PATH
+    REQUIRED
+  )
+  find_program(LLVM_READOBJ NAMES llvm-readobj REQUIRED)
+  add_custom_target(
+    verify-windows-dependencies
+    COMMAND "${CMAKE_COMMAND}"
+      "-DLLVM_READOBJ=${LLVM_READOBJ}"
+      "-DXML_DLL=$<TARGET_FILE:xml>"
+      "-DLIBXML2_DLL=${LIBXML2_RUNTIME_DLL}"
+      "-DLIBXSLT_DLL=${LIBXSLT_RUNTIME_DLL}"
+      -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/VerifyWindowsDependencies.cmake"
+    DEPENDS xml
+    COMMENT "Verifying the pure-xml Windows dependency closure"
+    VERBATIM
+  )
+endif()
