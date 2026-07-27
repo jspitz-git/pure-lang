@@ -59,3 +59,26 @@ if(WIN32)
     VERBATIM
   )
 endif()
+
+include(CTest)
+if(BUILD_TESTING)
+  pkg_get_variable(PURE_PREFIX pure prefix)
+  find_program(PURE_EXECUTABLE NAMES pure HINTS "${PURE_PREFIX}/bin" REQUIRED)
+  add_test(
+    NAME pure-xml-smoke
+    COMMAND "${CMAKE_COMMAND}"
+      "-DPURE_EXECUTABLE=${PURE_EXECUTABLE}"
+      "-DPURE_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
+      "-DMODULE_DIR=$<TARGET_FILE_DIR:xml>"
+      "-DTEST_SCRIPT=${CMAKE_CURRENT_SOURCE_DIR}/tests/smoke.pure"
+      -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunSmokeTest.cmake"
+  )
+  set_tests_properties(
+    pure-xml-smoke
+    PROPERTIES
+      LABELS "xml;xpath;xslt;encoding;paths;network-isolated"
+      REQUIRED_FILES
+        "$<TARGET_FILE:xml>;${CMAKE_CURRENT_SOURCE_DIR}/tests/smoke.pure;${CMAKE_CURRENT_SOURCE_DIR}/tests/input-utf8.xml;${CMAKE_CURRENT_SOURCE_DIR}/tests/transform.xsl"
+      TIMEOUT 60
+  )
+endif()

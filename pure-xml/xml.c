@@ -689,14 +689,18 @@ pure_expr *xml_load_file(const char *s, uint32_t flags)
     return NULL;
 }
 
-pure_expr *xml_load_string(const char *s, uint32_t flags)
+pure_expr *xml_load_string(pure_expr *string, uint32_t flags)
 {
-  unsigned oldflags = set_flags(flags);
-  xmlDocPtr doc = xmlParseDoc((const xmlChar*)s);
-  set_flags(oldflags);
-  if (doc)
-    return pure_doc(doc);
-  else
+  const char *s;
+  if (pure_is_string(string, &s)) {
+    unsigned oldflags = set_flags(flags);
+    xmlDocPtr doc = xmlParseDoc((const xmlChar*)s);
+    set_flags(oldflags);
+    if (doc)
+      return pure_doc(doc);
+    else
+      return NULL;
+  } else
     return NULL;
 }
 

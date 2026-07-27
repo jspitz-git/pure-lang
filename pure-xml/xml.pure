@@ -354,7 +354,7 @@ extern expr *xml_new_doc(char *version, expr *dtd, expr *info) = new_doc;
       if there is a fatal error parsing the document. */
 
 extern expr *xml_load_file(char *name, int flags) = load_file;
-extern expr *xml_load_string(char *s, int flags) = load_string;
+extern expr *xml_load_string(expr *s, int flags) = load_string;
 
 /* .. function:: xml::save_file name doc encoding compression
       		 xml::save_string doc
