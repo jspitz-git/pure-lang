@@ -17,7 +17,7 @@ portable Windows distribution.
 ## Task List
 
 1. [x] Build the package against the staged Pure runtime.
-2. [ ] Audit C++ ABI and runtime DLL dependencies.
+2. [x] Audit C++ ABI and runtime DLL dependencies.
 3. [ ] Add focused dictionary and lifetime smoke tests.
 4. [ ] Stage and validate the package outside MSYS2.
 
@@ -43,3 +43,13 @@ portable Windows distribution.
   CLANG64 Clang 22.1.8 and `-Wall -Wextra -Werror`.
 - 2026-07-28: Loaded `hashdict.dll` and `orddict.dll` from `C:\Windows` with
   `PATH` restricted to the clean build, portable Pure runtime, and Windows,
+- 2026-07-28: Confirmed that Clang targets `x86_64-w64-windows-gnu` and both
+  native modules are x86-64 PE files exporting their complete C interfaces.
+- 2026-07-28: Both modules import exactly `libpure.dll`, `libc++.dll`, and
+  Windows/UCRT components; neither imports an MSYS runtime or a second C++
+  standard library.
+- 2026-07-28: The existing portable `libc++.dll` is x86-64, has only
+  Windows/UCRT imports, and is byte-identical to the CLANG64 input with
+  SHA-256
+  `7344DAED05388589E9BD691ED1D30C568C374DA4B8B6A12E1502185948C03CD4`.
+- 2026-07-28: The native code does not use C++ exceptions across the module
