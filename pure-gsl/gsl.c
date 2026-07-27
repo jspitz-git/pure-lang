@@ -382,7 +382,8 @@ pure_expr* wrap_gsl_poly_complex_solve(double* a, size_t n)
   double tz[2*(n-1)];
   pure_expr *z[n-1];
   double t[2];
-  int i, r;
+  size_t i;
+  int r;
   
   gsl_poly_complex_workspace* w = gsl_poly_complex_workspace_alloc(n);
   r = gsl_poly_complex_solve(a, n, w, tz);
@@ -454,7 +455,7 @@ pure_expr* wrap_gsl_fit_mul_est(double x, double c1, double cov11)
 
 pure_expr* wrap_gsl_multifit_linear(gsl_matrix* X, gsl_matrix* y)
 {
-  int i;
+  size_t i;
   double chisq;
   pure_expr *cx[X->size1];
   double *p;

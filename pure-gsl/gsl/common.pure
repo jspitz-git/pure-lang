@@ -6,10 +6,14 @@
 // prevents errors from the dynamic linker when loading the module.
 #! --if *-mingw32
 // Windows/mingw-specific dll name.
-using "lib:libgsl-0";
+using "lib:libgsl-28";
+#! --else
+#! --if *-windows-gnu
+using "lib:libgsl-28";
 #! --else
 // This should hopefully work on other systems (Linux, Mac OS X, Un*x).
 using "lib:libgsl";
+#! --endif
 #! --endif
 
 using "lib:gsl";
