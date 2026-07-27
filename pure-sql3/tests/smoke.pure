@@ -1,0 +1,75 @@
+using sql3;
+
+check condition message =
+  if condition then () else throw ("pure-sql3 smoke: " + message);
+
+is_sqlnull sql3::SQLNULL = true;
+is_sqlnull _ = false;
+
+expect_db_error db = catch handler
+  (sql3::exec db "select * from table_that_does_not_exist")
+with
+  handler (sql3::db_error _ _) = 1;
+  handler exception = throw exception;
+end;
+
+check_round_trip [[1, name, note, payload]] expected_name = ()
+when
+  check (name == expected_name) "Unicode text did not round-trip";
+  check (is_sqlnull note) "SQL NULL did not round-trip";
+  check (payload == ["blob", 42, 3.5]) "blob did not round-trip";
+end;
+check_round_trip rows _ =
+  throw ("pure-sql3 smoke: unexpected query rows " + str rows);
+
+check_reopen [["updated", note]] =
+  check (is_sqlnull note) "NULL did not survive reopen";
+check_reopen rows =
+  throw ("pure-sql3 smoke: unexpected reopen rows " + str rows);
+
+smoke test_root = ()
+when
+  unicode_dir = strcat (map chr [382,108,117,357,111,117,269,107,253]);
+  unicode_text = strcat
+    (map chr [80,345,237,108,105,353,32,382,108,117,357,111,117,269,107,253,
+              32,107,367,328]);
+  database_path = test_root + "/database with spaces " + unicode_dir + "/test.db";
+  db = sql3::open database_path;
+  sql3::exec db "create table items (id integer primary key, name text not null, note text, payload blob)";
+
+  sql3::begin db;
+  insert = sql3::prep db "icnx"
+    "insert into items(id, name, note, payload) values(?, ?, ?, ?)";
+  sql3::exec insert (1, unicode_text, 0, ["blob", 42, 3.5]);
+  check (sql3::finalize insert == 0) "insert statement did not finalize";
+  sql3::commit db;
+
+  select_stmt = sql3::prep db "icvx:"
+    "select id, name, note, payload from items order by id";
+  check_round_trip (sql3::exec select_stmt ()) unicode_text;
+  check (sql3::finalize select_stmt == 0) "select statement did not finalize";
+
+  sql3::begin db;
+  sql3::exec db
+    "insert into items values(2, 'rolled back', null, X'010203')";
+  sql3::rollback db;
+  count_stmt = sql3::prep db "i:" "select count(*) from items";
+  check (sql3::exec count_stmt () == [[1]]) "rollback did not restore row count";
+  check (sql3::finalize count_stmt == 0) "count statement did not finalize";
+
+  sql3::exec db "update items set name='updated' where id=1";
+  check (expect_db_error db == 1) "invalid SQL did not raise db_error";
+  check (sql3::close db == 1) "database did not close";
+  check (sql3::close db == 0) "second close was not deterministic";
+
+  reopened = sql3::open database_path;
+  verify_stmt = sql3::prep reopened "cv:"
+    "select name, note from items where id=1";
+  check_reopen (sql3::exec verify_stmt ());
+  check (sql3::finalize verify_stmt == 0) "reopen statement did not finalize";
+  check (sql3::close reopened == 1) "reopened database did not close";
+  puts "PURE_SQL3_SMOKE_OK";
+end;
+
+if argc == 2 then smoke (argv!1)
+else throw "usage: smoke.pure DATABASE_PATH";

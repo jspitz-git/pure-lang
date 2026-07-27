@@ -17,7 +17,7 @@ distribution.
 ## Task List
 
 1. [x] Build the native module against the staged runtime and SQLite.
-2. [ ] Add focused database lifecycle and query smoke tests.
+2. [x] Add focused database lifecycle and query smoke tests.
 3. [ ] Audit DLL loading and package installation paths.
 4. [ ] Validate the staged package outside MSYS2.
 
@@ -45,3 +45,12 @@ distribution.
   The controlled SQLite 3.53.3 DLL is x86-64, depends only on Windows/UCRT
   components, and has SHA-256
   `91240F2E86A7648A408D2B3EA4F851C1DB0FB9A778F775A823FF81978ABB14F7`.
+- 2026-07-27: Added a CTest smoke test covering a database path with spaces
+  and non-ASCII characters, prepared inserts and selects, Unicode text,
+  SQL NULL, serialized blobs, commit, rollback, update, reopen, invalid SQL,
+  and deterministic statement/database release.
+- 2026-07-27: Declared the public `sql3::SQLNULL` symbol used by the native
+  value converter.
+- 2026-07-27: Fixed statement sentries so a statement already finalized by
+  explicit cleanup or database close is not finalized again after its
+  database has closed. The strict CLANG64 CTest run passes.

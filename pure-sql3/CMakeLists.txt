@@ -22,3 +22,20 @@ set_target_properties(
     PREFIX ""
     WINDOWS_EXPORT_ALL_SYMBOLS ON
 )
+
+include(CTest)
+if(BUILD_TESTING)
+  pkg_get_variable(PURE_PREFIX pure prefix)
+  find_program(PURE_EXECUTABLE NAMES pure HINTS "${PURE_PREFIX}/bin" REQUIRED)
+  add_test(
+    NAME pure-sql3-smoke
+    COMMAND "${CMAKE_COMMAND}"
+      "-DPURE_EXECUTABLE=${PURE_EXECUTABLE}"
+      "-DMODULE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
+      "-DMODULE_DLL_DIR=$<TARGET_FILE_DIR:sql3util>"
+      "-DTEST_SCRIPT=${CMAKE_CURRENT_SOURCE_DIR}/tests/smoke.pure"
+      "-DTEST_ROOT=${CMAKE_CURRENT_BINARY_DIR}/smoke-test"
+      -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunSmokeTest.cmake"
+  )
+  set_tests_properties(pure-sql3-smoke PROPERTIES TIMEOUT 60)
+endif()

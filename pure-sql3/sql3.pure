@@ -72,7 +72,7 @@ private extern int sqlite3_bind_text(sqlite3_stmt*, int, void*, int, void*);
 type db_ptr p::pointer = is_db_ptr p;
 type stmt_ptr p::pointer = is_stmt_ptr p;
 
-nonfix db_error db_busy;
+nonfix db_error db_busy SQLNULL;
 
 
 /**** Public db_ptr constants and functions  ********************************/
@@ -427,10 +427,9 @@ finalize_stmt stmt@(STMT _) sp::pointer = stmt if null sp;
 // finalize a stmt_ptr's prepared statement object
 finalize_stmt (STMT (rf_valid,_,_,dbp)) sp::stmt_ptr = ec
 when
-  is_open dbp || sql3_err "finalize: STMT attached to a closed db_ptr.";
   was_valid = get rf_valid;
-  ec = if was_valid then sqlite3_finalize sp else SQLITE_OK;
-  was_valid && SHOW_OPEN_CLOSE && printf 
+  ec = if was_valid && is_open dbp then sqlite3_finalize sp else SQLITE_OK;
+  was_valid && is_open dbp && SHOW_OPEN_CLOSE && printf
       "Finalized Stmt: sqlite3_stmt* %s\n" (str sp);
   put rf_valid 0;
 end;
