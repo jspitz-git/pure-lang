@@ -1,0 +1,4 @@
+using gsl;
+using gsl::complex;
+
+puts "PURE_GSL_LOAD_OK";
