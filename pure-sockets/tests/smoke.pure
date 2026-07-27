@@ -1,0 +1,149 @@
+using sockets, system;
+
+close_socket fd = () when closesocket fd end;
+close_sockets fds = do close_socket fds;
+
+smoke_fail sockets name error
+  = close_sockets sockets $$
+    fprintf stderr "FAIL: %s (socket error %d: %s)\n"
+      (name,error,socket_strerror error) $$
+    exit 1;
+
+smoke_check name sockets condition
+  = () if condition;
+  = smoke_fail sockets name socket_errno otherwise;
+
+set_timeout fd
+  = setsockopt fd SOL_SOCKET SO_RCVTIMEO {2000} SIZEOF_INT == 0 &&
+    setsockopt fd SOL_SOCKET SO_SNDTIMEO {2000} SIZEOF_INT == 0;
+
+tcp_smoke
+  = smoke_check "TCP listener socket" [] (listener >= 0) $$
+    smoke_check "TCP listener timeout" [listener] (set_timeout listener) $$
+    smoke_check "TCP bind" [listener]
+      (bind listener listen_address == 0) $$
+    tcp_bound listener
+when
+  listen_address = sockaddr (AF_INET,"127.0.0.1",0);
+  listener = socket AF_INET SOCK_STREAM IPPROTO_TCP;
+end;
+
+tcp_bound listener
+  = smoke_check "TCP bound address allocation" [listener]
+      (~null bound_address) $$
+    smoke_check "TCP getsockname" [listener]
+      (getsockname listener bound_address == 0) $$
+    tcp_listen listener (sockaddr_port bound_address)
+when
+  bound_address = sockaddr ();
+end;
+
+tcp_listen listener port
+  = smoke_check "TCP ephemeral port" [listener] (port > 0) $$
+    smoke_check "TCP listen" [listener] (listen listener 1 == 0) $$
+    tcp_connect listener (sockaddr (AF_INET,"127.0.0.1",port));
+
+tcp_connect listener server_address
+  = smoke_check "TCP server address" [listener] (~null server_address) $$
+    smoke_check "TCP client socket" [listener] (client >= 0) $$
+    smoke_check "TCP client timeout" [client,listener]
+      (set_timeout client) $$
+    smoke_check "TCP connect" [client,listener]
+      (connect client server_address == 0) $$
+    tcp_accept listener client
+when
+  client = socket AF_INET SOCK_STREAM IPPROTO_TCP;
+end;
+
+tcp_accept listener client
+  = smoke_check "TCP peer address allocation" [client,listener]
+      (~null peer_address) $$
+    smoke_check "TCP accept" [client,listener] (accepted >= 0) $$
+    tcp_transfer listener client accepted peer_address
+when
+  peer_address = sockaddr ();
+  accepted = accept listener peer_address;
+end;
+
+tcp_transfer listener client accepted peer_address
+  = smoke_check "TCP accepted timeout" [accepted,client,listener]
+      (set_timeout accepted) $$
+    smoke_check "TCP peer address" [accepted,client,listener]
+      (sockaddr_family peer_address == AF_INET &&
+       sockaddr_ip peer_address == "127.0.0.1" &&
+       sockaddr_port peer_address > 0) $$
+    smoke_check "TCP receive buffer" [accepted,client,listener]
+      (~null request_buffer) $$
+    smoke_check "TCP response buffer" [accepted,client,listener]
+      (~null response_buffer) $$
+    smoke_check "TCP client send" [accepted,client,listener]
+      (send client request (#request) 0 == #request) $$
+    smoke_check "TCP server receive" [accepted,client,listener]
+      (recv accepted request_buffer 256 0 == #request &&
+       blobp request_buffer && val request_buffer == "tcp-request") $$
+    smoke_check "TCP server send" [accepted,client,listener]
+      (send accepted response (#response) 0 == #response) $$
+    smoke_check "TCP client receive" [accepted,client,listener]
+      (recv client response_buffer 256 0 == #response &&
+       blobp response_buffer && val response_buffer == "tcp-response") $$
+    smoke_check "TCP close" []
+      (closesocket accepted + closesocket client + closesocket listener == 0)
+when
+  request = blob "tcp-request";
+  response = blob "tcp-response";
+  request_buffer = cooked $ malloc 256;
+  response_buffer = cooked $ malloc 256;
+end;
+
+udp_smoke
+  = smoke_check "UDP receiver socket" [] (receiver >= 0) $$
+    smoke_check "UDP receiver timeout" [receiver] (set_timeout receiver) $$
+    smoke_check "UDP bind" [receiver]
+      (bind receiver receive_address == 0) $$
+    udp_bound receiver
+when
+  receive_address = sockaddr (AF_INET,"127.0.0.1",0);
+  receiver = socket AF_INET SOCK_DGRAM IPPROTO_UDP;
+end;
+
+udp_bound receiver
+  = smoke_check "UDP bound address allocation" [receiver]
+      (~null bound_address) $$
+    smoke_check "UDP getsockname" [receiver]
+      (getsockname receiver bound_address == 0) $$
+    udp_transfer receiver (sockaddr_port bound_address)
+when
+  bound_address = sockaddr ();
+end;
+
+udp_transfer receiver port
+  = smoke_check "UDP ephemeral port" [receiver] (port > 0) $$
+    smoke_check "UDP destination" [receiver] (~null destination) $$
+    smoke_check "UDP sender socket" [receiver] (sender >= 0) $$
+    smoke_check "UDP sender timeout" [sender,receiver] (set_timeout sender) $$
+    smoke_check "UDP peer address allocation" [sender,receiver]
+      (~null peer_address) $$
+    smoke_check "UDP receive buffer" [sender,receiver]
+      (~null payload_buffer) $$
+    smoke_check "UDP sendto" [sender,receiver]
+      (sendto sender payload (#payload) 0 destination == #payload) $$
+    smoke_check "UDP recvfrom" [sender,receiver]
+      (recvfrom receiver payload_buffer 256 0 peer_address == #payload &&
+       blobp payload_buffer && val payload_buffer == "udp-payload") $$
+    smoke_check "UDP peer address" [sender,receiver]
+      (sockaddr_family peer_address == AF_INET &&
+       sockaddr_ip peer_address == "127.0.0.1" &&
+       sockaddr_port peer_address > 0) $$
+    smoke_check "UDP close" []
+      (closesocket sender + closesocket receiver == 0)
+when
+  destination = sockaddr (AF_INET,"127.0.0.1",port);
+  sender = socket AF_INET SOCK_DGRAM IPPROTO_UDP;
+  peer_address = sockaddr ();
+  payload = blob "udp-payload";
+  payload_buffer = cooked $ malloc 256;
+end;
+
+tcp_smoke;
+udp_smoke;
+puts "PURE_SOCKETS_LOOPBACK_OK";

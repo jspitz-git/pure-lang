@@ -19,6 +19,11 @@ set_target_properties(
     WINDOWS_EXPORT_ALL_SYMBOLS ON
 )
 
+set(
+  PURE_EXECUTABLE ""
+  CACHE FILEPATH "Pure interpreter used for package smoke tests"
+)
+
 if(BUILD_TESTING AND WIN32)
   add_executable(winsock-audit tests/winsock-audit.c)
   target_compile_definitions(winsock-audit PRIVATE WIN32_LEAN_AND_MEAN)
@@ -31,5 +36,32 @@ if(BUILD_TESTING AND WIN32)
     PROPERTIES
       LABELS "sockets;winsock;audit"
       REQUIRED_FILES "$<TARGET_FILE:sockets>"
+      TIMEOUT 10
   )
+
+  if(PURE_EXECUTABLE)
+    if(NOT EXISTS "${PURE_EXECUTABLE}")
+      message(FATAL_ERROR "PURE_EXECUTABLE does not exist: ${PURE_EXECUTABLE}")
+    endif()
+    add_test(
+      NAME pure-sockets-loopback
+      COMMAND "${CMAKE_COMMAND}"
+        "-DPURE_EXECUTABLE=${PURE_EXECUTABLE}"
+        "-DPURE_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
+        "-DPURE_MODULE_DIR=$<TARGET_FILE_DIR:sockets>"
+        "-DTEST_SCRIPT=${CMAKE_CURRENT_SOURCE_DIR}/tests/smoke.pure"
+        -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunSmokeTest.cmake"
+    )
+    set_tests_properties(
+      pure-sockets-loopback
+      PROPERTIES
+        LABELS "sockets;tcp;udp;loopback;smoke"
+        REQUIRED_FILES
+          "$<TARGET_FILE:sockets>;${CMAKE_CURRENT_SOURCE_DIR}/tests/smoke.pure"
+        TIMEOUT 30
+    )
+  else()
+    message(STATUS
+      "PURE_EXECUTABLE is not set; pure-sockets loopback test is disabled")
+  endif()
 endif()

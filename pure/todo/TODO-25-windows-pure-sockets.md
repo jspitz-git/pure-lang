@@ -18,7 +18,7 @@ distribution.
 
 1. [x] Build the module with CLANG64 and the staged runtime.
 2. [x] Audit Winsock initialization, shutdown, handles, and error translation.
-3. [ ] Add loopback TCP and UDP smoke tests.
+3. [x] Add loopback TCP and UDP smoke tests.
 4. [ ] Stage and validate the package outside MSYS2.
 
 ## Guardrails
@@ -94,3 +94,30 @@ distribution.
     - `llvm-readobj` confirmed a PE32+ x86-64 DLL with 35 exports, including
       the four lifecycle/error audit functions; its only nonsystem imports
       remain `WS2_32.dll` and `libpure.dll`.
+- 2026-07-27: Added bounded TCP and UDP loopback smoke coverage.
+  - The Pure test binds IPv4 listeners to `127.0.0.1` with port zero and reads
+    back each OS-assigned ephemeral port; it contains no public network
+    address or fixed port dependency.
+  - The TCP path listens, connects, accepts, validates the peer address,
+    exchanges serialized request and response payloads in both directions,
+    and closes all three socket handles.
+  - The UDP path sends a serialized datagram to the bound receiver, validates
+    both payload and sender address, and closes both handles.
+  - Every socket has 2-second send and receive timeouts. The CMake runner also
+    terminates Pure after 25 seconds, while CTest enforces a 30-second limit.
+    Failure paths close every handle opened by the current phase before
+    reporting the platform socket error.
+  - Validation:
+    - A clean Ninja Release build in
+      `C:\tmp\pure-sockets-build-step3-20260727` found Pure 0.68 and passed
+      with CLANG64 Clang 22.1.8 and `-Wall -Wextra -Werror`.
+    - From `C:\Windows`, with `PURELIB` unset and `PATH` restricted to the
+      portable runtime plus Windows system directories,
+      `ctest --output-on-failure -V` passed both
+      `pure-sockets-winsock-audit` and `pure-sockets-loopback` (2/2).
+    - The loopback test completed in 5.50 seconds and emitted
+      `PURE_SOCKETS_LOOPBACK_OK`; the native audit completed in 0.12 seconds.
+    - `ctest -R "^pure-sockets-loopback$" --repeat until-fail:3
+      --output-on-failure` passed three consecutive loopback runs in 17.47
+      seconds, confirming that dynamic ports and socket resources are released
+      between processes.
