@@ -1,0 +1,50 @@
+using xml, system;
+
+check condition message =
+  if condition then () else throw ("pure-xml smoke: " + message);
+
+node_texts doc path = [xml::node_content node | node = xml::select doc path];
+
+smoke test_root = ()
+when
+  input_path = test_root + "/vstup s mezerou.xml";
+  stylesheet_path = test_root + "/styl s mezerou.xsl";
+  unicode_text = strcat
+    (map chr [80,345,237,108,105,353,32,382,108,117,357,111,117,269,107,253,
+              32,107,367,328]);
+  coffee = strcat (map chr [107,225,118,97]);
+  transformed_text = strcat (map chr [50,32,112,111,108,111,382,107,121]);
+  encoded_path = test_root + "/output ISO-8859-2.xml";
+
+  document = xml::load_file input_path xml::NOBLANKS;
+  check (xml::docp document) "UTF-8 document did not parse";
+  parsed_texts = node_texts document "/catalog/item";
+  check (parsed_texts == [unicode_text, coffee])
+        ("XPath or UTF-8 content mismatch: " + str parsed_texts);
+
+  serialized = xml::save_string document;
+  check (stringp serialized && #serialized > 0) "UTF-8 serialization failed";
+  reparsed = xml::load_string serialized xml::NOBLANKS;
+  check (node_texts reparsed "/catalog/item/@id" == ["1", "2"])
+        "serialized document did not round-trip";
+
+  check (xml::save_file encoded_path document "ISO-8859-2" 0 == ())
+        "ISO-8859-2 file serialization failed";
+  encoded = xml::load_file encoded_path xml::NOBLANKS;
+  check (node_texts encoded "/catalog/item" == [unicode_text, coffee])
+        "encoded file did not round-trip";
+
+  stylesheet = xslt::load_stylesheet stylesheet_path;
+  check (xslt::stylesheetp stylesheet) "stylesheet did not parse";
+  transformed = xslt::apply_stylesheet stylesheet document [];
+  check (xml::docp transformed) "XSLT transformation failed";
+  result = xslt::save_result_string transformed stylesheet;
+  result_document = xml::load_string result xml::NOBLANKS;
+  check (node_texts result_document "/summary" == [transformed_text])
+        "XSLT result mismatch";
+
+  puts "PURE_XML_SMOKE_OK";
+end;
+
+if argc == 2 then smoke (argv!1)
+else throw "usage: smoke.pure TEST_ROOT";
