@@ -35,6 +35,19 @@ if(WIN32)
     NO_DEFAULT_PATH
     REQUIRED
   )
+  find_program(LLVM_READOBJ NAMES llvm-readobj REQUIRED)
+  add_custom_target(
+    verify-windows-dependencies
+    COMMAND "${CMAKE_COMMAND}"
+      "-DLLVM_READOBJ=${LLVM_READOBJ}"
+      "-DGSL_MODULE=$<TARGET_FILE:gsl>"
+      "-DGSL_DLL=${GSL_RUNTIME_DLL}"
+      "-DGSLCBLAS_DLL=${GSLCBLAS_RUNTIME_DLL}"
+      -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/VerifyWindowsDependencies.cmake"
+    DEPENDS gsl
+    COMMENT "Verifying the pure-gsl Windows dependency closure"
+    VERBATIM
+  )
 endif()
 
 include(CTest)
