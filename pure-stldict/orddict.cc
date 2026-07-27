@@ -265,7 +265,7 @@ static const char *orddict_str(myorddict *m)
 
 #define NPREC_APP 167772155 // this comes from expr.hh
 
-static int orddict_prec(myorddict *m)
+static int orddict_prec(myorddict *)
 {
   if (omsym()) {
     int32_t p = pure_sym_nprec(omsym());
@@ -847,7 +847,7 @@ static const char *ordmdict_str(myordmdict *m)
   return buf;
 }
 
-static int ordmdict_prec(myordmdict *m)
+static int ordmdict_prec(myordmdict *)
 {
   if (ommsym()) {
     int32_t p = pure_sym_nprec(ommsym());

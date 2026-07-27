@@ -235,7 +235,7 @@ static const char *hashdict_str(myhashdict *m)
 
 #define NPREC_APP 167772155 // this comes from expr.hh
 
-static int hashdict_prec(myhashdict *m)
+static int hashdict_prec(myhashdict *)
 {
   if (hmsym()) {
     int32_t p = pure_sym_nprec(hmsym());
@@ -801,12 +801,7 @@ extern "C" void hashdict_rehash(myhashdict *m, unsigned count)
 }
 
 extern "C" void hashdict_reserve(myhashdict *m, unsigned count)
-{
-  // This requires g++ >= 4.5. (Add other compilers as needed.)
-#if __GNUC__ > 4 || (__GNUC__ == 4 && __GNUC_MINOR__ >= 5)
-  m->reserve(count);
-#endif
-}
+{ m->reserve(count); }
 
 extern "C" unsigned hashdict_bucket_count(myhashdict *m)
 {
@@ -868,7 +863,7 @@ static const char *hashmdict_str(myhashmdict *m)
   return buf;
 }
 
-static int hashmdict_prec(myhashmdict *m)
+static int hashmdict_prec(myhashmdict *)
 {
   if (hmmsym()) {
     int32_t p = pure_sym_nprec(hmmsym());
@@ -1310,12 +1305,7 @@ extern "C" void hashmdict_rehash(myhashmdict *m, unsigned count)
 }
 
 extern "C" void hashmdict_reserve(myhashmdict *m, unsigned count)
-{
-  // This requires g++ >= 4.5. (Add other compilers as needed.)
-#if __GNUC__ > 4 || (__GNUC__ == 4 && __GNUC_MINOR__ >= 5)
-  m->reserve(count);
-#endif
-}
+{ m->reserve(count); }
 
 extern "C" unsigned hashmdict_bucket_count(myhashmdict *m)
 {

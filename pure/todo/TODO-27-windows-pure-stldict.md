@@ -16,7 +16,7 @@ portable Windows distribution.
 
 ## Task List
 
-1. [ ] Build the package against the staged Pure runtime.
+1. [x] Build the package against the staged Pure runtime.
 2. [ ] Audit C++ ABI and runtime DLL dependencies.
 3. [ ] Add focused dictionary and lifetime smoke tests.
 4. [ ] Stage and validate the package outside MSYS2.
@@ -34,3 +34,12 @@ portable Windows distribution.
 ## Progress Log
 
 - 2026-07-25: Created as a base Windows package candidate.
+- 2026-07-28: Added a CMake build for both native modules using C++17 and the
+  staged Pure 0.68 runtime.
+- 2026-07-28: Removed obsolete GNU-version guards around standard C++11
+  `unordered_map::reserve` calls and made intentionally unused pretty-printer
+  parameters explicit.
+- 2026-07-28: Verified both the legacy Makefile and a clean CMake build with
+  CLANG64 Clang 22.1.8 and `-Wall -Wextra -Werror`.
+- 2026-07-28: Loaded `hashdict.dll` and `orddict.dll` from `C:\Windows` with
+  `PATH` restricted to the clean build, portable Pure runtime, and Windows,
