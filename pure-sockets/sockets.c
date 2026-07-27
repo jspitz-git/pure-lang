@@ -1,9 +1,12 @@
 #include <sys/types.h>
+#include <errno.h>
+#include <limits.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <unistd.h>
 #include <string.h>
 #ifndef _WIN32
+#include <unistd.h>
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <netinet/in.h>
@@ -38,20 +41,107 @@
 #define SHUT_RD SD_RECEIVE
 #define SHUT_WR SD_SEND
 #define SHUT_RDWR SD_BOTH
-// These aren't properly declared in the mingw headers.
-void WSAAPI freeaddrinfo (struct addrinfo*);
-int WSAAPI getaddrinfo (const char*,const char*,const struct addrinfo*,
-		        struct addrinfo**);
-int WSAAPI getnameinfo(const struct sockaddr*,socklen_t,char*,DWORD,
-		       char*,DWORD,int);
 #endif
 
 #ifdef _WIN32
 int socketpair(int domain, int ty, int protocol, int *sv)
 {
+  (void)domain;
+  (void)ty;
+  (void)protocol;
+  (void)sv;
   // Not available on Windows.
   return -1;
 }
+#endif
+
+static char socket_error_buf[1025];
+
+int pure_socket_errno(void)
+{
+#ifdef _WIN32
+  return WSAGetLastError();
+#else
+  return errno;
+#endif
+}
+
+const char *pure_socket_strerror(int error)
+{
+#ifdef _WIN32
+  DWORD len = FormatMessageA(FORMAT_MESSAGE_FROM_SYSTEM |
+			     FORMAT_MESSAGE_IGNORE_INSERTS,
+			     0, error, 0, socket_error_buf,
+			     sizeof(socket_error_buf), 0);
+  if (len) {
+    while (len && (socket_error_buf[len-1] == '\r' ||
+		   socket_error_buf[len-1] == '\n'))
+      socket_error_buf[--len] = 0;
+  } else {
+    snprintf(socket_error_buf, sizeof(socket_error_buf),
+	     "Winsock error %d", error);
+  }
+  return socket_error_buf;
+#else
+  return strerror(error);
+#endif
+}
+
+#ifdef _WIN32
+static SRWLOCK winsock_lock = SRWLOCK_INIT;
+static int winsock_initialized;
+static int winsock_cleanup_registered;
+
+static void cleanup_winsock_at_exit(void);
+
+int pure_socket_startup(void)
+{
+  int rc = 0;
+  AcquireSRWLockExclusive(&winsock_lock);
+  if (!winsock_initialized) {
+    WORD version = MAKEWORD(2, 2);
+    WSADATA data;
+    rc = WSAStartup(version, &data);
+    if (!rc && data.wVersion != version) {
+      WSACleanup();
+      rc = WSAVERNOTSUPPORTED;
+    }
+    if (!rc) {
+      winsock_initialized = 1;
+      if (!winsock_cleanup_registered) {
+	if (atexit(cleanup_winsock_at_exit) == 0)
+	  winsock_cleanup_registered = 1;
+	else {
+	  WSACleanup();
+	  winsock_initialized = 0;
+	  rc = WSASYSNOTREADY;
+	}
+      }
+    }
+  }
+  ReleaseSRWLockExclusive(&winsock_lock);
+  return rc;
+}
+
+int pure_socket_cleanup(void)
+{
+  int rc = 0;
+  AcquireSRWLockExclusive(&winsock_lock);
+  if (winsock_initialized) {
+    rc = WSACleanup();
+    if (!rc) winsock_initialized = 0;
+  }
+  ReleaseSRWLockExclusive(&winsock_lock);
+  return rc;
+}
+
+static void cleanup_winsock_at_exit(void)
+{
+  pure_socket_cleanup();
+}
+#else
+int pure_socket_startup(void) { return 0; }
+int pure_socket_cleanup(void) { return 0; }
 #endif
 
 #define sockaddr_error pure_sym("::sockaddr_error")
@@ -82,6 +172,7 @@ struct sockaddr *local_sockaddr(const char *path)
   }
   return (struct sockaddr*)addr;
 #else
+  (void)path;
   return 0;
 #endif
 }
@@ -90,8 +181,14 @@ struct sockaddr *make_sockaddr(int family, const char *host, const char *port)
 {
   struct addrinfo hints, *res;
   struct sockaddr *addr = 0;
-  const size_t len = 0;
   int rc;
+#ifdef _WIN32
+  rc = pure_socket_startup();
+  if (rc) {
+    sockaddr_err(pure_socket_strerror(rc));
+    return 0;
+  }
+#endif
   memset(&hints, 0, sizeof(hints));
   hints.ai_family = family;
   // host "*" means INADDR_ANY
@@ -120,8 +217,15 @@ struct sockaddr **make_sockaddrs(int family, const char *host, const char *port)
 {
   struct addrinfo hints, *res, *res0;
   struct sockaddr *addr = 0, **addrs;
-  size_t len = 0, count;
+  size_t count;
   int rc;
+#ifdef _WIN32
+  rc = pure_socket_startup();
+  if (rc) {
+    sockaddr_err(pure_socket_strerror(rc));
+    return 0;
+  }
+#endif
   memset(&hints, 0, sizeof(hints));
   hints.ai_family = family;
   // host "*" means INADDR_ANY
@@ -268,61 +372,144 @@ socklen_t sockaddr_len(struct sockaddr *addr)
    library, as on Windows these use the stdcall calling convention and
    thus can't be called directly by Pure programs. */
 
-int pure_socket(int domain, int ty, int protocol)
-{ return socket(domain, ty, protocol); }
+#ifdef _WIN32
+static SOCKET native_socket(int64_t fd)
+{ return (SOCKET)(uintptr_t)fd; }
+
+static int64_t portable_socket(SOCKET fd)
+{ return fd == INVALID_SOCKET ? -1 : (int64_t)(uintptr_t)fd; }
+
+static int winsock_length(size_t len)
+{
+  if (len > INT_MAX) {
+    WSASetLastError(WSAEMSGSIZE);
+    return -1;
+  }
+  return (int)len;
+}
+#else
+static int native_socket(int64_t fd)
+{ return (int)fd; }
+#endif
+
+int64_t pure_socket(int domain, int ty, int protocol)
+{
+#ifdef _WIN32
+  int rc = pure_socket_startup();
+  if (rc) {
+    WSASetLastError(rc);
+    return -1;
+  }
+  return portable_socket(socket(domain, ty, protocol));
+#else
+  return socket(domain, ty, protocol);
+#endif
+}
+
 int pure_socketpair(int domain, int ty, int protocol, int *sv)
 { return socketpair(domain, ty, protocol, sv); }
-int pure_shutdown(int fd, int how)
-{ return shutdown(fd, how); }
+
+int pure_shutdown(int64_t fd, int how)
+{ return shutdown(native_socket(fd), how); }
 
 /* Windows uses this to close a socket. On POSIX systems this is just the same
    as close(). */
 
-int pure_closesocket(int fd)
+int pure_closesocket(int64_t fd)
 {
 #ifdef _WIN32
-  return closesocket(fd);
+  return closesocket(native_socket(fd));
 #else
-  return close(fd);
+  return close(native_socket(fd));
 #endif
 }
 
-int pure_listen(int sockfd, int backlog)
-{ return listen(sockfd, backlog); }
-int pure_accept(int sockfd, struct sockaddr *addr, int *addrlen)
-{ return accept(sockfd, addr, (socklen_t*)addrlen); }
-int pure_bind(int sockfd, struct sockaddr *addr, int addrlen)
-{ return bind(sockfd, addr, addrlen); }
-int pure_connect(int sockfd, struct sockaddr *addr, int addrlen)
-{ return connect(sockfd, addr, addrlen); }
-size_t pure_recv(int fd, void *buf, size_t len, int flags)
-{ return recv(fd, buf, len, flags); }
-size_t pure_send(int fd, void *buf, size_t len, int flags)
-{ return send(fd, buf, len, flags); }
-size_t pure_recvfrom(int fd, void *buf, size_t len, int flags,
-		     struct sockaddr *addr, int *addrlen)
-{ return recvfrom(fd, buf, len, flags, addr, (socklen_t*)addrlen); }
-size_t pure_sendto(int fd, void *buf, size_t len, int flags,
-		   struct sockaddr *addr, int addrlen)
-{ return sendto(fd, buf, len, flags, addr, addrlen); }
-int pure_getsockname(int fd, struct sockaddr *addr, int *addrlen)
-{ return getsockname(fd, addr, (socklen_t*)addrlen); }
-int pure_getpeername(int fd, struct sockaddr *addr, int *addrlen)
-{ return getpeername(fd, addr, (socklen_t*)addrlen); }
-int pure_getsockopt(int fd, int level, int name, void *val, int *len)
-{ return getsockopt(fd, level, name, val, (socklen_t*)len); }
-int pure_setsockopt(int fd, int level, int name, void *val, int len)
-{ return setsockopt(fd, level, name, val, len); }
+int pure_listen(int64_t fd, int backlog)
+{ return listen(native_socket(fd), backlog); }
+
+int64_t pure_accept(int64_t fd, struct sockaddr *addr, int *addrlen)
+{
+#ifdef _WIN32
+  return portable_socket(accept(native_socket(fd), addr, (socklen_t*)addrlen));
+#else
+  return accept(native_socket(fd), addr, (socklen_t*)addrlen);
+#endif
+}
+
+int pure_bind(int64_t fd, struct sockaddr *addr, int addrlen)
+{ return bind(native_socket(fd), addr, addrlen); }
+
+int pure_connect(int64_t fd, struct sockaddr *addr, int addrlen)
+{ return connect(native_socket(fd), addr, addrlen); }
+
+int64_t pure_recv(int64_t fd, void *buf, size_t len, int flags)
+{
+#ifdef _WIN32
+  int n = winsock_length(len);
+  return n < 0 ? -1 : recv(native_socket(fd), (char*)buf, n, flags);
+#else
+  return recv(native_socket(fd), buf, len, flags);
+#endif
+}
+
+int64_t pure_send(int64_t fd, const void *buf, size_t len, int flags)
+{
+#ifdef _WIN32
+  int n = winsock_length(len);
+  return n < 0 ? -1 : send(native_socket(fd), (const char*)buf, n, flags);
+#else
+  return send(native_socket(fd), buf, len, flags);
+#endif
+}
+
+int64_t pure_recvfrom(int64_t fd, void *buf, size_t len, int flags,
+		      struct sockaddr *addr, int *addrlen)
+{
+#ifdef _WIN32
+  int n = winsock_length(len);
+  return n < 0 ? -1 :
+    recvfrom(native_socket(fd), (char*)buf, n, flags, addr,
+	     (socklen_t*)addrlen);
+#else
+  return recvfrom(native_socket(fd), buf, len, flags, addr,
+		  (socklen_t*)addrlen);
+#endif
+}
+
+int64_t pure_sendto(int64_t fd, const void *buf, size_t len, int flags,
+		    struct sockaddr *addr, int addrlen)
+{
+#ifdef _WIN32
+  int n = winsock_length(len);
+  return n < 0 ? -1 :
+    sendto(native_socket(fd), (const char*)buf, n, flags, addr, addrlen);
+#else
+  return sendto(native_socket(fd), buf, len, flags, addr, addrlen);
+#endif
+}
+
+int pure_getsockname(int64_t fd, struct sockaddr *addr, int *addrlen)
+{ return getsockname(native_socket(fd), addr, (socklen_t*)addrlen); }
+
+int pure_getpeername(int64_t fd, struct sockaddr *addr, int *addrlen)
+{ return getpeername(native_socket(fd), addr, (socklen_t*)addrlen); }
+
+int pure_getsockopt(int64_t fd, int level, int name, void *val, int *len)
+{ return getsockopt(native_socket(fd), level, name, val, (socklen_t*)len); }
+
+int pure_setsockopt(int64_t fd, int level, int name, const void *val, int len)
+{ return setsockopt(native_socket(fd), level, name, val, len); }
 
 #define define(sym) pure_def(pure_sym(#sym), pure_int(sym))
 
 void __socket_defs(void)
 {
 #ifdef _WIN32
-  // This needs to be called on Windows so that the socket functions work.
-  WORD wVersionRequested = MAKEWORD(2, 2);
-  WSADATA wsaData;
-  WSAStartup(wVersionRequested, &wsaData);
+  int rc = pure_socket_startup();
+  if (rc) {
+    sockaddr_err(pure_socket_strerror(rc));
+    return;
+  }
 #endif
   // Address families.
   define(AF_UNSPEC);
