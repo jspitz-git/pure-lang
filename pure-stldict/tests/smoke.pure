@@ -1,0 +1,77 @@
+using system, stldict;
+
+check condition message =
+  if condition then () else throw ("pure-stldict smoke: " + message);
+
+expect_out_of_bounds dict = catch handler (dict!999)
+with
+  handler out_of_bounds = 1;
+  handler exception = throw exception;
+end;
+
+iterator_count iterator =
+  if stldict::endp iterator then 0
+  else 1 + iterator_count (stldict::next iterator);
+
+owned_iterator =
+  stldict::begin (orddict [7=>"seven", 8=>"eight"]);
+
+lifetime_churn 0 = ();
+lifetime_churn n =
+  void (hashdict [n=>n]) $$
+  void (orddict [n=>n]) $$
+  lifetime_churn (n-1);
+
+smoke = ()
+when
+  hash = hashdict [1=>"one", 2=>"two"];
+  check (#hash == 2) "hashdict size";
+  check (hash!1 == "one") "hashdict lookup";
+  check (member hash (2=>"two")) "hashdict pair membership";
+  insert hash (3=>"three");
+  update hash 2 "TWO";
+  delete hash 1;
+  check (#hash == 2 && ~member hash 1 && hash!2 == "TWO")
+        "hashdict insertion, update, or deletion";
+  hashdict::reserve hash 64;
+  check (hashdict::bucket_count hash > 0) "hashdict reserve";
+  check (expect_out_of_bounds hash == 1) "missing hashdict key";
+
+  hash_copy = copy hash;
+  insert hash_copy (4=>"four");
+  check (#hash_copy == 3 && #hash == 2) "hashdict copy independence";
+  clear hash_copy;
+  check (null hash_copy && ~null hash) "hashdict clear";
+
+  ordered = orddict [3=>"three", 1=>"one", 2=>"two"];
+  ordered_keys = keys ordered;
+  check (ordered_keys == [1,2,3]) ("orddict ordering: " + str ordered_keys);
+  check (iterator_count (stldict::begin ordered) == 3)
+        "orddict iterator traversal";
+  iterator = stldict::find ordered 2;
+  check (stldict::get iterator === (2=>"two")) "iterator find/get";
+  stldict::put iterator "TWO";
+  check (ordered!2 == "TWO") "iterator put";
+  erase_iterator = stldict::find ordered 3;
+  stldict::erase erase_iterator;
+  check (#ordered == 2 && ~member ordered 3)
+        "iterator erase";
+
+  retained = owned_iterator;
+  check (stldict::get retained === (7=>"seven"))
+        "iterator did not retain its temporary dictionary";
+
+  hash_multi = hashmdict [1=>"a", 1=>"b"];
+  ordered_multi = ordmdict [2=>"x", 2=>"y"];
+  check (#hash_multi == 2 && member hash_multi (1=>"a") &&
+         member hash_multi (1=>"b"))
+        "hash multidict duplicates";
+  check (#ordered_multi == 2 && member ordered_multi (2=>"x") &&
+         member ordered_multi (2=>"y"))
+        "ordered multidict duplicates";
+
+  lifetime_churn 250;
+  puts "PURE_STLDICT_SMOKE_OK";
+end;
+
+smoke;

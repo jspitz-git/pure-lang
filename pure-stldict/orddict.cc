@@ -203,15 +203,11 @@ static bool less_than(pure_expr *x, pure_expr *y)
   return rc!=0;
 }
 
-namespace std {
-  template<>
-  struct less<pure_expr*> {
-    bool operator()(pure_expr* x, pure_expr* y) const
-    { return less_than(x, y); }
-  };
-}
+struct pure_expr_less {
+  bool operator()(pure_expr* x, pure_expr* y) const { return less_than(x, y); }
+};
 
-typedef map<pure_expr*,pure_expr*> myorddict;
+typedef map<pure_expr*,pure_expr*,pure_expr_less> myorddict;
 
 // Runtime-configurable pretty-printing support.
 
@@ -265,7 +261,7 @@ static const char *orddict_str(myorddict *m)
 
 #define NPREC_APP 167772155 // this comes from expr.hh
 
-static int orddict_prec(myorddict *m)
+static int orddict_prec(myorddict *)
 {
   if (omsym()) {
     int32_t p = pure_sym_nprec(omsym());
@@ -804,7 +800,7 @@ extern "C" bool orddict_iterator_equal(myorddict_iterator *it,
 
 //////////////////////////////////////////////////////////////////////////////
 
-typedef multimap<pure_expr*,pure_expr*> myordmdict;
+typedef multimap<pure_expr*,pure_expr*,pure_expr_less> myordmdict;
 
 static ILS<int32_t> ommsym = 0;
 
@@ -847,7 +843,7 @@ static const char *ordmdict_str(myordmdict *m)
   return buf;
 }
 
-static int ordmdict_prec(myordmdict *m)
+static int ordmdict_prec(myordmdict *)
 {
   if (ommsym()) {
     int32_t p = pure_sym_nprec(ommsym());
