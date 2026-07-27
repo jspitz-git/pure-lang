@@ -1,6 +1,6 @@
 # TODO-26 - Windows pure-sql3 Package
 
-Status: Open
+Status: Closed on 2026-07-27
 Branch: todo/26-windows-pure-sql3
 
 ## Purpose
@@ -19,7 +19,7 @@ distribution.
 1. [x] Build the native module against the staged runtime and SQLite.
 2. [x] Add focused database lifecycle and query smoke tests.
 3. [x] Audit DLL loading and package installation paths.
-4. [ ] Validate the staged package outside MSYS2.
+4. [x] Validate the staged package outside MSYS2.
 
 ## Guardrails
 
@@ -63,3 +63,14 @@ distribution.
 - 2026-07-27: Ran the installed package from `C:\Windows` with a restricted
   `PATH` containing only its SQLite directory, the portable Pure runtime, and
   Windows. The complete database smoke test passed.
+- 2026-07-27: Created a fresh full portable runtime copy and installed the
+  package into it. The exact delta was the expected 13 files, for 53 files in
+  the completed staged tree.
+- 2026-07-27: Launched the staged `bin/pure.exe` directly from PowerShell in
+  `C:\Windows`, with `PURELIB` unset and `PATH` restricted to the bundle plus
+  Windows system directories. The marker-checked smoke test passed, exited
+  zero, and created and reopened its database below a path containing spaces
+  and non-ASCII characters.
+- 2026-07-27: The final source/build-path leak scan was clean, all direct
+  nonsystem DLL imports were present in the portable tree, and installed
+  binary hashes matched the audited build and controlled SQLite input.
