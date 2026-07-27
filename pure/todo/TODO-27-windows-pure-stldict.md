@@ -1,6 +1,6 @@
 # TODO-27 - Windows pure-stldict Package
 
-Status: Open
+Status: Closed on 2026-07-28
 Branch: todo/27-windows-pure-stldict
 
 ## Purpose
@@ -19,7 +19,7 @@ portable Windows distribution.
 1. [x] Build the package against the staged Pure runtime.
 2. [x] Audit C++ ABI and runtime DLL dependencies.
 3. [x] Add focused dictionary and lifetime smoke tests.
-4. [ ] Stage and validate the package outside MSYS2.
+4. [x] Stage and validate the package outside MSYS2.
 
 ## Guardrails
 
@@ -68,3 +68,18 @@ portable Windows distribution.
   temporary dictionary and reading it after the creator returned, then
   exercised 250 hash and ordered dictionary destruction cycles. The complete
   strict CLANG64 CTest passes.
+- 2026-07-28: Added prefix-contained install rules for two native modules,
+  four Pure sources, generated README, both package licenses, and four Pure
+  examples. The exact package manifest contains 13 files.
+- 2026-07-28: A negative `../escape` configuration was rejected. The
+  package-only installation passed the complete smoke test from `C:\Windows`
+  with its installed module files, and installed binary hashes matched the
+  clean strict build.
+- 2026-07-28: Installed the package into a fresh copy of the 40-file portable
+  runtime. The exact 13-file delta produced a 53-file staged tree without
+  duplicating the existing C++ runtime.
+- 2026-07-28: Launched staged `bin/pure.exe` directly from PowerShell in
+  `C:\Windows`, with `PURELIB` unset and `PATH` restricted to the bundle plus
+  Windows system directories. The full marker-checked lifetime test passed.
+- 2026-07-28: The final source/build-path leak scan was clean and every direct
+  nonsystem import was satisfied by the staged `libpure.dll` and `libc++.dll`.

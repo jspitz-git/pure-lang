@@ -17,6 +17,8 @@ foreach(module IN ITEMS hashdict orddict)
   )
 endforeach()
 
+include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/Install.cmake")
+
 include(CTest)
 if(BUILD_TESTING)
   pkg_get_variable(PURE_PREFIX pure prefix)
