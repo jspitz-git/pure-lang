@@ -127,3 +127,5 @@ if(BUILD_TESTING)
     PROPERTIES LABELS "stllib;map;multimap;hashmap;set;iterators"
   )
 endif()
+
+include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/Install.cmake")
