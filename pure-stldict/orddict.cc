@@ -203,15 +203,11 @@ static bool less_than(pure_expr *x, pure_expr *y)
   return rc!=0;
 }
 
-namespace std {
-  template<>
-  struct less<pure_expr*> {
-    bool operator()(pure_expr* x, pure_expr* y) const
-    { return less_than(x, y); }
-  };
-}
+struct pure_expr_less {
+  bool operator()(pure_expr* x, pure_expr* y) const { return less_than(x, y); }
+};
 
-typedef map<pure_expr*,pure_expr*> myorddict;
+typedef map<pure_expr*,pure_expr*,pure_expr_less> myorddict;
 
 // Runtime-configurable pretty-printing support.
 
@@ -804,7 +800,7 @@ extern "C" bool orddict_iterator_equal(myorddict_iterator *it,
 
 //////////////////////////////////////////////////////////////////////////////
 
-typedef multimap<pure_expr*,pure_expr*> myordmdict;
+typedef multimap<pure_expr*,pure_expr*,pure_expr_less> myordmdict;
 
 static ILS<int32_t> ommsym = 0;
 
