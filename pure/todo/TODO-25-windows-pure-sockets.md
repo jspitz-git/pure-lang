@@ -1,6 +1,6 @@
 # TODO-25 - Windows pure-sockets Package
 
-Status: Open
+Status: Closed on 2026-07-27
 Branch: todo/25-windows-pure-sockets
 
 ## Purpose
@@ -19,7 +19,7 @@ distribution.
 1. [x] Build the module with CLANG64 and the staged runtime.
 2. [x] Audit Winsock initialization, shutdown, handles, and error translation.
 3. [x] Add loopback TCP and UDP smoke tests.
-4. [ ] Stage and validate the package outside MSYS2.
+4. [x] Stage and validate the package outside MSYS2.
 
 ## Guardrails
 
@@ -30,6 +30,24 @@ distribution.
 
 - Exchange data over loopback TCP and UDP with bounded timeouts.
 - Repeat initialization and shutdown in one process and inspect PE imports.
+
+## Installed Package Manifest
+
+- `lib/pure/sockets.dll`
+- `lib/pure/sockets.pure`
+- `share/doc/pure-sockets/README`
+- `share/doc/pure-sockets/COPYING`
+- `share/doc/pure-sockets/COPYING.LESSER`
+- `share/doc/pure-sockets/examples/dgram.pure`
+- `share/doc/pure-sockets/examples/stream.pure`
+
+## Runtime Dependencies
+
+- `sockets.pure` loads `lib/pure/sockets.dll`.
+- `sockets.dll` directly imports `WS2_32.dll` and `libpure.dll`, plus Windows
+  system and UCRT libraries.
+- Windows supplies Winsock, and the base portable runtime already supplies
+  `libpure.dll`. The package therefore adds no dependency DLL copies.
 
 ## Progress Log
 
@@ -121,3 +139,30 @@ distribution.
       --output-on-failure` passed three consecutive loopback runs in 17.47
       seconds, confirming that dynamic ports and socket resources are released
       between processes.
+- 2026-07-27: Added a prefix-contained installation and closed TODO-25.
+  - The installation adds exactly the seven files listed in the package
+    manifest: the Pure source and native module, generated README, both license
+    files, and two examples.
+  - The README records version 0.8 and the installation date, with no remaining
+    template markers or build-machine paths.
+  - A file-by-file comparison with the base portable runtime confirmed that no
+    existing file was removed or replaced. The only new DLL is the
+    `sockets.dll` module itself; no dependency DLL is duplicated.
+  - All install destinations must be relative and remain below
+    `CMAKE_INSTALL_PREFIX`; separate negative configurations rejected both a
+    parent-directory component and an absolute documentation path.
+  - Validation:
+    - A clean Release build in
+      `C:\tmp\pure-sockets-package-build-step4-20260727` passed with CLANG64
+      Clang 22.1.8 and `-Wall -Wextra -Werror`.
+    - With `PATH` restricted to a fresh portable runtime plus Windows system
+      directories, both CTests passed before installation: the native audit in
+      0.11 seconds and the TCP/UDP loopback test in 5.29 seconds.
+    - The same native audit and full marker-checked loopback test passed from
+      `C:\Windows` against the installed `lib/pure/sockets.dll` and
+      `lib/pure/sockets.pure`, with `PURELIB` unset and no MSYS2 directory in
+      `PATH`.
+    - `llvm-readobj` confirmed a PE32+ x86-64 module with 35 exports and only
+      `WS2_32.dll`, `libpure.dll`, Windows system libraries, and UCRT imports.
+      The staged `bin/libpure.dll` satisfies the only nonsystem runtime
+      dependency.
