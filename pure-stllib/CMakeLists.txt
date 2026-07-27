@@ -68,3 +68,28 @@ foreach(module IN ITEMS
       WINDOWS_EXPORT_ALL_SYMBOLS ON
   )
 endforeach()
+
+if(WIN32)
+  find_program(LLVM_READOBJ NAMES llvm-readobj REQUIRED)
+  add_custom_target(
+    verify-windows-runtime
+    COMMAND "${CMAKE_COMMAND}"
+      "-DLLVM_READOBJ=${LLVM_READOBJ}"
+      "-DSTLBASE_DLL=$<TARGET_FILE:stlbase>"
+      "-DSTLVEC_DLL=$<TARGET_FILE:stlvec>"
+      "-DSTLALGORITHM_DLL=$<TARGET_FILE:stlalgorithm>"
+      "-DSTLMAP_DLL=$<TARGET_FILE:stlmap>"
+      "-DSTLMMAP_DLL=$<TARGET_FILE:stlmmap>"
+      "-DSTLHMAP_DLL=$<TARGET_FILE:stlhmap>"
+      -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/VerifyWindowsRuntime.cmake"
+    DEPENDS
+      stlbase
+      stlvec
+      stlalgorithm
+      stlmap
+      stlmmap
+      stlhmap
+    COMMENT "Verifying the pure-stllib Windows runtime dependency closure"
+    VERBATIM
+  )
+endif()
