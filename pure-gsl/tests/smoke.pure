@@ -1,0 +1,59 @@
+namespace smoke;
+
+check name condition
+  = () if condition;
+  = fprintf stderr "pure-gsl smoke failed: %s\n" name $$ exit 1 otherwise;
+
+close actual expected tolerance =
+  abs (actual-expected) <= tolerance;
+
+using gsl;
+using gsl::complex;
+
+smoke::check "matrix multiplication"
+  ({1.0,2.0;3.0,4.0} * {2.0;1.0} == {4.0;10.0});
+
+smoke::check "SVD solver"
+  (all (\x->smoke::close x!0 x!1 1.0e-10)
+       (zip (list (gsl::svd_solve (gsl::svd {3.0,0.0;0.0,2.0})
+                                  {6.0;8.0}))
+            [2.0,4.0]));
+
+smoke::check "vector sort"
+  (gsl::sort_vector {3.0,-1.0,2.0} == {-1.0,2.0,3.0});
+
+smoke::check "Gaussian density"
+  (smoke::close (gsl::randist::ugaussian_pdf 0.0)
+                0.3989422804014327 1.0e-14);
+smoke::check "Gaussian CDF"
+  (smoke::close (gsl::randist::ugaussian_P 0.0) 0.5 1.0e-15);
+
+smoke::check "statistics mean"
+  (smoke::close (gsl::stats::mean {1.0,2.0,3.0,4.0}) 2.5 1.0e-15);
+
+smoke::check "polynomial evaluation"
+  (smoke::close (gsl::poly::eval {1.0,2.0,3.0} 2.0) 17.0 1.0e-14);
+smoke::check "polynomial roots"
+  (gsl::poly::solve_quadratic 1.0 3.0 2.0 == [-2.0,-1.0]);
+
+smoke::check "linear fit intercept"
+  (smoke::close ((gsl::fit::linear {0.0,1.0,2.0}
+                                    {1.0,3.0,5.0})!0)
+                1.0 1.0e-14);
+smoke::check "linear fit slope"
+  (smoke::close ((gsl::fit::linear {0.0,1.0,2.0}
+                                    {1.0,3.0,5.0})!1)
+                2.0 1.0e-14);
+
+smoke::check "Bessel special function"
+  (smoke::close (gsl::sf::bessel_J0 0.0) 1.0 1.0e-15);
+smoke::check "Bessel error estimate"
+  (case gsl::sf::bessel_J0_e 0.0 of
+     [value,error] = smoke::close value 1.0 1.0e-15 && error >= 0.0;
+     _ = false;
+   end);
+smoke::check "special-function domain guard"
+  (~doublep (gsl::sf::bessel_Y0 (-1.0)));
+
+smoke::check "complex square root"
+  (smoke::close (im (gsl::complex::sqrt ((-4.0)+:0.0))) 2.0 1.0e-14);

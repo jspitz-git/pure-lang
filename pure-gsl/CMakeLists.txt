@@ -75,4 +75,21 @@ if(BUILD_TESTING)
       REQUIRED_FILES "$<TARGET_FILE:gsl>;${CMAKE_CURRENT_SOURCE_DIR}/gsl.pure"
       TIMEOUT 30
   )
+  add_test(
+    NAME pure-gsl-smoke
+    COMMAND "${CMAKE_COMMAND}"
+      "-DPURE_EXECUTABLE=${PURE_EXECUTABLE}"
+      "-DPURE_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
+      "-DMODULE_DIR=$<TARGET_FILE_DIR:gsl>"
+      "-DTEST_SCRIPT=${CMAKE_CURRENT_SOURCE_DIR}/tests/smoke.pure"
+      -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunSmokeTest.cmake"
+  )
+  set_tests_properties(
+    pure-gsl-smoke
+    PROPERTIES
+      LABELS "gsl;matrix;svd;statistics;polynomial-roots;fit;special-functions"
+      REQUIRED_FILES
+        "$<TARGET_FILE:gsl>;${CMAKE_CURRENT_SOURCE_DIR}/tests/smoke.pure"
+      TIMEOUT 60
+  )
 endif()
