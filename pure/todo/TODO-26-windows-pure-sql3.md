@@ -18,7 +18,7 @@ distribution.
 
 1. [x] Build the native module against the staged runtime and SQLite.
 2. [x] Add focused database lifecycle and query smoke tests.
-3. [ ] Audit DLL loading and package installation paths.
+3. [x] Audit DLL loading and package installation paths.
 4. [ ] Validate the staged package outside MSYS2.
 
 ## Guardrails
@@ -54,3 +54,12 @@ distribution.
 - 2026-07-27: Fixed statement sentries so a statement already finalized by
   explicit cleanup or database close is not finalized again after its
   database has closed. The strict CLANG64 CTest run passes.
+- 2026-07-27: Added prefix-contained install rules for the module, Pure
+  source, seven examples, generated README, package license, the controlled
+  SQLite DLL, and its license. The exact install manifest contains 13 files.
+- 2026-07-27: Verified that the installed SQLite DLL is byte-identical to the
+  controlled CLANG64 input and that both installed PE files are x86-64 with
+  no MSYS runtime import. A negative `../escape` configuration is rejected.
+- 2026-07-27: Ran the installed package from `C:\Windows` with a restricted
+  `PATH` containing only its SQLite directory, the portable Pure runtime, and
+  Windows. The complete database smoke test passed.
