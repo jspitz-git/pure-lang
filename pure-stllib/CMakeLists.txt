@@ -93,3 +93,37 @@ if(WIN32)
     VERBATIM
   )
 endif()
+
+include(CTest)
+if(BUILD_TESTING)
+  pkg_get_variable(PURE_PREFIX pure prefix)
+  find_program(PURE_EXECUTABLE NAMES pure HINTS "${PURE_PREFIX}/bin" REQUIRED)
+
+  foreach(test_kind IN ITEMS stlvec stlmap)
+    add_test(
+      NAME "pure-stllib-${test_kind}"
+      COMMAND "${CMAKE_COMMAND}"
+        "-DPURE_EXECUTABLE=${PURE_EXECUTABLE}"
+        "-DPURE_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
+        "-DMODULE_DIR=$<TARGET_FILE_DIR:stlbase>"
+        "-DTEST_KIND=${test_kind}"
+        -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunPackageTests.cmake"
+    )
+    set_tests_properties(
+      "pure-stllib-${test_kind}"
+      PROPERTIES
+        REQUIRED_FILES
+          "$<TARGET_FILE:stlbase>;$<TARGET_FILE:stlvec>;$<TARGET_FILE:stlalgorithm>;$<TARGET_FILE:stlmap>;$<TARGET_FILE:stlmmap>;$<TARGET_FILE:stlhmap>"
+        TIMEOUT 120
+    )
+  endforeach()
+
+  set_tests_properties(
+    pure-stllib-stlvec
+    PROPERTIES LABELS "stllib;vector;algorithms;lifetime"
+  )
+  set_tests_properties(
+    pure-stllib-stlmap
+    PROPERTIES LABELS "stllib;map;multimap;hashmap;set;iterators"
+  )
+endif()
