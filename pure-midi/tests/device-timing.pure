@@ -4,7 +4,7 @@ namespace device_timing;
 
 check name condition
   = () if condition;
-  = throw ("pure-midi device/timing audit failed: "+name) otherwise;
+  = exit 1 otherwise;
 
 devicep (interf::string,name::string,input::int,output::int,opened::int)
   = (input == 0 || input == 1) &&

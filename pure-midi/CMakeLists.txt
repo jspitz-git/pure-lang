@@ -64,4 +64,19 @@ if(BUILD_TESTING)
     LABELS "midi;device-enumeration;timing;no-hardware"
     REQUIRED_FILES "$<TARGET_FILE:pmlib>;${CMAKE_CURRENT_SOURCE_DIR}/midi.pure"
     TIMEOUT 45)
+  add_test(
+    NAME pure-midi-smoke
+    COMMAND "${CMAKE_COMMAND}"
+      "-DPURE_EXECUTABLE=${PURE_EXECUTABLE}"
+      "-DPURE_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
+      "-DMODULE_DIR=$<TARGET_FILE_DIR:pmlib>"
+      "-DTEST_SCRIPT=${CMAKE_CURRENT_SOURCE_DIR}/tests/smoke.pure"
+      "-DTEST_DIRECTORY=${CMAKE_CURRENT_BINARY_DIR}/smoke-test"
+      "-DFIXTURE=${CMAKE_CURRENT_SOURCE_DIR}/examples/prelude3.mid"
+      -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunPureTest.cmake")
+  set_tests_properties(pure-midi-smoke PROPERTIES
+    LABELS "midi;encoding;midifile;cleanup;no-hardware"
+    REQUIRED_FILES
+      "$<TARGET_FILE:pmlib>;$<TARGET_FILE:midifile>;${CMAKE_CURRENT_SOURCE_DIR}/examples/prelude3.mid"
+    TIMEOUT 45)
 endif()

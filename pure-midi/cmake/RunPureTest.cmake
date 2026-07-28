@@ -7,6 +7,9 @@ endforeach()
 
 file(REMOVE_RECURSE "${TEST_DIRECTORY}")
 file(MAKE_DIRECTORY "${TEST_DIRECTORY}")
+if(DEFINED FIXTURE AND NOT "${FIXTURE}" STREQUAL "")
+  file(COPY "${FIXTURE}" DESTINATION "${TEST_DIRECTORY}")
+endif()
 set(ENV{PATH} "${MODULE_DIR};$ENV{PATH}")
 execute_process(
   COMMAND "${PURE_EXECUTABLE}" --norc
@@ -20,6 +23,7 @@ execute_process(
   ERROR_VARIABLE error
   TIMEOUT 45
   ENCODING UTF-8)
+file(REMOVE "${TEST_DIRECTORY}/pure-midi-smoke.mid")
 if(NOT result EQUAL 0)
   message(FATAL_ERROR
     "pure-midi test failed (${result})\n"

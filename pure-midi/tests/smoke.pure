@@ -1,0 +1,42 @@
+using midi, midifile;
+
+namespace smoke;
+
+check name condition
+  = () if condition;
+  = exit 1 otherwise;
+
+run = ()
+when
+  message = Pm::Message 0x90 60 127;
+  check "message encoding" (message == 8338576);
+  check "message status" (Pm::MessageStatus message == 0x90);
+  check "message data 1" (Pm::MessageData1 message == 60);
+  check "message data 2" (Pm::MessageData2 message == 127);
+  check "word to bytes" (midi::bytes message == {0x90,60,127,0});
+  check "bytes to word" (midi::word {0x90,60,127,0} == message);
+  check "timestamp ordering" (Pm::Before 10 20 && ~Pm::Before 20 10);
+
+  check "invalid input open"
+    (midi::open_input Pm::NoDevice 0 == Pm::InvalidDeviceId);
+  check "invalid output open"
+    (midi::open_output Pm::NoDevice 0 0 == Pm::InvalidDeviceId);
+
+  source = midifile::load "prelude3.mid";
+  check "fixture load" (pointerp source);
+  check "fixture info" (midifile::info source == (1,0,120,2));
+  tracks = midifile::get_tracks source;
+  check "fixture tracks" (#tracks == 2 && map (#) tracks == [7,1625]);
+  check "fixture save" (midifile::save source "pure-midi-smoke.mid");
+
+  copy = midifile::load "pure-midi-smoke.mid";
+  check "copy load" (pointerp copy);
+  check "copy info" (midifile::info copy == midifile::info source);
+  check "copy events" (midifile::get_tracks copy == tracks);
+  check "copy close" (midifile::free copy);
+  check "source close" (midifile::free source);
+  check "PortMidi stop" (midi::stop == Pm::NoError);
+  check "PortTime stop" (Pt::Stop == Pt::NoError);
+end;
+
+smoke::run;
