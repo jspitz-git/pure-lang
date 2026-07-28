@@ -34,10 +34,12 @@ subdirs:
 	for dir in $(subdirs); do $(MAKE) -C $$dir all; done
 
 clean:
+	@test -n "$(DLL)" || { echo "refusing to clean: Pure DLL suffix is empty" >&2; exit 1; }
 	rm -Rf *.o *$(DLL)*
 	for dir in $(subdirs); do $(MAKE) -C $$dir clean; done
 
 realclean:
+	@test -n "$(DLL)" || { echo "refusing to clean: Pure DLL suffix is empty" >&2; exit 1; }
 	rm -Rf *.o *$(DLL)* portaudio.pure
 	for dir in $(subdirs); do $(MAKE) -C $$dir realclean; done
 
