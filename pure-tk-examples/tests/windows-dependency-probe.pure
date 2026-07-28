@@ -1,0 +1,41 @@
+using tk, system;
+
+tk_error msg
+  = fprintf stderr "pure-tk-examples dependency probe failed: %s\n" msg $$
+    exit 1;
+
+check name actual expected
+  = () if actual == expected;
+  = fprintf stderr
+      "pure-tk-examples dependency probe failed: %s: %s != %s\n"
+      (name, actual, expected) $$
+    tk_quit $$
+    exit 1 otherwise;
+
+probe package = tk_split $ tk $ sprintf
+  "set code [catch {package require %s} message]; list $code $message"
+  package;
+
+show package result =
+  printf "%s: unavailable (%s)\n" (package, result!1);
+
+tk "wm withdraw .";
+
+let gnocl_result = probe "Gnocl";
+let canvas_result = probe "GnoclCanvas";
+let vtk_result = probe "vtk";
+let vtkinteraction_result = probe "vtkinteraction";
+
+show "Gnocl" gnocl_result;
+show "GnoclCanvas" canvas_result;
+show "vtk" vtk_result;
+show "vtkinteraction" vtkinteraction_result;
+
+check "Gnocl availability" (gnocl_result!0) "1";
+check "GnoclCanvas availability" (canvas_result!0) "1";
+check "vtk availability" (vtk_result!0) "1";
+check "vtkinteraction availability" (vtkinteraction_result!0) "1";
+
+tk_quit;
+puts "PURE_TK_EXAMPLES_DEFERRED_OK";
+
