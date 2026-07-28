@@ -1,0 +1,75 @@
+using ffi, system;
+
+#! --if *-mingw32
+using "lib:libgtk-win32-2.0-0", "lib:libgobject-2.0-0",
+      "lib:libglib-2.0-0";
+#! --endif
+#! --if *-windows-gnu
+using "lib:libgtk-win32-2.0-0", "lib:libgobject-2.0-0",
+      "lib:libglib-2.0-0";
+#! --endif
+using "lib:gtk", "lib:glib";
+
+extern int gtk_init_check(int*, char***);
+extern void* gtk_window_new(int);
+extern void* gtk_button_new_with_label(char*);
+extern void gtk_window_set_title(void*, char*);
+extern void gtk_window_set_default_size(void*, int, int);
+extern void gtk_container_add(void*, void*);
+extern void gtk_button_clicked(void*);
+extern void gtk_widget_show_all(void*);
+extern void gtk_widget_destroy(void*);
+extern void gtk_main();
+extern void gtk_main_quit();
+extern long g_signal_connect_data(void*, char*, void*, void*, void*, int);
+extern int g_timeout_add(int, void*, void*);
+extern int g_idle_add(void*, void*);
+extern int g_source_remove(int);
+
+check name condition
+  = () if condition;
+  = fprintf stderr "pure-gtk GUI smoke failed: %s\n" name $$ exit 1 otherwise;
+
+ptr p::pointer = pointer_cast (pointer_type p + "*") q when
+  q = malloc SIZEOF_POINTER;
+  put_pointer q $ clear_sentry p;
+end;
+
+def signal_callback cb =
+  fclos cb FFI_DEFAULT_ABI void_t (pointer_t, pointer_t);
+def source_callback cb =
+  fclos cb FFI_DEFAULT_ABI sint_t (pointer_t);
+
+clicked (widget, state) =
+  put_int state 1 $$ gtk_main_quit;
+activate button =
+  gtk_button_clicked button $$ false;
+timed_out state =
+  put_int state 2 $$ gtk_main_quit $$ false;
+
+let argcp, argvp = {argc}, ptr (byte_cstring_pointer argv);
+check "GTK initialization" (gtk_init_check argcp argvp);
+
+let state = malloc SIZEOF_INT;
+put_int state 0;
+
+let window = gtk_window_new 0;
+let button = gtk_button_new_with_label "Pure GTK callback";
+gtk_window_set_title window "Pure GTK smoke";
+gtk_window_set_default_size window 240 80;
+gtk_container_add window button;
+
+let clicked_cb = signal_callback clicked;
+let activate_cb = source_callback activate;
+let timeout_cb = source_callback timed_out;
+g_signal_connect_data button "clicked" clicked_cb state NULL 0;
+let timeout_id = g_timeout_add 5000 timeout_cb state;
+g_idle_add activate_cb button;
+
+gtk_widget_show_all window;
+gtk_main;
+if get_int state == 1 then g_source_remove timeout_id else ();
+gtk_widget_destroy window;
+
+check "widget callback and bounded shutdown" (get_int state == 1);
+puts "pure-gtk GUI smoke passed";

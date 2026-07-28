@@ -1,0 +1,14 @@
+using gtk, glib, atk, cairo, pango, system;
+
+check name condition
+  = () if condition;
+  = fprintf stderr "pure-gtk smoke failed: %s\n" name $$ exit 1 otherwise;
+
+check "GTK function call" (gtk::events_pending >= 0);
+check "GLib function call" (glib::random_int_range 1 2 == 1);
+check "ATK version" (stringp atk::get_version);
+check "Cairo version" (stringp cairo::version_string);
+check "Pango version" (stringp pango::version_string);
+
+printf "pure-gtk smoke passed: GTK 2, GLib, ATK %s, Cairo %s, Pango %s\n"
+       (atk::get_version, cairo::version_string, pango::version_string);

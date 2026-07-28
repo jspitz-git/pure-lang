@@ -1,6 +1,11 @@
 /* /usr/include/pango-1.0/pango/pango.h: */
+#! --if *-mingw32
+using "lib:libpango-1.0-0";
+#! --endif
+#! --if *-windows-gnu
+using "lib:libpango-1.0-0";
+#! --endif
 using "lib:pango";
-
 namespace pango;
 const pango::SCALE = 1024;
 const pango::ATTR_INDEX_FROM_TEXT_BEGINNING = 0;

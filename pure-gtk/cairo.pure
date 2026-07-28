@@ -1,6 +1,11 @@
 /* /usr/include/cairo/cairo.h: */
+#! --if *-mingw32
+using "lib:libcairo-2";
+#! --endif
+#! --if *-windows-gnu
+using "lib:libcairo-2";
+#! --endif
 using "lib:cairo";
-
 namespace cairo;
 const cairo::VERSION_MAJOR = 1;
 const cairo::VERSION_MINOR = 13;
