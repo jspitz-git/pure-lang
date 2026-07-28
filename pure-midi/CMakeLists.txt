@@ -89,3 +89,5 @@ if(BUILD_TESTING)
     COMMENT "Running bounded pure-midi output validation"
     VERBATIM)
 endif()
+
+include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/Install.cmake")
