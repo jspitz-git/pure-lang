@@ -1,6 +1,15 @@
 /* /usr/include/glib-2.0/glib.h: */
+#! --if *-mingw32
+// Load each DLL whose public API is wrapped by this generated module.
+using "lib:libglib-2.0-0", "lib:libgobject-2.0-0",
+      "lib:libgio-2.0-0", "lib:libgmodule-2.0-0";
+#! --endif
+#! --if *-windows-gnu
+// Load each DLL whose public API is wrapped by this generated module.
+using "lib:libglib-2.0-0", "lib:libgobject-2.0-0",
+      "lib:libgio-2.0-0", "lib:libgmodule-2.0-0";
+#! --endif
 using "lib:glib";
-
 namespace glib;
 const glib::ANALYZER_ANALYZING = 0;
 const glib::FALSE = 0;
@@ -1323,10 +1332,14 @@ extern char* g_source_get_name(GSource*) = source_get_name;
 extern void g_source_set_name_by_id(int, char*) = source_set_name_by_id;
 extern void g_source_set_ready_time(GSource*, long) = source_set_ready_time;
 extern long g_source_get_ready_time(GSource*) = source_get_ready_time;
+#! --ifnot *-mingw32
+#! --ifnot *-windows-gnu
 extern void* g_source_add_unix_fd(GSource*, int, int) = source_add_unix_fd;
 extern void g_source_modify_unix_fd(GSource*, void*, int) = source_modify_unix_fd;
 extern void g_source_remove_unix_fd(GSource*, void*) = source_remove_unix_fd;
 extern int g_source_query_unix_fd(GSource*, void*) = source_query_unix_fd;
+#! --endif
+#! --endif
 extern void g_source_set_callback_indirect(GSource*, void*, GSourceCallbackFuncs*) = source_set_callback_indirect;
 extern void g_source_add_poll(GSource*, GPollFD*) = source_add_poll;
 extern void g_source_remove_poll(GSource*, GPollFD*) = source_remove_poll;
@@ -3340,9 +3353,13 @@ extern char* g_credentials_to_string(GCredentials*) = credentials_to_string;
 extern void* g_credentials_get_native(GCredentials*, int) = credentials_get_native;
 extern void g_credentials_set_native(GCredentials*, int, void*) = credentials_set_native;
 extern int g_credentials_is_same_user(GCredentials*, GCredentials*, GError**) = credentials_is_same_user;
+#! --ifnot *-mingw32
+#! --ifnot *-windows-gnu
 extern int g_credentials_get_unix_pid(GCredentials*, GError**) = credentials_get_unix_pid;
 extern int g_credentials_get_unix_user(GCredentials*, GError**) = credentials_get_unix_user;
 extern int g_credentials_set_unix_user(GCredentials*, int, GError**) = credentials_set_unix_user;
+#! --endif
+#! --endif
 extern long g_data_input_stream_get_type() = data_input_stream_get_type;
 extern GDataInputStream* g_data_input_stream_new(GInputStream*) = data_input_stream_new;
 extern void g_data_input_stream_set_byte_order(GDataInputStream*, int) = data_input_stream_set_byte_order;
@@ -3424,9 +3441,13 @@ extern int g_dbus_connection_emit_signal(GDBusConnection*, char*, char*, char*, 
 extern void g_dbus_connection_call(GDBusConnection*, char*, char*, char*, char*, GVariant*, GVariantType*, int, int, GCancellable*, void*, void*) = dbus_connection_call;
 extern GVariant* g_dbus_connection_call_finish(GDBusConnection*, GAsyncResult*, GError**) = dbus_connection_call_finish;
 extern GVariant* g_dbus_connection_call_sync(GDBusConnection*, char*, char*, char*, char*, GVariant*, GVariantType*, int, int, GCancellable*, GError**) = dbus_connection_call_sync;
+#! --ifnot *-mingw32
+#! --ifnot *-windows-gnu
 extern void g_dbus_connection_call_with_unix_fd_list(GDBusConnection*, char*, char*, char*, char*, GVariant*, GVariantType*, int, int, GUnixFDList*, GCancellable*, void*, void*) = dbus_connection_call_with_unix_fd_list;
 extern GVariant* g_dbus_connection_call_with_unix_fd_list_finish(GDBusConnection*, GUnixFDList**, GAsyncResult*, GError**) = dbus_connection_call_with_unix_fd_list_finish;
 extern GVariant* g_dbus_connection_call_with_unix_fd_list_sync(GDBusConnection*, char*, char*, char*, char*, GVariant*, GVariantType*, int, int, GUnixFDList*, GUnixFDList**, GCancellable*, GError**) = dbus_connection_call_with_unix_fd_list_sync;
+#! --endif
+#! --endif
 extern int g_dbus_connection_register_object(GDBusConnection*, char*, GDBusInterfaceInfo*, GDBusInterfaceVTable*, void*, void*, GError**) = dbus_connection_register_object;
 extern int g_dbus_connection_unregister_object(GDBusConnection*, int) = dbus_connection_unregister_object;
 extern int g_dbus_connection_register_subtree(GDBusConnection*, char*, GDBusSubtreeVTable*, int, void*, void*, GError**) = dbus_connection_register_subtree;
@@ -3502,8 +3523,12 @@ extern void g_dbus_message_set_header(GDBusMessage*, int, GVariant*) = dbus_mess
 extern char* g_dbus_message_get_header_fields(GDBusMessage*) = dbus_message_get_header_fields;
 extern GVariant* g_dbus_message_get_body(GDBusMessage*) = dbus_message_get_body;
 extern void g_dbus_message_set_body(GDBusMessage*, GVariant*) = dbus_message_set_body;
+#! --ifnot *-mingw32
+#! --ifnot *-windows-gnu
 extern GUnixFDList* g_dbus_message_get_unix_fd_list(GDBusMessage*) = dbus_message_get_unix_fd_list;
 extern void g_dbus_message_set_unix_fd_list(GDBusMessage*, GUnixFDList*) = dbus_message_set_unix_fd_list;
+#! --endif
+#! --endif
 extern int g_dbus_message_get_reply_serial(GDBusMessage*) = dbus_message_get_reply_serial;
 extern void g_dbus_message_set_reply_serial(GDBusMessage*, int) = dbus_message_set_reply_serial;
 extern char* g_dbus_message_get_interface(GDBusMessage*) = dbus_message_get_interface;
@@ -3539,7 +3564,11 @@ extern GDBusMessage* g_dbus_method_invocation_get_message(GDBusMethodInvocation*
 extern GVariant* g_dbus_method_invocation_get_parameters(GDBusMethodInvocation*) = dbus_method_invocation_get_parameters;
 extern void* g_dbus_method_invocation_get_user_data(GDBusMethodInvocation*) = dbus_method_invocation_get_user_data;
 extern void g_dbus_method_invocation_return_value(GDBusMethodInvocation*, GVariant*) = dbus_method_invocation_return_value;
+#! --ifnot *-mingw32
+#! --ifnot *-windows-gnu
 extern void g_dbus_method_invocation_return_value_with_unix_fd_list(GDBusMethodInvocation*, GVariant*, GUnixFDList*) = dbus_method_invocation_return_value_with_unix_fd_list;
+#! --endif
+#! --endif
 extern void g_dbus_method_invocation_return_error(GDBusMethodInvocation*, int, int, char*, ...) = dbus_method_invocation_return_error;
 extern void g_dbus_method_invocation_return_error_valist(GDBusMethodInvocation*, int, int, char*, void*) = dbus_method_invocation_return_error_valist;
 extern void g_dbus_method_invocation_return_error_literal(GDBusMethodInvocation*, int, int, char*) = dbus_method_invocation_return_error_literal;
@@ -3579,9 +3608,13 @@ extern char** g_dbus_proxy_get_cached_property_names(GDBusProxy*) = dbus_proxy_g
 extern void g_dbus_proxy_call(GDBusProxy*, char*, GVariant*, int, int, GCancellable*, void*, void*) = dbus_proxy_call;
 extern GVariant* g_dbus_proxy_call_finish(GDBusProxy*, GAsyncResult*, GError**) = dbus_proxy_call_finish;
 extern GVariant* g_dbus_proxy_call_sync(GDBusProxy*, char*, GVariant*, int, int, GCancellable*, GError**) = dbus_proxy_call_sync;
+#! --ifnot *-mingw32
+#! --ifnot *-windows-gnu
 extern void g_dbus_proxy_call_with_unix_fd_list(GDBusProxy*, char*, GVariant*, int, int, GUnixFDList*, GCancellable*, void*, void*) = dbus_proxy_call_with_unix_fd_list;
 extern GVariant* g_dbus_proxy_call_with_unix_fd_list_finish(GDBusProxy*, GUnixFDList**, GAsyncResult*, GError**) = dbus_proxy_call_with_unix_fd_list_finish;
 extern GVariant* g_dbus_proxy_call_with_unix_fd_list_sync(GDBusProxy*, char*, GVariant*, int, int, GUnixFDList*, GUnixFDList**, GCancellable*, GError**) = dbus_proxy_call_with_unix_fd_list_sync;
+#! --endif
+#! --endif
 extern long g_dbus_server_get_type() = dbus_server_get_type;
 extern GDBusServer* g_dbus_server_new_sync(char*, int, char*, GDBusAuthObserver*, GCancellable*, GError**) = dbus_server_new_sync;
 extern char* g_dbus_server_get_client_address(GDBusServer*) = dbus_server_get_client_address;
@@ -4515,7 +4548,11 @@ extern GOutputStream* g_subprocess_get_stdin_pipe(GSubprocess*) = subprocess_get
 extern GInputStream* g_subprocess_get_stdout_pipe(GSubprocess*) = subprocess_get_stdout_pipe;
 extern GInputStream* g_subprocess_get_stderr_pipe(GSubprocess*) = subprocess_get_stderr_pipe;
 extern char* g_subprocess_get_identifier(GSubprocess*) = subprocess_get_identifier;
+#! --ifnot *-mingw32
+#! --ifnot *-windows-gnu
 extern void g_subprocess_send_signal(GSubprocess*, int) = subprocess_send_signal;
+#! --endif
+#! --endif
 extern void g_subprocess_force_exit(GSubprocess*) = subprocess_force_exit;
 extern int g_subprocess_wait(GSubprocess*, GCancellable*, GError**) = subprocess_wait;
 extern void g_subprocess_wait_async(GSubprocess*, GCancellable*, void*, void*) = subprocess_wait_async;
@@ -4545,6 +4582,8 @@ extern void g_subprocess_launcher_unsetenv(GSubprocessLauncher*, char*) = subpro
 extern char* g_subprocess_launcher_getenv(GSubprocessLauncher*, char*) = subprocess_launcher_getenv;
 extern void g_subprocess_launcher_set_cwd(GSubprocessLauncher*, char*) = subprocess_launcher_set_cwd;
 extern void g_subprocess_launcher_set_flags(GSubprocessLauncher*, int) = subprocess_launcher_set_flags;
+#! --ifnot *-mingw32
+#! --ifnot *-windows-gnu
 extern void g_subprocess_launcher_set_stdin_file_path(GSubprocessLauncher*, char*) = subprocess_launcher_set_stdin_file_path;
 extern void g_subprocess_launcher_take_stdin_fd(GSubprocessLauncher*, int) = subprocess_launcher_take_stdin_fd;
 extern void g_subprocess_launcher_set_stdout_file_path(GSubprocessLauncher*, char*) = subprocess_launcher_set_stdout_file_path;
@@ -4553,6 +4592,8 @@ extern void g_subprocess_launcher_set_stderr_file_path(GSubprocessLauncher*, cha
 extern void g_subprocess_launcher_take_stderr_fd(GSubprocessLauncher*, int) = subprocess_launcher_take_stderr_fd;
 extern void g_subprocess_launcher_take_fd(GSubprocessLauncher*, int, int) = subprocess_launcher_take_fd;
 extern void g_subprocess_launcher_set_child_setup(GSubprocessLauncher*, void*, void*, void*) = subprocess_launcher_set_child_setup;
+#! --endif
+#! --endif
 extern long g_tcp_connection_get_type() = tcp_connection_get_type;
 extern void g_tcp_connection_set_graceful_disconnect(GTcpConnection*, int) = tcp_connection_set_graceful_disconnect;
 extern int g_tcp_connection_get_graceful_disconnect(GTcpConnection*) = tcp_connection_get_graceful_disconnect;

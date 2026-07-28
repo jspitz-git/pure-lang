@@ -61,4 +61,31 @@ if(BUILD_TESTING AND WIN32)
       LABELS "gtk;loader;utf8"
       TIMEOUT 15
   )
+
+  pkg_get_variable(PURE_PREFIX pure prefix)
+  pkg_get_variable(GTK2_PREFIX gtk+-2.0 prefix)
+  find_program(
+    PURE_EXECUTABLE
+    NAMES pure
+    HINTS "${PURE_PREFIX}/bin"
+    NO_DEFAULT_PATH
+    REQUIRED
+  )
+  add_test(
+    NAME pure-gtk-smoke
+    COMMAND "${PURE_EXECUTABLE}"
+      -I "${CMAKE_CURRENT_SOURCE_DIR}"
+      -L "$<TARGET_FILE_DIR:gtk>"
+      -x "${CMAKE_CURRENT_SOURCE_DIR}/tests/smoke.pure"
+  )
+  set_tests_properties(
+    pure-gtk-smoke
+    PROPERTIES
+      ENVIRONMENT_MODIFICATION
+        "PATH=path_list_prepend:$<TARGET_FILE_DIR:gtk>;PATH=path_list_prepend:${GTK2_PREFIX}/bin"
+      LABELS "gtk;runtime;integration;slow;no-display"
+      REQUIRED_FILES
+        "$<TARGET_FILE:gtk>;$<TARGET_FILE:glib>;$<TARGET_FILE:atk>;$<TARGET_FILE:cairo>;$<TARGET_FILE:pango>"
+      TIMEOUT 1200
+  )
 endif()

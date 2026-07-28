@@ -1,6 +1,15 @@
 /* /usr/include/gtk-2.0/gdk/gdk.h: */
+#! --if *-mingw32
+// PE modules do not re-export their dependency symbols. Load the GTK and GDK
+// runtime DLLs explicitly so that Pure can resolve the generated externs.
+using "lib:libgtk-win32-2.0-0", "lib:libgdk-win32-2.0-0";
+#! --endif
+#! --if *-windows-gnu
+// PE modules do not re-export their dependency symbols. Load the GTK and GDK
+// runtime DLLs explicitly so that Pure can resolve the generated externs.
+using "lib:libgtk-win32-2.0-0", "lib:libgdk-win32-2.0-0";
+#! --endif
 using "lib:gtk";
-
 namespace gdk;
 const gdk::CURRENT_TIME = 0;
 const gdk::PARENT_RELATIVE = 1;
