@@ -1,0 +1,38 @@
+using lilv, system;
+
+argc == 4 || exit 10;
+
+let empty_world = lilv::world_at (argv!1);
+null (lilv::plugins empty_world) || exit 11;
+
+let world = lilv::world_at (argv!2);
+let static_uri = "urn:pure-lang:test:static-gain";
+let dynamic_uri = "urn:pure-lang:test:dynamic-gain";
+let discovered = [uri | _, uri = lilv::plugins world];
+
+any (==static_uri) discovered || exit 12;
+any (==dynamic_uri) discovered || exit 13;
+
+let plugin = lilv::plugin world static_uri 48000 4;
+pointerp plugin || exit 14;
+lilv::num_audio_inputs plugin == 1 || exit 15;
+lilv::num_audio_outputs plugin == 1 || exit 16;
+
+let input = dmatrix {1.0, 2.0, 3.0, 4.0};
+let output = dmatrix (1, 4);
+
+lilv::set_control plugin 2 2.0;
+lilv::activate plugin;
+lilv::run plugin input output;
+lilv::deactivate plugin;
+list output == [2.0, 4.0, 6.0, 8.0] || exit 17;
+
+let state = lilv::get_preset world "urn:pure-lang:test:state" plugin;
+stringp state || exit 18;
+lilv::set_control plugin 2 1.0;
+lilv::set_preset world state plugin;
+lilv::get_control plugin 2 == 2.0 || exit 19;
+
+lilv::save_preset
+  world "urn:pure-lang:test:saved-state" "saved-state" plugin;
+puts "PURE_LILV_SMOKE_OK";

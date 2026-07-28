@@ -6,13 +6,18 @@
 
 #define _POSIX_C_SOURCE 200809L  /* for strdup */
 
+#include <ctype.h>
 #include <assert.h>
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
 #include <string.h>
+#ifdef _WIN32
+#include <malloc.h>
+#else
 #include <alloca.h>
+#endif
 
 #include <pure/runtime.h>
 
@@ -23,6 +28,33 @@
 
 #include <lilv/lilv.h>
 #include <serd/serd.h>
+
+LilvWorld *pure_lilv_world_new(const char *path)
+{
+  LilvWorld *world = lilv_world_new();
+  if (!world)
+    return NULL;
+
+  LilvNode *enabled = lilv_new_bool(world, true);
+  if (!enabled) {
+    lilv_world_free(world);
+    return NULL;
+  }
+  lilv_world_set_option(world, LILV_OPTION_DYN_MANIFEST, enabled);
+  lilv_node_free(enabled);
+
+  if (path && *path) {
+    LilvNode *search_path = lilv_new_string(world, path);
+    if (!search_path) {
+      lilv_world_free(world);
+      return NULL;
+    }
+    lilv_world_set_option(world, LILV_OPTION_LV2_PATH, search_path);
+    lilv_node_free(search_path);
+  }
+  lilv_world_load_all(world);
+  return world;
+}
 
 // These seem to be missing in the lilv headers right now.
 #define MY_URI_ATOM_PORT "http://lv2plug.in/ns/ext/atom#AtomPort"
@@ -1162,7 +1194,40 @@ get_port_value(const char* port_symbol,
   }
 }
 
+#ifndef PATH_MAX
 #define PATH_MAX 4096
+#endif
+
+static int path_separator(char c)
+{
+#ifdef _WIN32
+  return c == '/' || c == '\\';
+#else
+  return c == '/';
+#endif
+}
+
+static int absolute_path(const char *path)
+{
+  if (!path || !*path)
+    return 0;
+#ifdef _WIN32
+  return (isalpha((unsigned char)path[0]) && path[1] == ':' &&
+          path_separator(path[2])) ||
+         (path_separator(path[0]) && path_separator(path[1]));
+#else
+  return path[0] == '/';
+#endif
+}
+
+static const char *path_basename(const char *path)
+{
+  const char *basename = path;
+  for (const char *cursor = path; *cursor; ++cursor)
+    if (path_separator(*cursor))
+      basename = cursor + 1;
+  return basename;
+}
 
 pure_expr *lilv_plugin_save_preset(LilvWorld* world, const char* preset_uri,
 				   const char* path,
@@ -1175,23 +1240,25 @@ pure_expr *lilv_plugin_save_preset(LilvWorld* world, const char* preset_uri,
   lilv_node_free(uri);
   // Lilv needs an absolute pathname here, so make sure that we create one if
   // necessary.
+  if (!path || !*path) return 0;
   char mypath[PATH_MAX];
-  if (*path != '/') {
-    if (!getcwd(mypath, PATH_MAX)) return 0;
-    if (strlen(mypath)+strlen(path)+1 >= PATH_MAX) return 0;
-    strcat(strcat(mypath, "/"), path);
+  if (!absolute_path(path)) {
+    if (!getcwd(mypath, sizeof(mypath))) return 0;
+    const size_t cwd_len = strlen(mypath);
+    const size_t path_len = strlen(path);
+    if (cwd_len + path_len + 2 > sizeof(mypath)) return 0;
+    mypath[cwd_len] = '/';
+    memcpy(mypath + cwd_len + 1, path, path_len + 1);
     path = mypath;
   }
   // Parse the filename and construct the basename, bundle dir and filename
   // from it.
-  const char *basename = strrchr(path, '/');
-  if (!basename) return 0;
-  basename++;
+  const char *basename = path_basename(path);
   if (!*basename) return 0;
   char *dir = alloca(strlen(path)+6);
-  strcat(strcpy(dir, path), ".lv2/");
+  snprintf(dir, strlen(path)+6, "%s.lv2/", path);
   char *filename = alloca(strlen(basename)+5);
-  strcat(strcpy(filename, basename), ".ttl");
+  snprintf(filename, strlen(basename)+5, "%s.ttl", basename);
   uri = lilv_new_uri(world, lilv_instance_get_uri(p->instance));
   if (!uri) return 0;
   const LilvPlugins* plugins = lilv_world_get_all_plugins(world);
@@ -1206,6 +1273,8 @@ pure_expr *lilv_plugin_save_preset(LilvWorld* world, const char* preset_uri,
   int ret = lilv_state_save
     (world, &map, &unmap, state, preset_uri, dir, filename);
   lilv_state_free(state);
+  if (ret)
+    return 0;
   // Reload the preset so that it is known in the world state.
   SerdNode sdir = serd_node_new_file_uri((const uint8_t*)dir, 0, 0, 0);
   LilvNode* ldir = lilv_new_uri(world, (const char*)sdir.buf);
