@@ -29,8 +29,10 @@ LAME. The existing bundle copies of `libc++.dll` and
 `libwinpthread-1.dll` are reused after hash verification.
 
 PortAudio imports the native Windows multimedia, COM, and device-setup APIs.
-This build does not claim ASIO support. libsndfile's advertised codec set is
-limited to the codec DLLs present in this audited closure.
+This build does not claim ASIO support. The Ogg, Vorbis, FLAC, Opus, mpg123,
+and LAME DLLs are transitive parts of the audited libsndfile build, but their
+presence is not a claim that every corresponding file format was tested. The
+automated package test covers deterministic WAV input and output.
 
 ## Optional hardware validation
 
