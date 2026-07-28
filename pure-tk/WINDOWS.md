@@ -22,7 +22,37 @@ the root window, and verifies that the interpreter shuts down. No test window
 requires user interaction.
 
 The wrapper is built as `tk.dll`. Its PE closure reuses the bundle's
-`libpure.dll`; Tcl adds `zlib1.dll`, while networking, environment, GUI,
+`libpure.dll` and `zlib1.dll`, while networking, environment, GUI,
 common-control, UCRT, and other Windows system DLLs are never copied. The
 module and all three bundled DLLs must remain free of MSYS, GCC, and C++
 runtime imports.
+
+The optional `gnocl.pure` interface is not installed by this core package. It
+requires a separate Gnocl Tcl extension plus the GTK/XML stack and is evaluated
+with the examples after the Windows `pure-gtk` investigation.
+## Build, test, and stage
+
+From an MSYS2 CLANG64 shell, point `PKG_CONFIG_PATH` at the staged Pure SDK
+and run:
+
+```sh
+cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_C_COMPILER=clang -DBUILD_TESTING=ON
+cmake --build build
+cmake --build build --target verify-windows-dependencies
+ctest --test-dir build --output-on-failure
+```
+
+Copy the portable Pure runtime to a fresh prefix before installing pure-tk,
+then verify that complete stage:
+
+```sh
+cmake --install build --prefix "C:/tmp/Pure Tk Stage"
+cmake -DSTAGE_PREFIX="C:/tmp/Pure Tk Stage" \
+  -DSOURCE_PREFIX=C:/path/to/pure-runtime \
+  -DLLVM_READOBJ=/clang64/bin/llvm-readobj.exe \
+  -P cmake/VerifyInstalledPackage.cmake
+```
+
+The installed verifier checks both GUI tests, the Tcl/Tk discovery paths,
+reused DLL hashes, required script/data files, and the staged PE closure.
