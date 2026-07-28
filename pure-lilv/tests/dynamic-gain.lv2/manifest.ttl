@@ -1,0 +1,6 @@
+@prefix dman: <http://lv2plug.in/ns/ext/dynmanifest#> .
+@prefix lv2:  <http://lv2plug.in/ns/lv2core#> .
+
+<urn:pure-lang:test:dynamic-gain-manifest>
+    a dman:DynManifest ;
+    lv2:binary <dynamic-gain.dll> .

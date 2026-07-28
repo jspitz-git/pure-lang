@@ -18,11 +18,11 @@ Build, validate, and package `pure-lilv` with the Windows LV2 discovery stack.
 
 ## Task List
 
-1. [ ] Add the CLANG64 CMake build and inventory the complete Lilv dependency
+1. [x] Add the CLANG64 CMake build and inventory the complete Lilv dependency
    graph.
-2. [ ] Enable Dynamic Manifest support in the controlled Lilv build and in
+2. [x] Enable Dynamic Manifest support in the controlled Lilv build and in
    `pure-lilv` world creation.
-3. [ ] Define distribution-relative LV2 search behavior and add deterministic
+3. [x] Define distribution-relative LV2 search behavior and add deterministic
    metadata, processing, state, and lifecycle tests.
 4. [ ] Stage the module, LV2 specifications, runtime DLL closure, and licenses;
    validate the relocated package with a sanitized environment.
@@ -70,3 +70,7 @@ generating a batch-compiled Pure LV2 plugin and loading it through this host.
 - 2026-07-29: Confirmed that the stock MSYS2 Lilv 0.26.4 build leaves the
   upstream `dynmanifest` Meson feature disabled. Chose a controlled
   Dynamic-Manifest-enabled Lilv build so TODO-41 plugins can be validated.
+- 2026-07-29: Built the controlled Lilv 0.26.4 runtime after applying the
+  upstream Dynamic Manifest include fix. The isolated CTest discovered both static
+  and generated-manifest plugins, processed a fixed audio buffer, round-tripped
+  state, saved a relative preset, and passed the PE dependency audit.

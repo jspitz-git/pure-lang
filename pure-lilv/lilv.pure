@@ -7,9 +7,8 @@ using "lib:lilv";
 
 namespace lilv;
 
-private extern LilvWorld* lilv_world_new();
-private extern void lilv_world_load_all(LilvWorld*);
 private extern void lilv_world_free(LilvWorld*);
+private extern LilvWorld* pure_lilv_world_new(char*);
 
 /* lilv::world: Load the lilv world state, including the list of all available
    plugins. This returns a pointer which can be passed to the other
@@ -18,10 +17,14 @@ private extern void lilv_world_free(LilvWorld*);
    current) state which may change over time, as LV2 plugins are installed or
    deleted on your system. */
 
-world = sentry lilv_world_free w when
-  w = lilv_world_new;
-  lilv_world_load_all w;
-end;
+world = world_at "";
+
+/* lilv::world_at: Load a world from an explicit LV2 search path. This uses
+   Lilv's application-specific path option instead of changing the process
+   environment. On Windows, multiple entries are separated with semicolons. */
+
+world_at path::string =
+  sentry lilv_world_free (pure_lilv_world_new path);
 
 /* lilv::plugins: Return the list of all plugins, as pairs of plugin names and
    URIs. The latter are what you need to pass to lilv::info or lilv::plugin to
