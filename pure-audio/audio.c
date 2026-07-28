@@ -326,7 +326,7 @@ static bool init_buf(MyRingBuffer *buf, char **data, long bufsize)
   return true;
 }
 
-static void fini_buf(MyRingBuffer *buf, char **data)
+static void fini_buf(char **data)
 {
   free(*data);
   *data = NULL;
@@ -359,7 +359,7 @@ static bool init_stream(MyStream *v,
     long bufsize = round_pow2(Pa_GetSampleSize(out->sampleFormat)*
 			      out->channelCount*size);
     if (!init_buf(&v->out_buf, &v->out_data, bufsize)) {
-      if (in) fini_buf(&v->in_buf, &v->in_data);
+      if (in) fini_buf(&v->in_data);
       return false;
     }
 #if 0
@@ -406,6 +406,11 @@ static void unlock_stream(void *x)
   if (has_output(v)) pthread_mutex_unlock(&v->out_mutex);
 }
 
+static void unlock_mutex(void *x)
+{
+  pthread_mutex_unlock((pthread_mutex_t*)x);
+}
+
 static void fini_stream(MyStream *v, bool abort)
 {
   if (v->as) {
@@ -435,8 +440,8 @@ static void destroy_stream(MyStream *v)
     pthread_mutex_destroy(&v->out_mutex);
     pthread_cond_destroy(&v->out_cond);
   }
-  if (has_input(v)) fini_buf(&v->in_buf, &v->in_data);
-  if (has_output(v)) fini_buf(&v->out_buf, &v->out_data);
+  if (has_input(v)) fini_buf(&v->in_data);
+  if (has_output(v)) fini_buf(&v->out_data);
   if (v->prev) v->prev->next = v->next;
   if (v->next) v->next->prev = v->prev;
   if (v == current) current = v->next;
@@ -470,6 +475,10 @@ static int audio_cb(const void *input, void *output,
 		    void *data)
 {
   MyStream *v = (MyStream*)data;
+#ifdef TIMER_KLUDGE
+  (void)time_info;
+#endif
+  (void)status;
   long in_bytes = v->in_bpf*nframes, out_bytes = v->out_bpf*nframes;
   /* update the current time */
   pthread_mutex_lock(&v->data_mutex);
@@ -618,16 +627,30 @@ pure_expr *open_audio_stream(int *in, int *out,
      pure_pointer(v->as));
 }
 
-void audio_sentry(MyStream *v, PaStream *as)
+void audio_sentry(MyStream *v, pure_expr *stream)
 {
   if (!v) return;
   fini_stream(v, 0);
   destroy_stream(v);
   free(v);
+  if (stream) stream->data.p = NULL;
+}
+
+void close_audio_stream(pure_expr *stream)
+{
+  pure_expr *sentry, *function, *argument;
+  void *data;
+  if (!stream || !(sentry = pure_get_sentry(stream)) ||
+      !pure_is_app(sentry, &function, &argument) ||
+      !pure_is_pointer(argument, &data) || !data)
+    return;
+  pure_clear_sentry(stream);
+  audio_sentry((MyStream*)data, stream);
 }
 
 pure_expr *audio_stream_info(MyStream *v, PaStream *as)
 {
+  (void)as;
   int in_info[] = {v->in, v->in_channels, v->in_format, v->in_bps},
     out_info[] = {v->out, v->out_channels, v->out_format, v->out_bps};
   return pure_tuplel
@@ -639,12 +662,14 @@ pure_expr *audio_stream_info(MyStream *v, PaStream *as)
 
 pure_expr *audio_stream_latencies(MyStream *v, PaStream *as)
 {
+  (void)as;
   return pure_tuplel
     (2, pure_double(v->in_latency), pure_double(v->out_latency));
 }
 
 double audio_stream_time(MyStream *v, PaStream *as)
 {
+  (void)as;
   double time;
   pthread_mutex_lock(&v->data_mutex);
   time = v->time;
@@ -654,6 +679,7 @@ double audio_stream_time(MyStream *v, PaStream *as)
 
 int audio_stream_readable(MyStream *v, PaStream *as)
 {
+  (void)as;
   if (v->as && has_input(v))
     return MyRingBuffer_GetReadAvailable(&v->in_buf)/v->in_bpf;
   else
@@ -662,6 +688,7 @@ int audio_stream_readable(MyStream *v, PaStream *as)
 
 int audio_stream_writeable(MyStream *v, PaStream *as)
 {
+  (void)as;
   if (v->as && has_output(v))
     return MyRingBuffer_GetWriteAvailable(&v->out_buf)/v->out_bpf;
   else
@@ -670,13 +697,13 @@ int audio_stream_writeable(MyStream *v, PaStream *as)
 
 int read_audio_stream(MyStream *v, PaStream *as, void *buf, long size)
 {
+  (void)as;
   if (!has_input(v)) return -1;
   if (size > 0 && buf) {
     long bytes = size*v->in_bpf, read;
     char *p = (char*)buf;
     if (!p) return -1;
-    pthread_cleanup_push((void(*)(void*))pthread_mutex_unlock,
-			 (void*)&v->in_mutex);
+    pthread_cleanup_push(unlock_mutex, (void*)&v->in_mutex);
     pthread_mutex_lock(&v->in_mutex);
     while (v->as && bytes > 0) {
       while (v->as &&
@@ -696,13 +723,12 @@ int read_audio_stream(MyStream *v, PaStream *as, void *buf, long size)
 
 int write_audio_stream(MyStream *v, PaStream *as, void *buf, long size)
 {
+  (void)as;
   if (!has_output(v)) return -1;
   if (size > 0 && buf) {
-    long bytes = size*v->out_bpf, written;
+    long bytes = size*v->out_bpf, total = bytes, written;
     char *p = buf;
-    size = bytes;
-    pthread_cleanup_push((void(*)(void*))pthread_mutex_unlock,
-			 (void*)&v->out_mutex);
+    pthread_cleanup_push(unlock_mutex, (void*)&v->out_mutex);
     pthread_mutex_lock(&v->out_mutex);
     while (v->as && bytes > 0) {
       while (v->as &&
@@ -712,7 +738,7 @@ int write_audio_stream(MyStream *v, PaStream *as, void *buf, long size)
       p += written;
     }
     pthread_cleanup_pop(1);
-    written = (size*v->out_bpf-bytes)/v->out_bpf;
+    written = (total-bytes)/v->out_bpf;
     return written;
   } else if (size == 0)
     return 0;

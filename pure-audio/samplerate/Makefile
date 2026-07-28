@@ -8,9 +8,11 @@ LIBS = -lsamplerate
 all: srcprocess$(DLL) samplerate.pure
 
 clean:
+	@test -n "$(DLL)" || { echo "refusing to clean: Pure DLL suffix is empty" >&2; exit 1; }
 	rm -Rf *.o *$(DLL)*
 
 realclean:
+	@test -n "$(DLL)" || { echo "refusing to clean: Pure DLL suffix is empty" >&2; exit 1; }
 	rm -Rf *.o *$(DLL)* samplerate.pure
 
 srcprocess$(DLL): srcprocess.c

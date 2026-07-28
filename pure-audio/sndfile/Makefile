@@ -8,9 +8,11 @@ LIBS = -lsndfile
 all: sfinfo$(DLL) sndfile.pure
 
 clean:
+	@test -n "$(DLL)" || { echo "refusing to clean: Pure DLL suffix is empty" >&2; exit 1; }
 	rm -Rf *.o *$(DLL)*
 
 realclean:
+	@test -n "$(DLL)" || { echo "refusing to clean: Pure DLL suffix is empty" >&2; exit 1; }
 	rm -Rf *.o *$(DLL)* sndfile.pure
 
 sfinfo$(DLL): sfinfo.c

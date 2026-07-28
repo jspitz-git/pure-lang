@@ -1,0 +1,82 @@
+using audio, fftw, samplerate, sndfile, realtime;
+
+namespace smoke;
+
+check name condition
+  = () if condition;
+  = fprintf stderr "pure-audio smoke failed: %s\n" name $$ exit 1 otherwise;
+
+close actual expected = abs (actual-expected) <= 1.0e-9;
+
+check4 actual expected =
+  #actual == 4 &&
+  close (actual!0) (expected!0) &&
+  close (actual!1) (expected!1) &&
+  close (actual!2) (expected!2) &&
+  close (actual!3) (expected!3);
+
+check8 actual expected =
+  #actual == 8 &&
+  close (actual!0) (expected!0) &&
+  close (actual!1) (expected!1) &&
+  close (actual!2) (expected!2) &&
+  close (actual!3) (expected!3) &&
+  close (actual!4) (expected!4) &&
+  close (actual!5) (expected!5) &&
+  close (actual!6) (expected!6) &&
+  close (actual!7) (expected!7);
+
+run = ()
+when
+  check "PortAudio version" (stringp Pa::GetVersionText);
+  check "driver enumeration"
+    (audio::driver_count >= 0 && #audio::drivers == audio::driver_count);
+  check "device enumeration"
+    (audio::device_count >= 0 && #audio::devices == audio::device_count);
+  check "default input id" (intp audio::default_input);
+  check "default output id" (intp audio::default_output);
+  audio::stop;
+  audio::start;
+  check "PortAudio restart" (audio::driver_count >= 0);
+
+  wave = {1.0,0.0,-1.0,0.0};
+  spectrum = fft wave;
+  restored = ifft spectrum;
+  check "FFT shape" (#(spectrum!0) == 3 && #(spectrum!1) == 3);
+  check "FFT round trip" (check4 restored wave);
+
+  source = {0.0,1.0,0.0,-1.0};
+  resampled = dmatrix 8;
+  src_result =
+    src_simple (source,resampled,4,8,2.0) SRC_LINEAR 1;
+  check "samplerate result" (src_result == (0,4L,8L));
+  check "samplerate samples"
+    (check8 resampled {0.0,0.0,0.0,0.5,1.0,0.5,0.0,-0.5});
+  check "invalid samplerate ratio" (src_is_valid_ratio 0.0 == 0);
+
+  filename = "pure-audio-smoke.wav";
+  write_info = sf_info (8000,1,SF_FORMAT_WAV+SF_FORMAT_PCM_16);
+  check "WAV format" (sf_format_check write_info == 1);
+  output = sf_open filename SFM_WRITE write_info;
+  check "WAV output open" (pointerp output);
+  samples = {0.0,0.5,-0.5,0.25};
+  check "WAV write" (sf_write_double output samples 4 == 4);
+  check "WAV output close" (sf_close output == 0);
+  read_info = sf_info ();
+  input = sf_open filename SFM_READ read_info;
+  check "WAV input open" (pointerp input);
+  check "WAV metadata" (sf_get_info read_info == (4L,8000,1,65538,1,1));
+  decoded = dmatrix 4;
+  check "WAV read" (sf_read_double input decoded 4 == 4);
+  check "WAV round trip" (check4 decoded samples);
+  check "WAV input close" (sf_close input == 0);
+
+  check "realtime priority query" (tuplep priority);
+  check "normal scheduling" (realtime SCHED_OTHER 0 == 0);
+  check "normal priority" (priority == (SCHED_OTHER,0));
+  check "realtime bounds"
+    (min_priority SCHED_RR <= max_priority SCHED_RR);
+  audio::stop;
+end;
+
+smoke::run;
