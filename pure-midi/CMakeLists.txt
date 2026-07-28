@@ -79,4 +79,13 @@ if(BUILD_TESTING)
     REQUIRED_FILES
       "$<TARGET_FILE:pmlib>;$<TARGET_FILE:midifile>;${CMAKE_CURRENT_SOURCE_DIR}/examples/prelude3.mid"
     TIMEOUT 45)
+  add_custom_target(check-midi-output
+    COMMAND "${CMAKE_COMMAND}"
+      "-DPURE_EXECUTABLE=${PURE_EXECUTABLE}"
+      "-DPURE_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
+      "-DMODULE_DIR=$<TARGET_FILE_DIR:pmlib>"
+      -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunHardwareTest.cmake"
+    DEPENDS pmlib
+    COMMENT "Running bounded pure-midi output validation"
+    VERBATIM)
 endif()
