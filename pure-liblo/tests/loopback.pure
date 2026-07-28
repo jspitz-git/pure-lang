@@ -1,0 +1,68 @@
+using lo, osc, system;
+using namespace lo;
+
+cleanup s t
+  = address_free (clear_sentry t) $$
+    server_thread_stop s $$
+    server_thread_free (clear_sentry s);
+
+fail s t name
+  = cleanup s t $$
+    fprintf stderr "FAIL: %s\n" name $$
+    exit 1;
+
+check s t name condition
+  = () if condition;
+  = fail s t name otherwise;
+
+recv_wait 0 = ();
+recv_wait n
+  = msg if tuplep msg;
+  = nanosleep 0.01 $$ recv_wait (n-1) otherwise
+when
+  msg = osc_recv_noblock;
+end;
+
+let s = osc_server_with_proto NULL UDP;
+if null s then
+  fprintf stderr "FAIL: unable to create OSC server\n" $$ exit 1
+else ();
+
+let port = server_thread_get_port s;
+let t = make_address ("127.0.0.1",port,UDP);
+check s t "ephemeral UDP port" (port > 0);
+check s t "IPv4 loopback target" (~null t);
+
+check s t "mixed message send"
+  (osc_send t "/pure/message" "ifs" (42,1.5,"hello") > 0);
+let message = recv_wait 200;
+check s t "mixed message receive" (tuplep message);
+check s t "mixed message callback data"
+  (message!2 == "/pure/message" &&
+   message!3 == "ifs" &&
+   message!4 == (42,1.5,"hello"));
+
+check s t "bundle send"
+  (osc_send_timestamped t TT_IMMEDIATE "/pure/bundle" "s" "bundle" > 0);
+let bundle = recv_wait 200;
+check s t "bundle receive" (tuplep bundle);
+check s t "bundle callback data"
+  (bundle!1 == TT_IMMEDIATE &&
+   bundle!2 == "/pure/bundle" &&
+   bundle!3 == "s" &&
+   bundle!4 == "bundle");
+
+check s t "message type error"
+  (osc_send t "/pure/error" "i" "not-an-int" == -2 &&
+   address_errno t == -2 &&
+   address_errstr t == "bad format/args");
+check s t "bundle type error"
+  (osc_send_timestamped t TT_IMMEDIATE
+     "/pure/error-bundle" "i" "not-an-int" == -2 &&
+   address_errno t == -2 &&
+   address_errstr t == "bad format/args");
+
+check s t "server shutdown" (server_thread_stop s == 0);
+address_free (clear_sentry t);
+server_thread_free (clear_sentry s);
+puts "PURE_LIBLO_LOOPBACK_OK";
