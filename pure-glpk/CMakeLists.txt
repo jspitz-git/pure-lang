@@ -109,4 +109,20 @@ if(BUILD_TESTING)
       REQUIRED_FILES "$<TARGET_FILE:glpk>;${CMAKE_CURRENT_SOURCE_DIR}/glpk.pure"
       TIMEOUT 30
   )
+  add_test(
+    NAME pure-glpk-smoke
+    COMMAND "${CMAKE_COMMAND}"
+      "-DPURE_EXECUTABLE=${PURE_EXECUTABLE}"
+      "-DPURE_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
+      "-DMODULE_DIR=$<TARGET_FILE_DIR:glpk>"
+      "-DTEST_SCRIPT=${CMAKE_CURRENT_SOURCE_DIR}/tests/smoke.pure"
+      -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunSmokeTest.cmake"
+  )
+  set_tests_properties(
+    pure-glpk-smoke
+    PROPERTIES
+      LABELS "glpk;lp;mip;errors;cleanup"
+      REQUIRED_FILES "$<TARGET_FILE:glpk>;${CMAKE_CURRENT_SOURCE_DIR}/tests/smoke.pure"
+      TIMEOUT 60
+  )
 endif()
