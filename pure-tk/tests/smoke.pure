@@ -1,0 +1,36 @@
+using tk, system;
+
+tk_error msg
+  = fprintf stderr "FAIL: Tcl/Tk error: %s\n" msg $$ exit 1;
+
+fail name actual expected
+  = fprintf stderr "FAIL: %s\nactual: %s\nexpected: %s\n"
+      (name,str actual,str expected) $$
+    tk_quit $$
+    exit 1;
+
+check name actual expected
+  = () if actual == expected;
+  = fail name actual expected otherwise;
+
+clicked data = "callback:" + data;
+
+wait_event 0 = "timeout";
+wait_event n
+  = value if value == "done";
+  = nanosleep 0.01 $$ tk_ready $$ wait_event (n-1) otherwise
+when
+  value = tk "set pure_tk_event";
+end;
+
+tk "wm withdraw .";
+tk "button .button -text {Pure Tk} -command {pure clicked payload}";
+check "widget creation" (tk "winfo class .button") "Button";
+check "Pure callback data and result" (tk ".button invoke") "callback:payload";
+
+tk "set pure_tk_event pending; after 25 {set pure_tk_event done}";
+check "Tk event processing" (wait_event 200) "done";
+
+tk "destroy .";
+check "interpreter shutdown" tk_ready false;
+puts "PURE_TK_SMOKE_OK";

@@ -1,0 +1,31 @@
+using tk, system;
+
+extern char *getenv(char*);
+
+tk_error msg
+  = fprintf stderr "FAIL: Tcl/Tk error: %s\n" msg $$ exit 1;
+
+fail name actual expected
+  = fprintf stderr "FAIL: %s\nactual: %s\nexpected: %s\n"
+      (name,actual,expected) $$
+    tk_quit $$
+    exit 1;
+
+check name actual expected
+  = () if actual == expected;
+  = fail name actual expected otherwise;
+
+let expected_root = getenv "PURE_TK_EXPECTED_PREFIX";
+let expected_tcl = expected_root + "/lib/tcl8.6";
+let expected_tk = expected_root + "/lib/tk8.6";
+
+tk "wm withdraw .";
+check "Tcl library discovery" (tk "info library") expected_tcl;
+check "Tk library discovery" (tk "set tk_library") expected_tk;
+check "encoding data discovery"
+  (tk "file exists [file join [info library] encoding cp1250.enc]") "1";
+check "Unicode roundtrip"
+  (tk "set pure_tk_unicode {Příliš žluťoučký kůň}")
+  "Příliš žluťoučký kůň";
+tk_quit;
+puts "PURE_TK_RELOCATABLE_OK";

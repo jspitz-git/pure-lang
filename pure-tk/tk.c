@@ -17,6 +17,7 @@ static Tcl_Interp* interp;
 
 static int XErrorProc(ClientData data, XErrorEvent *errEventPtr)
 {
+  (void)data;
   fprintf(stderr, "X protocol error: ");
   fprintf(stderr, "error=%d request=%d minor=%d\n",
 	  errEventPtr->error_code, errEventPtr->request_code,
@@ -60,6 +61,7 @@ static int tk_pure(ClientData clientData,
 		   Tcl_Interp *interp,
 		   int argc, char **argv)
 {
+  (void)clientData;
   pure_expr *x, *e = NULL;
   const char *s;
   int i, fno;
