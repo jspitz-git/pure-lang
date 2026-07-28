@@ -1,0 +1,26 @@
+using midi;
+
+namespace hardware_output;
+
+check condition
+  = () if condition;
+  = exit 1 otherwise;
+
+run = ()
+when
+  check (midi::output >= 0 && midi::output < midi::device_count);
+  interf,name,input,output,opened = midi::devices!midi::output;
+  check (output == 1 && opened == 0);
+  stream = midi::open_output midi::output 0 0;
+  check (midi::streamp stream);
+  check (midi::writemsg stream 0 {0x90,60,32} == Pm::NoError);
+  check (midi::sleep 100 === ());
+  check (midi::writemsg stream 0 {0x80,60,0} == Pm::NoError);
+  check (midi::close stream == Pm::NoError);
+  check (~midi::streamp stream);
+  check (midi::stop == Pm::NoError);
+  check (Pt::Stop == Pt::NoError);
+  printf "%d|%s|%s\n" (midi::output) interf name;
+end;
+
+hardware_output::run;

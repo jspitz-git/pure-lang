@@ -1,0 +1,41 @@
+using midi;
+
+namespace device_timing;
+
+check name condition
+  = () if condition;
+  = exit 1 otherwise;
+
+devicep (interf::string,name::string,input::int,output::int,opened::int)
+  = (input == 0 || input == 1) &&
+    (output == 0 || output == 1) &&
+    (opened == 0 || opened == 1);
+devicep _ = false;
+
+valid_default id = id == Pm::NoDevice ||
+  (id >= 0 && id < midi::device_count);
+
+run = ()
+when
+  check "device count" (midi::device_count >= 0);
+  check "device table size" (#midi::devices == midi::device_count);
+  check "device records" (all devicep midi::devices);
+  check "default input" (valid_default midi::default_input);
+  check "default output" (valid_default midi::default_output);
+  check "numeric no-device lookup" (midi::find_device (-1,0) == -1);
+  check "invalid device info" (~tuplep (midi::device_info (-1)));
+  check "known error text" (stringp (midi::errmsg Pm::InvalidDeviceId));
+
+  t0 = midi::time;
+  midi::sleep 10;
+  t1 = midi::time;
+  check "monotonic PortTime" (t1 >= t0);
+  check "bounded PortTime sleep" (t1-t0 < 5000);
+
+  check "PortMidi terminate" (midi::stop == Pm::NoError);
+  check "PortMidi restart" (midi::start == Pm::NoError);
+  check "device recount" (Pm::CountDevices >= 0);
+  check "PortTime stop" (Pt::Stop == Pt::NoError);
+end;
+
+device_timing::run;

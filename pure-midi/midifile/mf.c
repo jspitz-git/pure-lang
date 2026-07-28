@@ -278,7 +278,7 @@ static bool encode_event(MidiFileTrack_t track, pure_expr *x)
     {
       // voice message
       if (n > 4) return false; // excess data
-      int i;
+      size_t i;
       uint32_t data = 0;
       for (i = 0; i < n; i++) {
 	data <<= 8;
