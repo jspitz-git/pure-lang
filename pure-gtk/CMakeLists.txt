@@ -1,5 +1,9 @@
 cmake_minimum_required(VERSION 3.25)
 
+if(POLICY CMP0207)
+  cmake_policy(SET CMP0207 NEW)
+endif()
+
 project(pure-gtk VERSION 0.13 LANGUAGES C)
 
 find_package(PkgConfig REQUIRED)
@@ -60,6 +64,17 @@ if(WIN32)
       -Werror
   )
   target_link_libraries(pure-gtk-windows-gui PRIVATE PkgConfig::GTK2)
+
+  add_executable(pure-gtk-windows-pixbuf tests/windows-pixbuf.c)
+  target_compile_features(pure-gtk-windows-pixbuf PRIVATE c_std_11)
+  target_compile_options(
+    pure-gtk-windows-pixbuf
+    PRIVATE
+      -Wall
+      -Wextra
+      -Werror
+  )
+  target_link_libraries(pure-gtk-windows-pixbuf PRIVATE PkgConfig::GTK2)
   find_program(LLVM_READOBJ NAMES llvm-readobj REQUIRED)
   add_custom_target(
     verify-windows-dependencies
@@ -168,3 +183,5 @@ if(BUILD_TESTING AND WIN32)
       "pure-gtk-gui-smoke disabled; set PURE_FFI_SOURCE_DIR and PURE_FFI_MODULE_DIR")
   endif()
 endif()
+
+include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/Install.cmake")

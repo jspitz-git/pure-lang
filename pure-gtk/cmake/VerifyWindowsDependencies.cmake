@@ -64,6 +64,7 @@ endforeach()
 
 require_import("${GTK_MODULE}" "libgtk-win32-2\\.0-0\\.dll")
 require_import("${GLIB_MODULE}" "libglib-2\\.0-0\\.dll")
+require_export("${GTK_MODULE}" "pure_gtk_init_bundle")
 
 set(gtk_utf8_aliases
   gtk_rc_add_default_file

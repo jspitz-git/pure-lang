@@ -10,6 +10,14 @@ using "lib:libgtk-win32-2.0-0", "lib:libgdk-win32-2.0-0";
 using "lib:libgtk-win32-2.0-0", "lib:libgdk-win32-2.0-0";
 #! --endif
 using "lib:gtk";
+#! --if *-mingw32
+extern int pure_gtk_init_bundle();
+let _pure_gtk_bundle_initialized = pure_gtk_init_bundle;
+#! --endif
+#! --if *-windows-gnu
+extern int pure_gtk_init_bundle();
+let _pure_gtk_bundle_initialized = pure_gtk_init_bundle;
+#! --endif
 namespace gdk;
 const gdk::CURRENT_TIME = 0;
 const gdk::PARENT_RELATIVE = 1;

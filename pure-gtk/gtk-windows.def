@@ -1,5 +1,6 @@
 LIBRARY gtk
 EXPORTS
+  pure_gtk_init_bundle
   gtk_rc_add_default_file=gtk_rc_add_default_file_utf8
   gtk_rc_set_default_files=gtk_rc_set_default_files_utf8
   gtk_rc_parse=gtk_rc_parse_utf8
