@@ -18,3 +18,33 @@ The package includes a controlled static plugin and Dynamic Manifest generator
 under its documentation directory. They are validation fixtures, are not on
 the default discovery path, and must not be presented as compatibility proof
 for arbitrary third-party plugins.
+
+## Build, test, and stage
+
+Run the build from an MSYS2 CLANG64 shell. Point `PKG_CONFIG_PATH` at the
+portable Pure SDK and the CLANG64 packages:
+
+```sh
+export PKG_CONFIG_PATH=C:/path/to/pure-prefix/lib/pkgconfig:/clang64/lib/pkgconfig
+cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
+cmake --build build
+ctest --test-dir build --output-on-failure
+cmake --build build --target verify-windows-dependencies
+```
+
+Copy the portable Pure runtime to a fresh prefix before installing this
+package. The verifier checks the exact LV2 specification and license
+inventories, reused runtime hashes, both controlled plugin types, and the
+staged PE closure with `PURELIB` and `LV2_PATH` unset:
+
+```sh
+cmake --install build --prefix C:/tmp/pure-lilv-stage
+cmake -DSTAGE_PREFIX=C:/tmp/pure-lilv-stage \
+  -DSOURCE_RUNTIME_DIR=C:/path/to/pure-runtime/bin \
+  -DLLVM_READOBJ=/clang64/bin/llvm-readobj.exe \
+  -P cmake/VerifyInstalledPackage.cmake
+```
+
+Repeat the verifier after copying the installed tree to a different path to
+validate relocation. At run time the bundle needs only its own `bin`,
+`lib/pure`, and `lib/lv2` trees plus Windows system directories on `PATH`.

@@ -1,6 +1,6 @@
 # TODO-40 - Windows pure-lilv Package
 
-Status: Open
+Status: Complete
 Branch: todo/40-windows-pure-lilv
 
 ## Purpose
@@ -24,7 +24,7 @@ Build, validate, and package `pure-lilv` with the Windows LV2 discovery stack.
    `pure-lilv` world creation.
 3. [x] Define distribution-relative LV2 search behavior and add deterministic
    metadata, processing, state, and lifecycle tests.
-4. [ ] Stage the module, LV2 specifications, runtime DLL closure, and licenses;
+4. [x] Stage the module, LV2 specifications, runtime DLL closure, and licenses;
    validate the relocated package with a sanitized environment.
 
 ## Guardrails
@@ -71,6 +71,12 @@ generating a batch-compiled Pure LV2 plugin and loading it through this host.
   upstream `dynmanifest` Meson feature disabled. Chose a controlled
   Dynamic-Manifest-enabled Lilv build so TODO-41 plugins can be validated.
 - 2026-07-29: Built the controlled Lilv 0.26.4 runtime after applying the
-  upstream Dynamic Manifest include fix. The isolated CTest discovered both static
-  and generated-manifest plugins, processed a fixed audio buffer, round-tripped
-  state, saved a relative preset, and passed the PE dependency audit.
+  upstream Dynamic Manifest include fix. The isolated CTest discovered both
+  static and generated-manifest plugins, processed a fixed audio buffer,
+  round-tripped state, saved a relative preset, and passed the PE dependency
+  audit.
+- 2026-07-29: Installed the module with 5 LV2-stack DLLs, 25 LV2
+  specification bundles (82 files), and 6 license directories into the
+  combined portable Pure/Tk/GTK tree. The installed verifier passed both
+  before and after copying the tree to a new path with spaces, with `PURELIB`
+  and `LV2_PATH` unset and `PATH` restricted to the bundle and Windows.
