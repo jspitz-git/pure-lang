@@ -1,0 +1,61 @@
+using system, odbc;
+
+namespace smoke;
+
+text_driver = "Microsoft Access Text Driver (*.txt, *.csv)";
+
+check name condition
+  = () if condition;
+  = fprintf stderr "pure-odbc smoke failed: %s\n" name $$ exit 1 otherwise;
+
+has_driver [] = 0;
+has_driver ((name,_):xs) = name == text_driver || has_driver xs;
+
+diagnosticp (odbc::error msg state)
+  = stringp msg && stringp state && state == "IM002";
+diagnosticp _ = 0;
+
+csv_test = ()
+when
+  connection =
+    "DRIVER={" + text_driver +
+    "};DBQ=.;Extensions=asc,csv,tab,txt;";
+  db = odbc::connect connection;
+  check "text-driver connection" (pointerp db);
+  rows = odbc::sql db
+    "SELECT id,name,score,note FROM [people.csv] ORDER BY id" [];
+  check "result titles and type conversion"
+    (rows ==
+      [["id","name","score","note"],
+       [1,"Ada",95,"alpha"],
+       [2,"Grace",82,odbc::SQLNULL],
+       [3,"Linus",70,"gamma"]]);
+  parameter_rows = odbc::sql db
+    "SELECT id,name,score FROM [people.csv] WHERE id = ?" [2];
+  check "bound integer parameter"
+    (parameter_rows == [["id","name","score"],[2,"Grace",82]]);
+  columns = odbc::sql_exec db
+    "SELECT name FROM [people.csv] WHERE id = ?" [3];
+  check "low-level statement columns" (columns == ["name"]);
+  check "low-level fetch" (odbc::sql_fetch db == ["Linus"]);
+  check "statement cleanup" (odbc::sql_close db === ());
+  check "connection cleanup" (odbc::disconnect db === ());
+  check "stale connection rejected" (~tuplep (odbc::info db));
+end;
+
+smoke = ()
+when
+  drivers = odbc::drivers;
+  sources = odbc::sources;
+  check "driver enumeration" (listp drivers);
+  check "data-source enumeration" (listp sources);
+  missing =
+    odbc::connect "DRIVER={__PURE_MISSING_ODBC_DRIVER__};";
+  check "diagnostic propagation" (diagnosticp missing);
+  if has_driver drivers then
+    csv_test
+  else
+    puts "PURE_ODBC_TEXT_DRIVER_SKIPPED";
+end;
+
+smoke;

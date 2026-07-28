@@ -65,4 +65,20 @@ if(BUILD_TESTING)
       REQUIRED_FILES "$<TARGET_FILE:odbc>;${CMAKE_CURRENT_SOURCE_DIR}/odbc.pure"
       TIMEOUT 30
   )
+  add_test(
+    NAME pure-odbc-smoke
+    COMMAND "${CMAKE_COMMAND}"
+      "-DPURE_EXECUTABLE=${PURE_EXECUTABLE}"
+      "-DPURE_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
+      "-DMODULE_DIR=$<TARGET_FILE_DIR:odbc>"
+      "-DTEST_DIRECTORY=${CMAKE_CURRENT_BINARY_DIR}/odbc smoke data"
+      -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunSmokeTest.cmake"
+  )
+  set_tests_properties(
+    pure-odbc-smoke
+    PROPERTIES
+      LABELS "odbc;drivers;diagnostics;parameters;results;cleanup"
+      REQUIRED_FILES "$<TARGET_FILE:odbc>;${CMAKE_CURRENT_SOURCE_DIR}/tests/smoke.pure"
+      TIMEOUT 60
+  )
 endif()
