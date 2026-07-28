@@ -1,0 +1,37 @@
+using GL, GLU, GLUT;
+
+GLUT::Init {0} NULL;
+GLUT::InitDisplayMode (GLUT::DOUBLE or GLUT::RGB or GLUT::DEPTH);
+GLUT::InitWindowSize 320 240;
+let window = GLUT::CreateWindow "Pure GL Windows desktop test";
+window > 0 || throw "FreeGLUT did not create an interactive window";
+
+let setup_error = GL::GetError;
+GL::ClearColor 0.08 0.08 0.12 1.0;
+GL::Clear (GL::COLOR_BUFFER_BIT or GL::DEPTH_BUFFER_BIT);
+let clear_error = GL::GetError;
+GL::Begin GL::TRIANGLES;
+  GL::Color3f 1.0 0.0 0.0;
+  GL::Vertex2f (-0.8) (-0.7);
+  GL::Color3f 0.0 1.0 0.0;
+  GL::Vertex2f 0.8 (-0.7);
+  GL::Color3f 0.0 0.0 1.0;
+  GL::Vertex2f 0.0 0.8;
+GL::End;
+let draw_error = GL::GetError;
+GLUT::SwapBuffers;
+let swap_error = GL::GetError;
+
+let display_cb = addr "Pure_glFlush";
+~null display_cb || throw "Could not resolve the display callback";
+GLUT::DisplayFunc display_cb;
+GLUT::PostRedisplay;
+GLUT::MainLoopEvent;
+
+nanosleep 1.0;
+let gl_error = [setup_error,clear_error,draw_error,swap_error,GL::GetError];
+all (==GL::NO_ERROR) gl_error
+  || throw ("OpenGL error in the interactive example: "+str gl_error);
+
+puts "pure-gl interactive desktop example displayed successfully";
+GLUT::DestroyWindow window;

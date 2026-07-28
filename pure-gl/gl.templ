@@ -58,14 +58,14 @@ get_proc_addr(const char *name)
   if (firstTime) {
     gl32 = LoadLibrary("opengl32.dll");
     glu32 = LoadLibrary("glu32.dll");
-    glut = LoadLibrary("freeglut.dll");
+    glut = LoadLibrary("libfreeglut.dll");
     firstTime = 0;
   }
   (void)
-    ((p = wglGetProcAddress(name)) ||
-     (p = GetProcAddress(gl32, name)) ||
+    ((p = GetProcAddress(gl32, name)) ||
      (p = GetProcAddress(glu32, name)) ||
-     (p = GetProcAddress(glut, name)));
+     (p = GetProcAddress(glut, name)) ||
+     (p = wglGetProcAddress(name)));
   return p;
 }
 
