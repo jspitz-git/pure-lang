@@ -82,3 +82,5 @@ if(BUILD_TESTING)
   set_tests_properties(pure-gl.hidden-render PROPERTIES
     TIMEOUT 55 RUN_SERIAL TRUE)
 endif()
+
+include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/Install.cmake")

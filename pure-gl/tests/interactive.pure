@@ -22,6 +22,12 @@ let draw_error = GL::GetError;
 GLUT::SwapBuffers;
 let swap_error = GL::GetError;
 
+let display_cb = addr "Pure_glFlush";
+~null display_cb || throw "Could not resolve the display callback";
+GLUT::DisplayFunc display_cb;
+GLUT::PostRedisplay;
+GLUT::MainLoopEvent;
+
 nanosleep 1.0;
 let gl_error = [setup_error,clear_error,draw_error,swap_error,GL::GetError];
 all (==GL::NO_ERROR) gl_error
