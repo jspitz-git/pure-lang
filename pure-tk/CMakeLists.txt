@@ -28,6 +28,18 @@ find_library(
   REQUIRED
 )
 
+foreach(runtime IN ITEMS TCL:tcl86.dll TK:tk86.dll ZLIB:zlib1.dll)
+  string(REPLACE ":" ";" runtime_pair "${runtime}")
+  list(GET runtime_pair 0 runtime_name)
+  list(GET runtime_pair 1 runtime_file)
+  find_file(
+    "${runtime_name}_RUNTIME_DLL"
+    NAMES "${runtime_file}"
+    HINTS "${TCL_PREFIX}/bin"
+    NO_DEFAULT_PATH
+    REQUIRED
+  )
+endforeach()
 add_library(pure-tk MODULE tk.c)
 target_compile_features(pure-tk PRIVATE c_std_11)
 target_include_directories(pure-tk PRIVATE "${TCL_INCLUDE_DIR}")
@@ -46,3 +58,42 @@ set_target_properties(
     PREFIX ""
     WINDOWS_EXPORT_ALL_SYMBOLS ON
 )
+if(WIN32)
+  find_program(LLVM_READOBJ NAMES llvm-readobj REQUIRED)
+  add_custom_target(
+    verify-windows-dependencies
+    COMMAND "${CMAKE_COMMAND}"
+      "-DLLVM_READOBJ=${LLVM_READOBJ}"
+      "-DPURE_TK_MODULE=$<TARGET_FILE:pure-tk>"
+      "-DTCL_DLL=${TCL_RUNTIME_DLL}"
+      "-DTK_DLL=${TK_RUNTIME_DLL}"
+      "-DZLIB_DLL=${ZLIB_RUNTIME_DLL}"
+      -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/VerifyWindowsDependencies.cmake"
+    DEPENDS pure-tk
+    COMMENT "Verifying the pure-tk Windows dependency closure"
+    VERBATIM
+  )
+endif()
+include(CTest)
+if(BUILD_TESTING AND WIN32)
+  pkg_get_variable(PURE_PREFIX pure prefix)
+  add_test(
+    NAME pure-tk-relocatable
+    COMMAND "${CMAKE_COMMAND}"
+      "-DPURE_PREFIX=${PURE_PREFIX}"
+      "-DMODULE_FILE=$<TARGET_FILE:pure-tk>"
+      "-DPURE_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
+      "-DTCL_PREFIX=${TCL_PREFIX}"
+      "-DTEST_SCRIPT=${CMAKE_CURRENT_SOURCE_DIR}/tests/relocatable.pure"
+      "-DTEST_ROOT=${CMAKE_CURRENT_BINARY_DIR}/relocatable-test"
+      -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunRelocatableTest.cmake"
+  )
+  set_tests_properties(
+    pure-tk-relocatable
+    PROPERTIES
+      LABELS "tk;relocatable;discovery;encoding;sanitized"
+      REQUIRED_FILES
+        "$<TARGET_FILE:pure-tk>;${CMAKE_CURRENT_SOURCE_DIR}/tests/relocatable.pure"
+      TIMEOUT 35
+  )
+endif()
