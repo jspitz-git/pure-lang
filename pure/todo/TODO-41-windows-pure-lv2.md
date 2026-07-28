@@ -21,7 +21,7 @@ infrastructure is available.
 
 ## Task List
 
-1. [ ] Add the CLANG64 CMake build and Windows source compatibility.
+1. [x] Add the CLANG64 CMake build and Windows source compatibility.
 2. [ ] Add the native Windows generator and correct Windows bundle/path
    handling for both compilation modes.
 3. [ ] Generate batch and source fixtures, load them through staged
@@ -69,3 +69,7 @@ is retained for development and receives Windows-aware path handling.
 - 2026-07-29: Selected a native `.cmd`/PowerShell generator so Windows users
   can build Pure LV2 bundles without invoking Bash. The compiler remains an
   optional developer dependency; produced plugins are runtime-only artifacts.
+- 2026-07-29: Added the CLANG64 CMake build, a compile-only check of the
+  generic plugin bridge, a sanitized module load test, and a PE32+ dependency
+  audit. Replaced both Unix-only `alloca.h` includes on Windows; the clean
+  build and all focused checks passed without compiler warnings.

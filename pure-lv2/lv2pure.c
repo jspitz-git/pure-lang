@@ -5,7 +5,11 @@
 
 #define _POSIX_C_SOURCE 200809L  /* for strdup */
 
+#ifdef _WIN32
+#include <malloc.h>
+#else
 #include <alloca.h>
+#endif
 #include <assert.h>
 #include <math.h>
 #include <stdio.h>
@@ -126,7 +130,7 @@ static int dirprefix(char *s, char *prefix)
 {
   int l = strlen(prefix);
   return s && *s && strncmp(s, prefix, l) == 0 &&
-    (!s[l] || strchr(dirstr, s[l]) && !strchr(volstr, s[l]));
+    (!s[l] || (strchr(dirstr, s[l]) && !strchr(volstr, s[l])));
 }
 
 static char *dirname(char *t, char *s)
@@ -192,8 +196,6 @@ static int chkfile(char *s)
   return !stat(s, &st) && S_ISREG(st.st_mode);
 }
 
-static char *lv2path = 0;
-
 static char *searchlib(char *s1, char *s2)
 {
   const char *s, *t;
@@ -207,12 +209,13 @@ static char *searchlib(char *s1, char *s2)
     if (!(t = strchr(s, PATHDELIM)))
       t = strchr(s, 0);
     if (s == t) goto next;
-    if (s[0] == '.')
+    if (s[0] == '.') {
       if (t == s+1)
 	s = t;
       else if (strchr(dirstr, s[1]) &&
 	       !strchr(volstr, s[1]))
 	s += 2;
+    }
     l = t-s;
     strncpy(p, s, l);
     p[l] = 0;

@@ -3,7 +3,11 @@
    (c) 2014 by Albert Gräf <aggraef@gmail.com>. Distributed under the new BSD
    license, please see the accompanying COPYING file for details. */
 
+#ifdef _WIN32
+#include <malloc.h>
+#else
 #include <alloca.h>
+#endif
 #include <pure/runtime.h>
 #include "lv2pure.h"
 #include <lv2/lv2plug.in/ns/ext/atom/util.h>
@@ -198,7 +202,7 @@ static pure_expr *position(lv2plugin_t *p, const LV2_Atom_Object* obj)
 
 pure_expr *lv2pure_get(lv2plugin_t *p, int k)
 {
-  if (!p || k<0 || k>=p->n || !p->data[k] || !p->running) return 0;
+  if (!p || k<0 || (uint32_t)k>=p->n || !p->data[k] || !p->running) return 0;
   // FIXME: We should preallocate some static Pure vectors here, to avoid
   // dynamic allocations as much as possible.
   switch (p->ty[k]) {
@@ -274,7 +278,7 @@ static bool forge_midi(lv2plugin_t* self,
 
 pure_expr *lv2pure_set(lv2plugin_t *p, int k, pure_expr *x)
 {
-  if (!p || k<0 || k>=p->n || !p->data[k] || !p->running) return 0;
+  if (!p || k<0 || (uint32_t)k>=p->n || !p->data[k] || !p->running) return 0;
   switch (p->ty[k]) {
   case 1: {
     double d;
