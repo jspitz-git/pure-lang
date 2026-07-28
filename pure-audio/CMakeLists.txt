@@ -85,3 +85,50 @@ if(WIN32)
     VERBATIM
   )
 endif()
+
+include(CTest)
+if(BUILD_TESTING)
+  pkg_get_variable(PURE_PREFIX pure prefix)
+  find_program(
+    PURE_EXECUTABLE
+    NAMES pure
+    HINTS "${PURE_PREFIX}/bin"
+    NO_DEFAULT_PATH
+    REQUIRED
+  )
+  add_test(
+    NAME pure-audio-load
+    COMMAND "${CMAKE_COMMAND}"
+      "-DPURE_EXECUTABLE=${PURE_EXECUTABLE}"
+      "-DPURE_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
+      "-DMODULE_DIR=$<TARGET_FILE_DIR:audio>"
+      "-DTEST_SCRIPT=${CMAKE_CURRENT_SOURCE_DIR}/tests/load.pure"
+      "-DTEST_DIRECTORY=${CMAKE_CURRENT_BINARY_DIR}/load-test"
+      -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunPureTest.cmake"
+  )
+  set_tests_properties(
+    pure-audio-load
+    PROPERTIES
+      LABELS "audio;load;no-hardware"
+      REQUIRED_FILES
+        "$<TARGET_FILE:audio>;$<TARGET_FILE:fftw>;$<TARGET_FILE:srcprocess>;$<TARGET_FILE:sfinfo>;$<TARGET_FILE:realtime>"
+      TIMEOUT 45
+  )
+  add_test(
+    NAME pure-audio-processing
+    COMMAND "${CMAKE_COMMAND}"
+      "-DPURE_EXECUTABLE=${PURE_EXECUTABLE}"
+      "-DPURE_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
+      "-DMODULE_DIR=$<TARGET_FILE_DIR:audio>"
+      "-DTEST_SCRIPT=${CMAKE_CURRENT_SOURCE_DIR}/tests/smoke.pure"
+      "-DTEST_DIRECTORY=${CMAKE_CURRENT_BINARY_DIR}/processing-test"
+      -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunPureTest.cmake"
+  )
+  set_tests_properties(
+    pure-audio-processing
+    PROPERTIES
+      LABELS "audio;fftw;samplerate;sndfile;realtime;no-hardware"
+      REQUIRED_FILES "${CMAKE_CURRENT_SOURCE_DIR}/tests/smoke.pure"
+      TIMEOUT 60
+  )
+endif()
