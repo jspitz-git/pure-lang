@@ -58,7 +58,7 @@ get_proc_addr(const char *name)
   if (firstTime) {
     gl32 = LoadLibrary("opengl32.dll");
     glu32 = LoadLibrary("glu32.dll");
-    glut = LoadLibrary("freeglut.dll");
+    glut = LoadLibrary("libfreeglut.dll");
     firstTime = 0;
   }
   (void)
