@@ -16,6 +16,11 @@ automated test copies the runtime to a path containing spaces, clears
 the staged runtime and Windows system directories, and verifies the reported
 Tcl/Tk library paths and encoding data.
 
+A second bounded smoke test withdraws the root window, creates and invokes a
+button backed by a real Pure callback, processes a scheduled Tk event, destroys
+the root window, and verifies that the interpreter shuts down. No test window
+requires user interaction.
+
 The wrapper is built as `tk.dll`. Its PE closure reuses the bundle's
 `libpure.dll`; Tcl adds `zlib1.dll`, while networking, environment, GUI,
 common-control, UCRT, and other Windows system DLLs are never copied. The

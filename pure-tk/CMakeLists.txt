@@ -85,6 +85,7 @@ if(BUILD_TESTING AND WIN32)
       "-DPURE_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
       "-DTCL_PREFIX=${TCL_PREFIX}"
       "-DTEST_SCRIPT=${CMAKE_CURRENT_SOURCE_DIR}/tests/relocatable.pure"
+      "-DEXPECTED_MARKER=PURE_TK_RELOCATABLE_OK"
       "-DTEST_ROOT=${CMAKE_CURRENT_BINARY_DIR}/relocatable-test"
       -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunRelocatableTest.cmake"
   )
@@ -94,6 +95,26 @@ if(BUILD_TESTING AND WIN32)
       LABELS "tk;relocatable;discovery;encoding;sanitized"
       REQUIRED_FILES
         "$<TARGET_FILE:pure-tk>;${CMAKE_CURRENT_SOURCE_DIR}/tests/relocatable.pure"
+      TIMEOUT 35
+  )
+  add_test(
+    NAME pure-tk-smoke
+    COMMAND "${CMAKE_COMMAND}"
+      "-DPURE_PREFIX=${PURE_PREFIX}"
+      "-DMODULE_FILE=$<TARGET_FILE:pure-tk>"
+      "-DPURE_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
+      "-DTCL_PREFIX=${TCL_PREFIX}"
+      "-DTEST_SCRIPT=${CMAKE_CURRENT_SOURCE_DIR}/tests/smoke.pure"
+      "-DEXPECTED_MARKER=PURE_TK_SMOKE_OK"
+      "-DTEST_ROOT=${CMAKE_CURRENT_BINARY_DIR}/smoke-test"
+      -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunRelocatableTest.cmake"
+  )
+  set_tests_properties(
+    pure-tk-smoke
+    PROPERTIES
+      LABELS "tk;widget;callback;event;shutdown;sanitized"
+      REQUIRED_FILES
+        "$<TARGET_FILE:pure-tk>;${CMAKE_CURRENT_SOURCE_DIR}/tests/smoke.pure"
       TIMEOUT 35
   )
 endif()

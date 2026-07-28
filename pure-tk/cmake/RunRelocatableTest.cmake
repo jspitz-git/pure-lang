@@ -1,5 +1,6 @@
 foreach(required IN ITEMS
-    PURE_PREFIX MODULE_FILE PURE_SOURCE_DIR TCL_PREFIX TEST_SCRIPT TEST_ROOT)
+    PURE_PREFIX MODULE_FILE PURE_SOURCE_DIR TCL_PREFIX TEST_SCRIPT TEST_ROOT
+    EXPECTED_MARKER)
   if(NOT DEFINED ${required} OR "${${required}}" STREQUAL "")
     message(FATAL_ERROR "${required} is required")
   endif()
@@ -47,9 +48,9 @@ if(NOT "${result}" STREQUAL "0")
     "Relocatable pure-tk test exited with ${result}\n"
     "stdout:\n${output}\nstderr:\n${error}")
 endif()
-if(NOT output MATCHES "(^|\r?\n)PURE_TK_RELOCATABLE_OK(\r?\n|$)")
+if(NOT output MATCHES "(^|\r?\n)${EXPECTED_MARKER}(\r?\n|$)")
   message(FATAL_ERROR
-    "Relocatable pure-tk test did not emit its success marker\n"
+    "Relocatable pure-tk test did not emit ${EXPECTED_MARKER}\n"
     "stdout:\n${output}\nstderr:\n${error}")
 endif()
 
