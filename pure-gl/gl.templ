@@ -62,10 +62,10 @@ get_proc_addr(const char *name)
     firstTime = 0;
   }
   (void)
-    ((p = wglGetProcAddress(name)) ||
-     (p = GetProcAddress(gl32, name)) ||
+    ((p = GetProcAddress(gl32, name)) ||
      (p = GetProcAddress(glu32, name)) ||
-     (p = GetProcAddress(glut, name)));
+     (p = GetProcAddress(glut, name)) ||
+     (p = wglGetProcAddress(name)));
   return p;
 }
 

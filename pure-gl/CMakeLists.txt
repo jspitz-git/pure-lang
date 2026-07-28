@@ -50,6 +50,18 @@ add_custom_target(verify-windows-dependencies
   DEPENDS pure-gl
   VERBATIM)
 
+add_custom_target(check-gl-interactive
+  COMMAND "${CMAKE_COMMAND}"
+    "-DPURE_EXECUTABLE=${PURE_EXECUTABLE}"
+    "-DPURE_LIBRARY_DIR=$<TARGET_FILE_DIR:pure-gl>"
+    "-DPURE_GL_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
+    "-DTEST_SCRIPT=${CMAKE_CURRENT_SOURCE_DIR}/tests/interactive.pure"
+    -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunPureTest.cmake"
+  DEPENDS pure-gl
+  COMMENT "Displaying the bounded pure-gl Windows desktop test"
+  USES_TERMINAL
+  VERBATIM)
+
 if(BUILD_TESTING)
   add_test(NAME pure-gl.load-all-modules
     COMMAND "${CMAKE_COMMAND}"
