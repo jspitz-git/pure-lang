@@ -48,10 +48,32 @@ if(WIN32)
       -Wextra
       -Werror
   )
+
+  add_executable(pure-gtk-windows-gui tests/windows-gui.c)
+  target_compile_features(pure-gtk-windows-gui PRIVATE c_std_11)
+  target_compile_options(
+    pure-gtk-windows-gui
+    PRIVATE
+      -Wall
+      -Wextra
+      -Werror
+  )
+  target_link_libraries(pure-gtk-windows-gui PRIVATE PkgConfig::GTK2)
 endif()
+
+set(
+  PURE_FFI_SOURCE_DIR ""
+  CACHE PATH "Source directory of pure-ffi used by the GUI integration test"
+)
+set(
+  PURE_FFI_MODULE_DIR ""
+  CACHE PATH "Directory containing ffi.dll for the GUI integration test"
+)
 
 include(CTest)
 if(BUILD_TESTING AND WIN32)
+  pkg_get_variable(GTK2_PREFIX gtk+-2.0 prefix)
+
   add_test(NAME pure-gtk-windows-loader COMMAND pure-gtk-windows-loader)
   set_tests_properties(
     pure-gtk-windows-loader
@@ -62,8 +84,17 @@ if(BUILD_TESTING AND WIN32)
       TIMEOUT 15
   )
 
+  add_test(NAME pure-gtk-windows-gui COMMAND pure-gtk-windows-gui)
+  set_tests_properties(
+    pure-gtk-windows-gui
+    PROPERTIES
+      ENVIRONMENT_MODIFICATION
+        "PATH=path_list_prepend:${GTK2_PREFIX}/bin"
+      LABELS "gtk;gui;widget;callback;shutdown"
+      TIMEOUT 15
+  )
+
   pkg_get_variable(PURE_PREFIX pure prefix)
-  pkg_get_variable(GTK2_PREFIX gtk+-2.0 prefix)
   find_program(
     PURE_EXECUTABLE
     NAMES pure
@@ -88,4 +119,34 @@ if(BUILD_TESTING AND WIN32)
         "$<TARGET_FILE:gtk>;$<TARGET_FILE:glib>;$<TARGET_FILE:atk>;$<TARGET_FILE:cairo>;$<TARGET_FILE:pango>"
       TIMEOUT 1200
   )
+
+  if(PURE_FFI_SOURCE_DIR AND PURE_FFI_MODULE_DIR)
+    if(NOT EXISTS "${PURE_FFI_SOURCE_DIR}/ffi.pure" OR
+        NOT EXISTS "${PURE_FFI_MODULE_DIR}/ffi.dll")
+      message(FATAL_ERROR
+        "PURE_FFI_SOURCE_DIR and PURE_FFI_MODULE_DIR must contain ffi.pure and ffi.dll")
+    endif()
+    add_test(
+      NAME pure-gtk-gui-smoke
+      COMMAND "${PURE_EXECUTABLE}"
+        -I "${PURE_FFI_SOURCE_DIR}"
+        -I "${CMAKE_CURRENT_SOURCE_DIR}"
+        -L "${PURE_FFI_MODULE_DIR}"
+        -L "$<TARGET_FILE_DIR:gtk>"
+        -x "${CMAKE_CURRENT_SOURCE_DIR}/tests/gui-smoke.pure"
+    )
+    set_tests_properties(
+      pure-gtk-gui-smoke
+      PROPERTIES
+        ENVIRONMENT_MODIFICATION
+          "PATH=path_list_prepend:$<TARGET_FILE_DIR:gtk>;PATH=path_list_prepend:${PURE_FFI_MODULE_DIR};PATH=path_list_prepend:${GTK2_PREFIX}/bin"
+        LABELS "gtk;gui;pure;ffi;widget;callback;shutdown"
+        REQUIRED_FILES
+          "${PURE_FFI_SOURCE_DIR}/ffi.pure;${PURE_FFI_MODULE_DIR}/ffi.dll;$<TARGET_FILE:gtk>;$<TARGET_FILE:glib>"
+        TIMEOUT 30
+    )
+  else()
+    message(STATUS
+      "pure-gtk-gui-smoke disabled; set PURE_FFI_SOURCE_DIR and PURE_FFI_MODULE_DIR")
+  endif()
 endif()
