@@ -20,12 +20,14 @@ void *__Pure_lo_server_thread_new() { return &lo_server_thread_new; }
 typedef struct _lo_address {
 	char            *host;
 	int              socket;
+	int              ownsocket;
 	char            *port;
 	int              protocol;
+	int              flags;
 	struct addrinfo *ai;
+	struct addrinfo *ai_first;
 	int              errnum;
 	const char      *errstr;
-	int              ttl;
 } *mylo_address;
 
 typedef struct _lo_message {
@@ -41,6 +43,7 @@ typedef struct _lo_message {
         /* timestamp from bundle (LO_TT_IMMEDIATE for unbundled messages) */
         lo_timetag ts;
 #endif
+        int refcount;
 } *mylo_message;
 
 // #define DEBUG
@@ -58,14 +61,12 @@ typedef struct _gsl_matrix_int
 
 int Pure_lo_message_add(lo_message msg, const char *types, pure_expr *x)
 {
-  int count = 0;
+  size_t count = 0;
   void *p;
   size_t sz;
   pure_expr **xs;
   int i;
-  int64_t i64;
   mpz_t z;
-  float f;
   char *s;
   lo_blob b;
   uint8_t *m;
@@ -169,7 +170,6 @@ int Pure_lo_message_add(lo_message msg, const char *types, pure_expr *x)
 	} else if (pure_is_int_matrix(x, &p)) {
 	  /* We also allow a 1x4 int vector here. */
 	  gsl_matrix_int *mat = (gsl_matrix_int*)p;
-	  int *data = mat->data;
 	  size_t nrows = mat->size1, ncols = mat->size2;
 	  if (nrows == 1 && ncols == 4) {
 	    m = (uint8_t*)matrix_to_byte_array(NULL, x);
@@ -221,88 +221,91 @@ int Pure_lo_message_add(lo_message msg, const char *types, pure_expr *x)
  err:
 #ifdef DEBUG
   fprintf(stderr, "liblo error: lo_send or lo_message_add called with "
-	  "invalid arg %d, probably arg mismatch, exiting.\n", count);
+	  "invalid arg %zu, probably arg mismatch, exiting.\n", count);
 #endif
   if (xs) free(xs);
   return -2;
 }
 
-int Pure_lo_send(mylo_address t, const char *path, const char *types,
+int Pure_lo_send(lo_address t, const char *path, const char *types,
 		 pure_expr *x)
 {
   int ret;
+  mylo_address priv = (mylo_address)t;
   lo_message msg = lo_message_new();
 
-  t->errnum = 0;
-  t->errstr = NULL;
+  priv->errnum = 0;
+  priv->errstr = NULL;
 
   ret = Pure_lo_message_add(msg, types, x);
 
   if (ret) {
     lo_message_free(msg);
-    t->errnum = ret;
-    if (ret == -1) t->errstr = "unknown type";
-    else t->errstr = "bad format/args";
+    priv->errnum = ret;
+    if (ret == -1) priv->errstr = "unknown type";
+    else priv->errstr = "bad format/args";
     return ret;
   }
 
-  ret = lo_send_message(t, path, msg);
+  ret = lo_send_message((lo_address)t, path, msg);
   lo_message_free(msg);
 
   return ret;
 }
 
-int Pure_lo_send_timestamped(mylo_address t, lo_timetag *ts,
+int Pure_lo_send_timestamped(lo_address t, lo_timetag *ts,
 			     const char *path, const char *types, pure_expr *x)
 {
   int ret;
+  mylo_address priv = (mylo_address)t;
   lo_message msg = lo_message_new();
   lo_bundle b = lo_bundle_new(*ts);
 
-  t->errnum = 0;
-  t->errstr = NULL;
+  priv->errnum = 0;
+  priv->errstr = NULL;
 
   ret = Pure_lo_message_add(msg, types, x);
 
-  if (t->errnum) {
+  if (priv->errnum) {
     lo_message_free(msg);
-    return t->errnum;
+    return priv->errnum;
   }
 
   lo_bundle_add_message(b, path, msg);
-  ret = lo_send_bundle(t, b);
+  ret = lo_send_bundle((lo_address)t, b);
   lo_message_free(msg);
   lo_bundle_free(b);
 
   return ret;
 }
 
-int Pure_lo_send_from(mylo_address to, lo_server from, lo_timetag *ts,
+int Pure_lo_send_from(lo_address to, lo_server from, lo_timetag *ts,
 		      const char *path, const char *types, pure_expr *x)
 {
   lo_bundle b = NULL;
   int ret;
+  mylo_address priv = (mylo_address)to;
   lo_message msg = lo_message_new();
   if (ts->sec!=LO_TT_IMMEDIATE.sec || ts->frac!=LO_TT_IMMEDIATE.frac)
     b = lo_bundle_new(*ts);
 
   // Clear any previous errors
-  to->errnum = 0;
-  to->errstr = NULL;
+  priv->errnum = 0;
+  priv->errstr = NULL;
 
   ret = Pure_lo_message_add(msg, types, x);
 
-  if (to->errnum) {
+  if (priv->errnum) {
     if (b) lo_bundle_free(b);
     lo_message_free(msg);
-    return to->errnum;
+    return priv->errnum;
   }
 
   if (b) {
     lo_bundle_add_message(b, path, msg);
-    ret = lo_send_bundle_from(to, from, b);
+    ret = lo_send_bundle_from((lo_address)to, from, b);
   } else {
-    ret = lo_send_message_from(to, from, path, msg);
+    ret = lo_send_message_from((lo_address)to, from, path, msg);
   }
 
   // Free-up memory
@@ -700,6 +703,9 @@ static size_t packet_size(const char *host, const char *port, int proto,
 			 const char *path, const char *types,
 			 lo_arg **argv, int argc)
 {
+  (void)proto;
+  (void)ts;
+  (void)argc;
   size_t sz = 0, i = 0, n = strlen(host), m = strlen(port);
   sz += sizeof(size_t);
   sz += n;
@@ -736,7 +742,7 @@ static size_t packet_size(const char *host, const char *port, int proto,
       sz += m;
       break;
     case LO_BLOB:
-      m = lo_blob_datasize(argv[i]);
+      m = lo_blob_datasize((lo_blob)argv[i]);
       sz += sizeof(size_t);
       sz += m;
       break;
@@ -801,9 +807,9 @@ static bool write_packet(const char *host, const char *port, int proto,
       jack_ringbuffer_write(rb, (char*)argv[i++], m);
       break;
     case LO_BLOB:
-      m = lo_blob_datasize(argv[i]);
+      m = lo_blob_datasize((lo_blob)argv[i]);
       jack_ringbuffer_write(rb, (char*)&m, sizeof(size_t));
-      jack_ringbuffer_write(rb, (char*)lo_blob_dataptr(argv[i++]), m);
+      jack_ringbuffer_write(rb, (char*)lo_blob_dataptr((lo_blob)argv[i++]), m);
       break;
     case LO_TIMETAG:
       jack_ringbuffer_write(rb, (char*)argv[i++], sizeof(lo_timetag));
@@ -880,7 +886,7 @@ static void read_packet(char **host, char **port, int *proto,
       jack_ringbuffer_read(rb, (char*)&m, sizeof(size_t));
       buf = calloc(m+1, 1); assert(buf);
       jack_ringbuffer_read(rb, buf, m);
-      (*argv)[i++] = lo_blob_new(m, buf); free(buf);
+      (*argv)[i++] = (lo_arg*)lo_blob_new(m, buf); free(buf);
       break;
     case LO_TIMETAG:
       buf = malloc(sizeof(lo_timetag)); assert(buf);
@@ -903,6 +909,7 @@ static void read_packet(char **host, char **port, int *proto,
 int Pure_osc_handler(const char *path, const char *types, lo_arg **argv,
 		     int argc, void *msg, void *user_data)
 {
+  (void)user_data;
   lo_address src = lo_message_get_source(msg);
   const char *host = lo_address_get_hostname(src);
   const char *port = lo_address_get_port(src);
@@ -927,8 +934,8 @@ int Pure_osc_handler(const char *path, const char *types, lo_arg **argv,
 pure_expr *Pure_osc_recv_noblock(void)
 {
   pure_expr *res;
-  mylo_address src;
-  mylo_message msg;
+  lo_address src;
+  lo_message msg;
   char *host, *port, *path, *types, *_types;
   int proto;
   lo_timetag ts;
@@ -939,7 +946,7 @@ pure_expr *Pure_osc_recv_noblock(void)
   _types = types;
   /* Reconstruct the message. */
   src = lo_address_new(host, port);
-  src->protocol = proto;
+  ((mylo_address)src)->protocol = proto;
   msg = lo_message_new();
   assert(src && msg);
   /* We have to to go a long way here. There must be a better way to do this. */
@@ -993,9 +1000,9 @@ pure_expr *Pure_osc_recv_noblock(void)
     }
   }
   argc = i;
-  msg->source = src;
+  ((mylo_message)msg)->source = src;
 #if HAVE_TIMETAG
-  msg->ts = ts;
+  ((mylo_message)msg)->ts = ts;
 #endif
   res = pure_tuplel(2, pure_cstring_dup(path), pure_pointer(msg));
   free(host); free(port); free(path); free(_types);
