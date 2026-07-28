@@ -1,0 +1,79 @@
+namespace smoke;
+
+check name condition
+  = () if condition;
+  = fprintf stderr "pure-glpk smoke failed: %s\n" name $$ exit 1 otherwise;
+
+close actual expected tolerance =
+  abs (actual-expected) <= tolerance;
+
+errorp value = index (str value) "glp::error" >= 0;
+
+using glpk;
+
+smoke::make_lp =
+  lp when
+    lp = glp::create_prob;
+    glp::set_obj_dir lp glp::max;
+    glp::add_rows lp 3;
+    glp::set_row_bnds lp (1, glp::up, 0.0, 4.0);
+    glp::set_row_bnds lp (2, glp::up, 0.0, 2.0);
+    glp::set_row_bnds lp (3, glp::up, 0.0, 3.0);
+    glp::add_cols lp 2;
+    glp::set_col_bnds lp (1, glp::lo, 0.0, 0.0);
+    glp::set_col_bnds lp (2, glp::lo, 0.0, 0.0);
+    glp::set_obj_coef lp (1, 3.0);
+    glp::set_obj_coef lp (2, 2.0);
+    glp::load_matrix lp
+      [(1,1,1.0),(1,2,1.0),(2,1,1.0),(3,2,1.0)];
+  end;
+
+smoke::make_mip =
+  lp when
+    lp = glp::create_prob;
+    glp::set_obj_dir lp glp::max;
+    glp::add_rows lp 2;
+    glp::set_row_bnds lp (1, glp::up, 0.0, 4.0);
+    glp::set_row_bnds lp (2, glp::up, 0.0, 4.0);
+    glp::add_cols lp 2;
+    glp::set_col_bnds lp (1, glp::lo, 0.0, 0.0);
+    glp::set_col_bnds lp (2, glp::lo, 0.0, 0.0);
+    glp::set_col_kind lp (1, glp::iv);
+    glp::set_col_kind lp (2, glp::iv);
+    glp::set_obj_coef lp (1, 1.0);
+    glp::set_obj_coef lp (2, 1.0);
+    glp::load_matrix lp
+      [(1,1,2.0),(1,2,1.0),(2,1,1.0),(2,2,2.0)];
+  end;
+
+let lp = smoke::make_lp;
+smoke::check "LP solver return"
+  (glp::simplex lp [(glp::msg_lev,glp::msg_off),
+                    (glp::presolve,glp::on)] === glp::ok);
+smoke::check "LP optimal status" (glp::get_status lp === glp::opt);
+smoke::check "LP objective"
+  (smoke::close (glp::get_obj_val lp) 10.0 1.0e-9);
+smoke::check "LP x"
+  (smoke::close (glp::get_col_prim lp 1) 2.0 1.0e-9);
+smoke::check "LP y"
+  (smoke::close (glp::get_col_prim lp 2) 2.0 1.0e-9);
+smoke::check "bounds failure path"
+  (smoke::errorp (glp::get_col_name lp 99));
+smoke::check "LP cleanup" (glp::delete_prob lp === ());
+smoke::check "stale LP handle rejected" (~intp (glp::get_num_cols lp));
+
+let mip = smoke::make_mip;
+smoke::check "MIP relaxation"
+  (glp::simplex mip [(glp::msg_lev,glp::msg_off)] === glp::ok);
+smoke::check "MIP solver return"
+  (glp::intopt mip [(glp::msg_lev,glp::msg_off)] === glp::ok);
+smoke::check "MIP optimal status" (glp::mip_status mip === glp::opt);
+smoke::check "MIP objective"
+  (smoke::close (glp::mip_obj_val mip) 2.0 1.0e-9);
+smoke::check "MIP integer x"
+  (smoke::close (glp::mip_col_val mip 1)
+                (round (glp::mip_col_val mip 1)) 1.0e-9);
+smoke::check "MIP integer y"
+  (smoke::close (glp::mip_col_val mip 2)
+                (round (glp::mip_col_val mip 2)) 1.0e-9);
+smoke::check "MIP cleanup" (glp::delete_prob mip === ());
