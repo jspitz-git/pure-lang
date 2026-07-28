@@ -1,0 +1,50 @@
+using audio;
+
+namespace hardware;
+
+check name condition
+  = () if condition;
+  = fprintf stderr "pure-audio hardware test failed: %s\n" name $$ exit 1
+    otherwise;
+
+playback = ()
+when
+  device = audio::output;
+  check "playback device" (device >= 0 && device < audio::device_count);
+  info = audio::devices!device;
+  sample_rate = info!4;
+  stream = audio::open_stream {} {device,1,Pa::Float32,0}
+                              sample_rate 256 0;
+  check "playback stream open" (audio::streamp stream);
+  silence = dmatrix 256;
+  check "bounded playback" (audio::write_stream stream silence 256 == 256);
+  audio::close_stream stream;
+  check "playback stream close" (~audio::streamp stream);
+  printf "playback passed: device %d, %s, %.0f Hz\n"
+         (device,info!0,sample_rate);
+  audio::stop;
+end;
+
+capture = ()
+when
+  device = audio::input;
+  check "capture device" (device >= 0 && device < audio::device_count);
+  info = audio::devices!device;
+  sample_rate = info!4;
+  stream = audio::open_stream {device,1,Pa::Float32,0} {}
+                              sample_rate 128 0;
+  check "capture stream open" (audio::streamp stream);
+  samples = dmatrix 128;
+  check "bounded capture" (audio::read_stream stream samples 128 == 128);
+  audio::close_stream stream;
+  check "capture stream close" (~audio::streamp stream);
+  printf "capture passed: device %d, %s, %.0f Hz, 128 frames (memory only)\n"
+         (device,info!0,sample_rate);
+  audio::stop;
+end;
+
+run "playback" = playback;
+run "capture" = capture;
+run mode = fprintf stderr "unknown hardware test mode: %s\n" mode $$ exit 1
+  otherwise;
+

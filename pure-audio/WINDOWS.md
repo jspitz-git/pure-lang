@@ -31,3 +31,18 @@ LAME. The existing bundle copies of `libc++.dll` and
 PortAudio imports the native Windows multimedia, COM, and device-setup APIs.
 This build does not claim ASIO support. libsndfile's advertised codec set is
 limited to the codec DLLs present in this audited closure.
+
+## Optional hardware validation
+
+After a normal CMake build, the following targets exercise the selected host
+devices with a hard 15-second process limit:
+
+```sh
+cmake --build <build-dir> --target check-audio-playback
+cmake --build <build-dir> --target check-audio-capture
+```
+
+Playback writes one 256-frame block of silence. Capture reads 128 frames into
+process memory and neither saves nor prints sample data. These targets are
+never part of the default CTest suite. Record the exact host device and sample
+rate before claiming hardware validation.

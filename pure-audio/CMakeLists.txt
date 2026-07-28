@@ -131,4 +131,18 @@ if(BUILD_TESTING)
       REQUIRED_FILES "${CMAKE_CURRENT_SOURCE_DIR}/tests/smoke.pure"
       TIMEOUT 60
   )
+  foreach(mode IN ITEMS playback capture)
+    add_custom_target(
+      "check-audio-${mode}"
+      COMMAND "${CMAKE_COMMAND}"
+        "-DPURE_EXECUTABLE=${PURE_EXECUTABLE}"
+        "-DPURE_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
+        "-DMODULE_DIR=$<TARGET_FILE_DIR:audio>"
+        "-DMODE=${mode}"
+        -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunHardwareTest.cmake"
+      DEPENDS audio
+      COMMENT "Running bounded pure-audio ${mode} validation"
+      VERBATIM
+    )
+  endforeach()
 endif()

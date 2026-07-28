@@ -133,7 +133,7 @@ audio::errmsg errno::int = Pa::GetErrorText errno;
 
 private extern expr *open_audio_stream
   (int *in, int *out, double sr, long size, int flags);
-private extern void audio_sentry(void *v, void *as);
+private extern void audio_sentry(void *v, expr *stream);
 
 /* Open and audio stream for reading, writing or both.
 
@@ -173,8 +173,8 @@ audio::open_stream inparams::matrix outparams::matrix sr::double size
 /* Close an audio stream. */
 
 public streamp;
-audio::close_stream as::pointer = get_sentry as $ clear_sentry as
-  if streamp as;
+private extern void close_audio_stream(expr *stream);
+audio::close_stream as::pointer = close_audio_stream as if streamp as;
 
 /* Check for a valid open audio stream object and get its associated data. */
 

@@ -627,13 +627,25 @@ pure_expr *open_audio_stream(int *in, int *out,
      pure_pointer(v->as));
 }
 
-void audio_sentry(MyStream *v, PaStream *as)
+void audio_sentry(MyStream *v, pure_expr *stream)
 {
-  (void)as;
   if (!v) return;
   fini_stream(v, 0);
   destroy_stream(v);
   free(v);
+  if (stream) stream->data.p = NULL;
+}
+
+void close_audio_stream(pure_expr *stream)
+{
+  pure_expr *sentry, *function, *argument;
+  void *data;
+  if (!stream || !(sentry = pure_get_sentry(stream)) ||
+      !pure_is_app(sentry, &function, &argument) ||
+      !pure_is_pointer(argument, &data) || !data)
+    return;
+  pure_clear_sentry(stream);
+  audio_sentry((MyStream*)data, stream);
 }
 
 pure_expr *audio_stream_info(MyStream *v, PaStream *as)
@@ -714,9 +726,8 @@ int write_audio_stream(MyStream *v, PaStream *as, void *buf, long size)
   (void)as;
   if (!has_output(v)) return -1;
   if (size > 0 && buf) {
-    long bytes = size*v->out_bpf, written;
+    long bytes = size*v->out_bpf, total = bytes, written;
     char *p = buf;
-    size = bytes;
     pthread_cleanup_push(unlock_mutex, (void*)&v->out_mutex);
     pthread_mutex_lock(&v->out_mutex);
     while (v->as && bytes > 0) {
@@ -727,7 +738,7 @@ int write_audio_stream(MyStream *v, PaStream *as, void *buf, long size)
       p += written;
     }
     pthread_cleanup_pop(1);
-    written = (size*v->out_bpf-bytes)/v->out_bpf;
+    written = (total-bytes)/v->out_bpf;
     return written;
   } else if (size == 0)
     return 0;
