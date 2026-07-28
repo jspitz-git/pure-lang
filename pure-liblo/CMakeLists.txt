@@ -26,3 +26,18 @@ set_target_properties(pure-liblo PROPERTIES
   OUTPUT_NAME lo
   PREFIX ""
   WINDOWS_EXPORT_ALL_SYMBOLS ON)
+
+if(WIN32)
+  find_program(LLVM_READOBJ NAMES llvm-readobj REQUIRED)
+  add_custom_target(
+    verify-windows-dependencies
+    COMMAND "${CMAKE_COMMAND}"
+      "-DLLVM_READOBJ=${LLVM_READOBJ}"
+      "-DPURE_LIBLO_MODULE=$<TARGET_FILE:pure-liblo>"
+      "-DLIBLO_DLL=${LIBLO_RUNTIME_DLL}"
+      -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/VerifyWindowsDependencies.cmake"
+    DEPENDS pure-liblo liblo-external
+    COMMENT "Verifying the pure-liblo Windows dependency closure"
+    VERBATIM
+  )
+endif()
