@@ -44,6 +44,46 @@ set_target_properties(
     WINDOWS_EXPORT_ALL_SYMBOLS ON
 )
 
+if(WIN32)
+  foreach(runtime IN ITEMS
+      GLPK:libglpk-40.dll
+      COLAMD:libcolamd.dll
+      AMD:libamd.dll
+      SUITESPARSECONFIG:libsuitesparseconfig.dll
+      OMP:libomp.dll
+      GMP:libgmp-10.dll
+      ZLIB:zlib1.dll)
+    string(REPLACE ":" ";" runtime_pair "${runtime}")
+    list(GET runtime_pair 0 runtime_name)
+    list(GET runtime_pair 1 runtime_file)
+    find_file(
+      "${runtime_name}_RUNTIME_DLL"
+      NAMES "${runtime_file}"
+      HINTS "$ENV{MSYSTEM_PREFIX}/bin"
+      NO_DEFAULT_PATH
+      REQUIRED
+    )
+  endforeach()
+  find_program(LLVM_READOBJ NAMES llvm-readobj REQUIRED)
+  add_custom_target(
+    verify-windows-dependencies
+    COMMAND "${CMAKE_COMMAND}"
+      "-DLLVM_READOBJ=${LLVM_READOBJ}"
+      "-DGLPK_MODULE=$<TARGET_FILE:glpk>"
+      "-DGLPK_DLL=${GLPK_RUNTIME_DLL}"
+      "-DCOLAMD_DLL=${COLAMD_RUNTIME_DLL}"
+      "-DAMD_DLL=${AMD_RUNTIME_DLL}"
+      "-DSUITESPARSECONFIG_DLL=${SUITESPARSECONFIG_RUNTIME_DLL}"
+      "-DOMP_DLL=${OMP_RUNTIME_DLL}"
+      "-DGMP_DLL=${GMP_RUNTIME_DLL}"
+      "-DZLIB_DLL=${ZLIB_RUNTIME_DLL}"
+      -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/VerifyWindowsDependencies.cmake"
+    DEPENDS glpk
+    COMMENT "Verifying the pure-glpk Windows dependency closure"
+    VERBATIM
+  )
+endif()
+
 include(CTest)
 if(BUILD_TESTING)
   pkg_get_variable(PURE_PREFIX pure prefix)
