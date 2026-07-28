@@ -20,3 +20,14 @@ Automated tests must not open physical playback or capture streams. They cover
 module loading, device enumeration, deterministic transforms, resampling, and
 audio-file I/O. Playback and capture are a separate bounded manual tier and
 may be reported only for the exact host devices on which they were exercised.
+
+## Runtime closure
+
+The package adds eleven non-system runtime DLLs: PortAudio, FFTW,
+libsamplerate, libsndfile, Ogg, Vorbis/VorbisEnc, FLAC, Opus, mpg123, and
+LAME. The existing bundle copies of `libc++.dll` and
+`libwinpthread-1.dll` are reused after hash verification.
+
+PortAudio imports the native Windows multimedia, COM, and device-setup APIs.
+This build does not claim ASIO support. libsndfile's advertised codec set is
+limited to the codec DLLs present in this audited closure.
