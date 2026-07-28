@@ -983,7 +983,7 @@ pure_expr *odbc_sql_exec(pure_expr *dbx, const char *query, pure_expr *args)
     }
     /* bind parameters */
     if (n > 0) {
-      if (!init_args(db, n))
+      if (n > INT_MAX || !init_args(db, (int)n))
 	goto fatal;
       for (i = 0; i < n; i++)
 	if (!set_arg(db, i, xv[i])) {
@@ -999,7 +999,7 @@ pure_expr *odbc_sql_exec(pure_expr *dbx, const char *query, pure_expr *args)
 	}
       free(xv);
     }
-    for (i = 0; i < db->argc; i++)
+    for (i = 0; i < (size_t)db->argc; i++)
       if ((ret = SQLBindParameter(db->hstmt, i+1, SQL_PARAM_INPUT,
 				  db->argv[i].ctype,
 				  db->argv[i].type,
@@ -1032,13 +1032,13 @@ pure_expr *odbc_sql_exec(pure_expr *dbx, const char *query, pure_expr *args)
       goto fatal;
     if (!(xs = malloc(cols*sizeof(pure_expr*))))
       goto fatal;
-    for (i = 0; i < cols; i++) {
+    for (i = 0; i < (size_t)cols; i++) {
       buf[0] = 0;
       if ((ret = SQLDescribeCol(db->hstmt, i+1, (SQLCHAR*)buf, sizeof(buf),
 				NULL, &coltype[i], NULL, NULL, NULL))
 	  != SQL_SUCCESS &&
 	  ret != SQL_SUCCESS_WITH_INFO) {
-	int j;
+	size_t j;
 	for (j = 0; j < i; j++) pure_freenew(xs[j]);
 	free(xs);
 	goto err;

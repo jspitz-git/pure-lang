@@ -1,0 +1,3 @@
+using odbc;
+
+if listp odbc::drivers && listp odbc::sources then () else exit 1;
