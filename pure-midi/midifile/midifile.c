@@ -128,26 +128,6 @@ struct MidiFileEvent
  * Helpers
  */
 
-static signed short interpret_int16(unsigned char *buffer)
-{
-	return ((signed short)(buffer[0]) << 8) | (signed short)(buffer[1]);
-}
-
-static signed short read_int16(FILE *in)
-{
-	unsigned char buffer[2];
-	fread(buffer, 1, 2, in);
-	return interpret_int16(buffer);
-}
-
-static void write_int16(FILE *out, signed short value)
-{
-	unsigned char buffer[2];
-	buffer[0] = (unsigned char)((value >> 8) & 0xFF);
-	buffer[1] = (unsigned char)(value & 0xFF);
-	fwrite(buffer, 1, 2, out);
-}
-
 static unsigned short interpret_uint16(unsigned char *buffer)
 {
 	return ((unsigned short)(buffer[0]) << 8) | (unsigned short)(buffer[1]);
@@ -1342,7 +1322,7 @@ MidiFileEvent_t MidiFileTrack_createMetaEvent(MidiFileTrack_t track, int32_t tic
 MidiFileEvent_t MidiFileTrack_createNoteStartAndEndEvents(MidiFileTrack_t track, int32_t start_tick, int32_t end_tick, int channel, int note, int start_velocity, int end_velocity)
 {
 	MidiFileEvent_t start_event = MidiFileTrack_createNoteOnEvent(track, start_tick, channel, note, start_velocity);
-	MidiFileEvent_t end_event = MidiFileTrack_createNoteOffEvent(track, end_tick, channel, note, end_velocity);
+	MidiFileTrack_createNoteOffEvent(track, end_tick, channel, note, end_velocity);
 	return start_event;
 }
 
