@@ -1,0 +1,40 @@
+using GL, GLU, GLUT;
+
+near actual expected
+  = abs (actual - expected) <= 2;
+
+GLUT::Init {0} NULL;
+GLUT::InitDisplayMode (GLUT::SINGLE or GLUT::RGBA);
+GLUT::InitWindowPosition (-10000) (-10000);
+GLUT::InitWindowSize 32 32;
+let window = GLUT::CreateWindow "pure-gl hidden render smoke";
+window > 0 || throw "FreeGLUT did not create a window";
+GLUT::HideWindow;
+
+let vendor = GL::GetString GL::VENDOR;
+let renderer = GL::GetString GL::RENDERER;
+let version = GL::GetString GL::VERSION;
+#vendor > 0 && #renderer > 0 && #version > 0
+  || throw "OpenGL context information is unavailable";
+
+GL::ClearColor 0.25 0.5 0.75 1.0;
+GL::Clear GL::COLOR_BUFFER_BIT;
+GL::Finish;
+
+let pixel = calloc 4 1;
+~null pixel || throw malloc_error;
+GL::ReadPixels 16 16 1 1 GL::RGBA GL::UNSIGNED_BYTE pixel;
+let pixel_word = uint (get_int pixel);
+free pixel;
+let rgba = [
+  pixel_word and 255,
+  (pixel_word >> 8) and 255,
+  (pixel_word >> 16) and 255,
+  (pixel_word >> 24) and 255
+];
+let [red,green,blue,alpha] = rgba;
+near red 64 && near green 128 && near blue 191 && near alpha 255
+  || throw ("Unexpected rendered pixel: "+str rgba);
+
+puts ("pure-gl hidden render: "+vendor+"; "+renderer+"; OpenGL "+version);
+GLUT::DestroyWindow window;

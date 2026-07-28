@@ -10,16 +10,20 @@ if(DEFINED ENV{PATH} AND NOT "$ENV{PATH}" STREQUAL "")
 endif()
 
 execute_process(
-  COMMAND "${CMAKE_COMMAND}" -E env
-    "PATH=${path}"
-    "PURE_LIBRARY=${PURE_GL_SOURCE_DIR}"
-    "${PURE_EXECUTABLE}" -x "${TEST_SCRIPT}"
+  COMMAND "${CMAKE_COMMAND}" -E env "PATH=${path}"
+    "${PURE_EXECUTABLE}" --norc
+      -I "${PURE_GL_SOURCE_DIR}"
+      -L "${PURE_LIBRARY_DIR}"
+      -x "${TEST_SCRIPT}"
   RESULT_VARIABLE result
   OUTPUT_VARIABLE output
   ERROR_VARIABLE error
-  TIMEOUT 20)
-if(NOT result EQUAL 0)
+  TIMEOUT 45)
+if(NOT result EQUAL 0 OR NOT error STREQUAL "")
   message(FATAL_ERROR
     "Pure test failed (${result})\nstdout:\n${output}\nstderr:\n${error}")
 endif()
-message(STATUS "${output}")
+string(STRIP "${output}" output)
+if(NOT output STREQUAL "")
+  message(STATUS "${output}")
+endif()

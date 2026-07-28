@@ -1,16 +1,12 @@
 using GL, GL_ARB, GL_EXT, GL_NV, GL_ATI, GLU, GLUT;
 
-check values
-  = if all values then () else throw "pure-gl module coverage failed";
-
-check [
-  GL::VERSION_1_1 == 1,
-  GL::TEXTURE0_ARB == 33984,
-  GL::ABGR_EXT == 32768,
-  GL::FOG_DISTANCE_MODE_NV == 34138,
-  GL::ELEMENT_ARRAY_ATI == 34664,
-  GLU::VERSION == 100800,
-  GLUT::API_VERSION == 4
-];
+GL::VERSION_1_1 == 1 &&
+GL::TEXTURE0_ARB == 33984 &&
+GL::ABGR_EXT == 32768 &&
+GL::FOG_DISTANCE_MODE_NV == 34138 &&
+GL::ELEMENT_ARRAY_ATI == 34664 &&
+GLU::VERSION == 100800 &&
+GLUT::API_VERSION == 4
+  || throw "pure-gl module coverage failed";
 
 puts "pure-gl: loaded GL, GL_ARB, GL_EXT, GL_NV, GL_ATI, GLU, and GLUT";

@@ -58,4 +58,15 @@ if(BUILD_TESTING)
       "-DPURE_GL_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
       "-DTEST_SCRIPT=${CMAKE_CURRENT_SOURCE_DIR}/tests/load.pure"
       -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunPureTest.cmake")
+  set_tests_properties(pure-gl.load-all-modules PROPERTIES
+    TIMEOUT 55 RUN_SERIAL TRUE)
+  add_test(NAME pure-gl.hidden-render
+    COMMAND "${CMAKE_COMMAND}"
+      "-DPURE_EXECUTABLE=${PURE_EXECUTABLE}"
+      "-DPURE_LIBRARY_DIR=$<TARGET_FILE_DIR:pure-gl>"
+      "-DPURE_GL_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
+      "-DTEST_SCRIPT=${CMAKE_CURRENT_SOURCE_DIR}/tests/hidden-render.pure"
+      -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunPureTest.cmake")
+  set_tests_properties(pure-gl.hidden-render PROPERTIES
+    TIMEOUT 55 RUN_SERIAL TRUE)
 endif()
