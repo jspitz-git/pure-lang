@@ -1,0 +1,3 @@
+using glpk;
+
+if stringp glp::version then () else exit 1;

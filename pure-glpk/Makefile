@@ -46,6 +46,7 @@ glpk$(DLL): glpk.c
 	$(CC) $(shared) $(dllname) -o $@ $(MOD_CFLAGS) $< $(MOD_LDFLAGS)
 
 clean:
+	@test -n "$(DLL)" || { echo "refusing to clean: Pure DLL suffix is empty" >&2; exit 1; }
 	rm -Rf *$(DLL)* *~ *.a *.o
 
 # documentation (this needs docutils)

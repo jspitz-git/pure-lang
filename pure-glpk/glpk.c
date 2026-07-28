@@ -145,9 +145,8 @@ static int pure_is_intlist(pure_expr **elems, const size_t nelem,
      indices are in the interval <1, maxi>. The array is supplied and it is
      responsibility of the caller to free it. The array uses 1-based indices
      and the zeroth elements is unused */
-  size_t n;
-  int i, indval;
-  double val;
+  size_t i;
+  int indval;
   indices[0] = 0;
   for (i = 0; i < nelem; i++) {
     if (!pure_is_int(elems[i], &indval)) {
@@ -173,7 +172,8 @@ static int pure_is_pairlist(pure_expr **elems, const size_t nelem,
      unused */
   size_t n;
   pure_expr **tpl;
-  int i, indval;
+  size_t i;
+  int indval;
   double val;
   indices[0] = 0;
   values[0] = 0.0;
@@ -207,7 +207,8 @@ static int pure_is_intpairlist(pure_expr **elems, const size_t nelem,
      unused */
   size_t n;
   pure_expr **tpl;
-  int i, ind1, ind2;
+  size_t i;
+  int ind1, ind2;
   indices1[0] = 0;
   indices2[0] = 0;
   for (i = 0; i < nelem; i++) {
@@ -237,7 +238,8 @@ static int pure_is_tripletlist(pure_expr **elems, const size_t nelem,
      indices and the zeroth elements are unused */
   size_t n;
   pure_expr **tpl;
-  int i, indvali, indvalj;
+  size_t i;
+  int indvali, indvalj;
   double val;
   indi[0] = 0;
   indj[0] = 0;
@@ -289,26 +291,6 @@ static pure_expr *pure_pairlist(const int cnt, int *indices,
      return res;
 }
 
-static pure_expr *pure_tripletlist(const int cnt, int *indices1,
-                            int *indices2, double *values)
-{
-  /* Convert three arrays - two with indices and the third with values
-     into a list of triplets (index1, index2 , value). */
-     size_t n;
-     int i;
-     pure_expr *res, **elems;
-     if (!(elems = (pure_expr **)malloc(cnt * sizeof(pure_expr*)))) {
-       return pure_err_internal("insufficient memory");
-     }
-     for (i = 0; i < n; i++) {
-       elems[i] = pure_tuplel(3, pure_int(indices1[i + 1]),
-                              pure_int(indices2[i + 1]),
-                              pure_double(values[i + 1]));
-     }
-     res = pure_listv((size_t) cnt, elems);
-     free(elems);
-     return res;
-}
 
 pure_expr *glpk_create_prob()
 {
@@ -1249,7 +1231,7 @@ static pure_expr *get_spx_parm(pure_expr *parms, glp_smcp *parm, int *cnterr)
   pure_expr **list, **tpl, *snd, *res;
   int32_t fst, intparm;
   double doubleparm;
-  int i;
+  size_t i;
   size_t it, cnt;
   *cnterr = 0;
   if (!pure_is_listv(parms, &cnt, &list)) {
@@ -1533,8 +1515,7 @@ static pure_expr *get_ipt_parm(pure_expr *parms, glp_iptcp *parm, int *cnterr)
   // Read the option list for glp_interior
   pure_expr **list, **tpl, *snd, *res;
   int32_t fst, intparm;
-  double doubleparm;
-  int i;
+  size_t i;
   size_t it, cnt;
   *cnterr = 0;
   if (!pure_is_listv(parms, &cnt, &list)) {
@@ -1757,7 +1738,7 @@ static pure_expr *get_mip_parm(pure_expr *parms, glp_iocp *parm, int *cnterr)
   int32_t fst, intparm;
   double doubleparm;
   void *ptrparm;
-  int i;
+  size_t i;
   size_t it, cnt;
   *cnterr = 0;
   if (!pure_is_listv(parms, &cnt, &list)) {
@@ -1950,6 +1931,7 @@ pure_expr *glpk_mip_col_val(pure_expr *ptr, int colind)
   return pure_double(glp_mip_col_val(glpobj->lp, colind));
 }
 
+#if GLP_MAJOR_VERSION == 4 && GLP_MINOR_VERSION <= 48
 static inline pure_expr *kkt_quality(int quality)
 {
   // Convert char codes to Pure strings
@@ -1959,7 +1941,6 @@ static inline pure_expr *kkt_quality(int quality)
   return pure_cstring_dup(c);
 }
 
-#if GLP_MAJOR_VERSION == 4 && GLP_MINOR_VERSION <= 48
 pure_expr *glpx_check_kkt(pure_expr *ptr, int scaled)
 {
   // Check Karush-Kuhn-Tucker conditions
@@ -2007,6 +1988,8 @@ pure_expr *glpx_check_kkt(pure_expr *ptr, int scaled)
 #else
 pure_expr *glpx_check_kkt(pure_expr *ptr, int scaled)
 {
+  (void)ptr;
+  (void)scaled;
   return pure_err_internal("function lpx::check_kkt is not available for GLPK version > 4.48");
 }
 #endif
@@ -2245,7 +2228,6 @@ pure_expr *glpk_mpl_generate(pure_expr *ptr, const char *fname)
 pure_expr *glpk_mpl_build_prob(pure_expr *ptr_tran, pure_expr *ptr_prob)
 {
   // Build problem instance from the model
-  int status;
   tran_obj *tranobj;
   glp_obj *glpobj;
   if (!is_tran_pointer(ptr_tran, &tranobj)) {
@@ -2470,8 +2452,6 @@ pure_expr *glpk_get_bfcp(pure_expr *ptr)
 {
   // Get basis factorization parameters
 #define BFCP_NUM 11
-  int32_t intparm;
-  double doubleparm;
   int i;
   glp_bfcp *parm;
   glp_obj *glpobj;
@@ -2516,8 +2496,9 @@ pure_expr *glpk_set_bfcp(pure_expr *ptr, pure_expr *parms)
   pure_expr **list, **tpl, *snd, *res;
   int32_t fst, intparm;
   double doubleparm;
-  int i;
-  size_t it, cnt, cnterr;
+  size_t i;
+  size_t it, cnt;
+  size_t cnterr = 0;
   glp_bfcp *parm;
   glp_obj *glpobj;
   if (!is_glp_pointer(ptr, &glpobj)) {
@@ -2670,7 +2651,7 @@ pure_expr *glpk_ftran(pure_expr *ptr, pure_expr *x)
 {
   // Perform forward transformation
   size_t rowcnt;
-  int i;
+  size_t i;
   pure_expr **list, *res;
   double *array, val;
   glp_obj *glpobj;
@@ -2683,7 +2664,7 @@ pure_expr *glpk_ftran(pure_expr *ptr, pure_expr *x)
   if (!pure_is_listv(x, &rowcnt, &list)) {
     return 0;
   }
-  if (rowcnt != glp_get_num_rows(glpobj->lp)) {
+  if (rowcnt != (size_t)glp_get_num_rows(glpobj->lp)) {
     free(list);
     return pure_err_internal("invalid number of list members");
   }
@@ -2713,7 +2694,7 @@ pure_expr *glpk_btran(pure_expr *ptr, pure_expr *x)
 {
   // Perform backward transformation
   size_t rowcnt;
-  int i;
+  size_t i;
   pure_expr **list, *res;
   double *array, val;
   glp_obj *glpobj;
@@ -2726,7 +2707,7 @@ pure_expr *glpk_btran(pure_expr *ptr, pure_expr *x)
   if (!pure_is_listv(x, &rowcnt, &list)) {
     return 0;
   }
-  if (rowcnt != glp_get_num_rows(glpobj->lp)) {
+  if (rowcnt != (size_t)glp_get_num_rows(glpobj->lp)) {
     free(list);
     return pure_err_internal("invalid number of list members");
   }
@@ -2765,10 +2746,10 @@ pure_expr *glpk_warm_up(pure_expr *ptr)
 pure_expr *glpk_eval_tab_row(pure_expr *ptr, int k)
 {
   // Compute row of the tableau
-  int i, *arrayind, colcnt, rowcnt, ind;
-  size_t cnt;
+  int *arrayind, colcnt, rowcnt;
+  size_t i, cnt;
   pure_expr **list, *res;
-  double *arrayval, val;
+  double *arrayval;
   glp_obj *glpobj;
   if (!is_glp_pointer(ptr, &glpobj)) {
     return 0;
@@ -2812,10 +2793,10 @@ pure_expr *glpk_eval_tab_row(pure_expr *ptr, int k)
 pure_expr *glpk_eval_tab_col(pure_expr *ptr, int k)
 {
   // Compute column of the tableau
-  int i, *arrayind, colcnt, rowcnt, ind;
-  size_t cnt;
+  int *arrayind, colcnt, rowcnt;
+  size_t i, cnt;
   pure_expr **list, *res;
-  double *arrayval, val;
+  double *arrayval;
   glp_obj *glpobj;
   if (!is_glp_pointer(ptr, &glpobj)) {
     return 0;
@@ -2859,10 +2840,10 @@ pure_expr *glpk_eval_tab_col(pure_expr *ptr, int k)
 pure_expr *glpk_transform_row(pure_expr *ptr, pure_expr *inrow)
 {
   // Transform explicitly specified row
-  int i, *arrayind, colcnt, ind;
-  size_t cnt;
+  int *arrayind, colcnt;
+  size_t i, cnt;
   pure_expr **list, **tlist, *res;
-  double *arrayval, val;
+  double *arrayval;
   glp_obj *glpobj;
   if (!is_glp_pointer(ptr, &glpobj)) {
     return 0;
@@ -2917,10 +2898,10 @@ pure_expr *glpk_transform_row(pure_expr *ptr, pure_expr *inrow)
 pure_expr *glpk_transform_col(pure_expr *ptr, pure_expr *incol)
 {
   // Transform explicitly specified column
-  int i, *arrayind, rowcnt, ind;
-  size_t cnt;
+  int *arrayind, rowcnt;
+  size_t i, cnt;
   pure_expr **list, **tlist, *res;
-  double *arrayval, val;
+  double *arrayval;
   glp_obj *glpobj;
   if (!is_glp_pointer(ptr, &glpobj)) {
     return 0;
@@ -2976,8 +2957,8 @@ pure_expr *glpk_prim_rtest(pure_expr *ptr, pure_expr *incol,
                                 int how, double tol)
 {
   // Perform primal ratio test
-  int i, *arrayind, colcnt, rowcnt, ind;
-  size_t cnt, n;
+  int *arrayind, colcnt, rowcnt, ind;
+  size_t i, cnt, n;
   pure_expr **list, **tpl, *res;
   double *arrayval, val;
   glp_obj *glpobj;
@@ -3045,8 +3026,8 @@ pure_expr *glpk_dual_rtest(pure_expr *ptr, pure_expr *incol,
                                 int how, double tol)
 {
   // Perform dual ratio test
-  int i, *arrayind, colcnt, rowcnt, ind;
-  size_t cnt, n;
+  int *arrayind, colcnt, rowcnt, ind;
+  size_t i, cnt, n;
   pure_expr **list, **tpl, *res;
   double *arrayval, val;
   glp_obj *glpobj;
@@ -3197,7 +3178,6 @@ pure_expr *glpk_delete_wrapper(pure_expr *ptr)
 pure_expr *glpk_ios_get_prob(pure_expr *ptr)
 {
   // Access the problem object
-  glp_prob *lp;
   glp_obj *glpobj;
   tree_obj *treeobj;
   if (!is_tree_pointer(ptr, &treeobj)) {
@@ -3274,8 +3254,7 @@ pure_expr *glpk_ios_select_node(pure_expr *ptr, int p)
 pure_expr *glpk_ios_heur_sol(pure_expr *ptr, pure_expr *x)
 {
   // Provide solution found by heuristic
-  size_t colcnt;
-  int i;
+  size_t i, colcnt;
   pure_expr **list, *res;
   double *array, val;
   tree_obj *treeobj;
@@ -3285,7 +3264,7 @@ pure_expr *glpk_ios_heur_sol(pure_expr *ptr, pure_expr *x)
   if (!pure_is_listv(x, &colcnt, &list)) {
     return 0;
   }
-  if (colcnt != glp_get_num_cols(glp_ios_get_prob(treeobj->tree))) {
+  if (colcnt != (size_t)glp_get_num_cols(glp_ios_get_prob(treeobj->tree))) {
     free(list);
     return pure_err_internal("invalid number of list members");
   }
@@ -3450,7 +3429,6 @@ pure_expr *glpk_ios_node_bound(pure_expr *ptr, int p)
 pure_expr *glpk_ios_best_node(pure_expr *ptr)
 {
   // Find active subproblem with the best local bound
-  int n_cnt;
   tree_obj *treeobj;
   if (!is_tree_pointer(ptr, &treeobj)) {
     return 0;
@@ -3461,7 +3439,6 @@ pure_expr *glpk_ios_best_node(pure_expr *ptr)
 pure_expr *glpk_ios_pool_size(pure_expr *ptr)
 {
   // Determine current size of the cut pool
-  int n_cnt;
   tree_obj *treeobj;
   if (!is_tree_pointer(ptr, &treeobj)) {
     return 0;
@@ -3522,7 +3499,6 @@ pure_expr *glpk_ios_add_row(pure_expr *ptr, const char *name, int klass,
 pure_expr *glpk_ios_del_row(pure_expr *ptr, int irow)
 {
   // Remove constraint from the cut pool
-  glp_attr attr;
   tree_obj *treeobj;
   if (!is_tree_pointer(ptr, &treeobj)) {
     return 0;
@@ -3537,7 +3513,6 @@ pure_expr *glpk_ios_del_row(pure_expr *ptr, int irow)
 pure_expr *glpk_ios_clear_pool(pure_expr *ptr)
 {
   // Remove all constraints from the cut pool
-  glp_attr attr;
   tree_obj *treeobj;
   if (!is_tree_pointer(ptr, &treeobj)) {
     return 0;
