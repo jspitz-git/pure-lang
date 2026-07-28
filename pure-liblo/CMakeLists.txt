@@ -71,3 +71,5 @@ if(BUILD_TESTING AND WIN32)
       TIMEOUT 30
   )
 endif()
+
+include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/Install.cmake")

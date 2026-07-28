@@ -32,6 +32,9 @@ ExternalProject_Add(liblo-external
     "${LIBLO_RUNTIME_DLL}"
     "${LIBLO_IMPORT_LIBRARY}")
 
+ExternalProject_Get_Property(liblo-external SOURCE_DIR)
+set(LIBLO_LICENSE_FILE "${SOURCE_DIR}/COPYING")
+
 add_library(liblo::liblo SHARED IMPORTED GLOBAL)
 set_target_properties(liblo::liblo PROPERTIES
   IMPORTED_LOCATION "${LIBLO_RUNTIME_DLL}"
