@@ -37,6 +37,7 @@ add_pure_gtk_module(cairo CAIRO)
 add_pure_gtk_module(pango PANGO)
 
 if(WIN32)
+  pkg_get_variable(GTK2_PREFIX gtk+-2.0 prefix)
   target_sources(gtk PRIVATE gtk-windows.def)
 
   add_executable(pure-gtk-windows-loader tests/windows-loader.c)
@@ -59,6 +60,25 @@ if(WIN32)
       -Werror
   )
   target_link_libraries(pure-gtk-windows-gui PRIVATE PkgConfig::GTK2)
+  find_program(LLVM_READOBJ NAMES llvm-readobj REQUIRED)
+  add_custom_target(
+    verify-windows-dependencies
+    COMMAND "${CMAKE_COMMAND}"
+      "-DLLVM_READOBJ=${LLVM_READOBJ}"
+      "-DRUNTIME_DIR=${GTK2_PREFIX}/bin"
+      "-DGTK_LOADER_DIR=${GTK2_PREFIX}/lib/gdk-pixbuf-2.0/2.10.0/loaders"
+      "-DGTK_ENGINE_DIR=${GTK2_PREFIX}/lib/gtk-2.0/2.10.0/engines"
+      "-DGTK_MODULE_DIR=${GTK2_PREFIX}/lib/gtk-2.0/modules"
+      "-DGTK_MODULE=$<TARGET_FILE:gtk>"
+      "-DGLIB_MODULE=$<TARGET_FILE:glib>"
+      "-DATK_MODULE=$<TARGET_FILE:atk>"
+      "-DCAIRO_MODULE=$<TARGET_FILE:cairo>"
+      "-DPANGO_MODULE=$<TARGET_FILE:pango>"
+      -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/VerifyWindowsDependencies.cmake"
+    DEPENDS gtk glib atk cairo pango
+    COMMENT "Verifying the pure-gtk Windows PE inventory"
+    VERBATIM
+  )
 endif()
 
 set(
@@ -72,8 +92,6 @@ set(
 
 include(CTest)
 if(BUILD_TESTING AND WIN32)
-  pkg_get_variable(GTK2_PREFIX gtk+-2.0 prefix)
-
   add_test(NAME pure-gtk-windows-loader COMMAND pure-gtk-windows-loader)
   set_tests_properties(
     pure-gtk-windows-loader
