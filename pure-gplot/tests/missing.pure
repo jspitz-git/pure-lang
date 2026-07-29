@@ -1,0 +1,5 @@
+using gplot, system;
+
+let gp = gplot::open gplot::GPLOT_EXE;
+null gp || exit 40;
+puts "PURE_GPLOT_MISSING_OK";

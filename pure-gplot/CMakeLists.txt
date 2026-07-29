@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.25)
 
-project(pure-gplot VERSION 0.1 LANGUAGES C)
+project(pure-gplot VERSION 0.1 LANGUAGES NONE)
 
 include(CTest)
 
@@ -11,6 +11,7 @@ option(PURE_GPLOT_INTERACTIVE_TESTS
   "Run the Windows desktop gnuplot smoke test" OFF)
 
 if(WIN32)
+  enable_language(C)
   add_library(gplot MODULE gplot_win.c)
   target_compile_features(gplot PRIVATE c_std_11)
   target_compile_options(gplot PRIVATE -Wall -Wextra)
@@ -87,3 +88,5 @@ if(BUILD_TESTING)
     endif()
   endif()
 endif()
+
+include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/Install.cmake")

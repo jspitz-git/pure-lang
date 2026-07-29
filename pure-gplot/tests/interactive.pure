@@ -1,7 +1,7 @@
 using gplot, system;
 
 let gp = gplot::open gplot::GPLOT_EXE;
-pointerp gp || exit 30;
+pointerp gp && ~null gp || exit 30;
 
 gplot::output gp "windows" "";
 gplot::title gp "pure-gplot interactive smoke test";

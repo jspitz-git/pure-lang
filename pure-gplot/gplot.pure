@@ -77,8 +77,8 @@ windows_host = index sysinfo "windows" >= 0 ||
   index sysinfo "mingw32" >= 0;
 
 // string containing path to gnuplot exe (taken from GPLOT_EXE environment
-// variable if it exists, otherwise "pgnuplot.exe" on Windows, "gnuplot"
-// otherwise)
+// variable if it exists, otherwise the managed bundle path on Windows,
+// "gnuplot" otherwise)
 let GPLOT_EXE =
   if stringp env then env
   else if windows_host then gplot_default_executable
@@ -124,7 +124,7 @@ Low-Level Commands
 
 	``gplot::puts_no_echo string gp;``
 	
-sends the string to the gnuplot session *gp* points to. As the name states, there is no echo read back from gnuplot (Don't know whether *gnuplot* or *pgnuplot.exe* supports reading/bidirectional pipes at all).
+sends the string to the gnuplot session *gp* points to. As the name states, there is no echo read back from gnuplot (The interface is deliberately write-only on every platform).
 
 	``gplot::puts string gp;``
 

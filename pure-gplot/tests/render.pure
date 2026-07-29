@@ -3,7 +3,7 @@ using gplot, system;
 argc == 2 || exit 20;
 let output_path = argv!1;
 let gp = gplot::open gplot::GPLOT_EXE;
-pointerp gp || exit 21;
+pointerp gp && ~null gp || exit 21;
 
 gplot::output gp "pngcairo size 320,200" output_path;
 gplot::title gp "pure-gplot Windows smoke test";

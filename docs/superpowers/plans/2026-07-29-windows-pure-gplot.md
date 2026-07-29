@@ -94,7 +94,7 @@ Windows PowerShell 5.1, official gnuplot 6.0.4 x86-64 Clang distribution.
   Run the focused CTest command from Step 2. Expected: one passing test with
   `PATH` containing no unrelated gnuplot.
 
-- [ ] **Step 5: Record and commit the verified step**
+- [x] **Step 5: Record and commit the verified step**
 
   Check task 2 in TODO-42, record the pinned checksum and command-contract
   result, then commit:
@@ -155,7 +155,7 @@ Windows PowerShell 5.1, official gnuplot 6.0.4 x86-64 Clang distribution.
   pass; rerun with `GPLOT_EXE` and the gnuplot directory removed from `PATH`
   except through the managed launcher.
 
-- [ ] **Step 5: Record and commit the verified step**
+- [x] **Step 5: Record and commit the verified step**
 
   Check task 3 in TODO-42, record the PNG and desktop results, then commit:
 
@@ -179,7 +179,7 @@ Windows PowerShell 5.1, official gnuplot 6.0.4 x86-64 Clang distribution.
 - Produces: `lib/pure/gplot.pure`, `lib/pure/gplot.dll`, documentation and,
   only when enabled, `tools/gnuplot`.
 
-- [ ] **Step 1: Add install rules and the installed verifier**
+- [x] **Step 1: Add install rules and the installed verifier**
 
   Install the Pure module and native bridge unconditionally. When
   `PURE_GPLOT_INSTALL_GNUPLOT=ON`, reject an absent or wrong-version
@@ -188,13 +188,14 @@ Windows PowerShell 5.1, official gnuplot 6.0.4 x86-64 Clang distribution.
   `share/doc/pure-gplot/licenses/gnuplot`. Install the existing LGPL/GPL files,
   examples, Windows instructions, and render test.
 
-- [ ] **Step 2: Stage into a copied portable prefix**
+- [x] **Step 2: Stage into a copied portable prefix**
 
   Copy the current verified Windows bundle to a new path, install
   `pure-gplot` with the optional component enabled, then run:
 
   ```powershell
   cmake -DSTAGE_PREFIX="C:\tmp\Pure Gplot Stage 20260729" `
+    -DSOURCE_RUNTIME_DIR="C:\path\to\source-bundle\bin" `
     -P pure-gplot/cmake/VerifyInstalledPackage.cmake
   ```
 
@@ -202,13 +203,13 @@ Windows PowerShell 5.1, official gnuplot 6.0.4 x86-64 Clang distribution.
   below a path containing spaces, validate the PNG, confirm gnuplot 6.0.4, and
   confirm `open` fails without searching `PATH` after the optional component is hidden.
 
-- [ ] **Step 3: Relocate and repeat**
+- [x] **Step 3: Relocate and repeat**
 
   Copy the complete stage to a differently named path containing spaces and
   rerun the installed verifier. Expected: the same checks pass without any
   source, build, MSYS2, or original-prefix path in the environment.
 
-- [ ] **Step 4: Close and commit TODO-42**
+- [x] **Step 4: Close and commit TODO-42**
 
   Set the TODO status to complete, check task 4, record the installed inventory
   and relocation evidence, then commit:

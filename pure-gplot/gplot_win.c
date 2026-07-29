@@ -1,3 +1,4 @@
+#define _WIN32_WINNT 0x0600
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 
@@ -47,6 +48,32 @@ static int remove_filename(wchar_t *path)
   return 1;
 }
 
+static HANDLE inheritable_output(DWORD standard_handle)
+{
+  SECURITY_ATTRIBUTES attributes;
+  HANDLE source = GetStdHandle(standard_handle);
+  HANDLE duplicate = INVALID_HANDLE_VALUE;
+
+  if (source && source != INVALID_HANDLE_VALUE &&
+      DuplicateHandle(GetCurrentProcess(), source, GetCurrentProcess(),
+                      &duplicate, 0, TRUE, DUPLICATE_SAME_ACCESS))
+    return duplicate;
+
+  memset(&attributes, 0, sizeof(attributes));
+  attributes.nLength = sizeof(attributes);
+  attributes.bInheritHandle = TRUE;
+  return CreateFileW(L"NUL", GENERIC_WRITE,
+                     FILE_SHARE_READ | FILE_SHARE_WRITE, &attributes,
+                     OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+}
+
+static void close_valid_handle(HANDLE *handle)
+{
+  if (*handle && *handle != INVALID_HANDLE_VALUE)
+    CloseHandle(*handle);
+  *handle = INVALID_HANDLE_VALUE;
+}
+
 __declspec(dllexport)
 const char *gplot_default_executable(void)
 {
@@ -92,15 +119,21 @@ __declspec(dllexport)
 void *gplot_open(const char *executable)
 {
   SECURITY_ATTRIBUTES attributes;
-  STARTUPINFOW startup;
+  STARTUPINFOEXW startup;
   PROCESS_INFORMATION process;
   gplot_process *handle = NULL;
   wchar_t *wide_executable = NULL;
   wchar_t *command_line = NULL;
   HANDLE child_input = INVALID_HANDLE_VALUE;
   HANDLE parent_input = INVALID_HANDLE_VALUE;
+  HANDLE child_output = INVALID_HANDLE_VALUE;
+  HANDLE child_error = INVALID_HANDLE_VALUE;
+  HANDLE inherited_handles[3];
+  SIZE_T attribute_size = 0;
+  int attribute_initialized = 0;
   size_t command_length;
 
+  memset(&startup, 0, sizeof(startup));
   wide_executable = utf8_to_wide(executable);
   if (!wide_executable || !wide_executable[0])
     goto fail;
@@ -121,27 +154,54 @@ void *gplot_open(const char *executable)
     goto fail;
   if (!SetHandleInformation(parent_input, HANDLE_FLAG_INHERIT, 0))
     goto fail;
-
-  memset(&startup, 0, sizeof(startup));
-  startup.cb = sizeof(startup);
-  startup.dwFlags = STARTF_USESTDHANDLES;
-  startup.hStdInput = child_input;
-  startup.hStdOutput = GetStdHandle(STD_OUTPUT_HANDLE);
-  startup.hStdError = GetStdHandle(STD_ERROR_HANDLE);
-  memset(&process, 0, sizeof(process));
-  if (!CreateProcessW(wide_executable, command_line, NULL, NULL, TRUE, 0,
-                      NULL, NULL, &startup, &process))
+  child_output = inheritable_output(STD_OUTPUT_HANDLE);
+  child_error = inheritable_output(STD_ERROR_HANDLE);
+  if (child_output == INVALID_HANDLE_VALUE ||
+      child_error == INVALID_HANDLE_VALUE)
     goto fail;
 
-  CloseHandle(child_input);
-  child_input = INVALID_HANDLE_VALUE;
+  startup.StartupInfo.cb = sizeof(startup);
+  startup.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
+  startup.StartupInfo.hStdInput = child_input;
+  startup.StartupInfo.hStdOutput = child_output;
+  startup.StartupInfo.hStdError = child_error;
+  inherited_handles[0] = child_input;
+  inherited_handles[1] = child_output;
+  inherited_handles[2] = child_error;
+  InitializeProcThreadAttributeList(NULL, 1, 0, &attribute_size);
+  if (!attribute_size)
+    goto fail;
+  startup.lpAttributeList =
+    (LPPROC_THREAD_ATTRIBUTE_LIST)malloc(attribute_size);
+  if (!startup.lpAttributeList)
+    goto fail;
+  if (!InitializeProcThreadAttributeList(startup.lpAttributeList, 1, 0,
+                                         &attribute_size))
+    goto fail;
+  attribute_initialized = 1;
+  if (!UpdateProcThreadAttribute(
+        startup.lpAttributeList, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
+        inherited_handles, sizeof(inherited_handles), NULL, NULL))
+    goto fail;
+
+  memset(&process, 0, sizeof(process));
+  if (!CreateProcessW(wide_executable, command_line, NULL, NULL, TRUE,
+                      EXTENDED_STARTUPINFO_PRESENT, NULL, NULL,
+                      &startup.StartupInfo, &process))
+    goto fail;
+
+  DeleteProcThreadAttributeList(startup.lpAttributeList);
+  free(startup.lpAttributeList);
+  startup.lpAttributeList = NULL;
+  close_valid_handle(&child_input);
+  close_valid_handle(&child_output);
+  close_valid_handle(&child_error);
   CloseHandle(process.hThread);
   handle = (gplot_process *)malloc(sizeof(*handle));
   if (!handle) {
-    CloseHandle(parent_input);
+    close_valid_handle(&parent_input);
     WaitForSingleObject(process.hProcess, INFINITE);
     CloseHandle(process.hProcess);
-    parent_input = INVALID_HANDLE_VALUE;
     goto fail;
   }
   handle->process = process.hProcess;
@@ -151,10 +211,13 @@ void *gplot_open(const char *executable)
   return handle;
 
 fail:
-  if (child_input != INVALID_HANDLE_VALUE)
-    CloseHandle(child_input);
-  if (parent_input != INVALID_HANDLE_VALUE)
-    CloseHandle(parent_input);
+  if (attribute_initialized)
+    DeleteProcThreadAttributeList(startup.lpAttributeList);
+  free(startup.lpAttributeList);
+  close_valid_handle(&child_input);
+  close_valid_handle(&parent_input);
+  close_valid_handle(&child_output);
+  close_valid_handle(&child_error);
   free(command_line);
   free(wide_executable);
   return NULL;

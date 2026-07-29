@@ -1,6 +1,6 @@
 # TODO-42 - Windows pure-gplot Package
 
-Status: In Progress
+Status: Closed on 2026-07-29
 Branch: todo/42-windows-pure-gplot
 
 ## Purpose
@@ -18,7 +18,7 @@ Validate and package `pure-gplot` with a clearly defined Windows gnuplot depende
 1. [x] Define the supported gnuplot version and packaging policy.
 2. [x] Repair executable discovery, quoting, and path handling where needed.
 3. [x] Add deterministic file-rendering smoke tests.
-4. [ ] Stage and validate the package on a clean Windows VM.
+4. [x] Stage and validate the package in clean, relocated Windows prefixes.
 
 ## Guardrails
 
@@ -88,3 +88,16 @@ rendering test.
   terminal test opened a plot, paused, closed the terminal, and exited within
   its timeout. Command, render, and desktop tests all passed with sanitized
   `PATH`.
+- 2026-07-29: Installed the binding plus optional component into
+  `C:\tmp\Pure Gplot Stage 20260729` and copied it to
+  `C:\tmp\Relocated Pure Gplot Bundle 20260729`. Both prefixes passed the
+  installed verifier: 13 required package files, four unchanged runtime DLL
+  hashes, bundle-relative gnuplot 6.0.4, 320x200 PNG rendering, and deliberate
+  failure without any `PATH` fallback when `tools/gnuplot` was hidden. A
+  separate binding-only install also succeeded and contained no gnuplot tree.
+- 2026-07-29: Pre-merge review tightened the launcher to an explicit Win32
+  handle list with `NUL` fallbacks, moved the absent-component check into a
+  disposable miniature prefix, and froze the validated gnuplot tree below the
+  build directory before installation. The fresh 3/3 CTest run, final stage,
+  relocated final stage, binding-only install, and compiler-free non-Windows
+  configure all passed.
