@@ -73,3 +73,8 @@ is retained for development and receives Windows-aware path handling.
   generic plugin bridge, a sanitized module load test, and a PE32+ dependency
   audit. Replaced both Unix-only `alloca.h` includes on Windows; the clean
   build and all focused checks passed without compiler warnings.
+- 2026-07-29: Added the native `pure2lv2.cmd`/PowerShell generator. Direct
+  launcher help and both batch/source generation passed with a sanitized
+  Windows `PATH`, explicit developer toolchain, and output bundles below a
+  path containing spaces. Batch compilation uses relative temporary outputs
+  to avoid Pure's unquoted internal `opt | llc` pipeline.

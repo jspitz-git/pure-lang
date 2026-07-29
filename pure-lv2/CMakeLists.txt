@@ -56,6 +56,23 @@ if(BUILD_TESTING)
     LABELS "pure-lv2;module;windows"
     REQUIRED_FILES "$<TARGET_FILE:lv2>;${CMAKE_CURRENT_SOURCE_DIR}/tests/load.pure"
     TIMEOUT 30)
+
+  if(WIN32)
+    set(POWERSHELL_EXECUTABLE
+      "$ENV{SystemRoot}/System32/WindowsPowerShell/v1.0/powershell.exe")
+    if(NOT EXISTS "${POWERSHELL_EXECUTABLE}")
+      message(FATAL_ERROR "Windows PowerShell not found: ${POWERSHELL_EXECUTABLE}")
+    endif()
+    add_test(
+      NAME pure-lv2-native-generator-help
+      COMMAND "${POWERSHELL_EXECUTABLE}"
+        -NoProfile -ExecutionPolicy Bypass
+        -File "${CMAKE_CURRENT_SOURCE_DIR}/pure2lv2.ps1" --help)
+    set_tests_properties(pure-lv2-native-generator-help PROPERTIES
+      LABELS "pure-lv2;generator;windows"
+      PASS_REGULAR_EXPRESSION "USAGE: pure2lv2"
+      TIMEOUT 15)
+  endif()
 endif()
 
 if(WIN32)
