@@ -1,4 +1,5 @@
 include_guard(GLOBAL)
+include("${CMAKE_CURRENT_LIST_DIR}/ExtractionContainment.cmake")
 
 function(_pure_octave_download_and_verify archive_url signature_url archive_path signature_path
     gpg_executable gnupg_home signing_key fingerprint_output)
@@ -179,6 +180,7 @@ function(acquire_windows_octave output_root)
   if (NOT extract_result EQUAL 0)
     message(FATAL_ERROR "Failed to extract signed Octave archive: ${extract_stdout}${extract_stderr}")
   endif ()
+  _pure_octave_validate_extraction_containment("${extract_root}" "${work_root}")
 
   # _pure_octave_validate_archive_paths rejects absolute and traversal paths before extraction.
   file(GLOB extracted_roots LIST_DIRECTORIES TRUE "${extract_root}/*")

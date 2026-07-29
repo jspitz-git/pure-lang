@@ -53,6 +53,9 @@ endforeach ()
 ]=] @ONLY)
   add_test(NAME pure-octave-rejected-root
     COMMAND "${CMAKE_COMMAND}" -P "${rejected_root_test}")
+  add_test(NAME pure-octave-extraction-containment
+    COMMAND "${CMAKE_COMMAND}" -P
+      "${CMAKE_CURRENT_SOURCE_DIR}/cmake/ContainmentRegression.cmake")
 
   add_test(NAME pure-octave-embed-probe
     COMMAND "${CMAKE_COMMAND}"
