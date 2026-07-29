@@ -1,0 +1,4 @@
+using octave, system;
+octave_eval "assert (gcd (10, 15) == 5);" == 0 || exit 10;
+octave_eval "assert (2 + 2 == 4);" == 0 || exit 11;
+puts "PURE_OCTAVE_BASIC_OK";

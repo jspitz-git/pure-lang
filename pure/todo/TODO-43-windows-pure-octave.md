@@ -55,3 +55,24 @@ Windows Octave distribution.
   - Validation:
     - `cmake -S pure-octave -B "C:\tmp\Pure Octave Build 20260729" -G Ninja -DBUILD_TESTING=ON -DPURE_PREFIX="C:\tmp\Relocated Pure Gplot Final Bundle 20260729" -DOCTAVE_ROOT="C:\tmp\Pure Octave Fake Root"` failed as expected with all required missing path classes.
     - `ctest --test-dir "C:\tmp\Pure Octave Build 20260729" --output-on-failure` passed 2/2: rejected-root contract and sanitized public-API embedding probe.
+- 2026-07-29: Ported the basic bridge to Octave 11.3 behind a stable C loader.
+  - TDD RED: compiling the legacy `embed.cc` with the validated 11.3
+    `mkoctfile.exe` failed first at
+    `embed.cc:26:10: fatal error: octave/config.h: No such file or directory`.
+  - Loader: validates the signed-root fingerprint, uses DLL-relative,
+    config-file, or explicit-root selection in that order, restricts Windows
+    DLL lookup to controlled directories, verifies the loaded
+    `liboctinterp-15.dll` path, and publishes the implementation table only
+    after all exports and the exact ABI are validated.
+  - Interpreter: uses the public Octave 11.3 instance lifecycle and evaluation
+    APIs. Because the embedded public lifecycle supplied only `.` as its load
+    path in the Pure host, the implementation deterministically enumerates the
+    validated root's full `mingw64/share/octave/11.3.0/m` tree, excluding
+    package-private directories.
+  - Pure initialization now passes `--quiet`, `--no-history`, and
+    `--no-init-file`, checks the result, and reports loader-owned diagnostics.
+  - Validation:
+    - `ctest --test-dir "C:\tmp\Pure Octave Build 20260729" -R "pure-octave-(basic|loader|dependencies)" --output-on-failure` passed 3/3.
+    - The first full-suite run exposed that the Task 1 nested rejected-root
+      configure no longer inherited a C compiler after enabling the C loader;
+      explicitly propagating the validated compiler made its focused
