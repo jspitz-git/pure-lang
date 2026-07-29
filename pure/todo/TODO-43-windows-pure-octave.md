@@ -76,3 +76,32 @@ Windows Octave distribution.
     - The first full-suite run exposed that the Task 1 nested rejected-root
       configure no longer inherited a C compiler after enabling the C loader;
       explicitly propagating the validated compiler made its focused
+      regression and the eight-test suite pass.
+- 2026-07-29: Restored the complete data-conversion and function-value contract.
+  - TDD RED: the new conversion and function-value tests failed 0/2 before the
+    exports existed. The first Octave 11.3 typed-array port then failed because
+    its typed `fortran_vec()` accessor is non-const.
+  - Native copy conversions now cover real, complex, logical, integer, and
+    string scalars/matrices. Opaque `octave_value` wrappers are allocated and
+    deleted only inside `octave_bridge_impl.dll`.
+  - Converter hooks restore cells, structs, struct arrays, and N-D arrays. The
+    Octave 11.3 public multi-output API required the cell extractor to request
+    the exact element count rather than the legacy single output.
+  - Function tests invoke named `eig` and an anonymous `x+y` handle. A chained
+    test sentry invokes the original `octave_free`, increments an exact Pure
+    reference counter, and proves all 60 wrappers finalize across top-level
+    evaluation boundaries before a further successful Octave call.
+  - Runtime conflict: repository and installed-DLL export audits confirmed that
+    controlled Pure 0.68 has no language or public C-runtime `pure_gc`; the user
+    approved evaluation boundaries plus the exact chained-sentry count as the
+    leak proof. No production GC API or working-set heuristic was added.
+  - The standalone absolute-preload helper cannot use the real Pure DLL closure:
+    adding the controlled Pure runtime directory before the loader or before
+    `octave_init` caused a Windows stack overflow. Its test-only fail-fast stub
+    exports exactly the implementation's 33 imported but uncalled Pure symbols;
+    any call exits with status 99. CMake confines it to the test tree and
+    disposable fixture, audits its PE exports, and asserts fixture cleanup. The
+    production loader continues to use only its existing trusted search roots.
+  - Validation:
+    - `ctest --test-dir "C:\tmp\Pure Octave Build 20260729" -R "pure-octave-(conversions|function-values)" --output-on-failure` passed 2/2 in 20.60 seconds.
+    - `ctest --test-dir "C:\tmp\Pure Octave Build 20260729" --output-on-failure` passed 10/10 in 44.25 seconds.

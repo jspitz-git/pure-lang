@@ -1,0 +1,39 @@
+using octave, math, system;
+
+octave_call "plus" 1 (2.5,3.5) == 6.0 || exit 10;
+octave_call "double" 1 {1,2;3,4} == {1.0,2.0;3.0,4.0} || exit 11;
+octave_call "conj" 1 {1.0+:2.0,3.0+:-4.0}
+  == {1.0+:-2.0,3.0+:4.0} || exit 12;
+octave_call "toupper" 1 "Pure" == "PURE" || exit 13;
+
+let real_matrix = {1.25,2.5,3.75;4.0,5.5,6.25};
+octave_call "double" 1 real_matrix == real_matrix || exit 20;
+
+let complex_values = {1.0+:2.0,3.0+:-4.0;-5.0+:6.0,7.5+:0.25};
+octave_call "double" 1 complex_values == complex_values || exit 21;
+
+let cell_values = {1,"two";3.5,4};
+octave_call "reshape" 1 (cell cell_values,2,2) == cell_values || exit 22;
+
+
+let array3 = octave_call "reshape" 1 ({1.0,2.0;3.0,4.0},2,1,2);
+octave_call "reshape" 1 (array3,2,1,2) == array3 || exit 23;
+
+let scalar_record = {"name"=>"Pure","count"=>3};
+octave_call "reshape" 1 (struct scalar_record,1,1) == scalar_record || exit 24;
+
+let struct_records = redim (1,2) $ smatrix
+  [{"name"=>"first","count"=>1},{"name"=>"second","count"=>2}];
+octave_call "reshape" 1 (struct struct_records,1,2) == struct_records || exit 25;
+
+octave_eval "global pure_octave_task3_value;" == 0 || exit 30;
+octave_set "pure_octave_task3_value" real_matrix === real_matrix || exit 31;
+octave_get "pure_octave_task3_value" == real_matrix || exit 32;
+
+octave_converters false == true || exit 40;
+let opaque_cell = octave_call "cell" 1 (1,1);
+octave_valuep opaque_cell || exit 41;
+octave_converters true == false || exit 42;
+octave_call "iscell" 1 opaque_cell || exit 43;
+
+puts "PURE_OCTAVE_CONVERSIONS_OK";

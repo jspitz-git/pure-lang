@@ -34,7 +34,15 @@ octave_init_status == 0 ||
 // Execute an Octave command.
 extern int octave_eval(char *cmd);
 
-// Data-conversion imports are restored with the Task 3 implementation.
+// Data conversion and function values.
+extern expr *octave_call(expr *fun, int nargout, expr *args);
+extern expr *octave_get(char *id);
+extern expr *octave_set(char *id, expr *x);
+extern expr *octave_func(expr *fun);
+extern bool octave_valuep(expr *x);
+extern void octave_free(void *val);
+extern bool octave_converters(bool enable);
+
 
 /* Convert some special types of Octave values to corresponding Pure values.
    This adds support for marshalling n-dimensional matrices, cell arrays and
@@ -127,7 +135,7 @@ __oct2pure__ x::pointer = (if null data then cell else id) (smatrix data) when
   sz = if null dims then 0 else foldl1 (*) dims;
   x = if #dims<=1 || sz<=1 then x
       else octave_call "permute" 1 (x,vector (reverse (1..#dims)));
-  data = cslist $ octave_call (octave_func ("x{:}","x")) 1 x with
+  data = cslist $ octave_call (octave_func ("x{:}","x")) sz x with
     cslist xs::tuple = smatrix $ list xs;
     cslist x = {x} otherwise; // singleton
   end;

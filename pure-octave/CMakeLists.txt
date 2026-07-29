@@ -58,6 +58,8 @@ unset(ENV{OCTAVE_EXEC_PATH})
 execute_process(
   COMMAND "@OCTAVE_MKOCTFILE@" --link-stand-alone -shared
     -DPURE_OCTAVE_IMPL_BUILD "-I@CMAKE_CURRENT_SOURCE_DIR@"
+    "-I@PURE_PREFIX@/include/pure" "-L@PURE_PREFIX@/lib" -lpure
+    "-I@PURE_PREFIX@/include"
     -o "octave_bridge_impl.dll" "@CMAKE_CURRENT_SOURCE_DIR@/embed.cc"
   WORKING_DIRECTORY "@PURE_OCTAVE_LIBRARY_DIR@"
   RESULT_VARIABLE build_result
@@ -83,6 +85,11 @@ if (BUILD_TESTING)
     PREFIX ""
     OUTPUT_NAME "liboctinterp-15"
     RUNTIME_OUTPUT_DIRECTORY "${PURE_OCTAVE_TEST_BINARY_DIR}/poison")
+  add_library(pure_octave_runtime_stub SHARED tests/pure_runtime_stub.c)
+  set_target_properties(pure_octave_runtime_stub PROPERTIES
+    PREFIX ""
+    OUTPUT_NAME "libpure"
+    RUNTIME_OUTPUT_DIRECTORY "${PURE_OCTAVE_TEST_BINARY_DIR}/runtime-stub")
   add_executable(pure_octave_absolute_preload tests/absolute_preload.c)
   set_target_properties(pure_octave_absolute_preload PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${PURE_OCTAVE_TEST_BINARY_DIR}")
@@ -151,6 +158,28 @@ endforeach ()
       "-DEXPECTED_OUTPUT=PURE_OCTAVE_BASIC_OK"
       -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunPureTest.cmake")
 
+  add_test(NAME pure-octave-conversions
+    COMMAND "${CMAKE_COMMAND}"
+      "-DPURE_EXECUTABLE=${PURE_PREFIX}/bin/pure.exe"
+      "-DPURE_PREFIX=${PURE_PREFIX}"
+      "-DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
+      "-DBRIDGE_DIR=${PURE_OCTAVE_LIBRARY_DIR}"
+      "-DTEST_SCRIPT=${CMAKE_CURRENT_SOURCE_DIR}/tests/conversions.pure"
+      "-DOCTAVE_ROOT=${OCTAVE_ROOT_NORMALIZED}"
+      "-DEXPECTED_OUTPUT=PURE_OCTAVE_CONVERSIONS_OK"
+      -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunPureTest.cmake")
+
+  add_test(NAME pure-octave-function-values
+    COMMAND "${CMAKE_COMMAND}"
+      "-DPURE_EXECUTABLE=${PURE_PREFIX}/bin/pure.exe"
+      "-DPURE_PREFIX=${PURE_PREFIX}"
+      "-DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
+      "-DBRIDGE_DIR=${PURE_OCTAVE_LIBRARY_DIR}"
+      "-DTEST_SCRIPT=${CMAKE_CURRENT_SOURCE_DIR}/tests/function-values.pure"
+      "-DOCTAVE_ROOT=${OCTAVE_ROOT_NORMALIZED}"
+      "-DEXPECTED_OUTPUT=PURE_OCTAVE_FUNCTION_VALUES_OK"
+      -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunPureTest.cmake")
+
   add_test(NAME pure-octave-poison-init
     COMMAND "${CMAKE_COMMAND}"
       "-DCMAKE_COMMAND=${CMAKE_COMMAND}"
@@ -168,6 +197,9 @@ endforeach ()
     COMMAND "${CMAKE_COMMAND}"
       "-DHELPER=$<TARGET_FILE:pure_octave_absolute_preload>"
       "-DLOADER=$<TARGET_FILE:octave_embed>"
+      "-DPURE_RUNTIME_STUB=$<TARGET_FILE:pure_octave_runtime_stub>"
+      "-DTEST_BINARY_DIR=${PURE_OCTAVE_TEST_BINARY_DIR}"
+      "-DOBJDUMP=${OCTAVE_RUNTIME_DIR}/objdump.exe"
       "-DPOISON_DLL=$<TARGET_FILE:pure_octave_poison>"
       "-DSOURCE_RUNTIME_DIR=${OCTAVE_RUNTIME_DIR}"
       "-DSOURCE_MODULE_DIR=${OCTAVE_MODULE_DIR}"
@@ -175,7 +207,8 @@ endforeach ()
       "-DWORK_ROOT=${CMAKE_CURRENT_BINARY_DIR}/absolute-preload-test"
       -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunAbsolutePreloadTest.cmake")
   set_tests_properties(
-    pure-octave-basic pure-octave-poison-init pure-octave-absolute-preload
+    pure-octave-basic pure-octave-conversions pure-octave-function-values
+    pure-octave-poison-init pure-octave-absolute-preload
     PROPERTIES RESOURCE_LOCK pure_octave_interpreter)
 
   set(loader_audit_test
@@ -193,7 +226,9 @@ endif ()
 if (audit_output MATCHES "DLL Name:[^\r\n]*[Oo]ctave")
   message(FATAL_ERROR "Stable loader has a static Octave import:\n${audit_output}")
 endif ()
-foreach (required_export octave_init octave_fini octave_eval octave_last_error)
+foreach (required_export octave_init octave_fini octave_eval octave_last_error
+    octave_get octave_set octave_call octave_func octave_valuep octave_free
+    octave_converters)
   if (NOT audit_output MATCHES "[ \t]${required_export}(\r?\n|$)")
     message(FATAL_ERROR "Stable loader omitted export ${required_export}.")
   endif ()

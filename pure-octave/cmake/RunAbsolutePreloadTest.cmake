@@ -1,9 +1,58 @@
 foreach (required_variable
-    HELPER LOADER POISON_DLL SOURCE_RUNTIME_DIR SOURCE_MODULE_DIR
-    SOURCE_FINGERPRINT WORK_ROOT)
+    HELPER LOADER PURE_RUNTIME_STUB TEST_BINARY_DIR OBJDUMP POISON_DLL SOURCE_RUNTIME_DIR
+    SOURCE_MODULE_DIR SOURCE_FINGERPRINT WORK_ROOT)
   if (NOT DEFINED ${required_variable} OR "${${required_variable}}" STREQUAL "")
     message(FATAL_ERROR
       "${required_variable} is required for the absolute preload test.")
+  endif ()
+endforeach ()
+cmake_path(ABSOLUTE_PATH PURE_RUNTIME_STUB NORMALIZE
+  OUTPUT_VARIABLE pure_runtime_stub_path)
+cmake_path(ABSOLUTE_PATH TEST_BINARY_DIR NORMALIZE
+  OUTPUT_VARIABLE test_binary_dir_path)
+cmake_path(IS_PREFIX test_binary_dir_path "${pure_runtime_stub_path}"
+  NORMALIZE stub_is_test_artifact)
+if (NOT stub_is_test_artifact)
+  message(FATAL_ERROR
+    "Pure runtime stub escaped test build tree: ${pure_runtime_stub_path}")
+endif ()
+get_filename_component(stub_name "${pure_runtime_stub_path}" NAME)
+if (NOT stub_name STREQUAL "libpure.dll")
+  message(FATAL_ERROR "Pure runtime stub has unexpected name: ${stub_name}")
+endif ()
+if (NOT EXISTS "${pure_runtime_stub_path}" OR NOT EXISTS "${OBJDUMP}")
+  message(FATAL_ERROR "Pure runtime stub audit input is missing.")
+endif ()
+execute_process(
+  COMMAND "${OBJDUMP}" -p "${pure_runtime_stub_path}"
+  RESULT_VARIABLE stub_audit_result
+  OUTPUT_VARIABLE stub_audit_output
+  ERROR_VARIABLE stub_audit_stderr)
+if (NOT stub_audit_result EQUAL 0)
+  message(FATAL_ERROR
+    "Could not audit Pure runtime stub:\n${stub_audit_stderr}")
+endif ()
+set(expected_stub_exports
+  pure_appx pure_complex pure_complex_matrix
+  pure_cstring_dup pure_double pure_double_matrix
+  pure_free pure_freenew pure_get_sentry
+  pure_int pure_int_matrix pure_is_app
+  pure_is_complex pure_is_complex_matrix pure_is_cstring_dup
+  pure_is_double pure_is_double_matrix pure_is_int
+  pure_is_int_matrix pure_is_pointer pure_is_symbolic_matrix
+  pure_is_tuplev pure_matrix_rowsl pure_matrix_rowsv
+  pure_new pure_pointer pure_sentry
+  pure_sym pure_sym_pname pure_symbol
+  pure_tuplev pure_unref str
+  )
+if (NOT stub_audit_output MATCHES
+    "\\[Name Pointer/Ordinal\\] Table[ \t]+00000021")
+  message(FATAL_ERROR
+    "Pure runtime stub must export exactly 33 named symbols.")
+endif ()
+foreach (required_export IN LISTS expected_stub_exports)
+  if (NOT stub_audit_output MATCHES "[ \t]${required_export}(\r?\n|$)")
+    message(FATAL_ERROR "Pure runtime stub omitted ${required_export}.")
   endif ()
 endforeach ()
 
@@ -43,6 +92,9 @@ foreach (source_dll IN LISTS source_runtime_dlls)
       "Could not stage runtime DLL ${dll_name}: ${link_result}")
   endif ()
 endforeach ()
+file(COPY_FILE "${pure_runtime_stub_path}"
+  "${fixture_runtime_dir}/libpure.dll"
+  ONLY_IF_DIFFERENT)
 if (NOT EXISTS "${fixture_runtime_dll}")
   message(FATAL_ERROR "Disposable fixture omitted liboctinterp-15.dll.")
 endif ()
@@ -64,6 +116,10 @@ if (EXISTS "${poison_marker}")
   file(REMOVE "${poison_marker}")
 endif ()
 file(REMOVE_RECURSE "${fixture_root}")
+if (EXISTS "${fixture_root}" OR EXISTS "${poison_marker}")
+  message(FATAL_ERROR
+    "Absolute preload test left fixture or poison-marker artifacts.")
+endif ()
 
 file(SHA256 "${source_runtime_dll}" source_runtime_hash_after)
 if (NOT source_runtime_hash_before STREQUAL source_runtime_hash_after)

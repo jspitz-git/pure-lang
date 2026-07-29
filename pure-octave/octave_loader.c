@@ -17,6 +17,13 @@ typedef void (*impl_fini_fn)(void);
 typedef int (*impl_eval_fn)(const char *);
 typedef const char *(*impl_last_error_fn)(void);
 typedef const char *(*impl_abi_fn)(void);
+typedef pure_expr *(*impl_get_fn)(const char *);
+typedef pure_expr *(*impl_set_fn)(const char *, pure_expr *);
+typedef pure_expr *(*impl_call_fn)(pure_expr *, int, pure_expr *);
+typedef pure_expr *(*impl_func_fn)(pure_expr *);
+typedef int (*impl_valuep_fn)(pure_expr *);
+typedef void (*impl_free_fn)(void *);
+typedef int (*impl_converters_fn)(int);
 
 struct impl_functions
 {
@@ -25,6 +32,13 @@ struct impl_functions
   impl_eval_fn eval;
   impl_last_error_fn last_error;
   impl_abi_fn abi;
+  impl_get_fn get;
+  impl_set_fn set;
+  impl_call_fn call;
+  impl_func_fn func;
+  impl_valuep_fn valuep;
+  impl_free_fn free_value;
+  impl_converters_fn converters;
 };
 
 static struct impl_functions implementation;
@@ -437,8 +451,30 @@ load_implementation(void)
     require_symbol(implementation_module, "pure_octave_impl_last_error");
   candidate.abi = (impl_abi_fn)
     require_symbol(implementation_module, "pure_octave_impl_abi");
+  candidate.get = (impl_get_fn)
+    require_symbol(implementation_module, "pure_octave_impl_get");
+  candidate.set = (impl_set_fn)
+    require_symbol(implementation_module, "pure_octave_impl_set");
+  candidate.call = (impl_call_fn)
+    require_symbol(implementation_module, "pure_octave_impl_call");
+  candidate.func = (impl_func_fn)
+    require_symbol(implementation_module, "pure_octave_impl_func");
+  candidate.valuep = (impl_valuep_fn)
+    require_symbol(implementation_module, "pure_octave_impl_valuep");
+  candidate.free_value = (impl_free_fn)
+    require_symbol(implementation_module, "pure_octave_impl_free");
+  candidate.converters = (impl_converters_fn)
+    require_symbol(implementation_module, "pure_octave_impl_converters");
   if (!candidate.init || !candidate.fini || !candidate.eval ||
       !candidate.last_error || !candidate.abi)
+    {
+      FreeLibrary(implementation_module);
+      implementation_module = NULL;
+      return 0;
+    }
+  if (!candidate.get || !candidate.set || !candidate.call ||
+      !candidate.func || !candidate.valuep || !candidate.free_value ||
+      !candidate.converters)
     {
       FreeLibrary(implementation_module);
       implementation_module = NULL;
@@ -497,6 +533,119 @@ octave_eval(const char *command)
   result = implementation.eval(command);
   if (result != 0)
     copy_error(implementation.last_error());
+  else
+    loader_error[0] = '\0';
+  return result;
+}
+
+PURE_OCTAVE_LOADER_API pure_expr *
+octave_get(const char *id)
+{
+  pure_expr *result;
+  const char *error;
+  if (!load_implementation())
+    return NULL;
+  result = implementation.get(id);
+  error = implementation.last_error();
+  if (error && *error)
+    copy_error(error);
+  else
+    loader_error[0] = '\0';
+  return result;
+}
+
+PURE_OCTAVE_LOADER_API pure_expr *
+octave_set(const char *id, pure_expr *value)
+{
+  pure_expr *result;
+  const char *error;
+  if (!load_implementation())
+    return NULL;
+  result = implementation.set(id, value);
+  error = implementation.last_error();
+  if (error && *error)
+    copy_error(error);
+  else
+    loader_error[0] = '\0';
+  return result;
+}
+
+PURE_OCTAVE_LOADER_API pure_expr *
+octave_call(pure_expr *function, int nargout, pure_expr *arguments)
+{
+  pure_expr *result;
+  const char *error;
+  if (!load_implementation())
+    return NULL;
+  result = implementation.call(function, nargout, arguments);
+  error = implementation.last_error();
+  if (error && *error)
+    copy_error(error);
+  else
+    loader_error[0] = '\0';
+  return result;
+}
+
+PURE_OCTAVE_LOADER_API pure_expr *
+octave_func(pure_expr *function)
+{
+  pure_expr *result;
+  const char *error;
+  if (!load_implementation())
+    return NULL;
+  result = implementation.func(function);
+  error = implementation.last_error();
+  if (error && *error)
+    copy_error(error);
+  else
+    loader_error[0] = '\0';
+  return result;
+}
+
+PURE_OCTAVE_LOADER_API int
+octave_valuep(pure_expr *value)
+{
+  int result;
+  const char *error;
+  if (!load_implementation())
+    return 0;
+  result = implementation.valuep(value);
+  error = implementation.last_error();
+  if (error && *error)
+    copy_error(error);
+  else
+    loader_error[0] = '\0';
+  return result;
+}
+
+PURE_OCTAVE_LOADER_API void
+octave_free(void *value)
+{
+  const char *error;
+  if (!implementation_module || !implementation.free_value)
+    {
+      set_error("Octave implementation is unavailable during value finalization");
+      return;
+    }
+  implementation.free_value(value);
+  error = implementation.last_error();
+  if (error && *error)
+    copy_error(error);
+  else
+    loader_error[0] = '\0';
+}
+
+PURE_OCTAVE_LOADER_API int
+octave_converters(int enable)
+{
+  int result;
+  const char *error;
+  if (!load_implementation())
+    return 0;
+  result = implementation.converters(enable);
+  error = implementation.last_error();
+  if (error && *error)
+    copy_error(error);
   else
     loader_error[0] = '\0';
   return result;
