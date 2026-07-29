@@ -49,8 +49,15 @@ octave_eval "global task3_cell3; task3_cell3=cell(2,1,2); task3_cell3{1,1,1}=1; 
 let cell3 = octave_get "task3_cell3";
 let expected_cell3 = redim (2,1) $ smatrix
   [{1.0,"a"},{2.0,"b"}];
-cell3 == expected_cell3 || exit 29;
-octave_call "reshape" 1 (cell cell3,2,1,2) == expected_cell3 || exit 30;
+dim cell3!0 == 2 && dim cell3!1 == 1 || exit 61;
+cell3!(0,0) === {1.0,"a"} || exit 62;
+cell3!(1,0) === {2.0,"b"} || exit 63;
+cell3 === expected_cell3 || exit 29;
+let cell3_roundtrip = octave_call "reshape" 1 (cell cell3,2,1,2);
+dim cell3_roundtrip!0 == 2 && dim cell3_roundtrip!1 == 1 || exit 64;
+cell3_roundtrip!(0,0) === {1.0,"a"} || exit 65;
+cell3_roundtrip!(1,0) === {2.0,"b"} || exit 66;
+cell3_roundtrip === expected_cell3 || exit 30;
 
 let nested_cells = {cell {"inner",2},cell (redim (0,2) {})};
 let nested_roundtrip = octave_call "reshape" 1 (cell nested_cells,1,2);
