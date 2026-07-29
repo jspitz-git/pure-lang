@@ -34,6 +34,10 @@ octave_init_status == 0 ||
 // Execute an Octave command.
 extern int octave_eval(char *cmd);
 
+// octave_init also installs the Octave-side builtin pure_call(NAME, ARG, ...).
+// Its arguments and results are fully converted before returning to Octave;
+// tuple results provide multiple Octave outputs.
+
 // Data conversion and function values.
 extern expr *octave_call(expr *fun, int nargout, expr *args);
 extern expr *octave_get(char *id);

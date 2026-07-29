@@ -17,8 +17,8 @@ Windows Octave distribution.
 ## Task List
 
 1. [x] Select and document a compatible Windows Octave toolchain.
-2. [ ] Build the bridge and audit its full runtime dependency closure.
-3. [ ] Add scalar, matrix, complex, callback, and error smoke tests.
+2. [x] Build the bridge and audit its full runtime dependency closure.
+3. [x] Add scalar, matrix, complex, callback, and error smoke tests.
 4. [ ] Decide whether to bundle, externally detect, or defer the package.
 
 ## Guardrails
@@ -105,3 +105,41 @@ Windows Octave distribution.
   - Validation:
     - `ctest --test-dir "C:\tmp\Pure Octave Build 20260729" -R "pure-octave-(conversions|function-values)" --output-on-failure` passed 2/2 in 20.60 seconds.
     - `ctest --test-dir "C:\tmp\Pure Octave Build 20260729" --output-on-failure` passed 10/10 in 44.25 seconds.
+- 2026-07-30: Proved callbacks, error recovery, and repeated lifecycle safety.
+  - The public Octave 11.3 built-in registration API now installs
+    `pure_call(NAME, ARG, ...)` in the embedded interpreter. Callback arguments
+    and all tuple outputs are converted before returning across the Octave C++
+    frame. Pure expressions, exception values, tuple arrays, and diagnostic
+    buffers use scoped ownership.
+  - TDD RED evidence included the exact missing-builtin failure
+    `feval: function 'pure_call' not found`, callback-exception suppression
+    failing the recovery contract at exit 14, and removal of the wrapper sentry
+    failing lifecycle finalization at exit 11. The corresponding focused tests
+    passed after each production fix.
+  - Callback coverage asserts scalar, two-output tuple, and exact complex-matrix
+    round trips. Error coverage alternates invalid syntax, a Pure callback
+    exception, and a missing Octave function with successful scalar, matrix,
+    and `gcd` calls; every success clears `octave_last_error`.
+  - CTest runs 20 fresh lifecycle processes with separate work, home, TEMP, and
+    TMP directories and a 60-second timeout. Each process completes 100 scalar,
+    matrix, callback, and anonymous-handle cycles and observes exactly 100
+    chained wrapper finalizers: 2,000 cycles/finalizers in the complete gate.
+  - Candidate acceptance ran with MSYS2 absent from `PATH` and passed 34/34 in
+    209.40 seconds. The PE audit confirmed that the stable C loader has no
+    Octave, Pure, or C++ runtime imports; the implementation imports the
+    controlled Pure and Octave libraries; Pure owns `libc++.dll` without
+    `libstdc++-6.dll`; and Octave owns `libstdc++-6.dll` without `libc++.dll`.
+  - Only after candidate acceptance, the signature-verified official
+    `octave-11.3.0-w64.7z` extraction was copied without overwrite to
+    `C:\Tools\GNU Octave\11.3.0`. Source and destination both contain 59,533
+    files and 2,797,722,221 bytes. The primary fingerprint remains
+    `DBD9C84E39FE1AAE99F04446B05F05B75D36644B`; SHA-256 hashes of
+    `octave-cli.exe`, `liboctinterp-15.dll`, `liboctave-13.dll`, and
+    `libstdc++-6.dll` match the accepted source.
+  - A fresh permanent-root gate exposed a harness-only RED: the nested
+    rejected-root configure could not find Ninja under the sanitized `PATH`.
+    Passing the already validated absolute `CMAKE_MAKE_PROGRAM` made the
+    focused regression pass 1/1 in 1.08 seconds.
+  - The corrected complete permanent-root suite passed 34/34 in 211.76 seconds
+    with `PURE_OCTAVE_ROOT=C:\Tools\GNU Octave\11.3.0`. A separate permanent
+    PE/runtime audit printed `PURE_OCTAVE_PE_AUDIT_OK`.

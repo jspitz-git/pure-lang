@@ -127,6 +127,7 @@ file(WRITE "${fake_root}/bin/octave-cli.exe" "")
 execute_process(
   COMMAND "@CMAKE_COMMAND@" -S "@CMAKE_CURRENT_SOURCE_DIR@" -B "@CMAKE_CURRENT_BINARY_DIR@/fake-octave-build"
     -G "@CMAKE_GENERATOR@" "-DCMAKE_C_COMPILER=@CMAKE_C_COMPILER@"
+    "-DCMAKE_MAKE_PROGRAM=@CMAKE_MAKE_PROGRAM@"
     -DBUILD_TESTING=OFF "-DPURE_PREFIX=@PURE_PREFIX@"
     "-DOCTAVE_ROOT=${fake_root}"
   RESULT_VARIABLE configure_result
@@ -197,6 +198,53 @@ endforeach ()
       "-DEXPECTED_OUTPUT=PURE_OCTAVE_FUNCTION_VALUES_OK"
       -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunPureTest.cmake")
 
+  add_test(NAME pure-octave-callbacks
+    COMMAND "${CMAKE_COMMAND}"
+      "-DPURE_EXECUTABLE=${PURE_PREFIX}/bin/pure.exe"
+      "-DPURE_PREFIX=${PURE_PREFIX}"
+      "-DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
+      "-DBRIDGE_DIR=${PURE_OCTAVE_LIBRARY_DIR}"
+      "-DTEST_SCRIPT=${CMAKE_CURRENT_SOURCE_DIR}/tests/callbacks.pure"
+      "-DOCTAVE_ROOT=${OCTAVE_ROOT_NORMALIZED}"
+      "-DEXPECTED_OUTPUT=PURE_OCTAVE_CALLBACKS_OK"
+      -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunPureTest.cmake")
+
+  add_test(NAME pure-octave-errors
+    COMMAND "${CMAKE_COMMAND}"
+      "-DPURE_EXECUTABLE=${PURE_PREFIX}/bin/pure.exe"
+      "-DPURE_PREFIX=${PURE_PREFIX}"
+      "-DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
+      "-DBRIDGE_DIR=${PURE_OCTAVE_LIBRARY_DIR}"
+      "-DTEST_SCRIPT=${CMAKE_CURRENT_SOURCE_DIR}/tests/errors.pure"
+      "-DOCTAVE_ROOT=${OCTAVE_ROOT_NORMALIZED}"
+      "-DEXPECTED_OUTPUT=PURE_OCTAVE_ERRORS_OK"
+      -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunPureTest.cmake")
+
+  foreach (lifecycle_process RANGE 1 20)
+    set(lifecycle_test_name
+      "pure-octave-lifecycle-${lifecycle_process}")
+    set(lifecycle_work_dir
+      "${PURE_OCTAVE_TEST_BINARY_DIR}/lifecycle-${lifecycle_process}")
+    file(MAKE_DIRECTORY "${lifecycle_work_dir}")
+    add_test(NAME "${lifecycle_test_name}"
+      COMMAND "${CMAKE_COMMAND}"
+        "-DPURE_EXECUTABLE=${PURE_PREFIX}/bin/pure.exe"
+        "-DPURE_PREFIX=${PURE_PREFIX}"
+        "-DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
+        "-DBRIDGE_DIR=${PURE_OCTAVE_LIBRARY_DIR}"
+        "-DTEST_SCRIPT=${CMAKE_CURRENT_SOURCE_DIR}/tests/lifecycle.pure"
+        "-DOCTAVE_ROOT=${OCTAVE_ROOT_NORMALIZED}"
+        "-DTEST_WORKING_DIRECTORY=${lifecycle_work_dir}"
+        "-DTEST_HOME=${lifecycle_work_dir}"
+        "-DEXPECTED_OUTPUT=PURE_OCTAVE_LIFECYCLE_OK"
+        "-DREQUIRE_CLEAN_OUTPUT=ON"
+        -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunPureTest.cmake")
+    set_tests_properties("${lifecycle_test_name}" PROPERTIES
+      ENVIRONMENT
+        "TEMP=${lifecycle_work_dir};TMP=${lifecycle_work_dir}"
+      RESOURCE_LOCK pure_octave_interpreter TIMEOUT 60)
+  endforeach ()
+
   add_test(NAME pure-octave-poison-init
     COMMAND "${CMAKE_COMMAND}"
       "-DCMAKE_COMMAND=${CMAKE_COMMAND}"
@@ -243,6 +291,8 @@ endforeach ()
 
   set_tests_properties(
     pure-octave-basic pure-octave-conversions pure-octave-function-values
+    pure-octave-callbacks
+    pure-octave-errors
     pure-octave-poison-init pure-octave-absolute-preload
     PROPERTIES RESOURCE_LOCK pure_octave_interpreter)
 

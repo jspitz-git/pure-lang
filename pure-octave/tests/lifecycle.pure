@@ -1,0 +1,32 @@
+using octave, system;
+
+lifecycle_callback x = x+1;
+
+chain_lifecycle_finalizer counter x =
+  sentry (chained (get_sentry x)) x with
+    chained original pointer =
+      original pointer $$ put counter (get counter+1);
+  end;
+
+lifecycle_cycle counter i = ok when
+  matrix_values = {i+0.25,i+0.5;i+0.75,i+1.0};
+  handle0 = octave_func ("x+1","x");
+  ok =
+    octave_call "plus" 1 (i,1) == i+1 &&
+    octave_call "double" 1 matrix_values == matrix_values &&
+    octave_call "pure_call" 1 ("lifecycle_callback",i) == i+1 &&
+    octave_call handle0 1 i == i+1;
+  handle = chain_lifecycle_finalizer counter handle0;
+  ok = ok && cookedp handle;
+end;
+
+let finalized = ref 0;
+let cycle_count = 100;
+
+all id [lifecycle_cycle finalized i | i = 1..cycle_count] || exit 10;
+get finalized == cycle_count || exit 11;
+
+octave_call "plus" 1 (20,22) == 42 || exit 12;
+octave_last_error == "" || exit 13;
+
+puts "PURE_OCTAVE_LIFECYCLE_OK";

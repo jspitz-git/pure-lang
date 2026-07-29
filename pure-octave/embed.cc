@@ -14,6 +14,8 @@
 #include <octave/oct.h>
 #include <octave/octave.h>
 #include <octave/interpreter.h>
+#include <octave/defun-dld.h>
+#include <octave/symtab.h>
 
 #include "octave_bridge_api.h"
 #include <runtime.h>
@@ -699,6 +701,135 @@ pure_to_octave(pure_expr *expression)
   return try_pure_to_octave(expression);
 }
 
+static const char pure_call_help[] =
+  "RES = pure_call(NAME, ARG, ...)\n"
+  "[RES, ...] = pure_call(NAME, ARG, ...)\n\n"
+  "Execute the Pure function named NAME with the given arguments.";
+
+static octave_value_list
+pure_call_error(const std::string& message)
+{
+  error("%s", message.c_str());
+  return octave_value_list();
+}
+
+struct pure_expression_deleter
+{
+  void operator()(pure_expr *expression) const noexcept
+  {
+    if (expression)
+      pure_freenew(expression);
+  }
+};
+
+using pure_expression_owner =
+  std::unique_ptr<pure_expr, pure_expression_deleter>;
+
+DEFUN_DLD(pure_call, args, nargout, pure_call_help)
+{
+  const octave_idx_type nargin = args.length();
+  if (nargin < 1 || !args(0).is_string())
+    return pure_call_error(
+      "pure_call: NAME must be a single-row character string");
+
+  charMatrix characters = args(0).char_matrix_value();
+  if (characters.rows() != 1)
+    return pure_call_error(
+      "pure_call: NAME must be a single-row character string");
+  const std::string name = characters.row_as_string(0);
+
+  const int function_number = pure_getsym(name.c_str());
+  if (function_number <= 0)
+    return pure_call_error(
+      "pure_call: unknown Pure function '" + name + "'");
+
+  std::vector<pure_expression_owner> pure_arguments;
+  pure_arguments.reserve(static_cast<size_t>(nargin - 1));
+  for (octave_idx_type index = 1; index < nargin; ++index)
+    {
+      pure_expression_owner converted(octave_to_pure(args(index)));
+      if (!converted)
+        return pure_call_error(
+          "pure_call: argument " + std::to_string(index) +
+          " could not be converted for '" + name + "'");
+      pure_arguments.push_back(std::move(converted));
+    }
+
+  pure_expr *raw_exception = nullptr;
+  pure_expression_owner result(
+    pure_symbolx(function_number, &raw_exception));
+  pure_expression_owner exception(raw_exception);
+  for (size_t index = 0; result && index < pure_arguments.size(); ++index)
+    {
+      pure_expr *next_exception = nullptr;
+      pure_expr *next_result =
+        pure_appx(result.release(), pure_arguments[index].release(),
+                  &next_exception);
+      result.reset(next_result);
+      exception.reset(next_exception);
+    }
+
+  if (!result)
+    {
+      std::string detail = "unknown Pure exception";
+      if (exception)
+        {
+          std::unique_ptr<char, decltype(&std::free)>
+            text(str(exception.get()), &std::free);
+          if (text)
+            detail = text.get();
+        }
+      return pure_call_error(
+        "pure_call: Pure exception in '" + name + "': " + detail);
+    }
+
+  size_t result_count = 0;
+  pure_expr **pure_results = nullptr;
+  pure_is_tuplev(result.get(), &result_count, &pure_results);
+  std::unique_ptr<pure_expr *, decltype(&std::free)>
+    result_elements(pure_results, &std::free);
+
+  if (nargout > 0 && result_count != static_cast<size_t>(nargout))
+    {
+      const std::string message =
+        "pure_call: wrong number of results from '" + name +
+        "' (expected " + std::to_string(nargout) + ", got " +
+        std::to_string(result_count) + ")";
+      return pure_call_error(message);
+    }
+
+  std::vector<octave_value> converted_results;
+  converted_results.reserve(result_count);
+  for (size_t index = 0; index < result_count; ++index)
+    {
+      std::unique_ptr<octave_value> converted =
+        pure_to_octave(pure_results[index]);
+      if (!converted)
+        {
+          const std::string message =
+            "pure_call: result " + std::to_string(index + 1) +
+            " from '" + name + "' could not be converted";
+          return pure_call_error(message);
+        }
+      converted_results.push_back(*converted);
+    }
+
+  octave_value_list returned;
+  for (size_t index = 0; index < converted_results.size(); ++index)
+    returned(static_cast<octave_idx_type>(index)) =
+      converted_results[index];
+  return returned;
+}
+
+static void
+install_pure_call()
+{
+  octave_value function(
+    new octave_builtin(Fpure_call, "pure_call", "embed.cc", pure_call_help));
+  interpreter->get_symbol_table().install_built_in_function(
+    "pure_call", function);
+}
+
 
 extern "C" PURE_OCTAVE_IMPL_API int
 pure_octave_impl_init(int argc, char **argv)
@@ -733,6 +864,7 @@ pure_octave_impl_init(int argc, char **argv)
           interpreter.reset();
           return status;
         }
+      install_pure_call();
 
       return 0;
     }

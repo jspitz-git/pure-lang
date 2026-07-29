@@ -1,0 +1,18 @@
+using octave, system;
+
+twice x = 2*x;
+pair x = x,x+1;
+callback_error _ = throw "callback failure";
+callback_matrix x = x;
+
+octave_call "pure_call" 1 ("twice",21) == 42 ||
+  (puts octave_last_error $$ exit 10);
+
+let a,b = octave_call "pure_call" 2 ("pair",9);
+a == 9 && b == 10 || exit 11;
+
+let complex_values = {1.0+:2.0,3.0+:-4.0;-5.0+:6.0,7.5+:0.25};
+octave_call "pure_call" 1 ("callback_matrix",complex_values)
+  == complex_values || exit 12;
+
+puts "PURE_OCTAVE_CALLBACKS_OK";
