@@ -18,6 +18,13 @@ later version.
 
 */
 
+#! --if *-windows-gnu
+using "lib:gplot";
+#! --endif
+#! --if *-mingw32
+using "lib:gplot";
+#! --endif
+
 namespace gplot;
 
 // constants:
@@ -39,7 +46,7 @@ private gpdata gpxydata gpxycmd gpxycmdtitle gpdata_cmd gpdata_end;
 private gpopt gptitle;
 
 // private helper functions
-private add_newline add_dquote;
+private add_newline add_dquote windows_host;
 
 /* ..
 
@@ -61,13 +68,20 @@ The usual work flow to generate plot via gnuplot is the following:
 using system;
 
 private extern char *getenv(char*);
+private extern void *gplot_open(char*);
+private extern int gplot_write(void*, char*);
+private extern int gplot_close(void*);
+private extern char *gplot_default_executable();
+
+windows_host = index sysinfo "windows" >= 0 ||
+  index sysinfo "mingw32" >= 0;
 
 // string containing path to gnuplot exe (taken from GPLOT_EXE environment
-// variable if it exists, otherwise "pgnuplot.exe" on Windows, "gnuplot"
-// otherwise)
+// variable if it exists, otherwise the managed bundle path on Windows,
+// "gnuplot" otherwise)
 let GPLOT_EXE =
   if stringp env then env
-  else if index sysinfo "mingw32" >= 0 then "pgnuplot.exe"
+  else if windows_host then gplot_default_executable
   else "gnuplot" when env = getenv "GPLOT_EXE" end;
 
 /* ..
@@ -89,7 +103,7 @@ opens a pipe to gnuplot, using *cmd*. *cmd* usually is something like ``gnuplot`
 	``let gp = gplot::open "/path_to_gnuplot/gnuplot";``
 	
 gplot::GPLOT_EXE is a predefined variable with the standard Gnuplot executable.
-It is set to ``pgnuplot`` on Windows and to ``gnuplot`` otherwise and can be overridden bythe GPLOT_EXE environment variable. (``pgnuplot.exe`` is a special executable for Windows, which is capable of stdin pipes in contrast to the normal ``gnuplot.exe``).
+On Windows it resolves the optional bundle-managed gnuplot executable relative to the native bridge. On other systems it is ``gnuplot``. The exact executable path can be overridden by the GPLOT_EXE environment variable.
 Usage of ``gplot::GPLOT_EXE`` might look like this:
 
 	``let gp = gplot::open gplot::GPLOT_EXE;``
@@ -98,8 +112,10 @@ Usage of ``gplot::GPLOT_EXE`` might look like this:
 
 closes a gnuplot session, given by the handle *gp*.
 */
-gplot::open cmd = popen cmd "w";
-gplot::close gp = pclose gp;
+gplot::open cmd = gplot_open cmd if windows_host;
+gplot::open cmd = popen cmd "w" otherwise;
+gplot::close gp = gplot_close gp if windows_host;
+gplot::close gp = pclose gp otherwise;
 
 /* ..
 
@@ -108,15 +124,17 @@ Low-Level Commands
 
 	``gplot::puts_no_echo string gp;``
 	
-sends the string to the gnuplot session *gp* points to. As the name states, there is no echo read back from gnuplot (Don't know whether *gnuplot* or *pgnuplot.exe* supports reading/bidirectional pipes at all).
+sends the string to the gnuplot session *gp* points to. As the name states, there is no echo read back from gnuplot (The interface is deliberately write-only on every platform).
 
 	``gplot::puts string gp;``
 
 is a convenience wrapper to ``gplot::puts_no_echo``.
 */
-gplot::puts_no_echo cmd::string gp::pointer = ret when
-	fputs (add_newline cmd) gp;
-	ret = fflush gp;
+gplot::puts_no_echo cmd::string gp::pointer =
+  gplot_write gp (add_newline cmd) if windows_host;
+gplot::puts_no_echo cmd::string gp::pointer = ret otherwise when
+  fputs (add_newline cmd) gp;
+  ret = fflush gp;
 end;
 gplot::puts cmd gp = puts_no_echo cmd gp;
 

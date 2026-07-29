@@ -1,0 +1,16 @@
+using gplot, system;
+
+argc == 2 || exit 20;
+let output_path = argv!1;
+let gp = gplot::open gplot::GPLOT_EXE;
+pointerp gp && ~null gp || exit 21;
+
+gplot::output gp "pngcairo size 320,200" output_path;
+gplot::title gp "pure-gplot Windows smoke test";
+gplot::plotxy gp
+  ([0.0, 1.0, 2.0, 3.0], [0.0, 1.0, 4.0, 9.0]) () [];
+(gplot::puts "unset output" gp) == 0 || exit 22;
+(gplot::puts "exit" gp) == 0 || exit 23;
+(gplot::close gp) == 0 || exit 24;
+
+puts "PURE_GPLOT_RENDER_OK";

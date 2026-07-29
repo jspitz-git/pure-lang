@@ -1,0 +1,12 @@
+using gplot, system;
+
+argc == 2 || exit 10;
+gplot::GPLOT_EXE == argv!1 || exit 11;
+
+let gp = gplot::open gplot::GPLOT_EXE;
+pointerp gp && ~null gp || exit 12;
+(gplot::puts "print GPVAL_VERSION" gp) == 0 || exit 14;
+(gplot::puts "exit" gp) == 0 || exit 15;
+(gplot::close gp) == 0 || exit 13;
+
+puts "PURE_GPLOT_COMMAND_OK";
