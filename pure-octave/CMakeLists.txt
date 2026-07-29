@@ -76,6 +76,17 @@ add_custom_command(
 add_custom_target(octave_bridge_impl ALL DEPENDS "${PURE_OCTAVE_IMPL}")
 
 if (BUILD_TESTING)
+  set(PURE_OCTAVE_TEST_BINARY_DIR
+    "${CMAKE_CURRENT_BINARY_DIR}/pure-octave-tests")
+  add_library(pure_octave_poison SHARED tests/poison_octinterp.c)
+  set_target_properties(pure_octave_poison PROPERTIES
+    PREFIX ""
+    OUTPUT_NAME "liboctinterp-15"
+    RUNTIME_OUTPUT_DIRECTORY "${PURE_OCTAVE_TEST_BINARY_DIR}/poison")
+  add_executable(pure_octave_absolute_preload tests/absolute_preload.c)
+  set_target_properties(pure_octave_absolute_preload PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${PURE_OCTAVE_TEST_BINARY_DIR}")
+
   if (NOT EXISTS "${PURE_PREFIX}/bin/pure.exe")
     message(FATAL_ERROR "PURE_PREFIX does not contain bin/pure.exe: ${PURE_PREFIX}")
   endif ()
@@ -139,6 +150,33 @@ endforeach ()
       "-DOCTAVE_ROOT=${OCTAVE_ROOT_NORMALIZED}"
       "-DEXPECTED_OUTPUT=PURE_OCTAVE_BASIC_OK"
       -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunPureTest.cmake")
+
+  add_test(NAME pure-octave-poison-init
+    COMMAND "${CMAKE_COMMAND}"
+      "-DCMAKE_COMMAND=${CMAKE_COMMAND}"
+      "-DPURE_EXECUTABLE=${PURE_PREFIX}/bin/pure.exe"
+      "-DPURE_PREFIX=${PURE_PREFIX}"
+      "-DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
+      "-DBRIDGE_DIR=${PURE_OCTAVE_LIBRARY_DIR}"
+      "-DTEST_SCRIPT=${CMAKE_CURRENT_SOURCE_DIR}/tests/poison_init.pure"
+      "-DOCTAVE_ROOT=${OCTAVE_ROOT_NORMALIZED}"
+      "-DRUN_PURE_TEST=${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunPureTest.cmake"
+      "-DWORK_ROOT=${CMAKE_CURRENT_BINARY_DIR}/poison-init-test"
+      -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunPoisonInitTest.cmake")
+
+  add_test(NAME pure-octave-absolute-preload
+    COMMAND "${CMAKE_COMMAND}"
+      "-DHELPER=$<TARGET_FILE:pure_octave_absolute_preload>"
+      "-DLOADER=$<TARGET_FILE:octave_embed>"
+      "-DPOISON_DLL=$<TARGET_FILE:pure_octave_poison>"
+      "-DSOURCE_RUNTIME_DIR=${OCTAVE_RUNTIME_DIR}"
+      "-DSOURCE_MODULE_DIR=${OCTAVE_MODULE_DIR}"
+      "-DSOURCE_FINGERPRINT=${OCTAVE_ROOT_NORMALIZED}/pure-octave.fingerprint"
+      "-DWORK_ROOT=${CMAKE_CURRENT_BINARY_DIR}/absolute-preload-test"
+      -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunAbsolutePreloadTest.cmake")
+  set_tests_properties(
+    pure-octave-basic pure-octave-poison-init pure-octave-absolute-preload
+    PROPERTIES RESOURCE_LOCK pure_octave_interpreter)
 
   set(loader_audit_test
     "${CMAKE_CURRENT_BINARY_DIR}/pure-octave-loader-audit.cmake")

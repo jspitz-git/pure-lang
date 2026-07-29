@@ -117,6 +117,9 @@ pure_octave_impl_init(int argc, char **argv)
 
       const std::string load_path = controlled_load_path();
       interpreter = std::make_unique<octave::interpreter>();
+      interpreter->initialize_history(false);
+      interpreter->read_user_files(false);
+      interpreter->inhibit_startup_message(true);
       interpreter->initialize_load_path(false);
       interpreter->get_load_path().set(load_path, false, true);
       interpreter->initialize();

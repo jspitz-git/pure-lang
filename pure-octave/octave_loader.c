@@ -389,7 +389,8 @@ load_implementation(void)
            (normalized_length + 1) * sizeof(wchar_t));
   }
   octave_runtime_module =
-    LoadLibraryExW(L"liboctinterp-15.dll", NULL,
+    LoadLibraryExW(octave_runtime_dll, NULL,
+                   LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR |
                    LOAD_LIBRARY_SEARCH_USER_DIRS |
                    LOAD_LIBRARY_SEARCH_SYSTEM32);
   if (!octave_runtime_module)
