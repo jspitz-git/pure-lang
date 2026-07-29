@@ -1,0 +1,31 @@
+using lilv, system;
+
+argc == 2 || exit 10;
+
+let world = lilv::world_at (argv!1);
+let batch_uri = "urn:pure-lang:test/pure_amp";
+let source_uri = "urn:pure-lang:source-test/pure_amp";
+let discovered = [uri | _, uri = lilv::plugins world];
+
+any (==batch_uri) discovered || exit 11;
+any (==source_uri) discovered || exit 12;
+
+check_gain uri control expected = () when
+  plugin = lilv::plugin world uri 48000 4;
+  pointerp plugin || exit 20;
+  lilv::num_ports plugin == 3 || exit 21;
+  lilv::num_audio_inputs plugin == 1 || exit 22;
+  lilv::num_audio_outputs plugin == 1 || exit 23;
+  lilv::set_control plugin 0 control;
+  lilv::activate plugin;
+  input = dmatrix {2.0, 4.0, 6.0, 8.0};
+  output = dmatrix (1, 4);
+  lilv::run plugin input output;
+  lilv::deactivate plugin;
+  list output == expected || exit 24;
+end;
+
+check_gain batch_uri 0.5 [1.0, 2.0, 3.0, 4.0];
+check_gain source_uri 0.25 [0.5, 1.0, 1.5, 2.0];
+
+puts "PURE_LV2_HOST_OK";

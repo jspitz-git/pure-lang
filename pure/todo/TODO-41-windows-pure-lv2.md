@@ -22,9 +22,9 @@ infrastructure is available.
 ## Task List
 
 1. [x] Add the CLANG64 CMake build and Windows source compatibility.
-2. [ ] Add the native Windows generator and correct Windows bundle/path
+2. [x] Add the native Windows generator and correct Windows bundle/path
    handling for both compilation modes.
-3. [ ] Generate batch and source fixtures, load them through staged
+3. [x] Generate batch and source fixtures, load them through staged
    `pure-lilv`, and audit their exports, imports, processing, and lifecycle.
 4. [ ] Stage the module, bridge sources, generator, examples, documentation,
    and license; validate the relocated package outside MSYS2.
@@ -78,3 +78,10 @@ is retained for development and receives Windows-aware path handling.
   Windows `PATH`, explicit developer toolchain, and output bundles below a
   path containing spaces. Batch compilation uses relative temporary outputs
   to avoid Pure's unquoted internal `opt | llc` pipeline.
+- 2026-07-29: Added deterministic end-to-end coverage for generated plugins.
+  The isolated test assembles a prefix below a path containing spaces, generates
+  batch and source bundles without `PURELIB` or `LV2_PATH`, discovers both via
+  Dynamic Manifest, exercises their ports and gain processing, unloads them,
+  and audits the resulting PE32+ files. Common port tuple shorthands are now
+  runtime globals so batch-compiled manifests retain their definitions. All
+  three CTest cases and the focused module PE audit pass.
