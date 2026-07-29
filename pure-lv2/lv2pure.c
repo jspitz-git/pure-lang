@@ -5,7 +5,11 @@
 
 #define _POSIX_C_SOURCE 200809L  /* for strdup */
 
+#ifdef _WIN32
+#include <malloc.h>
+#else
 #include <alloca.h>
+#endif
 #include <assert.h>
 #include <math.h>
 #include <stdio.h>
@@ -61,8 +65,10 @@
 // generating the dynamic manifest, if the plugin is loaded from a source
 // script.
 #ifdef PLUGIN_SCRIPT
+#ifndef _WIN32
 #ifndef DEFAULT_LV2_PATH
 #define DEFAULT_LV2_PATH "~/.lv2:/usr/lib/lv2:/usr/local/lib/lv2"
+#endif
 #endif
 #endif
 
@@ -81,6 +87,38 @@ extern void LOADER_NAME(int argc, char** argv);
 // Some helper functions to discover the bundle path which holds the plugin
 // script, when the script is loaded from source.
 
+#ifdef _WIN32
+#include <windows.h>
+#define MAXSTRLEN 32768
+
+static int chkfile(char *path)
+{
+  const DWORD attributes = GetFileAttributesA(path);
+  return attributes != INVALID_FILE_ATTRIBUTES &&
+    !(attributes & FILE_ATTRIBUTE_DIRECTORY);
+}
+
+static int plugin_script_path(char *path, size_t size)
+{
+  HMODULE module = NULL;
+  if (!GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                          GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                          (LPCSTR)&plugin_script_path, &module))
+    return 0;
+  DWORD length = GetModuleFileNameA(module, path, (DWORD)size);
+  if (!length || length >= size)
+    return 0;
+  char *slash = strrchr(path, '\\');
+  char *forward_slash = strrchr(path, '/');
+  if (!slash || (forward_slash && forward_slash > slash))
+    slash = forward_slash;
+  const size_t script_length = strlen(PLUGIN_SCRIPT);
+  if (!slash || (size_t)(slash - path) + script_length + 2 > size)
+    return 0;
+  memcpy(slash + 1, PLUGIN_SCRIPT, script_length + 1);
+  return chkfile(path);
+}
+#else
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -126,7 +164,7 @@ static int dirprefix(char *s, char *prefix)
 {
   int l = strlen(prefix);
   return s && *s && strncmp(s, prefix, l) == 0 &&
-    (!s[l] || strchr(dirstr, s[l]) && !strchr(volstr, s[l]));
+    (!s[l] || (strchr(dirstr, s[l]) && !strchr(volstr, s[l])));
 }
 
 static char *dirname(char *t, char *s)
@@ -192,8 +230,6 @@ static int chkfile(char *s)
   return !stat(s, &st) && S_ISREG(st.st_mode);
 }
 
-static char *lv2path = 0;
-
 static char *searchlib(char *s1, char *s2)
 {
   const char *s, *t;
@@ -207,12 +243,13 @@ static char *searchlib(char *s1, char *s2)
     if (!(t = strchr(s, PATHDELIM)))
       t = strchr(s, 0);
     if (s == t) goto next;
-    if (s[0] == '.')
+    if (s[0] == '.') {
       if (t == s+1)
 	s = t;
       else if (strchr(dirstr, s[1]) &&
 	       !strchr(volstr, s[1]))
 	s += 2;
+    }
     l = t-s;
     strncpy(p, s, l);
     p[l] = 0;
@@ -230,6 +267,7 @@ static char *searchlib(char *s1, char *s2)
   return strcpy(s1, s2);
 }
 
+#endif
 #endif
 
 static void connect_port(LV2_Handle instance, uint32_t port, void* data)
@@ -279,10 +317,15 @@ static lv2plugin_t *create_plugin(void)
     // Create a new interpreter instance.
 #ifdef PLUGIN_SCRIPT
     // Locate the script file in the bundle, searching the LV2 plugin path.
-    char path[MAXSTRLEN], script[MAXSTRLEN];
+    char script[MAXSTRLEN];
+#ifdef _WIN32
+    plugin_script_path(script, sizeof(script));
+#else
+    char path[MAXSTRLEN];
     snprintf(path, MAXSTRLEN, "%s.lv2%c%s",
              PLUGIN_NAME, *dirstr, PLUGIN_SCRIPT);
     searchlib(script, path);
+#endif
     if (!chkfile(script)) {
       fprintf(stderr, "%s: couldn't find script '%s'\n",
               PLUGIN_URI, PLUGIN_SCRIPT);
