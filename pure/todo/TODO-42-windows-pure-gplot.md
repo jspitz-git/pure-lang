@@ -16,7 +16,7 @@ Validate and package `pure-gplot` with a clearly defined Windows gnuplot depende
 ## Task List
 
 1. [x] Define the supported gnuplot version and packaging policy.
-2. [ ] Repair executable discovery, quoting, and path handling where needed.
+2. [x] Repair executable discovery, quoting, and path handling where needed.
 3. [ ] Add deterministic file-rendering smoke tests.
 4. [ ] Stage and validate the package on a clean Windows VM.
 
@@ -76,3 +76,9 @@ rendering test.
   equivalent standalone C `_popen` test passed, isolating the failure from
   gnuplot itself. The user approved the architecture change; the public Pure
   API and optional-component policy are unchanged.
+- 2026-07-29: Verified the native bridge with Clang 22.1.8 and the portable
+  Pure runtime. `pure-gplot-command` passed while `GPLOT_EXE` pointed to
+  `C:\tmp\Gnuplot 6.0.4 Controlled\bin\gnuplot.exe` and `PATH` contained no
+  gnuplot. The acquisition script also installed and version-checked the
+  official artifact with SHA-256
+  `2c31e3fc91b21c450f4b015f1cd1f2f84f7a8cfc63afc037f9ba5efb47cc0c23`.

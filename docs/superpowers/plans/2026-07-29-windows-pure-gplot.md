@@ -52,7 +52,7 @@ Windows PowerShell 5.1, official gnuplot 6.0.4 x86-64 Clang distribution.
   `lib/pure/gplot.dll`, and an extracted root whose
   `bin/gnuplot.exe` reports version `6.0 patchlevel 4`.
 
-- [ ] **Step 1: Write the command-contract test**
+- [x] **Step 1: Write the command-contract test**
 
   Add `tests/command.pure` which imports `gplot`, asserts the expected value of
   `gplot::GPLOT_EXE`, opens it, sends `print GPVAL_VERSION` and `exit`, and
@@ -60,7 +60,7 @@ Windows PowerShell 5.1, official gnuplot 6.0.4 x86-64 Clang distribution.
   `PURELIB`, set `GPLOT_EXE` to a controlled executable below a path containing
   spaces, and restrict `PATH` to the staged Pure runtime plus Windows.
 
-- [ ] **Step 2: Verify the existing implementation fails**
+- [x] **Step 2: Verify the existing implementation fails**
 
   Configure with:
 
@@ -76,7 +76,7 @@ Windows PowerShell 5.1, official gnuplot 6.0.4 x86-64 Clang distribution.
   executable name and, through the Pure system wrapper, closes the child stdin
   pipe before the first write.
 
-- [ ] **Step 3: Implement controlled acquisition and discovery**
+- [x] **Step 3: Implement controlled acquisition and discovery**
 
   `AcquireWindowsGnuplot.cmake` must download only the pinned official URL,
   validate `EXPECTED_HASH SHA256=2c31e3fc91b21c450f4b015f1cd1f2f84f7a8cfc63afc037f9ba5efb47cc0c23`, silently extract/install to
@@ -89,7 +89,7 @@ Windows PowerShell 5.1, official gnuplot 6.0.4 x86-64 Clang distribution.
   Update `gplot.pure` to preserve the public `open/puts/close` API through these
   functions on Windows while retaining the Unix implementation.
 
-- [ ] **Step 4: Run the command test**
+- [x] **Step 4: Run the command test**
 
   Run the focused CTest command from Step 2. Expected: one passing test with
   `PATH` containing no unrelated gnuplot.
