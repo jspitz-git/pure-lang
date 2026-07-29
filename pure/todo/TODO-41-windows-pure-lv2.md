@@ -1,6 +1,6 @@
 # TODO-41 - Windows pure-lv2 Package
 
-Status: Open
+Status: Complete
 Branch: todo/41-windows-pure-lv2
 
 ## Purpose
@@ -26,7 +26,7 @@ infrastructure is available.
    handling for both compilation modes.
 3. [x] Generate batch and source fixtures, load them through staged
    `pure-lilv`, and audit their exports, imports, processing, and lifecycle.
-4. [ ] Stage the module, bridge sources, generator, examples, documentation,
+4. [x] Stage the module, bridge sources, generator, examples, documentation,
    and license; validate the relocated package outside MSYS2.
 
 ## Guardrails
@@ -85,3 +85,9 @@ is retained for development and receives Windows-aware path handling.
   and audits the resulting PE32+ files. Common port tuple shorthands are now
   runtime globals so batch-compiled manifests retain their definitions. All
   three CTest cases and the focused module PE audit pass.
+- 2026-07-29: Installed the module, bridge sources, native and Unix generators,
+  LV2 development headers, examples, documentation, and licenses into the
+  combined portable prefix. The installed verifier passed both before and
+  after copying the complete bundle to a different path containing spaces;
+  the compiler and LLVM tools were used only while generating plugins and are
+  absent from their audited runtime dependency closure. TODO-41 is complete.

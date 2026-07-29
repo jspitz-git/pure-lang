@@ -152,3 +152,5 @@ if(WIN32)
     endif()
   endif()
 endif()
+
+include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/Install.cmake")
