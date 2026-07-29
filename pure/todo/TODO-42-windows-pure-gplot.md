@@ -17,7 +17,7 @@ Validate and package `pure-gplot` with a clearly defined Windows gnuplot depende
 
 1. [x] Define the supported gnuplot version and packaging policy.
 2. [x] Repair executable discovery, quoting, and path handling where needed.
-3. [ ] Add deterministic file-rendering smoke tests.
+3. [x] Add deterministic file-rendering smoke tests.
 4. [ ] Stage and validate the package on a clean Windows VM.
 
 ## Guardrails
@@ -82,3 +82,9 @@ rendering test.
   gnuplot. The acquisition script also installed and version-checked the
   official artifact with SHA-256
   `2c31e3fc91b21c450f4b015f1cd1f2f84f7a8cfc63afc037f9ba5efb47cc0c23`.
+- 2026-07-29: Added a deterministic `pngcairo` smoke test in a path with
+  spaces. It validated the PNG signature, 320x200 IHDR dimensions, and a
+  payload above 1 KiB. With `PURE_GPLOT_INTERACTIVE_TESTS=ON`, the Windows
+  terminal test opened a plot, paused, closed the terminal, and exited within
+  its timeout. Command, render, and desktop tests all passed with sanitized
+  `PATH`.

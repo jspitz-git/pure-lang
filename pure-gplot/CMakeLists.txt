@@ -7,6 +7,8 @@ include(CTest)
 set(PURE_PREFIX "" CACHE PATH "Portable Pure prefix used for tests")
 set(GNUPLOT_ROOT "" CACHE PATH
   "Controlled gnuplot 6.0.4 root used for Windows tests and packaging")
+option(PURE_GPLOT_INTERACTIVE_TESTS
+  "Run the Windows desktop gnuplot smoke test" OFF)
 
 if(WIN32)
   add_library(gplot MODULE gplot_win.c)
@@ -45,5 +47,43 @@ if(BUILD_TESTING)
       REQUIRED_FILES
         "$<TARGET_FILE:gplot>;${PURE_EXECUTABLE};${GNUPLOT_ROOT}/bin/gnuplot.exe;${CMAKE_CURRENT_SOURCE_DIR}/tests/command.pure"
       TIMEOUT 30)
+
+    add_test(
+      NAME pure-gplot-render
+      COMMAND "${CMAKE_COMMAND}"
+        "-DBUILD_ROOT=${CMAKE_CURRENT_BINARY_DIR}"
+        "-DTEST_ROOT=${CMAKE_CURRENT_BINARY_DIR}/render test"
+        "-DPURE_EXECUTABLE=${PURE_EXECUTABLE}"
+        "-DPURE_PREFIX=${PURE_PREFIX}"
+        "-DMODULE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
+        "-DMODULE_DLL_DIR=$<TARGET_FILE_DIR:gplot>"
+        "-DTEST_SCRIPT=${CMAKE_CURRENT_SOURCE_DIR}/tests/render.pure"
+        "-DGNUPLOT_EXECUTABLE=${GNUPLOT_ROOT}/bin/gnuplot.exe"
+        -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunRenderTest.cmake")
+    set_tests_properties(pure-gplot-render PROPERTIES
+      LABELS "pure-gplot;render;windows"
+      REQUIRED_FILES
+        "$<TARGET_FILE:gplot>;${PURE_EXECUTABLE};${GNUPLOT_ROOT}/bin/gnuplot.exe;${CMAKE_CURRENT_SOURCE_DIR}/tests/render.pure"
+      TIMEOUT 30)
+
+    if(PURE_GPLOT_INTERACTIVE_TESTS)
+      add_test(
+        NAME pure-gplot-interactive
+        COMMAND "${CMAKE_COMMAND}"
+          "-DBUILD_ROOT=${CMAKE_CURRENT_BINARY_DIR}"
+          "-DTEST_ROOT=${CMAKE_CURRENT_BINARY_DIR}/interactive test"
+          "-DPURE_EXECUTABLE=${PURE_EXECUTABLE}"
+          "-DPURE_PREFIX=${PURE_PREFIX}"
+          "-DMODULE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
+          "-DMODULE_DLL_DIR=$<TARGET_FILE_DIR:gplot>"
+          "-DTEST_SCRIPT=${CMAKE_CURRENT_SOURCE_DIR}/tests/interactive.pure"
+          "-DGNUPLOT_EXECUTABLE=${GNUPLOT_ROOT}/bin/gnuplot.exe"
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunInteractiveTest.cmake")
+      set_tests_properties(pure-gplot-interactive PROPERTIES
+        LABELS "pure-gplot;interactive;desktop;windows"
+        REQUIRED_FILES
+          "$<TARGET_FILE:gplot>;${PURE_EXECUTABLE};${GNUPLOT_ROOT}/bin/gnuplot.exe;${CMAKE_CURRENT_SOURCE_DIR}/tests/interactive.pure"
+        TIMEOUT 25)
+    endif()
   endif()
 endif()

@@ -120,7 +120,7 @@ Windows PowerShell 5.1, official gnuplot 6.0.4 x86-64 Clang distribution.
 - Produces: CTest `pure-gplot-render` and optional
   `pure-gplot-interactive`.
 
-- [ ] **Step 1: Add the failing deterministic test**
+- [x] **Step 1: Add the failing deterministic test**
 
   `render.pure` must select `pngcairo size 320,200`, write
   `known plot.png`, render fixed x/y vectors, call `unset output`, and close
@@ -128,7 +128,7 @@ Windows PowerShell 5.1, official gnuplot 6.0.4 x86-64 Clang distribution.
   decode the big-endian IHDR dimensions as 320 by 200, require a payload above
   1 KiB, and fail on a nonzero Pure or gnuplot exit status.
 
-- [ ] **Step 2: Run the deterministic test before fixes**
+- [x] **Step 2: Run the deterministic test before fixes**
 
   Run:
 
@@ -140,7 +140,7 @@ Windows PowerShell 5.1, official gnuplot 6.0.4 x86-64 Clang distribution.
   Expected: failure until CMake provides the controlled launcher, module path,
   gnuplot root, and spaced output directory.
 
-- [ ] **Step 3: Wire render and interactive tests**
+- [x] **Step 3: Wire render and interactive tests**
 
   Add `PURE_GPLOT_INTERACTIVE_TESTS` defaulting to `OFF`. The interactive
   script must select the `windows` terminal, draw fixed data, send
@@ -148,7 +148,7 @@ Windows PowerShell 5.1, official gnuplot 6.0.4 x86-64 Clang distribution.
   20-second timeout. Label the tests `render;windows` and
   `interactive;desktop;windows` respectively.
 
-- [ ] **Step 4: Verify both tests**
+- [x] **Step 4: Verify both tests**
 
   Run the complete CTest suite with interactive tests enabled from an
   interactive desktop. Expected: command, render, and interactive tests all

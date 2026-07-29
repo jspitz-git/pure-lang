@@ -1,0 +1,15 @@
+using gplot, system;
+
+let gp = gplot::open gplot::GPLOT_EXE;
+pointerp gp || exit 30;
+
+gplot::output gp "windows" "";
+gplot::title gp "pure-gplot interactive smoke test";
+gplot::plotxy gp
+  ([0.0, 1.0, 2.0, 3.0], [0.0, 1.0, 4.0, 9.0]) () [];
+(gplot::puts "pause 1" gp) == 0 || exit 31;
+(gplot::puts "set term windows close" gp) == 0 || exit 32;
+(gplot::puts "exit" gp) == 0 || exit 33;
+(gplot::close gp) == 0 || exit 34;
+
+puts "PURE_GPLOT_INTERACTIVE_OK";
