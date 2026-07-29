@@ -1,6 +1,6 @@
 foreach (required_variable
-    HELPER LOADER PURE_RUNTIME_STUB TEST_BINARY_DIR OBJDUMP POISON_DLL SOURCE_RUNTIME_DIR
-    SOURCE_MODULE_DIR SOURCE_FINGERPRINT WORK_ROOT)
+    HELPER LOADER IMPLEMENTATION PURE_RUNTIME_STUB TEST_BINARY_DIR OBJDUMP POISON_DLL
+    SOURCE_RUNTIME_DIR SOURCE_MODULE_DIR SOURCE_FINGERPRINT WORK_ROOT)
   if (NOT DEFINED ${required_variable} OR "${${required_variable}}" STREQUAL "")
     message(FATAL_ERROR
       "${required_variable} is required for the absolute preload test.")
@@ -23,38 +23,7 @@ endif ()
 if (NOT EXISTS "${pure_runtime_stub_path}" OR NOT EXISTS "${OBJDUMP}")
   message(FATAL_ERROR "Pure runtime stub audit input is missing.")
 endif ()
-execute_process(
-  COMMAND "${OBJDUMP}" -p "${pure_runtime_stub_path}"
-  RESULT_VARIABLE stub_audit_result
-  OUTPUT_VARIABLE stub_audit_output
-  ERROR_VARIABLE stub_audit_stderr)
-if (NOT stub_audit_result EQUAL 0)
-  message(FATAL_ERROR
-    "Could not audit Pure runtime stub:\n${stub_audit_stderr}")
-endif ()
-set(expected_stub_exports
-  pure_appx pure_complex pure_complex_matrix
-  pure_cstring_dup pure_double pure_double_matrix
-  pure_free pure_freenew pure_get_sentry
-  pure_int pure_int_matrix pure_is_app
-  pure_is_complex pure_is_complex_matrix pure_is_cstring_dup
-  pure_is_double pure_is_double_matrix pure_is_int
-  pure_is_int_matrix pure_is_pointer pure_is_symbolic_matrix
-  pure_is_tuplev pure_matrix_rowsl pure_matrix_rowsv
-  pure_new pure_pointer pure_sentry
-  pure_sym pure_sym_pname pure_symbol
-  pure_tuplev pure_unref str
-  )
-if (NOT stub_audit_output MATCHES
-    "\\[Name Pointer/Ordinal\\] Table[ \t]+00000021")
-  message(FATAL_ERROR
-    "Pure runtime stub must export exactly 33 named symbols.")
-endif ()
-foreach (required_export IN LISTS expected_stub_exports)
-  if (NOT stub_audit_output MATCHES "[ \t]${required_export}(\r?\n|$)")
-    message(FATAL_ERROR "Pure runtime stub omitted ${required_export}.")
-  endif ()
-endforeach ()
+include("${CMAKE_CURRENT_LIST_DIR}/AuditPureRuntimeStub.cmake")
 
 set(source_runtime_dll "${SOURCE_RUNTIME_DIR}/liboctinterp-15.dll")
 set(source_module_candidate "${SOURCE_MODULE_DIR}/liboctinterp-15.dll")

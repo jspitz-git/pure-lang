@@ -4,9 +4,11 @@
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
+#include <limits>
 #include <memory>
 #include <stdexcept>
 #include <string>
+#include <type_traits>
 #include <vector>
 
 #include <octave/oct.h>
@@ -207,6 +209,55 @@ create_int_matrix(size_t rows, size_t columns)
   return matrix;
 }
 
+static gsl_matrix_symbolic *
+create_symbolic_matrix(size_t rows, size_t columns)
+{
+  size_t allocated_rows = rows ? rows : 1;
+  size_t allocated_columns = columns ? columns : 1;
+  gsl_matrix_symbolic *matrix =
+    static_cast<gsl_matrix_symbolic *>(std::calloc(1, sizeof(*matrix)));
+  gsl_block_symbolic *block =
+    static_cast<gsl_block_symbolic *>(std::calloc(1, sizeof(*block)));
+  if (!matrix || !block)
+    {
+      std::free(matrix);
+      std::free(block);
+      return nullptr;
+    }
+  block->size = allocated_rows * allocated_columns;
+  block->data = static_cast<pure_expr **>(
+    std::calloc(block->size, sizeof(*block->data)));
+  if (!block->data)
+    {
+      std::free(block);
+      std::free(matrix);
+      return nullptr;
+    }
+  matrix->data = block->data;
+  matrix->size1 = rows;
+  matrix->size2 = columns;
+  matrix->tda = allocated_columns;
+  matrix->block = block;
+  matrix->owner = 1;
+  return matrix;
+}
+
+static void
+discard_symbolic_matrix(gsl_matrix_symbolic *matrix)
+{
+  if (!matrix)
+    return;
+  if (matrix->block)
+    {
+      for (size_t index = 0; index < matrix->block->size; ++index)
+        if (matrix->block->data[index])
+          pure_freenew(matrix->block->data[index]);
+      std::free(matrix->block->data);
+      std::free(matrix->block);
+    }
+  std::free(matrix);
+}
+
 static pure_expr *
 octave_pointer(const octave_value& value)
 {
@@ -315,6 +366,57 @@ integer_array_to_pure(Array array, size_t rows, size_t columns)
   return pure_int_matrix(matrix);
 }
 
+template <typename Integer>
+static bool
+fits_in_int32(Integer value)
+{
+  if constexpr (std::is_signed<Integer>::value)
+    return value >= static_cast<Integer>(std::numeric_limits<int32_t>::min()) &&
+           value <= static_cast<Integer>(std::numeric_limits<int32_t>::max());
+  return value <= static_cast<Integer>(std::numeric_limits<int32_t>::max());
+}
+
+template <typename Integer, typename Array>
+static pure_expr *
+wide_integer_array_to_pure(Array array, size_t rows, size_t columns,
+                           pure_expr *(*make_integer)(Integer))
+{
+  const auto *values = array.fortran_vec();
+  const size_t count = rows * columns;
+  if (!values && count != 0)
+    return nullptr;
+
+  bool all_fit = true;
+  for (size_t index = 0; index < count; ++index)
+    if (!fits_in_int32(static_cast<Integer>(values[index])))
+      {
+        all_fit = false;
+        break;
+      }
+  if (all_fit)
+    return integer_array_to_pure(array, rows, columns);
+  if (rows == 1 && columns == 1)
+    return make_integer(static_cast<Integer>(values[0]));
+
+  gsl_matrix_symbolic *matrix = create_symbolic_matrix(rows, columns);
+  if (!matrix)
+    return nullptr;
+  for (size_t row = 0; row < rows; ++row)
+    for (size_t column = 0; column < columns; ++column)
+      {
+        const size_t target = row * matrix->tda + column;
+        const size_t source = column * rows + row;
+        matrix->data[target] =
+          make_integer(static_cast<Integer>(values[source]));
+        if (!matrix->data[target])
+          {
+            discard_symbolic_matrix(matrix);
+            return nullptr;
+          }
+      }
+  return pure_symbolic_matrix(matrix);
+}
+
 static pure_expr *
 octave_to_pure(const octave_value& value)
 {
@@ -421,11 +523,14 @@ octave_to_pure(const octave_value& value)
       if (value.is_int32_type())
         return integer_array_to_pure(value.int32_array_value(), rows, columns);
       if (value.is_uint32_type())
-        return integer_array_to_pure(value.uint32_array_value(), rows, columns);
+        return wide_integer_array_to_pure<uint64_t>(
+          value.uint32_array_value(), rows, columns, pure_uint64);
       if (value.is_int64_type())
-        return integer_array_to_pure(value.int64_array_value(), rows, columns);
+        return wide_integer_array_to_pure<int64_t>(
+          value.int64_array_value(), rows, columns, pure_int64);
       if (value.is_uint64_type())
-        return integer_array_to_pure(value.uint64_array_value(), rows, columns);
+        return wide_integer_array_to_pure<uint64_t>(
+          value.uint64_array_value(), rows, columns, pure_uint64);
       return try_octave_to_pure(value);
     }
 

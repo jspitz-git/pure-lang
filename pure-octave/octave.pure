@@ -135,14 +135,16 @@ __oct2pure__ x::pointer = (if null data then cell else id) (smatrix data) when
   sz = if null dims then 0 else foldl1 (*) dims;
   x = if #dims<=1 || sz<=1 then x
       else octave_call "permute" 1 (x,vector (reverse (1..#dims)));
-  data = cslist $ octave_call (octave_func ("x{:}","x")) sz x with
+  data = if sz==0 then {} else cslist $
+    octave_call (octave_func ("x{:}","x")) sz x with
     cslist xs::tuple = smatrix $ list xs;
     cslist x = {x} otherwise; // singleton
   end;
   data = case dims of
     [] = {};
     [n] | [1,1] = map __try_oct2pure_cell__ data;
-    n:m:dims = redim (n,m) (collect (n*m) dims data) with
+    n:m:dims = redim (n,m) (if n*m==0 then {} else
+      collect (n*m) dims data) with
       collect n [] data = map __try_oct2pure_cell__ data;
       collect n (m:dims) data =
 	smatrix [collect m dims (subseq data ((i-1)*k) (i*k-1)) | i = 1..n]

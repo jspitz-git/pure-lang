@@ -89,7 +89,24 @@ if (BUILD_TESTING)
   set_target_properties(pure_octave_runtime_stub PROPERTIES
     PREFIX ""
     OUTPUT_NAME "libpure"
-    RUNTIME_OUTPUT_DIRECTORY "${PURE_OCTAVE_TEST_BINARY_DIR}/runtime-stub")
+    RUNTIME_OUTPUT_DIRECTORY "${PURE_OCTAVE_TEST_BINARY_DIR}/runtime-stub"
+    ARCHIVE_OUTPUT_DIRECTORY "${PURE_OCTAVE_TEST_BINARY_DIR}/runtime-stub")
+  add_library(pure_octave_runtime_stub_missing SHARED tests/pure_runtime_stub.c)
+  target_compile_definitions(pure_octave_runtime_stub_missing PRIVATE
+    PURE_RUNTIME_STUB_OMIT_PURE_INT)
+  set_target_properties(pure_octave_runtime_stub_missing PROPERTIES
+    PREFIX ""
+    OUTPUT_NAME "libpure"
+    RUNTIME_OUTPUT_DIRECTORY "${PURE_OCTAVE_TEST_BINARY_DIR}/runtime-stub-missing"
+    ARCHIVE_OUTPUT_DIRECTORY "${PURE_OCTAVE_TEST_BINARY_DIR}/runtime-stub-missing")
+  add_library(pure_octave_runtime_stub_extra SHARED tests/pure_runtime_stub.c)
+  target_compile_definitions(pure_octave_runtime_stub_extra PRIVATE
+    PURE_RUNTIME_STUB_EXTRA)
+  set_target_properties(pure_octave_runtime_stub_extra PROPERTIES
+    PREFIX ""
+    OUTPUT_NAME "libpure"
+    RUNTIME_OUTPUT_DIRECTORY "${PURE_OCTAVE_TEST_BINARY_DIR}/runtime-stub-extra"
+    ARCHIVE_OUTPUT_DIRECTORY "${PURE_OCTAVE_TEST_BINARY_DIR}/runtime-stub-extra")
   add_executable(pure_octave_absolute_preload tests/absolute_preload.c)
   set_target_properties(pure_octave_absolute_preload PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${PURE_OCTAVE_TEST_BINARY_DIR}")
@@ -197,6 +214,7 @@ endforeach ()
     COMMAND "${CMAKE_COMMAND}"
       "-DHELPER=$<TARGET_FILE:pure_octave_absolute_preload>"
       "-DLOADER=$<TARGET_FILE:octave_embed>"
+      "-DIMPLEMENTATION=${PURE_OCTAVE_IMPL}"
       "-DPURE_RUNTIME_STUB=$<TARGET_FILE:pure_octave_runtime_stub>"
       "-DTEST_BINARY_DIR=${PURE_OCTAVE_TEST_BINARY_DIR}"
       "-DOBJDUMP=${OCTAVE_RUNTIME_DIR}/objdump.exe"
@@ -206,6 +224,23 @@ endforeach ()
       "-DSOURCE_FINGERPRINT=${OCTAVE_ROOT_NORMALIZED}/pure-octave.fingerprint"
       "-DWORK_ROOT=${CMAKE_CURRENT_BINARY_DIR}/absolute-preload-test"
       -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunAbsolutePreloadTest.cmake")
+  add_test(NAME pure-octave-runtime-stub-rejects-missing
+    COMMAND "${CMAKE_COMMAND}"
+      "-DAUDIT_SCRIPT=${CMAKE_CURRENT_SOURCE_DIR}/cmake/AuditPureRuntimeStub.cmake"
+      "-DOBJDUMP=${OCTAVE_RUNTIME_DIR}/objdump.exe"
+      "-DIMPLEMENTATION=${PURE_OCTAVE_IMPL}"
+      "-DPURE_RUNTIME_STUB=$<TARGET_FILE:pure_octave_runtime_stub_missing>"
+      "-DEXPECTED_DIAGNOSTIC=Missing exports: pure_int"
+      -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/ExpectPureRuntimeStubAuditFailure.cmake")
+  add_test(NAME pure-octave-runtime-stub-rejects-extra
+    COMMAND "${CMAKE_COMMAND}"
+      "-DAUDIT_SCRIPT=${CMAKE_CURRENT_SOURCE_DIR}/cmake/AuditPureRuntimeStub.cmake"
+      "-DOBJDUMP=${OCTAVE_RUNTIME_DIR}/objdump.exe"
+      "-DIMPLEMENTATION=${PURE_OCTAVE_IMPL}"
+      "-DPURE_RUNTIME_STUB=$<TARGET_FILE:pure_octave_runtime_stub_extra>"
+      "-DEXPECTED_DIAGNOSTIC=Unexpected exports: pure_runtime_stub_extra"
+      -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/ExpectPureRuntimeStubAuditFailure.cmake")
+
   set_tests_properties(
     pure-octave-basic pure-octave-conversions pure-octave-function-values
     pure-octave-poison-init pure-octave-absolute-preload

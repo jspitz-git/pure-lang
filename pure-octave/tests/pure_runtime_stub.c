@@ -20,7 +20,10 @@ PURE_RUNTIME_STUB(pure_double_matrix)
 PURE_RUNTIME_STUB(pure_free)
 PURE_RUNTIME_STUB(pure_freenew)
 PURE_RUNTIME_STUB(pure_get_sentry)
+#ifndef PURE_RUNTIME_STUB_OMIT_PURE_INT
 PURE_RUNTIME_STUB(pure_int)
+#endif
+PURE_RUNTIME_STUB(pure_int64)
 PURE_RUNTIME_STUB(pure_int_matrix)
 PURE_RUNTIME_STUB(pure_is_app)
 PURE_RUNTIME_STUB(pure_is_complex)
@@ -41,6 +44,12 @@ PURE_RUNTIME_STUB(pure_sentry)
 PURE_RUNTIME_STUB(pure_sym)
 PURE_RUNTIME_STUB(pure_sym_pname)
 PURE_RUNTIME_STUB(pure_symbol)
+PURE_RUNTIME_STUB(pure_symbolic_matrix)
 PURE_RUNTIME_STUB(pure_tuplev)
 PURE_RUNTIME_STUB(pure_unref)
+PURE_RUNTIME_STUB(pure_uint64)
 PURE_RUNTIME_STUB(str)
+
+#ifdef PURE_RUNTIME_STUB_EXTRA
+PURE_RUNTIME_STUB(pure_runtime_stub_extra)
+#endif
