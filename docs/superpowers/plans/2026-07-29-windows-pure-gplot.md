@@ -8,15 +8,16 @@
 **Goal:** Package `pure-gplot` for portable Windows installations with gnuplot
 6.0.4 as a reproducible optional component.
 
-**Architecture:** Keep `pure-gplot` a source-only Pure module. On Windows its
-default command is a uniquely named launcher installed beside `pure.exe`; that
-launcher resolves the optional gnuplot tree relative to the portable prefix.
+**Architecture:** Keep the public Pure module API and add a focused Windows
+process bridge. The bridge uses `CreateProcessW` with an exact application path
+and an inherited stdin pipe, resolving the optional gnuplot tree relative to
+its own DLL location.
 CMake installs the module with or without an explicitly supplied gnuplot root,
 and CTest verifies rendering in a path containing spaces with a sanitized
 environment.
 
-**Tech Stack:** Pure, CMake 3.25+, CTest, Windows PowerShell 5.1, cmd.exe,
-official gnuplot 6.0.4 x86-64 Clang distribution.
+**Tech Stack:** Pure, C11, Win32 process/pipe APIs, CMake 3.25+, CTest,
+Windows PowerShell 5.1, official gnuplot 6.0.4 x86-64 Clang distribution.
 
 ## Global Constraints
 
@@ -26,9 +27,8 @@ official gnuplot 6.0.4 x86-64 Clang distribution.
 - Installing `pure-gplot` without gnuplot remains supported.
 - Bundling gnuplot is off by default and requires an explicit `GNUPLOT_ROOT`.
 - The managed tree is installed below `tools/gnuplot`.
-- Windows discovery checks `GPLOT_EXE` first and otherwise uses
-  `pure-gnuplot.cmd`; it never falls back to `gnuplot.exe` or
-  `pgnuplot.exe` on the host `PATH`.
+- Windows discovery checks an exact `GPLOT_EXE` first and otherwise derives
+  `tools/gnuplot/bin/gnuplot.exe` from `gplot.dll`; it never searches `PATH`.
 - All executable and output paths must support spaces.
 - Noninteractive rendering is mandatory; the interactive desktop test is
   separately labelled and optional in headless environments.
@@ -39,7 +39,7 @@ official gnuplot 6.0.4 x86-64 Clang distribution.
 
 **Files:**
 - Create: `pure-gplot/cmake/AcquireWindowsGnuplot.cmake`
-- Create: `pure-gplot/pure-gnuplot.cmd`
+- Create: `pure-gplot/gplot_win.c`
 - Modify: `pure-gplot/gplot.pure`
 - Create: `pure-gplot/tests/command.pure`
 - Create: `pure-gplot/cmake/RunCommandTest.cmake`
@@ -49,7 +49,7 @@ official gnuplot 6.0.4 x86-64 Clang distribution.
 **Interfaces:**
 - Consumes: `GPLOT_EXE` as an optional exact executable path.
 - Produces: `gplot::GPLOT_EXE`, `gplot::open executable`,
-  `bin/pure-gnuplot.cmd`, and an extracted root whose
+  `lib/pure/gplot.dll`, and an extracted root whose
   `bin/gnuplot.exe` reports version `6.0 patchlevel 4`.
 
 - [ ] **Step 1: Write the command-contract test**
@@ -72,20 +72,22 @@ official gnuplot 6.0.4 x86-64 Clang distribution.
     -R pure-gplot-command --output-on-failure
   ```
 
-  Expected: failure because the original Windows default is
-  `pgnuplot.exe` and an executable path containing spaces is not quoted
-  safely.
+  Expected: failure because the original CRT `popen` path splits the spaced
+  executable name and, through the Pure system wrapper, closes the child stdin
+  pipe before the first write.
 
 - [ ] **Step 3: Implement controlled acquisition and discovery**
 
   `AcquireWindowsGnuplot.cmake` must download only the pinned official URL,
   validate `EXPECTED_HASH SHA256=2c31e3fc91b21c450f4b015f1cd1f2f84f7a8cfc63afc037f9ba5efb47cc0c23`, silently extract/install to
   a caller-provided child directory, and verify `gnuplot.exe --version`.
-  `pure-gnuplot.cmd` must execute only
-  `%~dp0..\tools\gnuplot\bin\gnuplot.exe`, forward arguments, and return 127
-  with a clear error if absent. Update `gplot.pure` so Windows uses an exact
-  `GPLOT_EXE` override or `pure-gnuplot.cmd`, and so `open` safely quotes an
-  executable path without accepting appended shell arguments.
+  `gplot_win.c` must export `gplot_open(const char*)`,
+  `gplot_write(void*, const char*)`, `gplot_close(void*)`, and
+  `gplot_default_executable(void)`. It must use `CreateProcessW` with an exact
+  application path and inherited stdin pipe, resolve the managed executable
+  relative to its DLL, and never invoke or search through a command shell.
+  Update `gplot.pure` to preserve the public `open/puts/close` API through these
+  functions on Windows while retaining the Unix implementation.
 
 - [ ] **Step 4: Run the command test**
 
@@ -114,7 +116,7 @@ official gnuplot 6.0.4 x86-64 Clang distribution.
 
 **Interfaces:**
 - Consumes: `gplot::open`, `gplot::output`, `gplot::plotxy`,
-  `pure-gnuplot.cmd`, and an explicit test output root.
+  `gplot.dll`, and an explicit test output root.
 - Produces: CTest `pure-gplot-render` and optional
   `pure-gplot-interactive`.
 
@@ -174,12 +176,12 @@ official gnuplot 6.0.4 x86-64 Clang distribution.
 **Interfaces:**
 - Consumes: `PURE_GPLOT_INSTALL_GNUPLOT=ON|OFF`, explicit
   `GNUPLOT_ROOT`, an existing portable Pure prefix, and installed test scripts.
-- Produces: `lib/pure/gplot.pure`, `bin/pure-gnuplot.cmd`, documentation and,
+- Produces: `lib/pure/gplot.pure`, `lib/pure/gplot.dll`, documentation and,
   only when enabled, `tools/gnuplot`.
 
 - [ ] **Step 1: Add install rules and the installed verifier**
 
-  Install the Pure module and launcher unconditionally. When
+  Install the Pure module and native bridge unconditionally. When
   `PURE_GPLOT_INSTALL_GNUPLOT=ON`, reject an absent or wrong-version
   `GNUPLOT_ROOT`, copy the complete controlled tree below `tools/gnuplot`, and
   install gnuplot provenance/license material below
@@ -198,7 +200,7 @@ official gnuplot 6.0.4 x86-64 Clang distribution.
 
   The verifier must unset `PURELIB` and `GPLOT_EXE`, restrict `PATH`, render
   below a path containing spaces, validate the PNG, confirm gnuplot 6.0.4, and
-  confirm the launcher refuses to run after the optional component is hidden.
+  confirm `open` fails without searching `PATH` after the optional component is hidden.
 
 - [ ] **Step 3: Relocate and repeat**
 

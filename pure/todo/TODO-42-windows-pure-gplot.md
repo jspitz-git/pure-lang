@@ -40,18 +40,20 @@ acquisition validates the pinned artifact, while package staging consumes an
 explicit `GNUPLOT_ROOT` containing the extracted official distribution.
 
 The optional component is installed below `tools/gnuplot` in the portable
-prefix. A uniquely named `bin/pure-gnuplot.cmd` launcher resolves
-`../tools/gnuplot/bin/gnuplot.exe` relative to itself and fails clearly when
-the component is absent. On Windows, `gplot::GPLOT_EXE` uses an explicit
-`GPLOT_EXE` environment override first and the managed launcher otherwise.
-`gplot::open` treats its argument as an executable path and quotes it safely;
-it does not accept an executable plus arbitrary shell arguments.
+prefix. Windows builds add a small `gplot.dll` process bridge which uses
+`CreateProcessW` with an explicit application path and an inherited stdin
+pipe; it does not invoke `cmd.exe`. The bridge derives the managed
+`tools/gnuplot/bin/gnuplot.exe` path from its own installed location, while an
+exact `GPLOT_EXE` environment override remains available. The public Pure API
+stays `open`, `puts`, and `close`.
 
-The module remains installable without gnuplot. The CMake option which copies
-the managed component is off by default, so TODO-49 can expose it as an
-installer feature. Documentation records the upstream license and provenance.
-No temporary files are created by the binding: deterministic tests write
-directly to a caller-selected output path below a controlled directory.
+The source module and native bridge remain installable without gnuplot. The
+CMake option which copies the managed component is off by default, so TODO-49
+can expose it as an installer feature. A missing optional component makes
+`open` fail without falling back to `PATH`. Documentation records the upstream
+license and provenance. No temporary files are created by the binding:
+deterministic tests write directly to a caller-selected output path below a
+controlled directory.
 
 Validation uses a prefix and output path containing spaces with `PATH`
 restricted to the prefix and Windows. A noninteractive `pngcairo` test verifies
@@ -68,3 +70,9 @@ rendering test.
   6.0.4 as an optional, installer-managed component. The portable package
   uses an explicit validated distribution root and a bundle-relative launcher;
   it never falls back to an unrelated `gnuplot.exe` on the host `PATH`.
+- 2026-07-29: Replaced the planned cmd/CRT-popen launcher with a native
+  `CreateProcessW` bridge after controlled tests showed the LLVM22 Windows
+  `system.pure` pipe path gives the child EOF before its first write. An
+  equivalent standalone C `_popen` test passed, isolating the failure from
+  gnuplot itself. The user approved the architecture change; the public Pure
+  API and optional-component policy are unchanged.
