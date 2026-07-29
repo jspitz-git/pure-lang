@@ -168,7 +168,7 @@ Windows distribution, Octave `mkoctfile`, CMake 3.25+, Ninja, CTest, PowerShell
   octave_value_list in;
   in(0) = 10;
   in(1) = 15;
-  octave_value_list out = octave::feval("gcd", in, 1);
+  octave_value_list out = interpreter.feval("gcd", in, 1);
   ```
 
   It prints `PURE_OCTAVE_EMBED_PROBE_OK:5` only after a zero initialization
