@@ -3,10 +3,11 @@
 ## Status
 
 The version-scoped generated-header gate and the fail-closed Octave 11.3.0
-libtool-metadata normalizer are implemented.  Independent review rounds 1 and
-2 identified confinement/postcondition gaps; each now has isolated RED/GREEN
-coverage.  The normalizer has not yet been applied to the real disposable
-toolchain copy.
+libtool-metadata normalizer are implemented.  Independent review rounds 1,
+2, and 3 identified confinement, postcondition, manifest, and closure-scope
+gaps; each now has isolated RED/GREEN coverage.  A final write-free `Plan`
+against the pristine disposable toolchain copy passed every exact contract.
+The normalizer has not been applied.
 No permanent Octave file was used as an executable or modified.  All source,
 build, and toolchain paths used by Task 3 are disposable children of
 `C:\tmp\todo51-task3`.
@@ -148,6 +149,15 @@ audited Octave 11.3.0 layout.  It:
 - requires the exact expected file count, byte count, and manifest SHA-256;
 - accepts only ASCII libtool assignment and token forms exercised by the
   copied Octave metadata;
+- requires a hashed, strict CRLF, role-tagged `.la` selection manifest below
+  the disposable parent and outside the toolchain;
+- requires a second hashed seed-library manifest, whose ordered 34-token
+  contents must equal the built-in Octave 11.3.0 `LIBOCTAVE_LINK_DEPS`
+  contract outside synthetic tests;
+- normalizes only the selected transitive closure and proves all unselected
+  `.la` files remain byte-identical;
+- resolves libraries only through six explicit version-scoped search
+  directories, never ambient `PATH`;
 - maps only the 13 audited directory spellings;
 - resolves absolute `.la` references only when exactly one regular copied
   candidate exists;
@@ -341,11 +351,111 @@ PASS Test-PlanDoesNotWrite
 PASS all 19 normalizer tests
 ```
 
+## Independent-review fix round 3
+
+### Established manifest and pristine input
+
+The established baseline contained zero-byte files.  The first exact-manifest
+RED exposed both PowerShell 5.1's empty-array parameter binding and a format
+mistake: the established manifest used PowerShell enumeration order and CRLF,
+while the initial implementation assumed ordinal sorting and LF.  The
+normalizer now declares `PowerShellTsvV1` explicitly and requires a separate
+hashed three-field order reference.  Its path set must equal the current tree,
+each record is strict UTF-8 without BOM and CRLF-terminated, and missing,
+extra, duplicate, unsafe, reordered, or hash-changed references fail before
+writes.
+
+An earlier disposable `toolchain-root` had five MSYS scratch-path records in
+`libbfd.la` and the `libctf*.la` family, so it was rejected as contaminated.
+The final Plan used only
+`C:\tmp\todo51-task3\toolchain-normalize-pristine`.  An independent post-Plan
+rehash in the established reference order confirmed the unchanged exact
+baseline:
+
+- files: 59,533
+- bytes: 2,797,722,287
+- manifest SHA-256:
+  `95D51222C8000706D235A309EF1CAEA6D986B08F1B04A08671475AD041A18CCD`
+
+### Selection and transitive closure
+
+A broad 214-file Plan failed closed on the five scratch records and on a real
+`libiberty` dependency that has no copied library candidate.  The accepted
+scope is therefore the exact metadata closure of the nine external `.la`
+roots used by `liboctave`, not every unrelated archive shipped in the
+toolchain.
+
+The disposable role-tagged selection manifest has 22 unique records (nine
+`root`, thirteen `dependency`) and SHA-256
+`590987916CCF773D1ADAC0C663A5C2D442A4F7743C816BF663D98420E0591514`.
+Outside synthetic tests the implementation additionally requires the exact
+nine version-scoped root paths, exactly 22 selected files, and an exact
+30-edge transitive closure.  Explicit `.la` references and recursively found
+`-l` tokens must resolve uniquely through the six audited directories.
+Missing, extra, duplicate, escaping, reparse, ambiguous, and unreachable
+selection entries all fail before writes.  Cycles terminate through a visited
+set.
+
+The exact ordered Octave 11.3.0 seed contract contains 34 unique library
+tokens.  Its disposable strict-CRLF manifest SHA-256 is
+`EBFE170E0DD3A1C1C9AE3DCE47B996BF7E054BB3F6DB945FDDFCE3999730B270`.
+The same ordered allowlist is versioned in the normalizer and compared
+record-by-record in non-synthetic mode.  Its selected `.la` resolutions must
+equal the nine declared roots exactly.  Unioning these seed tokens with the
+recursive closure must yield exactly 44 unique and 44 resolved `-l` tokens.
+
+The selection/seed TDD sequence recorded:
+
+- RED: 27/27 existing tests failed because the new manifest parameters did
+  not yet exist;
+- intermediate GREEN: 22/28, then 26/28 and 27/28, exposing validation-order
+  and prefixless synthetic-fixture assumptions;
+- final GREEN: 28/28, including unrelated scratch bytes unchanged, selected
+  scratch and escape rejection, missing/extra/duplicate selection rejection,
+  recursive `-l`, cycles, unique resolution, and missing/extra/changed/hash-
+  changed seed plus root-resolution mismatch rejection.
+
+Every negative case runs `Apply` against a synthetic fixture, compares its
+exact before/after inventory, and proves zero retained transaction
+directories.  The final full harness output ended with:
+
+```text
+PASS Test-SeedLibraryContractRejections
+PASS Test-PlanDoesNotWrite
+PASS all 28 normalizer tests
+```
+
+### Final real write-free Plan
+
+The final process exited 0 with empty stderr and `Mode = Plan`:
+
+- selection: 22 files, nine roots, 192 unselected archives
+- seed libraries: 34
+- closure edges: 30
+- unique/resolved `-l` tokens: 44/44
+- audited search directories: six
+- changed-file prediction: exactly 22 files
+- baseline: 59,533 files, 2,797,722,287 bytes,
+  `95D51222C8000706D235A309EF1CAEA6D986B08F1B04A08671475AD041A18CCD`
+- predicted result: 59,533 files, 2,797,722,565 bytes,
+  `9417DC1DC935E33ACADACA3A0AD86389F500B937F7670E3D177A8D58B3C68CED`
+- stdout: 9,869 bytes, SHA-256
+  `734416EABBBDB693F1A53D736158839E8CB687B8EE0AC9DC9726F4D223404CEA`
+- stderr: zero bytes, SHA-256
+  `E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855`
+- retained helper directories: zero
+- retained transaction directories: zero
+
+Independent checks prove that the 22 predicted changed paths equal the
+selection exactly with no duplicates, no selected scratch or `libiberty`
+path, and that all 192 unselected `.la` hashes still match the pristine
+reference.  The full 59,533-file post-Plan rehash also reproduced the exact
+baseline above.  No `Apply` invocation occurred.
+
 ## Next verified step
 
 After this checkpoint is committed and independently reviewed, the next step
-is a write-free `Plan` against the exact copied-toolchain baseline.  Only if
-the complete 214-file audit and predicted inventory pass will one
-transactional `Apply` be allowed.  A second dry run must be idempotent before
+is the separately authorized transactional `Apply` of the exact 22-file plan
+to the pristine disposable copy.  A second dry run must be idempotent before
 a new clean configure, generated-header gate, and the sole
 `liboctave/liboctave.la` target are attempted.
