@@ -1,6 +1,6 @@
 # TODO-43 - Windows pure-octave Package
 
-Status: Open
+Status: Blocked
 Branch: todo/43-windows-pure-octave
 
 ## Purpose
@@ -20,20 +20,28 @@ Windows Octave distribution.
 2. [x] Build the bridge and audit its full runtime dependency closure.
 3. [x] Add scalar, matrix, complex, callback, and error smoke tests.
 4. [ ] Decide whether to bundle, externally detect, or defer the package.
+   - Blocked only on strict Windows write confinement, tracked by TODO-51.
 
 ## Guardrails
 
 - Do not mix incompatible Octave and Pure C++ runtimes.
 - Do not silently bundle an incomplete Octave runtime.
+- Do not describe Low integrity plus a Medium-integrity poison marker as strict
+  controlled-work-directory confinement.
 
 ## Validation Plan
 
 - Execute representative Octave functions and round-trip matrices and errors.
 - Repeat on a clean VM with only the explicitly staged dependencies.
+- Complete TODO-51's adversarial Low-integrity sibling regression before making
+  the Task 4 packaging decision.
 
 ## Open Questions
 
 - Whether the size and ABI stability justify an integrated installer component.
+- The packaging decision is blocked only by TODO-51. The callback, recovery,
+  lifecycle, leak/finalizer, permanent-root, and PE/runtime ownership gates are
+  accepted evidence and must be preserved.
 
 ## Progress Log
 
@@ -175,3 +183,21 @@ Windows Octave distribution.
   - Post-fix focused verification passed 5/5 in 12.82 seconds. After correcting
     the Windows CRLF marker form, the complete permanent-root suite passed
     39/39 in 191.72 seconds.
+- 2026-07-30: Marked Task 4 blocked only on strict Windows write confinement.
+  - Commit `7ea1646c` remains the accepted callback, recovery, 20-process
+    lifecycle, exact 2,000-finalizer, permanent-root identity, and PE/runtime
+    ownership baseline; its 39/39 gate remains required.
+  - A Low-integrity child cannot write the Medium-integrity poison marker used
+    by the current regression, but it can still write an adversarial
+    Low-integrity sibling when ordinary discretionary ACLs permit it. The
+    reviewer's strict controlled-work-directory confinement finding therefore
+    remains unresolved.
+  - Restricted-token variants either prevented the Windows loader from starting
+    the staged process or failed token creation. A zero-capability AppContainer
+    strictly confined a minimal probe, but upstream Octave 11.3 returned empty
+    canonical paths for existing load-path files and could not initialize the
+    full staged Pure/Octave bridge.
+  - The product decision is BLOCKED rather than accepting a weaker claim or
+    changing production code. TODO-51 records the complete no-go evidence and
+    the dependent acceptance criteria. Tasks 1-3 and all other Task 4 evidence
+    remain complete.
