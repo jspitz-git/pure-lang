@@ -182,6 +182,13 @@ $objectPath = Join-Path $binDirectory "windows_canonicalize_appcontainer.obj"
 $targetPath = Join-Path $fixtureDirectory "embed_probe.cc"
 $ordinaryOutputPath = Join-Path $workDirectory "ordinary.txt"
 $packagedOutputPath = Join-Path $workDirectory "appcontainer.txt"
+$junctionDirectory = Join-Path $stageRoot "junction"
+$junctionOutputPath = Join-Path $workDirectory "junction.txt"
+$forcedFallbackOutputPath = Join-Path $workDirectory "forced-fallback.txt"
+$volumeMutationOutputPath = Join-Path $workDirectory "volume-mismatch.txt"
+$reparseMutationOutputPath = Join-Path $workDirectory "reparse.txt"
+$pathMutationOutputPath = Join-Path $workDirectory "malformed-path.txt"
+$maximumInfoOutputPath = Join-Path $workDirectory "file-name-info-max.txt"
 
 $profileMayExist = $false
 $probeAvailable = $false
@@ -297,6 +304,79 @@ try {
         -Expected $expectedFinalPath -Label "ordinary opened"
     Assert-WindowsPathEqual -Actual $ordinaryFileNameInfoPath `
         -Expected $expectedFileNameInfoPath -Label "ordinary FileNameInfo"
+    Assert-OutputMatch -Text $ordinaryOutput `
+        -Pattern "(?m)^CANDIDATE_SOURCE=NORMALIZED ERROR=0 NONEMPTY=1\r?$" `
+        -Label "ordinary candidate"
+    $ordinaryCandidatePath = Get-RequiredOutputValue `
+        -Values $ordinaryValues -Key "CANDIDATE_PATH" `
+        -Label "ordinary candidate path"
+    Assert-WindowsPathEqual -Actual $ordinaryCandidatePath `
+        -Expected $expectedFinalPath -Label "ordinary candidate"
+
+    & $probeCanonical --probe-mutation force-fallback `
+        $ordinaryTargetArgument $forcedFallbackOutputPath
+    Assert-ExitCode -Actual $LASTEXITCODE -Expected 0 `
+        -Label "forced safe fallback"
+    $forcedFallbackOutput = Get-Content -Raw -LiteralPath $forcedFallbackOutputPath
+    Assert-OutputMatch -Text $forcedFallbackOutput `
+        -Pattern "(?m)^CANDIDATE_SOURCE=FALLBACK ERROR=0 NONEMPTY=1\r?$" `
+        -Label "forced safe fallback"
+    $forcedFallbackValues = ConvertFrom-ProbeOutput -Text $forcedFallbackOutput
+    $forcedFallbackPath = Get-RequiredOutputValue `
+        -Values $forcedFallbackValues -Key "CANDIDATE_PATH" `
+        -Label "forced safe fallback path"
+    Assert-WindowsPathEqual -Actual $forcedFallbackPath `
+        -Expected $expectedFinalPath -Label "forced safe fallback"
+    New-Item -ItemType Junction -Path $junctionDirectory `
+        -Target $fixtureDirectoryCanonical | Out-Null
+    if (((Get-Item -Force -LiteralPath $junctionDirectory).Attributes -band
+         [System.IO.FileAttributes]::ReparsePoint) -eq 0) {
+        throw "junction fixture is not a reparse point"
+    }
+    $junctionTarget = Join-Path $junctionDirectory "embed_probe.cc"
+    & $probeCanonical --probe-mutation force-fallback `
+        $junctionTarget $junctionOutputPath
+    Assert-ExitCode -Actual $LASTEXITCODE -Expected 25 `
+        -Label "real junction fail-closed fallback"
+    $junctionOutput = Get-Content -Raw -LiteralPath $junctionOutputPath
+    Assert-OutputMatch -Text $junctionOutput `
+        -Pattern "(?m)^CANDIDATE_SOURCE=REJECTED ERROR=5 NONEMPTY=0\r?$" `
+        -Label "real junction fail-closed fallback"
+    $junctionValues = ConvertFrom-ProbeOutput -Text $junctionOutput
+    if ($junctionValues["CANDIDATE_PATH"] -ne "") {
+        throw "real junction returned a candidate path"
+    }
+
+
+    $mutationCases = @(
+        @("volume-mismatch", $volumeMutationOutputPath),
+        @("reparse", $reparseMutationOutputPath),
+        @("malformed-path", $pathMutationOutputPath)
+    )
+    foreach ($mutationCase in $mutationCases) {
+        $mutationName = $mutationCase[0]
+        $mutationOutputPath = $mutationCase[1]
+        & $probeCanonical --probe-mutation $mutationName `
+            $ordinaryTargetArgument $mutationOutputPath
+        Assert-ExitCode -Actual $LASTEXITCODE -Expected 25 `
+            -Label "$mutationName fail-closed fallback"
+        $mutationOutput = Get-Content -Raw -LiteralPath $mutationOutputPath
+        Assert-OutputMatch -Text $mutationOutput `
+            -Pattern "(?m)^CANDIDATE_SOURCE=REJECTED ERROR=5 NONEMPTY=0\r?$" `
+            -Label "$mutationName fail-closed fallback"
+        $mutationValues = ConvertFrom-ProbeOutput -Text $mutationOutput
+        if ($mutationValues["CANDIDATE_PATH"] -ne "") {
+            throw "$mutationName returned a candidate path"
+        }
+    }
+
+    & $probeCanonical --file-name-info-max $maximumInfoOutputPath
+    Assert-ExitCode -Actual $LASTEXITCODE -Expected 0 `
+        -Label "FileNameInfo exact maximum allocation"
+    $maximumInfoOutput = Get-Content -Raw -LiteralPath $maximumInfoOutputPath
+    Assert-OutputMatch -Text $maximumInfoOutput `
+        -Pattern "(?m)^FILE_NAME_INFO_MAX_ATTEMPTS=7 LAST_CAPACITY=65538 ERROR=111\r?$" `
+        -Label "FileNameInfo exact maximum allocation"
 
     $profileMayExist = $true
     $packagedLines = & $probeCanonical --appcontainer $profileName `
@@ -304,9 +384,9 @@ try {
         $packagedTargetArgument 2>&1
     $packagedExit = $LASTEXITCODE
     $packagedConsole = $packagedLines -join [Environment]::NewLine
-    Assert-ExitCode -Actual $packagedExit -Expected 10 `
-        -Label "AppContainer probe"
     $packagedOutput = Get-Content -Raw -LiteralPath $packagedOutputPath
+    Assert-ExitCode -Actual $packagedExit -Expected 0 `
+        -Label "AppContainer probe`n$packagedOutput"
 
     Assert-OutputMatch -Text $packagedConsole `
         -Pattern "(?m)^TOKEN_IS_APPCONTAINER=1 TOKEN_SID_MATCH=1 TOKEN_CAPABILITIES=0\r?$" `
@@ -319,7 +399,7 @@ try {
         -Label "AppContainer CreateFileW"
     Assert-OutputMatch -Text $packagedOutput `
         -Pattern "(?m)^GETFINAL_NORMALIZED_LENGTH=0 ERROR=5 NONEMPTY=0\r?$" `
-        -Label "AppContainer normalized RED"
+        -Label "AppContainer normalized API failure"
     Assert-OutputMatch -Text $packagedOutput `
         -Pattern "(?m)^GETFINAL_OPENED_LENGTH=0 ERROR=5 NONEMPTY=0\r?$" `
         -Label "AppContainer opened RED"
@@ -343,6 +423,14 @@ try {
     Assert-WindowsPathEqual -Actual $packagedFileNameInfoPath `
         -Expected $ordinaryFileNameInfoPath `
         -Label "ordinary/AppContainer FileNameInfo"
+    Assert-OutputMatch -Text $packagedOutput `
+        -Pattern "(?m)^CANDIDATE_SOURCE=FALLBACK ERROR=0 NONEMPTY=1\r?$" `
+        -Label "AppContainer candidate fallback"
+    $packagedCandidatePath = Get-RequiredOutputValue `
+        -Values $packagedValues -Key "CANDIDATE_PATH" `
+        -Label "AppContainer candidate path"
+    Assert-WindowsPathEqual -Actual $packagedCandidatePath `
+        -Expected $expectedFinalPath -Label "AppContainer candidate"
 
     $scratchAclAfter = (Get-Acl -LiteralPath $scratchCanonical).Sddl
     if ($scratchAclAfter -ne $scratchAclBefore) {
@@ -390,9 +478,15 @@ finally {
 }
 
 Write-Output "BUILD_EXIT=0"
+Write-Output "FORCED_FALLBACK_EXIT=0"
+Write-Output "VOLUME_MISMATCH_EXIT=25"
+Write-Output "REPARSE_MUTATION_EXIT=25"
+Write-Output "MALFORMED_PATH_EXIT=25"
+Write-Output "REAL_JUNCTION_EXIT=25"
+Write-Output $maximumInfoOutput.TrimEnd()
 Write-Output "ORDINARY_EXIT=0"
 Write-Output $ordinaryOutput.TrimEnd()
-Write-Output "PACKAGED_EXIT=10"
+Write-Output "PACKAGED_EXIT=0"
 Write-Output $packagedConsole.TrimEnd()
 Write-Output $packagedOutput.TrimEnd()
 Write-Output $cleanupConsole.TrimEnd()

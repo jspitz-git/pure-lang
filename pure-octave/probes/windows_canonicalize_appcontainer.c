@@ -29,6 +29,7 @@
 #include <userenv.h>
 
 #include <limits.h>
+#include <wctype.h>
 #include <stddef.h>
 #include <stdarg.h>
 #include <stdio.h>
@@ -44,6 +45,7 @@ enum
   probe_read_failed = 21,
   probe_enumeration_failed = 22,
   probe_output_failed = 23,
+  probe_candidate_rejected = 25,
   launcher_usage = 64,
   launcher_profile_failed = 65,
   launcher_acl_failed = 66,
@@ -56,6 +58,15 @@ enum
   launcher_termination_failed = 73,
   probe_file_name_info_failed = 24
 };
+
+typedef enum
+{
+  mutation_none = 0,
+  mutation_force_fallback,
+  mutation_volume_mismatch,
+  mutation_reparse,
+  mutation_malformed_path
+} fallback_mutation;
 
 typedef struct
 {
@@ -232,6 +243,11 @@ append_wide_path (output_builder *output, const char *label,
   output->failed = 1;
 }
 
+static int file_name_info_force_more_data = 0;
+static DWORD file_name_info_attempts = 0;
+static DWORD fallback_stage = 0;
+static DWORD file_name_info_last_capacity = 0;
+
 static FILE_NAME_INFO *
 query_file_name_info (HANDLE file, DWORD *length, DWORD *error)
 {
@@ -247,6 +263,8 @@ query_file_name_info (HANDLE file, DWORD *length, DWORD *error)
 
   while (capacity <= maximum)
     {
+      file_name_info_attempts++;
+      file_name_info_last_capacity = capacity;
       FILE_NAME_INFO *info = (FILE_NAME_INFO *) calloc (1, capacity);
       if (! info)
         {
@@ -255,7 +273,10 @@ query_file_name_info (HANDLE file, DWORD *length, DWORD *error)
         }
 
       SetLastError (ERROR_SUCCESS);
-      if (GetFileInformationByHandleEx (file, FileNameInfo, info, capacity))
+      if (file_name_info_force_more_data)
+        SetLastError (ERROR_MORE_DATA);
+      else if (GetFileInformationByHandleEx (file, FileNameInfo, info,
+                                             capacity))
         {
           DWORD bytes = info->FileNameLength;
           DWORD available
@@ -278,15 +299,277 @@ query_file_name_info (HANDLE file, DWORD *length, DWORD *error)
           && *error != ERROR_INSUFFICIENT_BUFFER)
         return NULL;
 
-      if (capacity > maximum / 2)
+      if (capacity == maximum)
         break;
-      capacity *= 2;
+      if (capacity > maximum / 2)
+        capacity = maximum;
+      else
+        capacity *= 2;
     }
 
   *error = ERROR_BUFFER_OVERFLOW;
   return NULL;
 }
 
+static int
+query_file_identity (HANDLE file, FILE_ID_INFO *identity)
+{
+  return GetFileInformationByHandleEx (file, FileIdInfo, identity,
+                                       sizeof (*identity));
+}
+
+static int
+same_file_identity (const FILE_ID_INFO *left, const FILE_ID_INFO *right)
+{
+  return left->VolumeSerialNumber == right->VolumeSerialNumber
+         && memcmp (left->FileId.Identifier, right->FileId.Identifier,
+                    sizeof (left->FileId.Identifier)) == 0;
+}
+
+static int
+local_drive_root (const wchar_t *target, wchar_t *root, DWORD capacity)
+{
+
+  if (! target || wcslen (target) < 3
+      || ! ((target[0] >= L'A' && target[0] <= L'Z')
+            || (target[0] >= L'a' && target[0] <= L'z'))
+      || target[1] != L':'
+      || (target[2] != L'\\' && target[2] != L'/'))
+    return 0;
+
+  fallback_stage = 10;
+  if (! GetVolumePathNameW (target, root, capacity))
+    return 0;
+  fallback_stage = 11;
+  if (wcslen (root) != 3 || root[1] != L':'
+      || root[2] != L'\\' || towupper (root[0]) != towupper (target[0]))
+    return 0;
+  fallback_stage = 12;
+
+  UINT drive_type = GetDriveTypeW (root);
+  if (drive_type == DRIVE_UNKNOWN || drive_type == DRIVE_NO_ROOT_DIR
+      || drive_type == DRIVE_REMOTE)
+    return 0;
+  fallback_stage = 13;
+
+  return 1;
+}
+
+static int
+input_components_are_not_reparse_points (const wchar_t *target,
+                                          fallback_mutation mutation)
+{
+  size_t length = wcslen (target);
+  wchar_t *component = (wchar_t *) calloc (length + 1, sizeof (wchar_t));
+  size_t start = 3;
+  size_t index;
+  DWORD attributes;
+  int valid = 1;
+
+  if (! component)
+    return 0;
+  memcpy (component, target, (length + 1) * sizeof (wchar_t));
+
+  for (index = start; index <= length; index++)
+    {
+      if (index != length && component[index] != L'\\'
+          && component[index] != L'/')
+        continue;
+      if (index == start)
+        {
+          valid = 0;
+          break;
+        }
+
+      wchar_t saved = component[index];
+      component[index] = L'\0';
+      attributes = GetFileAttributesW (component);
+      component[index] = saved;
+      if (attributes == INVALID_FILE_ATTRIBUTES
+          || (attributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0)
+        valid = 0;
+      if (! valid)
+        break;
+      start = index + 1;
+    }
+
+  free (component);
+  return valid && mutation != mutation_reparse;
+}
+
+static int
+valid_volume_relative_path (const wchar_t *path, DWORD length)
+{
+  DWORD index;
+  DWORD component_start = 1;
+
+  if (! path || length == 0 || path[0] != L'\\')
+    return 0;
+
+  for (index = 1; index <= length; index++)
+    {
+      wchar_t current = index == length ? L'\\' : path[index];
+      if (index < length
+          && (current == L'\0' || current == L'/' || current == L':'))
+        return 0;
+      if (current != L'\\')
+        continue;
+      if (index == component_start)
+        return length == 1 && index == 1;
+      if ((index - component_start == 1
+           && path[component_start] == L'.')
+          || (index - component_start == 2
+              && path[component_start] == L'.'
+              && path[component_start + 1] == L'.'))
+        return 0;
+      component_start = index + 1;
+    }
+
+  return 1;
+}
+
+static wchar_t *
+query_fallback_path (HANDLE file, const wchar_t *target,
+                     fallback_mutation mutation, DWORD *length)
+{
+  wchar_t volume_root[32767];
+  FILE_ID_INFO target_identity;
+  FILE_ID_INFO reopened_identity;
+  DWORD info_length = 0;
+  DWORD info_error = ERROR_SUCCESS;
+  FILE_NAME_INFO *info = NULL;
+  wchar_t *result = NULL;
+  HANDLE reopened = INVALID_HANDLE_VALUE;
+  int reopened_matches = 0;
+
+  *length = 0;
+  fallback_stage = 0;
+  if (! local_drive_root (target, volume_root,
+                          (DWORD) (sizeof (volume_root)
+                                   / sizeof (volume_root[0]))))
+    goto cleanup;
+  fallback_stage = 1;
+
+  if (! query_file_identity (file, &target_identity))
+    goto cleanup;
+  fallback_stage = 2;
+  if (mutation == mutation_reparse
+      && ! input_components_are_not_reparse_points (target, mutation))
+    goto cleanup;
+  fallback_stage = 3;
+
+  info = query_file_name_info (file, &info_length, &info_error);
+  if (! info)
+    goto cleanup;
+  fallback_stage = 5;
+  if (mutation == mutation_malformed_path)
+    info->FileName[0] = L'X';
+  if (! valid_volume_relative_path (info->FileName, info_length)
+      || info_length > 32767 - 7)
+    goto cleanup;
+  if (info_length != wcslen (target) - 2
+      || _wcsnicmp (info->FileName, target + 2, info_length) != 0)
+    goto cleanup;
+  fallback_stage = 6;
+
+  *length = 6 + info_length;
+  result = (wchar_t *) calloc ((size_t) *length + 1, sizeof (wchar_t));
+  if (! result)
+    {
+      *length = 0;
+      goto cleanup;
+    }
+  result[0] = L'\\';
+  result[1] = L'\\';
+  result[2] = L'?';
+  result[3] = L'\\';
+  result[4] = (wchar_t) towupper (volume_root[0]);
+  result[5] = L':';
+  memcpy (result + 6, info->FileName,
+          (size_t) info_length * sizeof (wchar_t));
+  result[*length] = L'\0';
+  fallback_stage = 7;
+
+  reopened
+    = CreateFileW (result, FILE_READ_ATTRIBUTES,
+                   FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                   NULL, OPEN_EXISTING,
+                   FILE_FLAG_BACKUP_SEMANTICS
+                   | FILE_FLAG_OPEN_REPARSE_POINT, NULL);
+  if (reopened != INVALID_HANDLE_VALUE
+      && query_file_identity (reopened, &reopened_identity))
+    {
+      if (mutation == mutation_volume_mismatch)
+        reopened_identity.VolumeSerialNumber ^= 1;
+      reopened_matches
+        = same_file_identity (&target_identity, &reopened_identity);
+    }
+  if (! reopened_matches)
+    {
+      free (result);
+      result = NULL;
+      *length = 0;
+    }
+  if (result)
+    fallback_stage = 8;
+
+ cleanup:
+  if (reopened != INVALID_HANDLE_VALUE)
+    CloseHandle (reopened);
+  free (info);
+  return result;
+}
+
+static wchar_t *
+query_candidate_path (HANDLE file, const wchar_t *target,
+                      fallback_mutation mutation, DWORD *length,
+                      DWORD *error, const char **source)
+{
+  wchar_t *result = NULL;
+  DWORD normalized_error = ERROR_ACCESS_DENIED;
+
+  *length = 0;
+  *error = ERROR_SUCCESS;
+  *source = "REJECTED";
+
+  if (mutation == mutation_none)
+    result = query_final_path (file, FILE_NAME_NORMALIZED, length,
+                               &normalized_error);
+  if (result)
+    {
+      *source = "NORMALIZED";
+      return result;
+    }
+  if (normalized_error != ERROR_ACCESS_DENIED)
+    {
+      *error = normalized_error;
+      return NULL;
+    }
+
+  result = query_fallback_path (file, target, mutation, length);
+  if (! result)
+    {
+      *error = normalized_error;
+      return NULL;
+    }
+
+  *source = "FALLBACK";
+  return result;
+}
+
+static fallback_mutation
+parse_mutation (const wchar_t *name)
+{
+  if (wcscmp (name, L"force-fallback") == 0)
+    return mutation_force_fallback;
+  if (wcscmp (name, L"volume-mismatch") == 0)
+    return mutation_volume_mismatch;
+  if (wcscmp (name, L"reparse") == 0)
+    return mutation_reparse;
+  if (wcscmp (name, L"malformed-path") == 0)
+    return mutation_malformed_path;
+  return mutation_none;
+}
 static int
 write_output (const wchar_t *path, const char *output, size_t output_length)
 {
@@ -360,11 +643,13 @@ enumerate_target (const wchar_t *path, DWORD *error)
 }
 
 static int
-run_probe (const wchar_t *target, const wchar_t *output_path)
+run_probe (const wchar_t *target, const wchar_t *output_path,
+           fallback_mutation mutation)
 {
   output_builder output;
   wchar_t *normalized = NULL;
   wchar_t *opened = NULL;
+  wchar_t *candidate = NULL;
   FILE_NAME_INFO *file_info = NULL;
   DWORD normalized_error;
   DWORD normalized_length;
@@ -372,6 +657,9 @@ run_probe (const wchar_t *target, const wchar_t *output_path)
   DWORD opened_length;
   DWORD file_info_error;
   DWORD file_info_length;
+  DWORD candidate_error;
+  DWORD candidate_length;
+  const char *candidate_source;
   DWORD open_error;
   DWORD read_error = ERROR_SUCCESS;
   DWORD enum_error = ERROR_SUCCESS;
@@ -432,8 +720,18 @@ run_probe (const wchar_t *target, const wchar_t *output_path)
                file_info && file_info_length > 0);
   append_wide_path (&output, "FILE_NAME_INFO_PATH",
                     file_info ? file_info->FileName : NULL, file_info_length);
+  candidate
+    = query_candidate_path (canonical_handle, target, mutation,
+                            &candidate_length, &candidate_error,
+                            &candidate_source);
+  append_line (&output, "CANDIDATE_SOURCE=%s ERROR=%lu NONEMPTY=%d\r\n",
+               candidate_source, (unsigned long) candidate_error,
+               candidate && candidate_length > 0);
+  append_wide_path (&output, "CANDIDATE_PATH", candidate, candidate_length);
   CloseHandle (canonical_handle);
 
+  append_line (&output, "CANDIDATE_FALLBACK_STAGE=%lu\r\n",
+               (unsigned long) fallback_stage);
   SetLastError (ERROR_SUCCESS);
   HANDLE read_handle
     = CreateFileW (target, GENERIC_READ,
@@ -465,13 +763,48 @@ run_probe (const wchar_t *target, const wchar_t *output_path)
     result = probe_enumeration_failed;
   else if (! file_info || file_info_length == 0)
     result = probe_file_name_info_failed;
-  else if (! normalized || normalized_length == 0)
-    result = probe_canonicalize_red;
+  else if (! candidate || candidate_length == 0)
+    result = probe_candidate_rejected;
 
   free (output.data);
+  free (candidate);
   free (file_info);
   free (opened);
   free (normalized);
+  return result;
+}
+
+static int
+run_file_name_info_max_probe (const wchar_t *output_path)
+{
+  const DWORD maximum
+    = (DWORD) (offsetof (FILE_NAME_INFO, FileName)
+                + 32767 * sizeof (wchar_t));
+  DWORD length = 0;
+  DWORD error = ERROR_SUCCESS;
+  FILE_NAME_INFO *info;
+  output_builder output;
+  int result;
+
+  file_name_info_attempts = 0;
+  file_name_info_last_capacity = 0;
+  file_name_info_force_more_data = 1;
+  info = query_file_name_info (INVALID_HANDLE_VALUE, &length, &error);
+  file_name_info_force_more_data = 0;
+
+  initialize_output (&output);
+  append_line (&output,
+               "FILE_NAME_INFO_MAX_ATTEMPTS=%lu LAST_CAPACITY=%lu ERROR=%lu\r\n",
+               (unsigned long) file_name_info_attempts,
+               (unsigned long) file_name_info_last_capacity,
+               (unsigned long) error);
+  result = (! info && length == 0 && error == ERROR_BUFFER_OVERFLOW
+            && file_name_info_last_capacity == maximum
+            && file_name_info_attempts == 7 && ! output.failed
+            && write_output (output_path, output.data, output.length))
+           ? probe_ok : probe_file_name_info_failed;
+  free (info);
+  free (output.data);
   return result;
 }
 
@@ -856,7 +1189,18 @@ int
 wmain (int argc, wchar_t **argv)
 {
   if (argc == 4 && wcscmp (argv[1], L"--probe") == 0)
-    return run_probe (argv[2], argv[3]);
+    return run_probe (argv[2], argv[3], mutation_none);
+
+  if (argc == 5 && wcscmp (argv[1], L"--probe-mutation") == 0)
+    {
+      fallback_mutation mutation = parse_mutation (argv[2]);
+      if (mutation != mutation_none)
+        return run_probe (argv[3], argv[4], mutation);
+    }
+
+  if (argc == 3 && wcscmp (argv[1], L"--file-name-info-max") == 0)
+    return run_file_name_info_max_probe (argv[2]);
+
 
   if (argc == 7 && wcscmp (argv[1], L"--appcontainer") == 0)
     return run_appcontainer (argv[2], argv[3], argv[4], argv[5], argv[6]);
@@ -867,8 +1211,10 @@ wmain (int argc, wchar_t **argv)
   fwprintf (stderr,
             L"usage:\n"
             L"  %ls --probe TARGET OUTPUT\n"
+            L"  %ls --probe-mutation MODE TARGET OUTPUT\n"
+            L"  %ls --file-name-info-max OUTPUT\n"
             L"  %ls --appcontainer PROFILE STAGE WORK PROBE TARGET\n"
             L"  %ls --delete-profile PROFILE\n",
-            argv[0], argv[0], argv[0]);
+            argv[0], argv[0], argv[0], argv[0], argv[0]);
   return launcher_usage;
 }

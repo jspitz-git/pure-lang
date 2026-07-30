@@ -1,0 +1,210 @@
+diff --git a/liboctave/system/file-ops.cc b/liboctave/system/file-ops.cc
+index 18278fc..0000000 100644
+--- a/liboctave/system/file-ops.cc
++++ b/liboctave/system/file-ops.cc
+@@ -31,6 +31,7 @@
+ #include <cstdio>
+ #include <cstdlib>
+ #include <cstring>
++#include <cwctype>
+ 
+ #include <vector>
+ 
+@@ -864,6 +865,160 @@ tempnam (const std::string& dir, const std::string& pfx,
+   return retval;
+ }
+ 
++#if defined (OCTAVE_USE_WINDOWS_API)
++
++static bool
++valid_volume_relative_path (const wchar_t *path, DWORD length)
++{
++  DWORD component_start = 1;
++
++  if (! path || length == 0 || path[0] != L'\\')
++    return false;
++
++  for (DWORD index = 1; index <= length; index++)
++    {
++      wchar_t current = index == length ? L'\\' : path[index];
++
++      if (index < length
++          && (current == L'\0' || current == L'/' || current == L':'))
++        return false;
++
++      if (current != L'\\')
++        continue;
++
++      if (index == component_start)
++        return length == 1 && index == 1;
++
++      if ((index - component_start == 1
++           && path[component_start] == L'.')
++          || (index - component_start == 2
++              && path[component_start] == L'.'
++              && path[component_start + 1] == L'.'))
++        return false;
++
++      component_start = index + 1;
++    }
++
++  return true;
++}
++
++static FILE_NAME_INFO *
++query_file_name_info (HANDLE file, DWORD& length,
++                      std::vector<unsigned char>& storage)
++{
++  const DWORD header = offsetof (FILE_NAME_INFO, FileName);
++  const DWORD maximum = header + 32767 * sizeof (wchar_t);
++  DWORD capacity = header + 512 * sizeof (wchar_t);
++
++  length = 0;
++
++  while (capacity <= maximum)
++    {
++      storage.assign (capacity, 0);
++      FILE_NAME_INFO *info
++        = reinterpret_cast<FILE_NAME_INFO *> (storage.data ());
++
++      if (GetFileInformationByHandleEx (file, FileNameInfo, info, capacity))
++        {
++          DWORD bytes = info->FileNameLength;
++          DWORD available = capacity - header;
++
++          if (bytes == 0 || bytes % sizeof (wchar_t) != 0
++              || bytes > available)
++            return nullptr;
++
++          length = bytes / sizeof (wchar_t);
++          return info;
++        }
++
++      DWORD error = GetLastError ();
++      if (error != ERROR_MORE_DATA && error != ERROR_INSUFFICIENT_BUFFER)
++        return nullptr;
++
++      if (capacity == maximum)
++        break;
++
++      capacity = capacity > maximum / 2 ? maximum : capacity * 2;
++    }
++
++  return nullptr;
++}
++
++static bool
++same_file_identity (const BY_HANDLE_FILE_INFORMATION& left,
++                    const BY_HANDLE_FILE_INFORMATION& right)
++{
++  return left.dwVolumeSerialNumber == right.dwVolumeSerialNumber
++         && left.nFileIndexHigh == right.nFileIndexHigh
++         && left.nFileIndexLow == right.nFileIndexLow;
++}
++
++static std::wstring
++fallback_canonical_path (HANDLE file, const std::wstring& name)
++{
++  if (name.size () < 3
++      || ! std::iswalpha (name[0]) || name[1] != L':'
++      || (name[2] != L'\\' && name[2] != L'/'))
++    return std::wstring ();
++
++  std::vector<wchar_t> root (32767, L'\0');
++  if (! GetVolumePathNameW (name.c_str (), root.data (),
++                            static_cast<DWORD> (root.size ()))
++      || std::wcslen (root.data ()) != 3 || root[1] != L':'
++      || root[2] != L'\\'
++      || std::towupper (root[0]) != std::towupper (name[0]))
++    return std::wstring ();
++
++  UINT drive_type = GetDriveTypeW (root.data ());
++  if (drive_type == DRIVE_UNKNOWN || drive_type == DRIVE_NO_ROOT_DIR
++      || drive_type == DRIVE_REMOTE)
++    return std::wstring ();
++
++  BY_HANDLE_FILE_INFORMATION original_id;
++  if (! GetFileInformationByHandle (file, &original_id))
++    return std::wstring ();
++
++  DWORD relative_length = 0;
++  std::vector<unsigned char> storage;
++  FILE_NAME_INFO *info
++    = query_file_name_info (file, relative_length, storage);
++  if (! info || ! valid_volume_relative_path (info->FileName, relative_length)
++      || relative_length > 32767 - 7
++      || relative_length != name.size () - 2
++      || _wcsnicmp (info->FileName, name.c_str () + 2,
++                    relative_length) != 0)
++    return std::wstring ();
++
++  // FileNameInfo names the object opened by the kernel.  Exact comparison
++  // with the input suffix rejects path-changing reparse points, SUBST roots,
++  // mounted-folder offsets, UNC paths, and mapped drives.  Re-opening the
++  // reconstructed path and comparing both volume and file IDs makes the
++  // check fail closed if the namespace changes between those observations.
++  std::wstring result = LR"(\\?\)";
++  result += static_cast<wchar_t> (std::towupper (root[0]));
++  result += L':';
++  result.append (info->FileName, relative_length);
++
++  HANDLE reopened
++    = CreateFileW (result.c_str (), FILE_READ_ATTRIBUTES,
++                   FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
++                   nullptr, OPEN_EXISTING,
++                   FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT,
++                   nullptr);
++  if (reopened == INVALID_HANDLE_VALUE)
++    return std::wstring ();
++
++  unwind_action close_reopened_handle (CloseHandle, reopened);
++  BY_HANDLE_FILE_INFORMATION reopened_id;
++  if (! GetFileInformationByHandle (reopened, &reopened_id)
++      || ! same_file_identity (original_id, reopened_id))
++    return std::wstring ();
++
++  return result;
++}
++
++#endif
++
+ std::string
+ canonicalize_file_name (const std::string& name)
+ {
+@@ -909,15 +1064,34 @@ canonicalize_file_name (const std::string& name, std::string& msg)
+   const std::size_t buf_size = 32767;
+   wchar_t buffer[buf_size] = L"";
+ 
++  std::wstring canonical_path;
++
+   // query canonical name
+   DWORD len = GetFinalPathNameByHandleW (h_file, buffer, buf_size,
+                                          FILE_NAME_NORMALIZED);
+-  if (len >= buf_size)
++  if (len == 0)
++    {
++      DWORD error = GetLastError ();
++
++      if (error == ERROR_ACCESS_DENIED)
++        canonical_path = fallback_canonical_path (h_file, wname);
++
++      if (canonical_path.empty ())
++        {
++          const std::error_condition econd
++            = std::system_category ().default_error_condition (error);
++          msg = econd.message ();
++          return retval;
++        }
++    }
++  else if (len >= buf_size)
+     {
+       msg = "Error querying normalized name for \"" + name + "\"";
+       return retval;
+     }
++  else
++    canonical_path.assign (buffer, len);
+ 
+-  retval = u8_from_wstring (std::wstring (buffer, len));
++  retval = u8_from_wstring (canonical_path);
+ 
+   // remove prefix

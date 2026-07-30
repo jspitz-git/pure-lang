@@ -45,8 +45,9 @@ $ErrorActionPreference = "Stop"
 $archive = "C:\tmp\octave-11.3.0-source-task51\octave-11.3.0.tar.xz"
 $signature = "$archive.sig"
 $scratchRoot = [IO.Path]::GetFullPath("C:\pure-lang")
+$runId = [guid]::NewGuid().ToString("N")
 $verifyRoot = [IO.Path]::GetFullPath(
-    (Join-Path $scratchRoot ".task1-signature-<unique-id>"))
+    (Join-Path $scratchRoot ".task1-signature-$runId"))
 $verifyPrefix = $scratchRoot.TrimEnd("\") + "\"
 $defaultGpgHome = Join-Path (
     [Environment]::GetFolderPath("UserProfile")) ".gnupg"
@@ -61,8 +62,8 @@ if (Test-Path -LiteralPath $defaultGpgHome) {
     throw "default GnuPG home exists; refusing ambiguous replay"
 }
 Get-Item -LiteralPath $archive, $signature, $gpgv | Out-Null
-New-Item -ItemType Directory -Path $verifyRoot | Out-Null
 try {
+    New-Item -ItemType Directory -Path $verifyRoot | Out-Null
     $gpgHome = Join-Path $verifyRoot "gpg-home"
     $keyring = Join-Path $verifyRoot "gnu-keyring.gpg"
     New-Item -ItemType Directory -Path $gpgHome | Out-Null
