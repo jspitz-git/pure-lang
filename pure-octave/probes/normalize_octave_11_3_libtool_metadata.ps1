@@ -9,6 +9,7 @@ param(
     [ValidateSet("Plan", "Apply")][string] $Mode = "Plan",
     [ValidateSet(
         "None",
+        "CompilerFailureAfterTempCreation",
         "RootIdentityMismatchBeforeSecondReplacement",
         "BeforeSecondReplacement",
         "RemoveEmittedTargetAfterReplacement")]
@@ -20,7 +21,7 @@ $ErrorActionPreference = "Stop"
 $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 $ascii = [Text.Encoding]::ASCII
 
-Add-Type -TypeDefinition @'
+$directoryIdentitySource = @'
 using System;
 using System.ComponentModel;
 using System.Runtime.InteropServices;
@@ -167,6 +168,23 @@ function Assert-NoReparsePoints {
     foreach ($item in @(Get-ChildItem -LiteralPath $Root -Recurse -Force)) {
         if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
             throw "reparse point is forbidden in toolchain tree: $($item.FullName)"
+        }
+    }
+}
+
+function Assert-NoReparsePathComponents {
+    param([Parameter(Mandatory = $true)][string] $Path)
+
+    $canonical = [IO.Path]::GetFullPath($Path).TrimEnd("\")
+    $cursor = [IO.Path]::GetPathRoot($canonical).TrimEnd("\")
+    $relative = $canonical.Substring(
+        [IO.Path]::GetPathRoot($canonical).Length)
+    foreach ($component in @($relative -split '\\' |
+            Where-Object { $_.Length -ne 0 })) {
+        $cursor = Join-Path $cursor $component
+        $item = Get-Item -LiteralPath $cursor -Force
+        if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+            throw "reparse point is forbidden in validated path: $cursor"
         }
     }
 }
@@ -438,7 +456,76 @@ if ($requestedRoot.Equals($permanentRoot, [StringComparison]::OrdinalIgnoreCase)
 $root = Get-CanonicalDirectory -Path $ToolchainRoot -Description "Toolchain root"
 $disposableParent = Get-CanonicalDirectory -Path $DisposableParentRoot `
     -Description "Disposable parent root"
+if (-not (Test-IsStrictDescendant -Path $root -Parent $disposableParent)) {
+    throw "Toolchain root must be a strict child of the disposable parent root."
+}
+$approvedDisposableBase = [IO.Path]::GetFullPath("C:\tmp").TrimEnd("\")
+if (-not (Test-IsStrictDescendant `
+        -Path $disposableParent -Parent $approvedDisposableBase)) {
+    throw "Disposable parent root must be a strict child of C:\tmp."
+}
+Assert-NoReparsePathComponents -Path $disposableParent
+Assert-NoReparsePathComponents -Path $root
 Assert-NoReparsePoints -Root $root
+
+$testParentPattern = '^C:\\tmp\\todo51-normalizer-tests-[0-9a-f]{32}$'
+if ($TestFailurePoint -ne "None" -and
+        $disposableParent -notmatch $testParentPattern) {
+    throw "test failure injection is forbidden outside a synthetic test root"
+}
+
+$compilerTempRoot = Join-Path $disposableParent `
+    (".todo51-add-type-" + [guid]::NewGuid().ToString("N"))
+$savedCompilerEnvironment = @{}
+try {
+    [void] (New-Item -ItemType Directory -Path $compilerTempRoot)
+    foreach ($name in @("TEMP", "TMP", "TMPDIR")) {
+        $savedCompilerEnvironment[$name] = [pscustomobject] @{
+            WasPresent = Test-Path -LiteralPath "Env:$name"
+            Value = [Environment]::GetEnvironmentVariable($name, "Process")
+        }
+        [Environment]::SetEnvironmentVariable(
+            $name, $compilerTempRoot, "Process")
+    }
+    if ($TestFailurePoint -eq "CompilerFailureAfterTempCreation") {
+        throw "injected compiler failure after temp creation"
+    }
+    Add-Type -TypeDefinition $directoryIdentitySource
+}
+finally {
+    foreach ($name in $savedCompilerEnvironment.Keys) {
+        $saved = $savedCompilerEnvironment[$name]
+        if ($saved.WasPresent) {
+            [Environment]::SetEnvironmentVariable(
+                $name, $saved.Value, "Process")
+        }
+        else {
+            [Environment]::SetEnvironmentVariable($name, $null, "Process")
+        }
+    }
+    if (Test-Path -LiteralPath $compilerTempRoot) {
+        $compilerTempCanonical =
+            [IO.Path]::GetFullPath($compilerTempRoot).TrimEnd("\")
+        if (-not (Test-IsStrictDescendant `
+                -Path $compilerTempCanonical -Parent $disposableParent) -or
+                (Split-Path -Leaf $compilerTempCanonical) -notmatch
+                    '^\.todo51-add-type-[0-9a-f]{32}$') {
+            throw "refusing unsafe compiler-temp cleanup: $compilerTempCanonical"
+        }
+        Remove-Item -LiteralPath $compilerTempCanonical -Recurse -Force
+    }
+}
+foreach ($name in @("TEMP", "TMP", "TMPDIR")) {
+    $saved = $savedCompilerEnvironment[$name]
+    $isPresent = Test-Path -LiteralPath "Env:$name"
+    $restored = [Environment]::GetEnvironmentVariable($name, "Process")
+    if ($isPresent -ne $saved.WasPresent -or $restored -ne $saved.Value) {
+        throw "compiler environment restoration failed for $name"
+    }
+}
+if (Test-Path -LiteralPath $compilerTempRoot) {
+    throw "compiler temp cleanup failed: $compilerTempRoot"
+}
 
 $rootIdentityHandle = [Todo51DirectoryIdentity]::Open($root)
 $root = Convert-FinalPathToDos -Path $rootIdentityHandle.FinalPath `
@@ -472,15 +559,6 @@ try {
 }
 finally {
     $permanentIdentityHandle.Dispose()
-}
-
-if ($TestFailurePoint -ne "None") {
-    $testParentPattern = '^C:\\tmp\\todo51-normalizer-tests-[0-9a-f]{32}$'
-    if ($disposableParent -notmatch $testParentPattern -or
-            -not (Test-IsStrictDescendant -Path $root -Parent $disposableParent)) {
-        $rootIdentityHandle.Dispose()
-        throw "test failure injection is forbidden outside a synthetic test root"
-    }
 }
 
 try {
@@ -720,6 +798,8 @@ $result = [ordered] @{
     ResultFileCount = $predicted.FileCount
     ResultTotalBytes = $predicted.TotalBytes
     ResultManifestSha256 = $predicted.Sha256
+    CompilerTempRoot = $compilerTempRoot
+    CompilerEnvironmentRestored = $true
 }
 
 if ($Mode -eq "Apply" -and $replacementBytes.Count -ne 0) {

@@ -3,10 +3,10 @@
 ## Status
 
 The version-scoped generated-header gate and the fail-closed Octave 11.3.0
-libtool-metadata normalizer are implemented.  Independent review round 1
-identified three confinement/postcondition gaps; all three now have isolated
-RED/GREEN coverage.  The normalizer has not yet been applied to the real
-disposable toolchain copy.
+libtool-metadata normalizer are implemented.  Independent review rounds 1 and
+2 identified confinement/postcondition gaps; each now has isolated RED/GREEN
+coverage.  The normalizer has not yet been applied to the real disposable
+toolchain copy.
 No permanent Octave file was used as an executable or modified.  All source,
 build, and toolchain paths used by Task 3 are disposable children of
 `C:\tmp\todo51-task3`.
@@ -134,6 +134,13 @@ audited Octave 11.3.0 layout.  It:
 - requires the toolchain to be a strict child of an explicitly supplied
   disposable parent;
 - rejects reparse points in the path and tree;
+- performs all lexical, local-drive, permanent-path, strict-child, existence,
+  and basic reparse validation before compiling its filesystem-identity
+  helper;
+- compiles that helper with `TEMP`, `TMP`, and `TMPDIR` temporarily redirected
+  to one exact unique directory below the validated disposable parent,
+  restores the original process environment in `finally`, and removes the
+  exact compiler directory fail-closed;
 - resolves the root through an open directory handle, compares volume/file
   identity and final DOS path against the permanent root, holds the root
   handle without delete sharing, and rechecks the identity before every write
@@ -181,6 +188,8 @@ PASS Test-NonAsciiRejection
 PASS Test-ReparseRejection
 PASS Test-PermanentRootRejection
 PASS Test-NamespaceRejection
+PASS Test-NegativePathSkipsHelperCompilation
+PASS Test-CompilerTempConfinementAndCleanup
 PASS Test-RootIdentityGuard
 PASS Test-RollbackBeforeSecondReplacement
 PASS Test-EmittedTargetPostcondition
@@ -188,7 +197,7 @@ PASS Test-FailureInjectionScope
 PASS Test-ManifestRejection
 PASS Test-NoPartialWrites
 PASS Test-PlanDoesNotWrite
-PASS all 17 normalizer tests
+PASS all 19 normalizer tests
 ```
 
 Every negative mutation test compares the exact before/after tree-manifest
@@ -258,6 +267,79 @@ validates targets both before and after replacement, revalidates every write
 destination immediately before `File.Replace`, detects the injected missing
 directory, restores it, rolls back the archives byte-for-byte, and removes all
 transaction state.
+
+## Independent-review fix round 2
+
+Review found that the inline C# filesystem-identity helper was compiled before
+disposable-path validation.  Windows PowerShell 5.1 may write `Add-Type`
+compiler artifacts through the process `TEMP`/`TMP`, so a rejected invocation
+could write outside Task 3 confinement.
+
+The RED used the standard full harness command shown above.  It set `TEMP`,
+`TMP`, and `TMPDIR` to an external poison file and invoked a `\\?\` permanent
+path:
+
+```text
+FAIL Test-NegativePathSkipsHelperCompilation
+Helper compilation ran before negative path rejection.
+```
+
+The implementation now keeps the C# source as inert text until pure PowerShell
+has verified:
+
+- local drive-letter DOS spelling for root and parent;
+- lexical exclusion of the permanent Octave root;
+- existence and strict root-under-parent containment;
+- parent containment strictly below `C:\tmp`; and
+- absence of reparse points in every path component and the toolchain tree.
+
+Only then does it create
+`<validated-parent>\.todo51-add-type-<32 hex digits>`, save the exact process
+values of `TEMP`, `TMP`, and `TMPDIR`, redirect all three for `Add-Type`,
+restore them in `finally`, validate the exact cleanup target, and recursively
+remove only that target.  Environment snapshots record both `WasPresent` and
+`Value`, so an unset variable remains distinct from a present empty variable.
+Failure to restore either presence/value or to clean is fatal.
+
+`Test-NegativePathSkipsHelperCompilation` proves that rejected namespace paths
+do not consult the poisoned compiler environment.  The separate
+`Test-CompilerTempConfinementAndCleanup` verifies:
+
+- the external poison directory's exact file count, byte count, and manifest
+  SHA-256 remain unchanged;
+- the reported compiler-temp path is an exact unique child of the synthetic
+  disposable parent;
+- process compiler variables are restored before normalization continues;
+- mixed inherited state (`TEMP` set, `TMP` present-empty, `TMPDIR` unset) is
+  restored with the exact original presence and value;
+- no `.todo51-add-type-*` directory remains after successful compilation; and
+- a test-scoped failure immediately after temp creation also restores the
+  environment and leaves zero helper-temp directories.
+
+The final fix-round-2 harness run exited 0:
+
+```text
+PASS Test-SuccessAndAnomalies
+PASS Test-AmbiguousCandidate
+PASS Test-MissingCandidate
+PASS Test-UnknownAbsolutePath
+PASS Test-UnsupportedAssignment
+PASS Test-UnsupportedQuoteForm
+PASS Test-NonAsciiRejection
+PASS Test-ReparseRejection
+PASS Test-PermanentRootRejection
+PASS Test-NamespaceRejection
+PASS Test-NegativePathSkipsHelperCompilation
+PASS Test-CompilerTempConfinementAndCleanup
+PASS Test-RootIdentityGuard
+PASS Test-RollbackBeforeSecondReplacement
+PASS Test-EmittedTargetPostcondition
+PASS Test-FailureInjectionScope
+PASS Test-ManifestRejection
+PASS Test-NoPartialWrites
+PASS Test-PlanDoesNotWrite
+PASS all 19 normalizer tests
+```
 
 ## Next verified step
 

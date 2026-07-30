@@ -136,10 +136,12 @@ function Invoke-Normalizer {
         [string] $ParentRoot = $testRoot,
         [ValidateSet(
             "None",
+            "CompilerFailureAfterTempCreation",
             "RootIdentityMismatchBeforeSecondReplacement",
             "BeforeSecondReplacement",
             "RemoveEmittedTargetAfterReplacement")]
-        [string] $TestFailurePoint = "None"
+        [string] $TestFailurePoint = "None",
+        [string] $CompilerTempOverride = ""
     )
 
     $stdout = Join-Path $testRoot ("stdout-" + [guid]::NewGuid().ToString("N") + ".log")
@@ -164,9 +166,36 @@ function Invoke-Normalizer {
     if ($TestFailurePoint -ne "None") {
         $arguments += @("-TestFailurePoint", $TestFailurePoint)
     }
-    $process = Start-Process -FilePath "powershell.exe" -ArgumentList $arguments `
-        -RedirectStandardOutput $stdout -RedirectStandardError $stderr `
-        -WindowStyle Hidden -Wait -PassThru
+    $savedCompilerEnvironment = @{}
+    try {
+        if ($CompilerTempOverride.Length -ne 0) {
+            foreach ($name in @("TEMP", "TMP", "TMPDIR")) {
+                $savedCompilerEnvironment[$name] = [pscustomobject] @{
+                    WasPresent = Test-Path -LiteralPath "Env:$name"
+                    Value = [Environment]::GetEnvironmentVariable(
+                        $name, "Process")
+                }
+                [Environment]::SetEnvironmentVariable(
+                    $name, $CompilerTempOverride, "Process")
+            }
+        }
+        $process = Start-Process -FilePath "powershell.exe" -ArgumentList $arguments `
+            -RedirectStandardOutput $stdout -RedirectStandardError $stderr `
+            -WindowStyle Hidden -Wait -PassThru
+    }
+    finally {
+        foreach ($name in $savedCompilerEnvironment.Keys) {
+            $saved = $savedCompilerEnvironment[$name]
+            if ($saved.WasPresent) {
+                [Environment]::SetEnvironmentVariable(
+                    $name, $saved.Value, "Process")
+            }
+            else {
+                [Environment]::SetEnvironmentVariable(
+                    $name, $null, "Process")
+            }
+        }
+    }
     return [pscustomobject] @{
         ExitCode = $process.ExitCode
         Stdout = [IO.File]::ReadAllText($stdout)
@@ -191,6 +220,7 @@ function Assert-FailureWithoutWrites {
         [Parameter(Mandatory = $true)][string] $ExpectedMessage,
         [ValidateSet(
             "None",
+            "CompilerFailureAfterTempCreation",
             "RootIdentityMismatchBeforeSecondReplacement",
             "BeforeSecondReplacement",
             "RemoveEmittedTargetAfterReplacement")]
@@ -334,6 +364,128 @@ function Test-NamespaceRejection {
     }
 }
 
+function Test-NegativePathSkipsHelperCompilation {
+    $poison = Join-Path "C:\tmp" `
+        ("todo51-external-temp-poison-" + [guid]::NewGuid().ToString("N"))
+    try {
+        Write-AsciiFile -Path $poison -Text "compiler temp must not be consulted"
+        $before = (Get-FileHash -LiteralPath $poison -Algorithm SHA256).Hash
+        $dummy = [pscustomobject] @{
+            FileCount = 0
+            TotalBytes = 0
+            Sha256 = ("0" * 64)
+        }
+        $result = Invoke-Normalizer `
+            -Root "\\?\C:\Tools\GNU Octave\11.3.0" `
+            -ParentRoot "\\?\C:\Tools\GNU Octave" `
+            -Manifest $dummy -Mode Apply -CompilerTempOverride $poison
+        Assert-True ($result.ExitCode -ne 0) `
+            "Namespaced path unexpectedly succeeded with poisoned TEMP/TMP."
+        Assert-True (($result.Stdout + $result.Stderr) -match "namespace") `
+            "Helper compilation ran before negative path rejection."
+        $after = (Get-FileHash -LiteralPath $poison -Algorithm SHA256).Hash
+        Assert-True ($before -eq $after) "Negative path handling modified poison TEMP/TMP."
+    }
+    finally {
+        if (Test-Path -LiteralPath $poison) {
+            Remove-Item -LiteralPath $poison -Force
+        }
+    }
+}
+
+function Test-CompilerTempConfinementAndCleanup {
+    $poisonRoot = Join-Path "C:\tmp" `
+        ("todo51-external-temp-poison-" + [guid]::NewGuid().ToString("N"))
+    try {
+        [void] (New-Item -ItemType Directory -Path $poisonRoot)
+        Write-AsciiFile -Path (Join-Path $poisonRoot "sentinel.txt") `
+            -Text "external compiler temp poison"
+        $poisonBefore = Get-TreeManifest -Root $poisonRoot
+
+        $successRoot = New-Fixture -Name "compiler-temp-success"
+        $successManifest = Get-TreeManifest -Root $successRoot
+        $success = Invoke-Normalizer -Root $successRoot `
+            -Manifest $successManifest -Mode Plan `
+            -CompilerTempOverride $poisonRoot
+        Assert-True ($success.ExitCode -eq 0) `
+            "Confined helper compilation failed: $($success.Stderr)"
+        $successJson = $success.Stdout | ConvertFrom-Json
+        $expectedPrefix = [IO.Path]::GetFullPath($testRoot).TrimEnd("\") + "\"
+        Assert-True ($successJson.CompilerTempRoot.StartsWith(
+                $expectedPrefix, [StringComparison]::OrdinalIgnoreCase)) `
+            "Compiler temp was not located under the synthetic disposable parent."
+        Assert-True ((Split-Path -Leaf $successJson.CompilerTempRoot) -match
+                '^\.todo51-add-type-[0-9a-f]{32}$') `
+            "Compiler temp did not use the exact unique helper name."
+        Assert-True ([bool] $successJson.CompilerEnvironmentRestored) `
+            "Normalizer did not confirm compiler environment restoration."
+
+        $customSavedEnvironment = @{}
+        try {
+            foreach ($name in @("TEMP", "TMP", "TMPDIR")) {
+                $customSavedEnvironment[$name] = [pscustomobject] @{
+                    WasPresent = Test-Path -LiteralPath "Env:$name"
+                    Value = [Environment]::GetEnvironmentVariable(
+                        $name, "Process")
+                }
+            }
+            [Environment]::SetEnvironmentVariable(
+                "TEMP", $poisonRoot, "Process")
+            [Environment]::SetEnvironmentVariable("TMP", "", "Process")
+            [Environment]::SetEnvironmentVariable("TMPDIR", $null, "Process")
+            $mixedState = Invoke-Normalizer -Root $successRoot `
+                -Manifest $successManifest -Mode Plan
+            Assert-True ($mixedState.ExitCode -eq 0) `
+                "Mixed compiler environment state failed: $($mixedState.Stderr)"
+            $mixedJson = $mixedState.Stdout | ConvertFrom-Json
+            Assert-True ([bool] $mixedJson.CompilerEnvironmentRestored) `
+                "Unset and empty compiler environment states were not restored."
+        }
+        finally {
+            foreach ($name in $customSavedEnvironment.Keys) {
+                $saved = $customSavedEnvironment[$name]
+                if ($saved.WasPresent) {
+                    [Environment]::SetEnvironmentVariable(
+                        $name, $saved.Value, "Process")
+                }
+                else {
+                    [Environment]::SetEnvironmentVariable(
+                        $name, $null, "Process")
+                }
+            }
+        }
+
+        $failureRoot = New-Fixture -Name "compiler-temp-failure"
+        $failureManifest = Get-TreeManifest -Root $failureRoot
+        $failure = Invoke-Normalizer -Root $failureRoot `
+            -Manifest $failureManifest -Mode Apply `
+            -CompilerTempOverride $poisonRoot `
+            -TestFailurePoint CompilerFailureAfterTempCreation
+        Assert-True ($failure.ExitCode -ne 0) `
+            "Injected compiler failure unexpectedly succeeded."
+        Assert-True (($failure.Stdout + $failure.Stderr) -match
+                "injected compiler failure") `
+            "Injected compiler failure did not reach the intended point."
+
+        $helperTemps = @(Get-ChildItem -LiteralPath $testRoot -Force -Directory |
+            Where-Object { $_.Name -like ".todo51-add-type-*" })
+        Assert-True ($helperTemps.Count -eq 0) `
+            "Helper compiler temp directory remained after success or failure."
+        $poisonAfter = Get-TreeManifest -Root $poisonRoot
+        Assert-True ($poisonAfter.FileCount -eq $poisonBefore.FileCount) `
+            "External poison TEMP/TMP inventory changed."
+        Assert-True ($poisonAfter.TotalBytes -eq $poisonBefore.TotalBytes) `
+            "External poison TEMP/TMP byte count changed."
+        Assert-True ($poisonAfter.Sha256 -eq $poisonBefore.Sha256) `
+            "External poison TEMP/TMP bytes changed."
+    }
+    finally {
+        if (Test-Path -LiteralPath $poisonRoot) {
+            Remove-Item -LiteralPath $poisonRoot -Recurse -Force
+        }
+    }
+}
+
 function Test-RootIdentityGuard {
     $root = New-Fixture -Name "identity-guard"
     $manifest = Get-TreeManifest -Root $root
@@ -433,6 +585,8 @@ $tests = @(
     "Test-ReparseRejection",
     "Test-PermanentRootRejection",
     "Test-NamespaceRejection",
+    "Test-NegativePathSkipsHelperCompilation",
+    "Test-CompilerTempConfinementAndCleanup",
     "Test-RootIdentityGuard",
     "Test-RollbackBeforeSecondReplacement",
     "Test-EmittedTargetPostcondition",
