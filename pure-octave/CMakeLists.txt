@@ -27,12 +27,40 @@ pure_octave_validate_toolchain()
 set(PURE_OCTAVE_ABI "pure-octave/11.3.0/windows-x86_64/v1")
 set(PURE_OCTAVE_FINGERPRINT
   "DBD9C84E39FE1AAE99F04446B05F05B75D36644B")
+set(PURE_OCTAVE_TREE_SHA256
+  "959C23237F0852C29E131C5034B378FF4168B84325EFE1C92A50070A8BB89607")
 if (NOT OCTAVE_SIGNING_FINGERPRINT STREQUAL PURE_OCTAVE_FINGERPRINT)
   message(FATAL_ERROR
     "The configured Octave root is not the signature-validated Task 1 root.")
 endif ()
+
+set(PURE_OCTAVE_POWERSHELL
+  "C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe")
+if (NOT EXISTS "${PURE_OCTAVE_POWERSHELL}")
+  message(FATAL_ERROR
+    "Windows PowerShell is required to validate the Octave root identity.")
+endif ()
+execute_process(
+  COMMAND "${PURE_OCTAVE_POWERSHELL}" -NoLogo -NoProfile -NonInteractive
+    -ExecutionPolicy Bypass
+    -File "${CMAKE_CURRENT_SOURCE_DIR}/cmake/GetOctaveRootIdentity.ps1"
+    -Root "${OCTAVE_ROOT_NORMALIZED}"
+  RESULT_VARIABLE root_identity_result
+  OUTPUT_VARIABLE root_identity
+  ERROR_VARIABLE root_identity_stderr)
+string(STRIP "${root_identity}" root_identity)
+if (NOT root_identity_result EQUAL 0)
+  message(FATAL_ERROR
+    "Could not validate the Octave root content identity:\n"
+    "${root_identity_stderr}")
+endif ()
+if (NOT root_identity STREQUAL PURE_OCTAVE_TREE_SHA256)
+  message(FATAL_ERROR
+    "Octave root content identity mismatch: expected "
+    "${PURE_OCTAVE_TREE_SHA256}, got ${root_identity}")
+endif ()
 file(WRITE "${OCTAVE_ROOT_NORMALIZED}/pure-octave.fingerprint"
-  "${PURE_OCTAVE_FINGERPRINT}\n")
+  "${PURE_OCTAVE_FINGERPRINT}\n${PURE_OCTAVE_TREE_SHA256}\n")
 
 set(PURE_OCTAVE_LIBRARY_DIR "${CMAKE_CURRENT_BINARY_DIR}/lib/pure")
 file(MAKE_DIRECTORY "${PURE_OCTAVE_LIBRARY_DIR}")
@@ -110,6 +138,14 @@ if (BUILD_TESTING)
   add_executable(pure_octave_absolute_preload tests/absolute_preload.c)
   set_target_properties(pure_octave_absolute_preload PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${PURE_OCTAVE_TEST_BINARY_DIR}")
+  add_executable(pure_octave_restricted_runner tests/restricted_runner.c)
+  target_link_libraries(pure_octave_restricted_runner PRIVATE advapi32)
+  target_link_options(pure_octave_restricted_runner PRIVATE -municode)
+  set_target_properties(pure_octave_restricted_runner PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${PURE_OCTAVE_TEST_BINARY_DIR}")
+
+  file(TO_CMAKE_PATH "$ENV{USERPROFILE}/AppData/LocalLow"
+    PURE_OCTAVE_LOW_INTEGRITY_BASE)
 
   if (NOT EXISTS "${PURE_PREFIX}/bin/pure.exe")
     message(FATAL_ERROR "PURE_PREFIX does not contain bin/pure.exe: ${PURE_PREFIX}")
@@ -153,6 +189,17 @@ endforeach ()
 ]=] @ONLY)
   add_test(NAME pure-octave-rejected-root
     COMMAND "${CMAKE_COMMAND}" -P "${rejected_root_test}")
+  add_test(NAME pure-octave-root-identity
+    COMMAND "${CMAKE_COMMAND}"
+      "-DCMAKE_COMMAND=${CMAKE_COMMAND}"
+      "-DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
+      "-DBINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}"
+      "-DGENERATOR=${CMAKE_GENERATOR}"
+      "-DC_COMPILER=${CMAKE_C_COMPILER}"
+      "-DMAKE_PROGRAM=${CMAKE_MAKE_PROGRAM}"
+      "-DPURE_PREFIX=${PURE_PREFIX}"
+      "-DSIGNING_FINGERPRINT=${PURE_OCTAVE_FINGERPRINT}"
+      -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RootIdentityRegression.cmake")
   add_test(NAME pure-octave-extraction-containment
     COMMAND "${CMAKE_COMMAND}" -P
       "${CMAKE_CURRENT_SOURCE_DIR}/cmake/ContainmentRegression.cmake")
@@ -220,12 +267,15 @@ endforeach ()
       "-DEXPECTED_OUTPUT=PURE_OCTAVE_ERRORS_OK"
       -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunPureTest.cmake")
 
+  string(SHA256 lifecycle_build_id "${CMAKE_CURRENT_BINARY_DIR}")
+  string(SUBSTRING "${lifecycle_build_id}" 0 16 lifecycle_build_id)
   foreach (lifecycle_process RANGE 1 20)
     set(lifecycle_test_name
       "pure-octave-lifecycle-${lifecycle_process}")
+    set(lifecycle_audit_dir
+      "${PURE_OCTAVE_LOW_INTEGRITY_BASE}/pure-octave-${lifecycle_build_id}-lifecycle-${lifecycle_process}")
     set(lifecycle_work_dir
-      "${PURE_OCTAVE_TEST_BINARY_DIR}/lifecycle-${lifecycle_process}")
-    file(MAKE_DIRECTORY "${lifecycle_work_dir}")
+      "${lifecycle_audit_dir}/work")
     add_test(NAME "${lifecycle_test_name}"
       COMMAND "${CMAKE_COMMAND}"
         "-DPURE_EXECUTABLE=${PURE_PREFIX}/bin/pure.exe"
@@ -237,6 +287,12 @@ endforeach ()
         "-DTEST_WORKING_DIRECTORY=${lifecycle_work_dir}"
         "-DTEST_HOME=${lifecycle_work_dir}"
         "-DEXPECTED_OUTPUT=PURE_OCTAVE_LIFECYCLE_OK"
+        "-DWRITE_AUDIT_ROOT=${lifecycle_audit_dir}"
+        "-DALLOWED_WRITE_ROOT=${lifecycle_work_dir}"
+        "-DRESTRICT_WRITES=ON"
+        "-DRESTRICTED_RUNNER=$<TARGET_FILE:pure_octave_restricted_runner>"
+        "-DCLEAN_WRITE_AUDIT_ROOT=ON"
+        "-DWRITE_AUDIT_CLEANUP_BASE=${PURE_OCTAVE_LOW_INTEGRITY_BASE}"
         "-DREQUIRE_CLEAN_OUTPUT=ON"
         -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunPureTest.cmake")
     set_tests_properties("${lifecycle_test_name}" PROPERTIES
@@ -257,6 +313,41 @@ endforeach ()
       "-DRUN_PURE_TEST=${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunPureTest.cmake"
       "-DWORK_ROOT=${CMAKE_CURRENT_BINARY_DIR}/poison-init-test"
       -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunPoisonInitTest.cmake")
+
+  add_test(NAME pure-octave-write-audit-regression
+    COMMAND "${CMAKE_COMMAND}"
+      "-DCMAKE_COMMAND=${CMAKE_COMMAND}"
+      "-DPURE_EXECUTABLE=${PURE_PREFIX}/bin/pure.exe"
+      "-DPURE_PREFIX=${PURE_PREFIX}"
+      "-DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
+      "-DBRIDGE_DIR=${PURE_OCTAVE_LIBRARY_DIR}"
+      "-DTEST_SCRIPT=${CMAKE_CURRENT_SOURCE_DIR}/tests/poison_write.pure"
+      "-DOCTAVE_ROOT=${OCTAVE_ROOT_NORMALIZED}"
+      "-DRUN_PURE_TEST=${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunPureTest.cmake"
+      "-DWORK_ROOT=${PURE_OCTAVE_TEST_BINARY_DIR}/write-audit-regression"
+      "-DEXPECTED_OUTPUT=PURE_OCTAVE_POISON_WRITE_OK"
+      "-DEXPECTED_DIAGNOSTIC=Pure/Octave test wrote outside its controlled work directory"
+      -P
+        "${CMAKE_CURRENT_SOURCE_DIR}/cmake/ExpectPureTestWriteAuditFailure.cmake")
+
+  add_test(NAME pure-octave-write-confinement
+    COMMAND "${CMAKE_COMMAND}"
+      "-DCMAKE_COMMAND=${CMAKE_COMMAND}"
+      "-DPURE_EXECUTABLE=${PURE_PREFIX}/bin/pure.exe"
+      "-DPURE_PREFIX=${PURE_PREFIX}"
+      "-DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
+      "-DBRIDGE_DIR=${PURE_OCTAVE_LIBRARY_DIR}"
+      "-DTEST_SCRIPT=${CMAKE_CURRENT_SOURCE_DIR}/tests/poison_escape.pure"
+      "-DOCTAVE_ROOT=${OCTAVE_ROOT_NORMALIZED}"
+      "-DRUN_PURE_TEST=${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunPureTest.cmake"
+      "-DRESTRICTED_RUNNER=$<TARGET_FILE:pure_octave_restricted_runner>"
+      "-DWORK_ROOT=${PURE_OCTAVE_LOW_INTEGRITY_BASE}/pure-octave-${lifecycle_build_id}-write-confinement"
+      "-DWRITE_AUDIT_CLEANUP_BASE=${PURE_OCTAVE_LOW_INTEGRITY_BASE}"
+      "-DOUTSIDE_POISON=${CMAKE_CURRENT_BINARY_DIR}/pure-octave-write-escape-poison.txt"
+      "-DEXPECTED_OUTPUT=PURE_OCTAVE_OUTSIDE_WRITE_DENIED_OK"
+      "-DEXPECTED_RESULT=14"
+      -P
+        "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunPureTestWriteConfinement.cmake")
 
   add_test(NAME pure-octave-absolute-preload
     COMMAND "${CMAKE_COMMAND}"
@@ -294,6 +385,8 @@ endforeach ()
     pure-octave-callbacks
     pure-octave-errors
     pure-octave-poison-init pure-octave-absolute-preload
+    pure-octave-write-audit-regression
+    pure-octave-write-confinement
     PROPERTIES RESOURCE_LOCK pure_octave_interpreter)
 
   set(loader_audit_test
@@ -354,4 +447,29 @@ endforeach ()
 ]=] @ONLY)
   add_test(NAME pure-octave-dependencies
     COMMAND "${CMAKE_COMMAND}" -P "${dependency_audit_test}")
+
+  set(runtime_ownership_audit
+    "${CMAKE_CURRENT_SOURCE_DIR}/cmake/AuditRuntimeOwnership.cmake")
+  add_test(NAME pure-octave-runtime-ownership
+    COMMAND "${CMAKE_COMMAND}"
+      "-DOBJDUMP=${OCTAVE_RUNTIME_DIR}/objdump.exe"
+      "-DLOADER=$<TARGET_FILE:octave_embed>"
+      "-DIMPLEMENTATION=${PURE_OCTAVE_IMPL}"
+      "-DPURE_LIBRARY=${PURE_PREFIX}/bin/libpure.dll"
+      "-DPURE_RUNTIME_DIR=${PURE_PREFIX}/bin"
+      "-DOCTAVE_RUNTIME_DIR=${OCTAVE_RUNTIME_DIR}"
+      -P "${runtime_ownership_audit}")
+  add_test(NAME pure-octave-runtime-ownership-rejects-foreign-pure-runtime
+    COMMAND "${CMAKE_COMMAND}"
+      "-DCMAKE_COMMAND=${CMAKE_COMMAND}"
+      "-DAUDIT_SCRIPT=${runtime_ownership_audit}"
+      "-DOBJDUMP=${OCTAVE_RUNTIME_DIR}/objdump.exe"
+      "-DLOADER=$<TARGET_FILE:octave_embed>"
+      "-DIMPLEMENTATION=${PURE_OCTAVE_IMPL}"
+      "-DPURE_LIBRARY=${OCTAVE_RUNTIME_DIR}/libstdc++-6.dll"
+      "-DPURE_RUNTIME_DIR=${PURE_PREFIX}/bin"
+      "-DOCTAVE_RUNTIME_DIR=${OCTAVE_RUNTIME_DIR}"
+      "-DEXPECTED_DIAGNOSTIC=Pure runtime must import libc++.dll"
+      -P
+        "${CMAKE_CURRENT_SOURCE_DIR}/cmake/ExpectRuntimeOwnershipAuditFailure.cmake")
 endif ()

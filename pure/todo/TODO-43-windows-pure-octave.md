@@ -143,3 +143,35 @@ Windows Octave distribution.
   - The corrected complete permanent-root suite passed 34/34 in 211.76 seconds
     with `PURE_OCTAVE_ROOT=C:\Tools\GNU Octave\11.3.0`. A separate permanent
     PE/runtime audit printed `PURE_OCTAVE_PE_AUDIT_OK`.
+  - Task 4 fix round 1 binds the configured root to a canonical SHA-256 tree
+    identity, not merely the caller-provided signing fingerprint. The identity
+    covers 59,532 files (all Octave files except the generated trust marker)
+    using ordinal paths and per-file SHA-256 records and is pinned as
+    `959C23237F0852C29E131C5034B378FF4168B84325EFE1C92A50070A8BB89607`.
+    Reparse points are rejected. A shape-valid foreign-root regression was RED
+    in 1.40 seconds before the binding and GREEN in 1.75 seconds afterward.
+  - The composite trust marker contains the signature fingerprint plus the
+    pinned tree identity. The loader accepts exactly the LF or Windows CRLF
+    two-line form. An incremental header mutation and its revert each caused
+    Ninja to rebuild `octave_loader.c.obj` and relink `octave_embed.dll`.
+  - Lifecycle execution now combines a recursive before/after filesystem
+    snapshot outside each allowed work directory with a disposable Windows
+    helper. The helper verifies a Low-integrity work directory, lowers its own
+    primary token, requires `TOKEN_MANDATORY_POLICY_NO_WRITE_UP`, starts the
+    child suspended with `CreateProcessW`, validates the inherited child token,
+    and only then resumes it. TEMP, TMP, home, and work all stay inside the
+    controlled directory, and cleanup is accepted only for strict child paths
+    under `LocalLow`.
+  - The outside-write regression targets a marker in the default-Medium build
+    tree, outside both the audit and allowed roots. The final gate passed with
+    the marker absent. Temporarily disabling the confinement produced the
+    intended RED because the marker was created; the mutation was reverted.
+  - The automated versioned PE ownership audit checks the stable loader, bridge,
+    `libpure.dll`, `liboctave-13.dll`, and `liboctinterp-15.dll`. It requires
+    exact controlled DLLs, Pure-owned `libc++.dll`, Octave-owned
+    `libstdc++-6.dll`, exact versioned Octave bridge imports, and rejects
+    cross-runtime ownership. The initial missing-audit state was RED 0/2; the
+    normal audit and a foreign-Pure mutation passed 2/2 after implementation.
+  - Post-fix focused verification passed 5/5 in 12.82 seconds. After correcting
+    the Windows CRLF marker form, the complete permanent-root suite passed
+    39/39 in 191.72 seconds.

@@ -306,7 +306,12 @@ validate_root(const wchar_t *root)
                      sizeof(fingerprint_text), 0) <= 0)
     return 0;
   fingerprint = trim_utf8(fingerprint_text);
-  if (strcmp(fingerprint, PURE_OCTAVE_SIGNING_FINGERPRINT) != 0)
+  if (strcmp(fingerprint,
+             PURE_OCTAVE_SIGNING_FINGERPRINT "\n"
+             PURE_OCTAVE_ROOT_IDENTITY) != 0 &&
+      strcmp(fingerprint,
+             PURE_OCTAVE_SIGNING_FINGERPRINT "\r\n"
+             PURE_OCTAVE_ROOT_IDENTITY) != 0)
     {
       set_error("The selected Octave root has an unsupported fingerprint");
       return 0;

@@ -1,0 +1,12 @@
+using system;
+
+extern char *getenv(char*);
+
+let poison_path = getenv "PURE_OCTAVE_POISON_MARKER";
+stringp poison_path && ~null poison_path || exit 10;
+let poison_file = fopen poison_path "w";
+null poison_file && exit 11;
+fputs "poison write\n" poison_file >= 0 || exit 12;
+fflush poison_file == 0 || exit 13;
+
+puts "PURE_OCTAVE_POISON_WRITE_OK";
