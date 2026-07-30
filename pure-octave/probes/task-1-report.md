@@ -41,21 +41,65 @@ Fresh `Get-FileHash -Algorithm SHA256` output:
 Fresh detached-signature replay used:
 
 ```powershell
-$verifyRoot = "C:/pure-lang/.task1-signature-<unique-id>"
+$ErrorActionPreference = "Stop"
+$archive = "C:\tmp\octave-11.3.0-source-task51\octave-11.3.0.tar.xz"
+$signature = "$archive.sig"
+$scratchRoot = [IO.Path]::GetFullPath("C:\pure-lang")
+$verifyRoot = [IO.Path]::GetFullPath(
+    (Join-Path $scratchRoot ".task1-signature-<unique-id>"))
+$verifyPrefix = $scratchRoot.TrimEnd("\") + "\"
+$defaultGpgHome = Join-Path (
+    [Environment]::GetFolderPath("UserProfile")) ".gnupg"
+$gpgv = "C:\Program Files\Git\usr\bin\gpgv.exe"
+
+if (-not $verifyRoot.StartsWith(
+    $verifyPrefix, [StringComparison]::OrdinalIgnoreCase)) {
+    throw "verification root escaped scratch"
+}
 if (Test-Path -LiteralPath $verifyRoot) { throw "verification root exists" }
+if (Test-Path -LiteralPath $defaultGpgHome) {
+    throw "default GnuPG home exists; refusing ambiguous replay"
+}
+Get-Item -LiteralPath $archive, $signature, $gpgv | Out-Null
 New-Item -ItemType Directory -Path $verifyRoot | Out-Null
-gpgv.exe --status-fd 1 `
-  --keyring "$verifyRoot/gnu-keyring.gpg" `
-  C:/tmp/octave-11.3.0-source-task51/octave-11.3.0.tar.xz.sig `
-  C:/tmp/octave-11.3.0-source-task51/octave-11.3.0.tar.xz
+try {
+    $gpgHome = Join-Path $verifyRoot "gpg-home"
+    $keyring = Join-Path $verifyRoot "gnu-keyring.gpg"
+    New-Item -ItemType Directory -Path $gpgHome | Out-Null
+    Invoke-WebRequest -UseBasicParsing `
+        -Uri "https://ftp.gnu.org/gnu/gnu-keyring.gpg" `
+        -OutFile $keyring
+    if ((Get-Item -LiteralPath $keyring).Length -eq 0) {
+        throw "downloaded GNU keyring is empty"
+    }
+
+    Get-FileHash -LiteralPath $archive -Algorithm SHA256
+    & $gpgv --status-fd 1 `
+        --homedir $gpgHome.Replace("\", "/") `
+        --keyring $keyring.Replace("\", "/") `
+        $signature.Replace("\", "/") `
+        $archive.Replace("\", "/")
+    if ($LASTEXITCODE -ne 0) { throw "gpgv failed: $LASTEXITCODE" }
+}
+finally {
+    if (Test-Path -LiteralPath $verifyRoot) {
+        Remove-Item -LiteralPath $verifyRoot -Recurse -Force
+    }
+    if (Test-Path -LiteralPath $verifyRoot) {
+        throw "verification root cleanup failed"
+    }
+    if (Test-Path -LiteralPath $defaultGpgHome) {
+        throw "default GnuPG home was created"
+    }
+}
 ```
 
-The replay downloads the official keyring only after the absence precheck,
-uses `gpgv` with that exact keyring (and therefore never the default GnuPG
-home), and in `finally` removes only the canonical, strict-descendant
-verification root and verifies its absence.  If `gpg` is substituted for
-`gpgv`, it must use `--homedir` pointing at a separately prechecked disposable
-directory plus `--no-options`; it must never use `%APPDATA%\gnupg`.
+The replay acquires the keyring over HTTPS from the official GNU host only
+after all absence and containment prechecks.  Both `--homedir` and `--keyring`
+name explicit disposable paths.  `finally` removes only the canonical,
+strict-descendant verification root and proves that both it and the default
+user `.gnupg` remain absent.  It never reads from or writes to the default
+GnuPG home.
 
 It exited zero and emitted:
 
@@ -186,7 +230,12 @@ profile cleanup failure cannot skip stage removal.  It removes only the
 canonical, strict-descendant `C:\pure-lang\.task1-harness-*` root and verifies
 absence.  The harness makes ordinary/AppContainer exit codes and all output
 claims below executable assertions, including a successful, nonzero,
-in-bounds `FileNameInfo` result.
+in-bounds `FileNameInfo` result.  It parses the probe's key/value output and
+uses case-insensitive Windows path equality to require both ordinary final
+paths to equal the exact `\\?\` canonical target.  It also requires both
+ordinary and AppContainer `FileNameInfo` paths to equal the exact expected
+volume-relative target and each other; both invocations receive the same
+canonical target argument.
 
 ## Exact RED evidence
 

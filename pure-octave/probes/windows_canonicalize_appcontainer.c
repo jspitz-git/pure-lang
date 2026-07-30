@@ -57,76 +57,160 @@ enum
   probe_file_name_info_failed = 24
 };
 
-static void
-append_line (char *output, size_t output_size, const char *format, ...)
+typedef struct
 {
-  size_t used = strlen (output);
-  va_list args;
+  char *data;
+  size_t length;
+  size_t capacity;
+  int failed;
+} output_builder;
 
-  if (used >= output_size)
-    return;
+static void
+initialize_output (output_builder *output)
+{
+  output->length = 0;
+  output->capacity = 1024;
+  output->data = (char *) calloc (output->capacity, sizeof (char));
+  output->failed = output->data == NULL;
+}
+
+static int
+reserve_output (output_builder *output, size_t additional)
+{
+  size_t required;
+  size_t capacity;
+  char *resized;
+
+  if (output->failed)
+    return 0;
+
+  if (additional > (size_t) -1 - output->length - 1)
+    {
+      output->failed = 1;
+      return 0;
+    }
+
+  required = output->length + additional + 1;
+  if (required <= output->capacity)
+    return 1;
+
+  capacity = output->capacity;
+  while (capacity < required)
+    {
+      if (capacity > (size_t) -1 / 2)
+        {
+          capacity = required;
+          break;
+        }
+      capacity *= 2;
+    }
+
+  resized = (char *) realloc (output->data, capacity);
+  if (! resized)
+    {
+      output->failed = 1;
+      return 0;
+    }
+
+  output->data = resized;
+  output->capacity = capacity;
+  return 1;
+}
+
+static int
+append_line (output_builder *output, const char *format, ...)
+{
+  va_list args;
+  int required;
+  int written;
+
+  if (output->failed)
+    return 0;
 
   va_start (args, format);
-  _vsnprintf_s (output + used, output_size - used, _TRUNCATE, format, args);
+  required = _vscprintf (format, args);
   va_end (args);
+  if (required < 0
+      || ! reserve_output (output, (size_t) required))
+    {
+      output->failed = 1;
+      return 0;
+    }
+
+  va_start (args, format);
+  written
+    = _vsnprintf_s (output->data + output->length,
+                    output->capacity - output->length, _TRUNCATE,
+                    format, args);
+  va_end (args);
+  if (written != required)
+    {
+      output->failed = 1;
+      return 0;
+    }
+
+  output->length += (size_t) written;
+  return 1;
+}
+
+static int
+final_path_length_is_valid (DWORD length)
+{
+  return length < 32767;
 }
 
 static wchar_t *
 query_final_path (HANDLE file, DWORD flags, DWORD *length, DWORD *error)
 {
-  DWORD capacity = 512;
+  const DWORD capacity = 32767;
+  wchar_t *buffer
+    = (wchar_t *) calloc ((size_t) capacity, sizeof (wchar_t));
 
   *length = 0;
   *error = ERROR_SUCCESS;
 
-  while (capacity <= 32768)
+  if (! buffer)
     {
-      wchar_t *buffer = (wchar_t *) calloc (capacity, sizeof (wchar_t));
-      if (! buffer)
-        {
-          *error = ERROR_NOT_ENOUGH_MEMORY;
-          return NULL;
-        }
-
-      SetLastError (ERROR_SUCCESS);
-      DWORD result
-        = GetFinalPathNameByHandleW (file, buffer, capacity, flags);
-      if (result == 0)
-        {
-          *error = GetLastError ();
-          free (buffer);
-          return NULL;
-        }
-
-      if (result < capacity)
-        {
-          buffer[result] = L'\0';
-          *length = result;
-          return buffer;
-        }
-
-      free (buffer);
-      if (result >= 32768)
-        {
-          *error = ERROR_BUFFER_OVERFLOW;
-          return NULL;
-        }
-
-      capacity = result + 1;
+      *error = ERROR_NOT_ENOUGH_MEMORY;
+      return NULL;
     }
 
-  *error = ERROR_BUFFER_OVERFLOW;
-  return NULL;
+  SetLastError (ERROR_SUCCESS);
+  DWORD result
+    = GetFinalPathNameByHandleW (file, buffer, capacity, flags);
+  if (result == 0)
+    {
+      *error = GetLastError ();
+      free (buffer);
+      return NULL;
+    }
+
+  if (! final_path_length_is_valid (result))
+    {
+      *error = ERROR_BUFFER_OVERFLOW;
+      free (buffer);
+      return NULL;
+    }
+
+  buffer[result] = L'\0';
+  *length = result;
+  return buffer;
 }
 
 static void
-append_wide_path (char *output, size_t output_size, const char *label,
+append_wide_path (output_builder *output, const char *label,
                   const wchar_t *path, DWORD length)
 {
   char *utf8 = NULL;
   int required = 0;
 
-  if (path && length > 0 && length <= INT_MAX)
+  if (! path || length == 0)
+    {
+      append_line (output, "%s=\r\n", label);
+      return;
+    }
+
+  if (length <= INT_MAX)
     required = WideCharToMultiByte (CP_UTF8, 0, path, (int) length,
                                     NULL, 0, NULL, NULL);
 
@@ -138,14 +222,14 @@ append_wide_path (char *output, size_t output_size, const char *label,
                                   utf8, required, NULL, NULL) == required)
         {
           utf8[required] = '\0';
-          append_line (output, output_size, "%s=%s\r\n", label, utf8);
+          append_line (output, "%s=%s\r\n", label, utf8);
           free (utf8);
           return;
         }
     }
 
   free (utf8);
-  append_line (output, output_size, "%s=\r\n", label);
+  output->failed = 1;
 }
 
 static FILE_NAME_INFO *
@@ -204,10 +288,13 @@ query_file_name_info (HANDLE file, DWORD *length, DWORD *error)
 }
 
 static int
-write_output (const wchar_t *path, const char *output)
+write_output (const wchar_t *path, const char *output, size_t output_length)
 {
   DWORD written = 0;
-  DWORD size = (DWORD) strlen (output);
+  DWORD size;
+  if (output_length > MAXDWORD)
+    return 0;
+  size = (DWORD) output_length;
   HANDLE file = CreateFileW (path, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS,
                              FILE_ATTRIBUTE_NORMAL, NULL);
 
@@ -275,7 +362,7 @@ enumerate_target (const wchar_t *path, DWORD *error)
 static int
 run_probe (const wchar_t *target, const wchar_t *output_path)
 {
-  char output[8192] = "";
+  output_builder output;
   wchar_t *normalized = NULL;
   wchar_t *opened = NULL;
   FILE_NAME_INFO *file_info = NULL;
@@ -291,53 +378,59 @@ run_probe (const wchar_t *target, const wchar_t *output_path)
   DWORD bytes_read = 0;
   unsigned char byte = 0;
 
+  initialize_output (&output);
+
   SetLastError (ERROR_SUCCESS);
   HANDLE canonical_handle
     = CreateFileW (target, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING,
                    FILE_FLAG_BACKUP_SEMANTICS, NULL);
   open_error = (canonical_handle == INVALID_HANDLE_VALUE
                 ? GetLastError () : ERROR_SUCCESS);
-  append_line (output, sizeof (output), "CREATEFILE_HANDLE=%d ERROR=%lu\r\n",
+  append_line (&output, "CREATEFILE_HANDLE=%d ERROR=%lu\r\n",
                canonical_handle != INVALID_HANDLE_VALUE,
                (unsigned long) open_error);
 
   if (canonical_handle == INVALID_HANDLE_VALUE)
     {
-      write_output (output_path, output);
-      return probe_create_file_failed;
+      int result
+        = (! output.failed
+           && write_output (output_path, output.data, output.length)
+           ? probe_create_file_failed : probe_output_failed);
+      free (output.data);
+      return result;
     }
 
   normalized
     = query_final_path (canonical_handle, FILE_NAME_NORMALIZED,
                         &normalized_length, &normalized_error);
-  append_line (output, sizeof (output),
+  append_line (&output,
                "GETFINAL_NORMALIZED_LENGTH=%lu ERROR=%lu NONEMPTY=%d\r\n",
                (unsigned long) normalized_length,
                (unsigned long) normalized_error,
                normalized && normalized_length > 0);
-  append_wide_path (output, sizeof (output), "GETFINAL_NORMALIZED_PATH",
+  append_wide_path (&output, "GETFINAL_NORMALIZED_PATH",
                     normalized, normalized_length);
 
   opened
     = query_final_path (canonical_handle, FILE_NAME_OPENED,
                         &opened_length, &opened_error);
-  append_line (output, sizeof (output),
+  append_line (&output,
                "GETFINAL_OPENED_LENGTH=%lu ERROR=%lu NONEMPTY=%d\r\n",
                (unsigned long) opened_length,
                (unsigned long) opened_error,
                opened && opened_length > 0);
-  append_wide_path (output, sizeof (output), "GETFINAL_OPENED_PATH",
+  append_wide_path (&output, "GETFINAL_OPENED_PATH",
                     opened, opened_length);
 
   file_info
     = query_file_name_info (canonical_handle, &file_info_length,
                             &file_info_error);
-  append_line (output, sizeof (output),
+  append_line (&output,
                "FILE_NAME_INFO_OK=%d LENGTH=%lu ERROR=%lu NONEMPTY=%d\r\n",
                file_info != NULL, (unsigned long) file_info_length,
                (unsigned long) file_info_error,
                file_info && file_info_length > 0);
-  append_wide_path (output, sizeof (output), "FILE_NAME_INFO_PATH",
+  append_wide_path (&output, "FILE_NAME_INFO_PATH",
                     file_info ? file_info->FileName : NULL, file_info_length);
   CloseHandle (canonical_handle);
 
@@ -353,17 +446,18 @@ run_probe (const wchar_t *target, const wchar_t *output_path)
     read_error = GetLastError ();
   if (read_handle != INVALID_HANDLE_VALUE)
     CloseHandle (read_handle);
-  append_line (output, sizeof (output),
+  append_line (&output,
                "READFILE=%d ERROR=%lu BYTES=%lu BYTE=%u\r\n",
                read_ok, (unsigned long) read_error,
                (unsigned long) bytes_read, (unsigned int) byte);
 
   int enum_ok = enumerate_target (target, &enum_error);
-  append_line (output, sizeof (output), "ENUMERATION=%d ERROR=%lu\r\n",
+  append_line (&output, "ENUMERATION=%d ERROR=%lu\r\n",
                enum_ok, (unsigned long) enum_error);
 
   int result = probe_ok;
-  if (! write_output (output_path, output))
+  if (output.failed
+      || ! write_output (output_path, output.data, output.length))
     result = probe_output_failed;
   else if (! read_ok)
     result = probe_read_failed;
@@ -374,6 +468,7 @@ run_probe (const wchar_t *target, const wchar_t *output_path)
   else if (! normalized || normalized_length == 0)
     result = probe_canonicalize_red;
 
+  free (output.data);
   free (file_info);
   free (opened);
   free (normalized);

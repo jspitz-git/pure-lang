@@ -103,6 +103,53 @@ function Assert-OutputMatch {
     }
 }
 
+function ConvertFrom-ProbeOutput {
+    param([Parameter(Mandatory = $true)][string] $Text)
+
+    $values = @{}
+    foreach ($line in ($Text -split "\r?\n")) {
+        if ([string]::IsNullOrEmpty($line)) {
+            continue
+        }
+        if ($line -notmatch "^([^=]+)=(.*)$") {
+            throw "Malformed probe output line: $line"
+        }
+        $key = $Matches[1]
+        if ($values.ContainsKey($key)) {
+            throw "Duplicate probe output key: $key"
+        }
+        $values[$key] = $Matches[2]
+    }
+    return $values
+}
+
+function Get-RequiredOutputValue {
+    param(
+        [Parameter(Mandatory = $true)][hashtable] $Values,
+        [Parameter(Mandatory = $true)][string] $Key,
+        [Parameter(Mandatory = $true)][string] $Label
+    )
+
+    if (-not $Values.ContainsKey($Key) -or
+        [string]::IsNullOrEmpty([string] $Values[$Key])) {
+        throw "$Label is missing or empty: $Key"
+    }
+    return [string] $Values[$Key]
+}
+
+function Assert-WindowsPathEqual {
+    param(
+        [Parameter(Mandatory = $true)][string] $Actual,
+        [Parameter(Mandatory = $true)][string] $Expected,
+        [Parameter(Mandatory = $true)][string] $Label
+    )
+
+    if (-not [string]::Equals(
+        $Actual, $Expected, [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "$Label path mismatch`nactual:   $Actual`nexpected: $Expected"
+    }
+}
+
 $repoRoot = [System.IO.Path]::GetFullPath(
     (Join-Path $PSScriptRoot "..\.."))
 if ([string]::IsNullOrWhiteSpace($ScratchRoot)) {
@@ -168,6 +215,18 @@ try {
         -Label "target"
     Assert-NoReparseTree -Root $stageCanonical
 
+    $targetVolumeRoot = [System.IO.Path]::GetPathRoot($targetCanonical)
+    if ($targetVolumeRoot -notmatch "^[A-Za-z]:\\$") {
+        throw "Probe target must be on a local drive: $targetCanonical"
+    }
+    $expectedFinalPath = "\\?\$targetCanonical"
+    $expectedFileNameInfoPath =
+        "\" + $targetCanonical.Substring($targetVolumeRoot.Length)
+    $ordinaryTargetArgument = $targetCanonical
+    $packagedTargetArgument = $targetCanonical
+    Assert-WindowsPathEqual -Actual $packagedTargetArgument `
+        -Expected $ordinaryTargetArgument -Label "probe invocation target"
+
     if (-not (Test-Path -LiteralPath $VsWherePath -PathType Leaf)) {
         throw "vswhere not found: $VsWherePath"
     }
@@ -196,7 +255,8 @@ try {
     Assert-NoReparseTree -Root $stageCanonical
     $probeAvailable = $true
 
-    & $probeCanonical --probe $targetCanonical $ordinaryOutputPath
+    & $probeCanonical --probe $ordinaryTargetArgument `
+        $ordinaryOutputPath
     $ordinaryExit = $LASTEXITCODE
     Assert-ExitCode -Actual $ordinaryExit -Expected 0 `
         -Label "ordinary probe"
@@ -221,9 +281,27 @@ try {
         -Pattern "(?m)^ENUMERATION=1 ERROR=0\r?$" `
         -Label "ordinary enumeration"
 
+    $ordinaryValues = ConvertFrom-ProbeOutput -Text $ordinaryOutput
+    $ordinaryNormalizedPath = Get-RequiredOutputValue `
+        -Values $ordinaryValues -Key "GETFINAL_NORMALIZED_PATH" `
+        -Label "ordinary normalized path"
+    $ordinaryOpenedPath = Get-RequiredOutputValue `
+        -Values $ordinaryValues -Key "GETFINAL_OPENED_PATH" `
+        -Label "ordinary opened path"
+    $ordinaryFileNameInfoPath = Get-RequiredOutputValue `
+        -Values $ordinaryValues -Key "FILE_NAME_INFO_PATH" `
+        -Label "ordinary FileNameInfo path"
+    Assert-WindowsPathEqual -Actual $ordinaryNormalizedPath `
+        -Expected $expectedFinalPath -Label "ordinary normalized"
+    Assert-WindowsPathEqual -Actual $ordinaryOpenedPath `
+        -Expected $expectedFinalPath -Label "ordinary opened"
+    Assert-WindowsPathEqual -Actual $ordinaryFileNameInfoPath `
+        -Expected $expectedFileNameInfoPath -Label "ordinary FileNameInfo"
+
     $profileMayExist = $true
     $packagedLines = & $probeCanonical --appcontainer $profileName `
-        $stageCanonical $workCanonical $probeCanonical $targetCanonical 2>&1
+        $stageCanonical $workCanonical $probeCanonical `
+        $packagedTargetArgument 2>&1
     $packagedExit = $LASTEXITCODE
     $packagedConsole = $packagedLines -join [Environment]::NewLine
     Assert-ExitCode -Actual $packagedExit -Expected 10 `
@@ -254,6 +332,17 @@ try {
     Assert-OutputMatch -Text $packagedOutput `
         -Pattern "(?m)^ENUMERATION=1 ERROR=0\r?$" `
         -Label "AppContainer enumeration"
+
+    $packagedValues = ConvertFrom-ProbeOutput -Text $packagedOutput
+    $packagedFileNameInfoPath = Get-RequiredOutputValue `
+        -Values $packagedValues -Key "FILE_NAME_INFO_PATH" `
+        -Label "AppContainer FileNameInfo path"
+    Assert-WindowsPathEqual -Actual $packagedFileNameInfoPath `
+        -Expected $expectedFileNameInfoPath `
+        -Label "AppContainer FileNameInfo"
+    Assert-WindowsPathEqual -Actual $packagedFileNameInfoPath `
+        -Expected $ordinaryFileNameInfoPath `
+        -Label "ordinary/AppContainer FileNameInfo"
 
     $scratchAclAfter = (Get-Acl -LiteralPath $scratchCanonical).Sddl
     if ($scratchAclAfter -ne $scratchAclBefore) {
