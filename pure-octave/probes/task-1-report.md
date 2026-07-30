@@ -41,10 +41,21 @@ Fresh `Get-FileHash -Algorithm SHA256` output:
 Fresh detached-signature replay used:
 
 ```powershell
-gpgv.exe --status-fd 1 --keyring C:/pure-lang/.task1-build/gnu-keyring.gpg `
+$verifyRoot = "C:/pure-lang/.task1-signature-<unique-id>"
+if (Test-Path -LiteralPath $verifyRoot) { throw "verification root exists" }
+New-Item -ItemType Directory -Path $verifyRoot | Out-Null
+gpgv.exe --status-fd 1 `
+  --keyring "$verifyRoot/gnu-keyring.gpg" `
   C:/tmp/octave-11.3.0-source-task51/octave-11.3.0.tar.xz.sig `
   C:/tmp/octave-11.3.0-source-task51/octave-11.3.0.tar.xz
 ```
+
+The replay downloads the official keyring only after the absence precheck,
+uses `gpgv` with that exact keyring (and therefore never the default GnuPG
+home), and in `finally` removes only the canonical, strict-descendant
+verification root and verifies its absence.  If `gpg` is substituted for
+`gpgv`, it must use `--homedir` pointing at a separately prechecked disposable
+directory plus `--no-options`; it must never use `%APPDATA%\gnupg`.
 
 It exited zero and emitted:
 
@@ -55,6 +66,54 @@ VALIDSIG DBD9C84E39FE1AAE99F04446B05F05B75D36644B 2026-06-02 ...
 
 The `VALIDSIG` primary fingerprint exactly matches the already trusted
 fingerprint `DBD9C84E39FE1AAE99F04446B05F05B75D36644B`.
+
+## Official Windows package and build provenance
+
+The tested installed tree is `C:\Tools\GNU Octave\11.3.0`.  Its
+`README.html` identifies Octave 11.3.0, its packaging-tree `HG-ID` is
+`8837c9048e1a`, and `etc\os-release` identifies the distribution environment
+as MSYS2.  `pure-octave.fingerprint` records the official signing fingerprint
+`DBD9C84E39FE1AAE99F04446B05F05B75D36644B` and package hash
+`959C23237F0852C29E131C5034B378FF4168B84325EFE1C92A50070A8BB89607`.
+The extracted, signature-verified Octave source has `HG-ID 4e62258d6e20`.
+
+The installed interpreter's `__octave_config_info__()` reports:
+
+```text
+version=11.3.0
+release_date=2026-06-01
+hg_id=4e62258d6e20
+canonical_host_type=x86_64-w64-mingw32
+windows=1
+CC=x86_64-w64-mingw32-gcc
+CXX=x86_64-w64-mingw32-g++
+GCC_VERSION=15.2.0
+GXX_VERSION=15.2.0
+CFLAGS=-g -O2
+CXXFLAGS=-g -O2
+DEFS=-DHAVE_CONFIG_H
+```
+
+The configured options include the exact target/build pair
+`--host=x86_64-w64-mingw32 --build=x86_64-pc-linux-gnu`, the MXE prefix
+`/scratch/build/mxe-octave-w64/usr/x86_64-w64-mingw32`,
+`--enable-relocate-all`, `--with-blas=-lblas -lxerbla`, `--enable-64`,
+`--with-x=no`, and `--enable-cross-tools`.  The installed runtime includes
+`libstdc++-6.dll`, `libgcc_s_seh-1.dll`, and `liboctave-13.dll`; this is the
+MinGW GCC/libstdc++ Octave runtime.
+
+The source file `oct-conf-post-private.in.h` contains:
+
+```c
+#if defined (__WIN32__) && ! defined (__CYGWIN__)
+#  define OCTAVE_USE_WINDOWS_API 1
+#endif
+```
+
+Thus this native MinGW target selects the Windows implementation discussed
+below.  MSVC is used only to build the small standalone Win32 probe with
+strict warnings; it is not the compiler or C++ runtime provenance of the
+tested Octave package.
 
 ## Exact Octave branch
 
@@ -97,15 +156,37 @@ probe.exe --probe TARGET OUTPUT
 probe.exe --appcontainer UNIQUE_PROFILE STAGE WORK PROBE TARGET
 ```
 
-The verified run copied the executable and the existing nonempty
+The committed reproducible harness is:
+
+```powershell
+pwsh -NoProfile -File `
+  pure-octave/probes/run_windows_canonicalize_appcontainer.ps1 `
+  -ScratchRoot C:\pure-lang
+```
+
+It canonicalizes source, fixture, scratch, stage, work, probe, and target;
+requires every generated path to be a strict descendant of the disposable
+stage as appropriate; and rejects reparse points in all path components and
+the complete staged tree.  It snapshots the scratch-root ACL before the run
+and proves that the launcher changes ACLs only inside the disposable stage.
+
+The harness copies the executable and the existing nonempty
 `pure-octave/probes/embed_probe.cc` fixture into one disposable stage.  It ran
 `--probe` ordinarily, then launched `--probe` in a zero-capability
 AppContainer against that exact same staged target.  The launcher grants the
 temporary package SID read/execute on the stage and modify on its work
-subdirectory.  It waits at most 15 seconds, terminates a timed-out child with a
-further bounded wait, and always attempts `DeleteAppContainerProfile`.
-The calling PowerShell `try/finally` removes only the resolved
-`C:\pure-lang\.task1-stage-*` path and verifies it no longer exists.
+subdirectory.  It creates the child suspended, opens the child token, proves
+`TokenIsAppContainer == 1`, requires the exact expected package SID and zero
+capabilities, and only then resumes it.  It distinguishes timeout, failed,
+and unexpected waits; every failure path requires `TerminateProcess` to
+succeed and a second bounded wait to return `WAIT_OBJECT_0`.
+
+PowerShell `finally` independently attempts profile and stage cleanup, so a
+profile cleanup failure cannot skip stage removal.  It removes only the
+canonical, strict-descendant `C:\pure-lang\.task1-harness-*` root and verifies
+absence.  The harness makes ordinary/AppContainer exit codes and all output
+claims below executable assertions, including a successful, nonzero,
+in-bounds `FileNameInfo` result.
 
 ## Exact RED evidence
 
@@ -115,12 +196,12 @@ Ordinary process, exit `0`:
 
 ```text
 CREATEFILE_HANDLE=1 ERROR=0
-GETFINAL_NORMALIZED_LENGTH=49 ERROR=0 NONEMPTY=1
-GETFINAL_NORMALIZED_PATH=\\?\C:\pure-lang\.task1-stage-run4\embed_probe.cc
-GETFINAL_OPENED_LENGTH=49 ERROR=0 NONEMPTY=1
-GETFINAL_OPENED_PATH=\\?\C:\pure-lang\.task1-stage-run4\embed_probe.cc
-FILE_NAME_INFO_OK=1 LENGTH=43 ERROR=0 NONEMPTY=1
-FILE_NAME_INFO_PATH=\pure-lang\.task1-stage-run4\embed_probe.cc
+GETFINAL_NORMALIZED_LENGTH=87 ERROR=0 NONEMPTY=1
+GETFINAL_NORMALIZED_PATH=\\?\C:\pure-lang\.task1-harness-<unique-id>\fixture\embed_probe.cc
+GETFINAL_OPENED_LENGTH=87 ERROR=0 NONEMPTY=1
+GETFINAL_OPENED_PATH=\\?\C:\pure-lang\.task1-harness-<unique-id>\fixture\embed_probe.cc
+FILE_NAME_INFO_OK=1 LENGTH=81 ERROR=0 NONEMPTY=1
+FILE_NAME_INFO_PATH=\pure-lang\.task1-harness-<unique-id>\fixture\embed_probe.cc
 READFILE=1 ERROR=0 BYTES=1 BYTE=35
 ENUMERATION=1 ERROR=0
 ```
@@ -128,13 +209,14 @@ ENUMERATION=1 ERROR=0
 Zero-capability AppContainer process, expected RED exit `10`:
 
 ```text
+TOKEN_IS_APPCONTAINER=1 TOKEN_SID_MATCH=1 TOKEN_CAPABILITIES=0
 CREATEFILE_HANDLE=1 ERROR=0
 GETFINAL_NORMALIZED_LENGTH=0 ERROR=5 NONEMPTY=0
 GETFINAL_NORMALIZED_PATH=
 GETFINAL_OPENED_LENGTH=0 ERROR=5 NONEMPTY=0
 GETFINAL_OPENED_PATH=
-FILE_NAME_INFO_OK=1 LENGTH=43 ERROR=0 NONEMPTY=1
-FILE_NAME_INFO_PATH=\pure-lang\.task1-stage-run4\embed_probe.cc
+FILE_NAME_INFO_OK=1 LENGTH=81 ERROR=0 NONEMPTY=1
+FILE_NAME_INFO_PATH=\pure-lang\.task1-harness-<unique-id>\fixture\embed_probe.cc
 READFILE=1 ERROR=0 BYTES=1 BYTE=35
 ENUMERATION=1 ERROR=0
 ```
@@ -149,6 +231,7 @@ Cleanup output:
 
 ```text
 PROFILE_DELETE_HRESULT=0x00000000
+PROFILE_CLEANUP_HRESULT=0x00000000
 STAGE_EXISTS_AFTER_CLEANUP=False
 ```
 
