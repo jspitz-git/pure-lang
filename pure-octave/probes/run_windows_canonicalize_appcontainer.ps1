@@ -12,6 +12,7 @@ pwsh -NoProfile -File .\run_windows_canonicalize_appcontainer.ps1 `
 param(
     [string] $ScratchRoot = "",
     [string] $FixturePath = "",
+    [string] $MinGWCompiler = "",
     [string] $VsWherePath =
         "C:\Program Files (x86)\Microsoft Visual Studio\Installer\vswhere.exe"
 )
@@ -184,14 +185,17 @@ $ordinaryOutputPath = Join-Path $workDirectory "ordinary.txt"
 $packagedOutputPath = Join-Path $workDirectory "appcontainer.txt"
 $junctionDirectory = Join-Path $stageRoot "junction"
 $junctionOutputPath = Join-Path $workDirectory "junction.txt"
+$hardlinkPath = Join-Path $fixtureDirectory "embed_probe-hardlink.cc"
+$junctionHardlinkOutputPath = Join-Path $workDirectory "junction-hardlink.txt"
+$substOutputPath = Join-Path $workDirectory "subst.txt"
 $forcedFallbackOutputPath = Join-Path $workDirectory "forced-fallback.txt"
-$volumeMutationOutputPath = Join-Path $workDirectory "volume-mismatch.txt"
-$reparseMutationOutputPath = Join-Path $workDirectory "reparse.txt"
-$pathMutationOutputPath = Join-Path $workDirectory "malformed-path.txt"
 $maximumInfoOutputPath = Join-Path $workDirectory "file-name-info-max.txt"
 
+$sharedValidationOutputPath = Join-Path $workDirectory "shared-validation.txt"
 $profileMayExist = $false
 $probeAvailable = $false
+$substDrive = $null
+$substAvailable = $false
 $ordinaryOutput = ""
 $packagedOutput = ""
 $packagedConsole = ""
@@ -234,27 +238,38 @@ try {
     Assert-WindowsPathEqual -Actual $packagedTargetArgument `
         -Expected $ordinaryTargetArgument -Label "probe invocation target"
 
-    if (-not (Test-Path -LiteralPath $VsWherePath -PathType Leaf)) {
-        throw "vswhere not found: $VsWherePath"
+    if ([string]::IsNullOrWhiteSpace($MinGWCompiler)) {
+        if (-not (Test-Path -LiteralPath $VsWherePath -PathType Leaf)) {
+            throw "vswhere not found: $VsWherePath"
+        }
+        $installationPath = (& $VsWherePath -latest -products * `
+            -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 `
+            -property installationPath | Select-Object -First 1)
+        if ([string]::IsNullOrWhiteSpace($installationPath)) {
+            throw "Visual Studio C++ Build Tools installation not found"
+        }
+        $vcvarsPath = Join-Path $installationPath `
+            "VC\Auxiliary\Build\vcvars64.bat"
+        if (-not (Test-Path -LiteralPath $vcvarsPath -PathType Leaf)) {
+            throw "vcvars64.bat not found: $vcvarsPath"
+        }
+        $buildCommand =
+            "`"$vcvarsPath`" >nul && cl /nologo /W4 /WX /TC " +
+            "/Fo:`"$objectPath`" /Fe:`"$probePath`" `"$sourceCanonical`" " +
+            "/link userenv.lib advapi32.lib"
+        & "$env:SystemRoot\System32\cmd.exe" /d /s /c $buildCommand
+        Assert-ExitCode -Actual $LASTEXITCODE -Expected 0 -Label "MSVC build"
+        $buildToolchain = "MSVC"
     }
-    $installationPath = (& $VsWherePath -latest -products * `
-        -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 `
-        -property installationPath | Select-Object -First 1)
-    if ([string]::IsNullOrWhiteSpace($installationPath)) {
-        throw "Visual Studio C++ Build Tools installation not found"
+    else {
+        $compilerCanonical = Get-CanonicalExistingPath -Path $MinGWCompiler
+        $env:PATH = (Split-Path -Parent $compilerCanonical) + ";" + $env:PATH
+        & $compilerCanonical -x c++ -std=gnu++17 -Wall -Wextra -Werror -municode `
+            -DNTDDI_VERSION=0x0A000007 -D_WIN32_WINNT=0x0A00 `
+            $sourceCanonical -o $probePath -luserenv -ladvapi32
+        Assert-ExitCode -Actual $LASTEXITCODE -Expected 0 -Label "MinGW build"
+        $buildToolchain = "MinGW-G++"
     }
-    $vcvarsPath = Join-Path $installationPath `
-        "VC\Auxiliary\Build\vcvars64.bat"
-    if (-not (Test-Path -LiteralPath $vcvarsPath -PathType Leaf)) {
-        throw "vcvars64.bat not found: $vcvarsPath"
-    }
-
-    $buildCommand =
-        "`"$vcvarsPath`" >nul && cl /nologo /W4 /WX /TC " +
-        "/Fo:`"$objectPath`" /Fe:`"$probePath`" `"$sourceCanonical`" " +
-        "/link userenv.lib advapi32.lib"
-    & "$env:SystemRoot\System32\cmd.exe" /d /s /c $buildCommand
-    Assert-ExitCode -Actual $LASTEXITCODE -Expected 0 -Label "MSVC build"
 
     $probeCanonical = Get-CanonicalExistingPath -Path $probePath
     Assert-StrictDescendant -Child $probeCanonical -Parent $stageCanonical `
@@ -282,6 +297,12 @@ try {
         -Pattern "(?m)^FILE_NAME_INFO_OK=1 LENGTH=[1-9][0-9]* ERROR=0 NONEMPTY=1\r?$" `
         -Label "ordinary FileNameInfo"
     Assert-OutputMatch -Text $ordinaryOutput `
+        -Pattern "(?m)^FILE_NORMALIZED_NAME_INFO_OK=1 LENGTH=[1-9][0-9]* ERROR=0 NONEMPTY=1\r?$" `
+        -Label "ordinary FileNormalizedNameInfo"
+    Assert-OutputMatch -Text $ordinaryOutput `
+        -Pattern "(?m)^SYSTEM_WINDOWS_DIRECTORY_LENGTH=[1-9][0-9]* ERROR=0 NONEMPTY=1\r?$" `
+        -Label "ordinary GetSystemWindowsDirectoryW"
+    Assert-OutputMatch -Text $ordinaryOutput `
         -Pattern "(?m)^READFILE=1 ERROR=0 BYTES=1 BYTE=[0-9]+\r?$" `
         -Label "ordinary ReadFile"
     Assert-OutputMatch -Text $ordinaryOutput `
@@ -298,12 +319,18 @@ try {
     $ordinaryFileNameInfoPath = Get-RequiredOutputValue `
         -Values $ordinaryValues -Key "FILE_NAME_INFO_PATH" `
         -Label "ordinary FileNameInfo path"
+    $ordinaryFileNormalizedNameInfoPath = Get-RequiredOutputValue `
+        -Values $ordinaryValues -Key "FILE_NORMALIZED_NAME_INFO_PATH" `
+        -Label "ordinary FileNormalizedNameInfo path"
     Assert-WindowsPathEqual -Actual $ordinaryNormalizedPath `
         -Expected $expectedFinalPath -Label "ordinary normalized"
     Assert-WindowsPathEqual -Actual $ordinaryOpenedPath `
         -Expected $expectedFinalPath -Label "ordinary opened"
     Assert-WindowsPathEqual -Actual $ordinaryFileNameInfoPath `
         -Expected $expectedFileNameInfoPath -Label "ordinary FileNameInfo"
+    Assert-WindowsPathEqual -Actual $ordinaryFileNormalizedNameInfoPath `
+        -Expected $expectedFileNameInfoPath `
+        -Label "ordinary FileNormalizedNameInfo"
     Assert-OutputMatch -Text $ordinaryOutput `
         -Pattern "(?m)^CANDIDATE_SOURCE=NORMALIZED ERROR=0 NONEMPTY=1\r?$" `
         -Label "ordinary candidate"
@@ -336,39 +363,101 @@ try {
     $junctionTarget = Join-Path $junctionDirectory "embed_probe.cc"
     & $probeCanonical --probe-mutation force-fallback `
         $junctionTarget $junctionOutputPath
-    Assert-ExitCode -Actual $LASTEXITCODE -Expected 25 `
-        -Label "real junction fail-closed fallback"
+    Assert-ExitCode -Actual $LASTEXITCODE -Expected 0 `
+        -Label "real junction normalized fallback"
     $junctionOutput = Get-Content -Raw -LiteralPath $junctionOutputPath
     Assert-OutputMatch -Text $junctionOutput `
-        -Pattern "(?m)^CANDIDATE_SOURCE=REJECTED ERROR=5 NONEMPTY=0\r?$" `
-        -Label "real junction fail-closed fallback"
+        -Pattern "(?m)^FILE_NORMALIZED_NAME_INFO_OK=1 LENGTH=[1-9][0-9]* ERROR=0 NONEMPTY=1\r?$" `
+        -Label "junction FileNormalizedNameInfo"
+    Assert-OutputMatch -Text $junctionOutput `
+        -Pattern "(?m)^CANDIDATE_SOURCE=FALLBACK ERROR=0 NONEMPTY=1\r?$" `
+        -Label "real junction normalized fallback"
     $junctionValues = ConvertFrom-ProbeOutput -Text $junctionOutput
-    if ($junctionValues["CANDIDATE_PATH"] -ne "") {
-        throw "real junction returned a candidate path"
-    }
+    $junctionFileNormalizedNameInfoPath = Get-RequiredOutputValue `
+        -Values $junctionValues -Key "FILE_NORMALIZED_NAME_INFO_PATH" `
+        -Label "junction FileNormalizedNameInfo path"
+    Assert-WindowsPathEqual -Actual $junctionFileNormalizedNameInfoPath `
+        -Expected $expectedFileNameInfoPath `
+        -Label "junction FileNormalizedNameInfo"
+    $junctionCandidatePath = Get-RequiredOutputValue `
+        -Values $junctionValues -Key "CANDIDATE_PATH" `
+        -Label "junction candidate path"
+    Assert-WindowsPathEqual -Actual $junctionCandidatePath `
+        -Expected $expectedFinalPath -Label "junction underlying candidate"
 
+    New-Item -ItemType HardLink -Path $hardlinkPath -Target $targetCanonical |
+        Out-Null
+    $hardlinkCanonical = Get-CanonicalExistingPath -Path $hardlinkPath
+    $expectedHardlinkInfoPath =
+        "\" + $hardlinkCanonical.Substring($targetVolumeRoot.Length)
+    $junctionHardlinkTarget =
+        Join-Path $junctionDirectory "embed_probe-hardlink.cc"
+    & $probeCanonical --probe-mutation force-fallback `
+        $junctionHardlinkTarget $junctionHardlinkOutputPath
+    Assert-ExitCode -Actual $LASTEXITCODE -Expected 0 `
+        -Label "junction+hardlink normalized fallback"
+    $junctionHardlinkOutput =
+        Get-Content -Raw -LiteralPath $junctionHardlinkOutputPath
+    $junctionHardlinkValues =
+        ConvertFrom-ProbeOutput -Text $junctionHardlinkOutput
+    $junctionHardlinkNormalizedPath = Get-RequiredOutputValue `
+        -Values $junctionHardlinkValues -Key "FILE_NORMALIZED_NAME_INFO_PATH" `
+        -Label "junction+hardlink normalized path"
+    Assert-WindowsPathEqual -Actual $junctionHardlinkNormalizedPath `
+        -Expected $expectedHardlinkInfoPath `
+        -Label "junction+hardlink FileNormalizedNameInfo"
+    $junctionHardlinkCandidatePath = Get-RequiredOutputValue `
+        -Values $junctionHardlinkValues -Key "CANDIDATE_PATH" `
+        -Label "junction+hardlink candidate path"
+    $expectedHardlinkCandidatePath = "\\?\" + $hardlinkCanonical
+    Assert-WindowsPathEqual -Actual $junctionHardlinkCandidatePath `
+        -Expected $expectedHardlinkCandidatePath `
+        -Label "junction+hardlink underlying candidate"
 
-    $mutationCases = @(
-        @("volume-mismatch", $volumeMutationOutputPath),
-        @("reparse", $reparseMutationOutputPath),
-        @("malformed-path", $pathMutationOutputPath)
-    )
-    foreach ($mutationCase in $mutationCases) {
-        $mutationName = $mutationCase[0]
-        $mutationOutputPath = $mutationCase[1]
-        & $probeCanonical --probe-mutation $mutationName `
-            $ordinaryTargetArgument $mutationOutputPath
-        Assert-ExitCode -Actual $LASTEXITCODE -Expected 25 `
-            -Label "$mutationName fail-closed fallback"
-        $mutationOutput = Get-Content -Raw -LiteralPath $mutationOutputPath
-        Assert-OutputMatch -Text $mutationOutput `
-            -Pattern "(?m)^CANDIDATE_SOURCE=REJECTED ERROR=5 NONEMPTY=0\r?$" `
-            -Label "$mutationName fail-closed fallback"
-        $mutationValues = ConvertFrom-ProbeOutput -Text $mutationOutput
-        if ($mutationValues["CANDIDATE_PATH"] -ne "") {
-            throw "$mutationName returned a candidate path"
+    $substExe = Join-Path $env:SystemRoot "System32\subst.exe"
+    if (Test-Path -LiteralPath $substExe -PathType Leaf) {
+        foreach ($letterCode in 90..68) {
+            $candidateDrive = ([char]$letterCode).ToString() + ":"
+            if (Test-Path -LiteralPath ($candidateDrive + "\")) {
+                continue
+            }
+            & $substExe $candidateDrive $fixtureDirectoryCanonical
+            if ($LASTEXITCODE -eq 0) {
+                $substDrive = $candidateDrive
+                $substAvailable = $true
+                break
+            }
         }
     }
+
+    if ($substAvailable) {
+        $substTarget = $substDrive + "\embed_probe.cc"
+        & $probeCanonical --probe-mutation force-fallback `
+            $substTarget $substOutputPath
+        Assert-ExitCode -Actual $LASTEXITCODE -Expected 25 `
+            -Label "real SUBST fail-closed fallback"
+        $substOutput = Get-Content -Raw -LiteralPath $substOutputPath
+        $substValues = ConvertFrom-ProbeOutput -Text $substOutput
+        $substNormalizedPath = Get-RequiredOutputValue `
+            -Values $substValues -Key "FILE_NORMALIZED_NAME_INFO_PATH" `
+            -Label "SUBST FileNormalizedNameInfo path"
+        Assert-WindowsPathEqual -Actual $substNormalizedPath `
+            -Expected $expectedFileNameInfoPath `
+            -Label "SUBST underlying normalized path"
+        if ($substValues["CANDIDATE_PATH"] -ne "") {
+            throw "SUBST alias returned a candidate path"
+        }
+    }
+
+    & $probeCanonical --shared-helper-validation $sharedValidationOutputPath
+    Assert-ExitCode -Actual $LASTEXITCODE -Expected 0 `
+        -Label "shared helper validation"
+    $sharedValidationOutput =
+        Get-Content -Raw -LiteralPath $sharedValidationOutputPath
+    Assert-OutputMatch -Text $sharedValidationOutput `
+        -Pattern "(?m)^SHARED_VALID=1 MALFORMED_ROOT=0 PARENT=0 SLASH=0 COLON=0 INVALID_HANDLE_ERROR=6\r?$" `
+        -Label "shared helper malformed/error validation"
+
 
     & $probeCanonical --file-name-info-max $maximumInfoOutputPath
     Assert-ExitCode -Actual $LASTEXITCODE -Expected 0 `
@@ -407,6 +496,12 @@ try {
         -Pattern "(?m)^FILE_NAME_INFO_OK=1 LENGTH=[1-9][0-9]* ERROR=0 NONEMPTY=1\r?$" `
         -Label "AppContainer FileNameInfo"
     Assert-OutputMatch -Text $packagedOutput `
+        -Pattern "(?m)^FILE_NORMALIZED_NAME_INFO_OK=1 LENGTH=[1-9][0-9]* ERROR=0 NONEMPTY=1\r?$" `
+        -Label "AppContainer FileNormalizedNameInfo"
+    Assert-OutputMatch -Text $packagedOutput `
+        -Pattern "(?m)^SYSTEM_WINDOWS_DIRECTORY_LENGTH=[1-9][0-9]* ERROR=0 NONEMPTY=1\r?$" `
+        -Label "AppContainer GetSystemWindowsDirectoryW"
+    Assert-OutputMatch -Text $packagedOutput `
         -Pattern "(?m)^READFILE=1 ERROR=0 BYTES=1 BYTE=[0-9]+\r?$" `
         -Label "AppContainer ReadFile"
     Assert-OutputMatch -Text $packagedOutput `
@@ -417,12 +512,21 @@ try {
     $packagedFileNameInfoPath = Get-RequiredOutputValue `
         -Values $packagedValues -Key "FILE_NAME_INFO_PATH" `
         -Label "AppContainer FileNameInfo path"
+    $packagedFileNormalizedNameInfoPath = Get-RequiredOutputValue `
+        -Values $packagedValues -Key "FILE_NORMALIZED_NAME_INFO_PATH" `
+        -Label "AppContainer FileNormalizedNameInfo path"
     Assert-WindowsPathEqual -Actual $packagedFileNameInfoPath `
         -Expected $expectedFileNameInfoPath `
         -Label "AppContainer FileNameInfo"
     Assert-WindowsPathEqual -Actual $packagedFileNameInfoPath `
         -Expected $ordinaryFileNameInfoPath `
         -Label "ordinary/AppContainer FileNameInfo"
+    Assert-WindowsPathEqual -Actual $packagedFileNormalizedNameInfoPath `
+        -Expected $expectedFileNameInfoPath `
+        -Label "AppContainer FileNormalizedNameInfo"
+    Assert-WindowsPathEqual -Actual $packagedFileNormalizedNameInfoPath `
+        -Expected $ordinaryFileNormalizedNameInfoPath `
+        -Label "ordinary/AppContainer FileNormalizedNameInfo"
     Assert-OutputMatch -Text $packagedOutput `
         -Pattern "(?m)^CANDIDATE_SOURCE=FALLBACK ERROR=0 NONEMPTY=1\r?$" `
         -Label "AppContainer candidate fallback"
@@ -458,6 +562,13 @@ finally {
     }
 
     try {
+        if ($null -ne $substDrive) {
+            & $substExe $substDrive /D
+            if ($LASTEXITCODE -ne 0) {
+                throw "SUBST cleanup failed: $substDrive"
+            }
+            $substDrive = $null
+        }
         $cleanupStage = [System.IO.Path]::GetFullPath($stageRoot)
         Assert-StrictDescendant -Child $cleanupStage -Parent $scratchCanonical `
             -Label "cleanup stage"
@@ -479,14 +590,18 @@ finally {
 
 Write-Output "BUILD_EXIT=0"
 Write-Output "FORCED_FALLBACK_EXIT=0"
-Write-Output "VOLUME_MISMATCH_EXIT=25"
-Write-Output "REPARSE_MUTATION_EXIT=25"
-Write-Output "MALFORMED_PATH_EXIT=25"
-Write-Output "REAL_JUNCTION_EXIT=25"
+Write-Output "REAL_JUNCTION_EXIT=0"
+Write-Output "JUNCTION_HARDLINK_EXIT=0"
+Write-Output "SUBST_AVAILABLE=$substAvailable"
+if ($substAvailable) {
+    Write-Output "SUBST_EXIT=25"
+}
+Write-Output $sharedValidationOutput.TrimEnd()
 Write-Output $maximumInfoOutput.TrimEnd()
 Write-Output "ORDINARY_EXIT=0"
 Write-Output $ordinaryOutput.TrimEnd()
 Write-Output "PACKAGED_EXIT=0"
+Write-Output "BUILD_TOOLCHAIN=$buildToolchain"
 Write-Output $packagedConsole.TrimEnd()
 Write-Output $packagedOutput.TrimEnd()
 Write-Output $cleanupConsole.TrimEnd()
