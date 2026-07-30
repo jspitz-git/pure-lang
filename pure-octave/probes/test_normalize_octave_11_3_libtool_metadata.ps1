@@ -132,7 +132,14 @@ function Invoke-Normalizer {
     param(
         [Parameter(Mandatory = $true)][string] $Root,
         [Parameter(Mandatory = $true)] $Manifest,
-        [ValidateSet("Plan", "Apply")][string] $Mode = "Apply"
+        [ValidateSet("Plan", "Apply")][string] $Mode = "Apply",
+        [string] $ParentRoot = $testRoot,
+        [ValidateSet(
+            "None",
+            "RootIdentityMismatchBeforeSecondReplacement",
+            "BeforeSecondReplacement",
+            "RemoveEmittedTargetAfterReplacement")]
+        [string] $TestFailurePoint = "None"
     )
 
     $stdout = Join-Path $testRoot ("stdout-" + [guid]::NewGuid().ToString("N") + ".log")
@@ -148,12 +155,15 @@ function Invoke-Normalizer {
         "-ExecutionPolicy", "Bypass",
         "-File", (Quote-ProcessArgument -Value $normalizer),
         "-ToolchainRoot", (Quote-ProcessArgument -Value $Root),
-        "-DisposableParentRoot", (Quote-ProcessArgument -Value $testRoot),
+        "-DisposableParentRoot", (Quote-ProcessArgument -Value $ParentRoot),
         "-ExpectedFileCount", [string] $Manifest.FileCount,
         "-ExpectedTotalBytes", [string] $Manifest.TotalBytes,
         "-ExpectedManifestSha256", [string] $Manifest.Sha256,
         "-Mode", $Mode
     )
+    if ($TestFailurePoint -ne "None") {
+        $arguments += @("-TestFailurePoint", $TestFailurePoint)
+    }
     $process = Start-Process -FilePath "powershell.exe" -ArgumentList $arguments `
         -RedirectStandardOutput $stdout -RedirectStandardError $stderr `
         -WindowStyle Hidden -Wait -PassThru
@@ -178,17 +188,28 @@ function Assert-FailureWithoutWrites {
     param(
         [Parameter(Mandatory = $true)][string] $Root,
         [Parameter(Mandatory = $true)] $Manifest,
-        [Parameter(Mandatory = $true)][string] $ExpectedMessage
+        [Parameter(Mandatory = $true)][string] $ExpectedMessage,
+        [ValidateSet(
+            "None",
+            "RootIdentityMismatchBeforeSecondReplacement",
+            "BeforeSecondReplacement",
+            "RemoveEmittedTargetAfterReplacement")]
+        [string] $TestFailurePoint = "None"
     )
 
     $before = Get-TreeManifest -Root $Root
-    $result = Invoke-Normalizer -Root $Root -Manifest $Manifest -Mode Apply
+    $result = Invoke-Normalizer -Root $Root -Manifest $Manifest -Mode Apply `
+        -TestFailurePoint $TestFailurePoint
     $after = Get-TreeManifest -Root $Root
     Assert-True ($result.ExitCode -ne 0) "Expected normalization failure."
     Assert-True (($result.Stdout + $result.Stderr) -match $ExpectedMessage) `
         "Expected failure message '$ExpectedMessage', got: $($result.Stdout)$($result.Stderr)"
     Assert-True ($before.Sha256 -eq $after.Sha256) "Failure modified fixture bytes."
     Assert-True ($before.FileCount -eq $after.FileCount) "Failure changed fixture inventory."
+    Assert-True ($before.TotalBytes -eq $after.TotalBytes) "Failure changed fixture byte count."
+    $transactions = @(Get-ChildItem -LiteralPath $testRoot -Force -Directory |
+        Where-Object { $_.Name -like ".todo51-la-normalize-*" })
+    Assert-True ($transactions.Count -eq 0) "Failure retained a transaction directory."
 }
 
 function Test-SuccessAndAnomalies {
@@ -283,6 +304,92 @@ function Test-PermanentRootRejection {
         "Permanent-root rejection did not identify the cause."
 }
 
+function Test-NamespaceRejection {
+    $dummy = [pscustomobject] @{ FileCount = 0; TotalBytes = 0; Sha256 = ("0" * 64) }
+    $cases = @(
+        [pscustomobject] @{
+            Root = "\\?\C:\Tools\GNU Octave\11.3.0"
+            Parent = "\\?\C:\Tools\GNU Octave"
+        },
+        [pscustomobject] @{
+            Root = "\\.\C:\Tools\GNU Octave\11.3.0"
+            Parent = "\\.\C:\Tools\GNU Octave"
+        },
+        [pscustomobject] @{
+            Root = "\\?\Volume{00000000-0000-0000-0000-000000000000}\Octave"
+            Parent = "\\?\Volume{00000000-0000-0000-0000-000000000000}"
+        },
+        [pscustomobject] @{
+            Root = "\\localhost\C$\Tools\GNU Octave\11.3.0"
+            Parent = "\\localhost\C$\Tools\GNU Octave"
+        }
+    )
+    foreach ($case in $cases) {
+        $result = Invoke-Normalizer -Root $case.Root -ParentRoot $case.Parent `
+            -Manifest $dummy -Mode Apply
+        Assert-True ($result.ExitCode -ne 0) `
+            "Namespaced path unexpectedly succeeded: $($case.Root)"
+        Assert-True (($result.Stdout + $result.Stderr) -match "namespace") `
+            "Namespaced path was not rejected lexically: $($case.Root)"
+    }
+}
+
+function Test-RootIdentityGuard {
+    $root = New-Fixture -Name "identity-guard"
+    $manifest = Get-TreeManifest -Root $root
+    Assert-FailureWithoutWrites -Root $root -Manifest $manifest `
+        -ExpectedMessage "identity" `
+        -TestFailurePoint RootIdentityMismatchBeforeSecondReplacement
+}
+
+function Test-RollbackBeforeSecondReplacement {
+    $root = New-Fixture -Name "rollback-second"
+    $manifest = Get-TreeManifest -Root $root
+    Assert-FailureWithoutWrites -Root $root -Manifest $manifest `
+        -ExpectedMessage "injected failure before replacement 2" `
+        -TestFailurePoint BeforeSecondReplacement
+}
+
+function Test-EmittedTargetPostcondition {
+    $root = New-Fixture -Name "emitted-target-postcondition"
+    $manifest = Get-TreeManifest -Root $root
+    Assert-FailureWithoutWrites -Root $root -Manifest $manifest `
+        -ExpectedMessage "emitted target" `
+        -TestFailurePoint RemoveEmittedTargetAfterReplacement
+    Assert-True (Test-Path -LiteralPath (
+            Join-Path $root "mingw64\lib\GraphicsMagick-1.3.46\modules-Q16\coders") `
+            -PathType Container) `
+        "Injected emitted directory was not restored after rollback."
+}
+
+function Test-FailureInjectionScope {
+    $outsideParent = Join-Path "C:\tmp" `
+        ("todo51-normalizer-nontest-" + [guid]::NewGuid().ToString("N"))
+    try {
+        [void] (New-Item -ItemType Directory -Path $outsideParent)
+        $source = New-Fixture -Name "injection-scope-source"
+        $root = Join-Path $outsideParent "fixture"
+        Copy-Item -LiteralPath $source -Destination $root -Recurse
+        $manifest = Get-TreeManifest -Root $root
+        $result = Invoke-Normalizer -Root $root -ParentRoot $outsideParent `
+            -Manifest $manifest -Mode Apply `
+            -TestFailurePoint BeforeSecondReplacement
+        Assert-True ($result.ExitCode -ne 0) `
+            "Failure injection unexpectedly ran outside the synthetic test scope."
+        Assert-True (($result.Stdout + $result.Stderr) -match
+                "failure injection is forbidden") `
+            "Out-of-scope failure injection did not identify the cause."
+        $after = Get-TreeManifest -Root $root
+        Assert-True ($after.Sha256 -eq $manifest.Sha256) `
+            "Out-of-scope failure injection changed fixture bytes."
+    }
+    finally {
+        if (Test-Path -LiteralPath $outsideParent) {
+            Remove-Item -LiteralPath $outsideParent -Recurse -Force
+        }
+    }
+}
+
 function Test-ManifestRejection {
     $root = New-Fixture -Name "manifest"
     $manifest = Get-TreeManifest -Root $root
@@ -325,6 +432,11 @@ $tests = @(
     "Test-NonAsciiRejection",
     "Test-ReparseRejection",
     "Test-PermanentRootRejection",
+    "Test-NamespaceRejection",
+    "Test-RootIdentityGuard",
+    "Test-RollbackBeforeSecondReplacement",
+    "Test-EmittedTargetPostcondition",
+    "Test-FailureInjectionScope",
     "Test-ManifestRejection",
     "Test-NoPartialWrites",
     "Test-PlanDoesNotWrite"

@@ -3,8 +3,10 @@
 ## Status
 
 The version-scoped generated-header gate and the fail-closed Octave 11.3.0
-libtool-metadata normalizer are implemented and independently verified.  The
-normalizer has not yet been applied to the real disposable toolchain copy.
+libtool-metadata normalizer are implemented.  Independent review round 1
+identified three confinement/postcondition gaps; all three now have isolated
+RED/GREEN coverage.  The normalizer has not yet been applied to the real
+disposable toolchain copy.
 No permanent Octave file was used as an executable or modified.  All source,
 build, and toolchain paths used by Task 3 are disposable children of
 `C:\tmp\todo51-task3`.
@@ -127,9 +129,15 @@ No existing Octave runtime, source, repository script, `post-install.bat`, or
 audited Octave 11.3.0 layout.  It:
 
 - rejects the permanent Octave root before enumeration;
+- rejects `\\?\`, `\\.\`, volume-GUID, UNC, and every other non-local
+  drive-letter DOS spelling before filesystem access;
 - requires the toolchain to be a strict child of an explicitly supplied
   disposable parent;
 - rejects reparse points in the path and tree;
+- resolves the root through an open directory handle, compares volume/file
+  identity and final DOS path against the permanent root, holds the root
+  handle without delete sharing, and rechecks the identity before every write
+  and after the replacement phase;
 - requires the exact expected file count, byte count, and manifest SHA-256;
 - accepts only ASCII libtool assignment and token forms exercised by the
   copied Octave metadata;
@@ -140,8 +148,11 @@ audited Octave 11.3.0 layout.  It:
 - constructs and hashes the complete rewrite plan before writing;
 - applies replacements transactionally with rollback backups outside the
   toolchain tree;
-- verifies every changed-file hash, zero stale paths, and the exact predicted
-  result manifest;
+- verifies every unique emitted `-L`, `-R`, `libdir`, and `.la` target before
+  and after replacement for containment, type, existence, reparse points, and
+  final resolved path;
+- verifies every changed-file hash, zero stale paths, stable root identity,
+  and the exact predicted result manifest;
 - reports an exact changed-file inventory; and
 - supports write-free `Plan` mode and idempotent `Apply`.
 
@@ -169,16 +180,84 @@ PASS Test-UnsupportedQuoteForm
 PASS Test-NonAsciiRejection
 PASS Test-ReparseRejection
 PASS Test-PermanentRootRejection
+PASS Test-NamespaceRejection
+PASS Test-RootIdentityGuard
+PASS Test-RollbackBeforeSecondReplacement
+PASS Test-EmittedTargetPostcondition
+PASS Test-FailureInjectionScope
 PASS Test-ManifestRejection
 PASS Test-NoPartialWrites
 PASS Test-PlanDoesNotWrite
-PASS all 12 normalizer tests
+PASS all 17 normalizer tests
 ```
 
 Every negative mutation test compares the exact before/after tree-manifest
 SHA-256 and file count.  The success test verifies both audited anomaly
 mappings and unique candidate selection, then runs a second apply and requires
 `ChangedFileCount = 0` with an unchanged exact manifest SHA-256.
+
+## Independent-review fix round 1
+
+All review RED and GREEN runs used the same full command:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File `
+  C:\pure-lang\pure-octave\probes\test_normalize_octave_11_3_libtool_metadata.ps1
+```
+
+### Filesystem namespace and stable identity
+
+The first RED run exited 1 because a permanent-tree spelling using
+`\\?\C:\Tools\GNU Octave\11.3.0` with an equivalently aliased parent reached a
+later failure instead of the lexical namespace guard:
+
+```text
+FAIL Test-NamespaceRejection
+Namespaced path was not rejected lexically: \\?\C:\Tools\GNU Octave\11.3.0
+```
+
+The GREEN implementation rejects all four reviewed spelling classes before
+enumeration and establishes a stable volume/file identity plus final DOS path
+from held handles.  A separate identity-mismatch RED initially exposed a
+broken rollback call: .NET rejected a null backup-path argument and retained
+the transaction directory.  The atomic rollback now uses an explicit discard
+file, and the identity test verifies exact restored file count, byte count,
+manifest SHA-256, and zero transaction directories.
+
+### Deterministic rollback after the first replacement
+
+The dedicated RED exited 1 because the requested failure before replacement
+2 was not yet implemented:
+
+```text
+FAIL Test-RollbackBeforeSecondReplacement
+Expected normalization failure.
+```
+
+The test-only hook is accepted solely below a parent whose resolved path is
+exactly `C:\tmp\todo51-normalizer-tests-<32 hex digits>`.  It fails before the
+second replacement, after the first replacement has completed.  GREEN proves
+that the original file count, total bytes, and manifest SHA-256 are restored
+and that the transaction directory is absent.  `Test-FailureInjectionScope`
+also proves that the hook is rejected before writes on a non-test disposable
+root.
+
+### Emitted-target postcondition
+
+The emitted-target RED exited 1 because removing a planned emitted directory
+after replacement did not make Apply fail:
+
+```text
+FAIL Test-EmittedTargetPostcondition
+Expected normalization failure.
+```
+
+GREEN collects every unique directory and `.la` target from the complete
+result text of every changed archive, not only from the rewritten line.  It
+validates targets both before and after replacement, revalidates every write
+destination immediately before `File.Replace`, detects the injected missing
+directory, restores it, rolls back the archives byte-for-byte, and removes all
+transaction state.
 
 ## Next verified step
 
