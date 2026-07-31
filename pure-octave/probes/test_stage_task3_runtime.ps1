@@ -5,91 +5,278 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 $scriptPath = Join-Path $PSScriptRoot 'stage_task3_runtime.ps1'
-$testRoot = Join-Path $env:TEMP ('todo51-stage-tests-' + [guid]::NewGuid().ToString('N'))
+$testRoot = 'C:\tmp\todo51-stage-tests-' + [guid]::NewGuid().ToString('N')
 $permanentRoot = Join-Path $testRoot 'permanent-octave'
 $parent = Join-Path $testRoot 'parent'
-$stage = Join-Path $parent 'stage'
 $pure = Join-Path $testRoot 'pure'
 $octave = Join-Path $testRoot 'normalized-octave'
 $bridge = Join-Path $testRoot 'bridge'
 $probe = Join-Path $testRoot 'probe'
-$patched = Join-Path $testRoot 'liboctave-13.dll'
+$patched = Join-Path $testRoot 'patched\liboctave-13.dll'
+$artifactEvidence = Join-Path $testRoot 'evidence\artifact.txt'
+$objectEvidence = Join-Path $testRoot 'evidence\object.txt'
+$buildEvidence = Join-Path $testRoot 'evidence\build.txt'
 
 function Write-TestFile {
-  param([string]$Path, [string]$Text)
-  $dir = Split-Path -Parent $Path
-  [System.IO.Directory]::CreateDirectory($dir) | Out-Null
-  [System.IO.File]::WriteAllText($Path, $Text, [System.Text.Encoding]::ASCII)
+    param([string]$Path, [string]$Text)
+    [IO.Directory]::CreateDirectory((Split-Path -Parent $Path)) | Out-Null
+    [IO.File]::WriteAllText($Path, $Text, [Text.Encoding]::ASCII)
+}
+
+function Write-TestPe {
+    param([string]$Path, [string]$Tag)
+    Write-TestFile $Path ("MZ" + $Tag)
 }
 
 function Assert-True {
-  param([bool]$Condition, [string]$Message)
-  if (-not $Condition) { throw $Message }
+    param([bool]$Condition, [string]$Message)
+    if (-not $Condition) { throw $Message }
 }
 
-function Invoke-ExpectedFailure {
-  param([scriptblock]$Action, [string]$Label)
-  $failed = $false
-  try { & $Action; if ($LASTEXITCODE -ne 0) { $failed = $true } } catch { $failed = $true }
-  Assert-True $failed "$Label was accepted."
+function Get-Sha256File([string]$Path) {
+    return (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash
+}
+
+function Get-TreeManifest([string]$Root) {
+    $files = @(Get-ChildItem -LiteralPath $Root -Recurse -Force -File)
+    $paths = [string[]]@($files | ForEach-Object { $_.FullName.Substring($Root.Length + 1).Replace('\','/') })
+    [Array]::Sort($paths, [StringComparer]::Ordinal)
+    $lines = New-Object 'Collections.Generic.List[string]'
+    [long]$bytes = 0
+    foreach ($relative in $paths) {
+        $file = Join-Path $Root $relative.Replace('/','\')
+        $item = Get-Item -LiteralPath $file -Force
+        $bytes += $item.Length
+        $lines.Add(('{0}`t{1}`t{2}' -f $relative, $item.Length, (Get-Sha256File $file)))
+    }
+    $text = if ($lines.Count -eq 0) { '' } else { ($lines -join "`n") + "`n" }
+    $sha = [Security.Cryptography.SHA256]::Create()
+    try { $hash = ([BitConverter]::ToString($sha.ComputeHash(([Text.UTF8Encoding]::new($false)).GetBytes($text)))).Replace('-','') }
+    finally { $sha.Dispose() }
+    return [pscustomobject]@{ FileCount=$paths.Count; TotalBytes=$bytes; Sha256=$hash }
+}
+
+function Write-ImportFixture {
+    param([string]$Path, [hashtable]$Imports)
+    $lines = @($Imports.Keys | Sort-Object | ForEach-Object {
+        $value = if ($Imports[$_].Count -eq 0) { '-' } else { [string]::Join(';', [string[]]$Imports[$_]) }
+        "$_`t$value"
+    })
+    Write-TestFile $Path (($lines -join "`r`n") + "`r`n")
+}
+
+function Write-SystemFixture {
+    param([string]$Path, [hashtable]$Mappings)
+    $lines = @($Mappings.Keys | Sort-Object | ForEach-Object { "$_`t$($Mappings[$_])" })
+    Write-TestFile $Path $(if ($lines.Count -eq 0) { '' } else { ($lines -join "`r`n") + "`r`n" })
+}
+
+function New-BaseImports {
+    return @{
+        'bridge/octave_bridge_impl.dll' = @()
+        'bridge/octave_embed.dll' = @()
+        'mingw64/bin/libgcc_s_seh-1.dll' = @()
+        'mingw64/bin/liboctave-13.dll' = @()
+        'mingw64/lib/octave/packages/hidden_module.oct' = @()
+        'pure/bin/libgcc_s_seh-1.dll' = @()
+        'pure/bin/libpure.dll' = @()
+        'pure/bin/pure.exe' = @()
+    }
+}
+
+function Invoke-Stage {
+    param(
+        [string]$Name,
+        [hashtable]$Imports,
+        [hashtable]$SystemMappings = @{},
+        [switch]$NoTestMode,
+        [switch]$OmitSyntheticTools,
+        [string]$DisposableParentOverride = '',
+        [string]$BridgeModuleOverride = '',
+        [string]$PermanentRootOverride = '',
+        [string]$ExpectedPatchedOverride = '',
+        [string[]]$ExtraArguments = @()
+    )
+    $stage = Join-Path $parent $Name
+    $importFile = Join-Path $testRoot ("fixtures\$Name-imports.tsv")
+    $systemFile = Join-Path $testRoot ("fixtures\$Name-system.tsv")
+    Write-ImportFixture $importFile $Imports
+    Write-SystemFixture $systemFile $SystemMappings
+    $pureManifest = Get-TreeManifest $pure
+    $bridgeManifest = Get-TreeManifest $bridge
+    $args = @(
+        '-NoProfile','-ExecutionPolicy','Bypass','-File',$scriptPath,
+        '-StageRoot',$stage,
+        '-DisposableParent',$(if ($DisposableParentOverride) { $DisposableParentOverride } else { $parent }),
+        '-PermanentOctaveRoot',$(if ($PermanentRootOverride) { $PermanentRootOverride } else { $permanentRoot }),
+        '-PureRuntimeRoot',$pure,
+        '-NormalizedOctaveRoot',$octave,
+        '-BridgeRoot',$bridge,
+        '-BridgeModuleSource',$(if ($BridgeModuleOverride) { $BridgeModuleOverride } else { Join-Path $bridge 'octave.pure' }),
+        '-ProbeRoot',$probe,
+        '-PatchedLiboctave',$patched,
+        '-ExpectedPatchedSha256',$(if ($ExpectedPatchedOverride) { $ExpectedPatchedOverride } else { Get-Sha256File $patched }),
+        '-ExpectedLibgccSha256',(Get-Sha256File (Join-Path $octave 'mingw64\bin\libgcc_s_seh-1.dll')),
+        '-ExpectedPureFileCount',[string]$pureManifest.FileCount,
+        '-ExpectedPureTotalBytes',[string]$pureManifest.TotalBytes,
+        '-ExpectedPureManifestSha256',$pureManifest.Sha256,
+        '-ExpectedBridgeFileCount',[string]$bridgeManifest.FileCount,
+        '-ExpectedBridgeTotalBytes',[string]$bridgeManifest.TotalBytes,
+        '-ExpectedBridgeManifestSha256',$bridgeManifest.Sha256,
+        '-ExpectedBridgeModuleSha256',(Get-Sha256File (Join-Path $bridge 'octave.pure')),
+        '-ExpectedProbeSha256',(Get-Sha256File (Join-Path $probe 'embed_probe.cc'))
+    )
+    if (-not $OmitSyntheticTools) {
+        $args += @(
+            '-SyntheticImportManifest',$importFile,
+            '-SyntheticSystemMappingManifest',$systemFile,
+            '-SyntheticArtifactEvidence',$artifactEvidence,
+            '-SyntheticObjectEvidence',$objectEvidence,
+            '-SyntheticBuildEvidence',$buildEvidence
+        )
+    }
+    if (-not $NoTestMode) { $args += '-TestMode' }
+    $args += $ExtraArguments
+    $savedPreference = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        $output = @(& powershell.exe @args 2>&1 | ForEach-Object { $_.ToString() })
+        $exitCode = $LASTEXITCODE
+    }
+    finally { $ErrorActionPreference = $savedPreference }
+    return [pscustomobject]@{ ExitCode=$exitCode; Output=($output -join "`n"); Stage=$stage }
+}
+
+function Assert-Failure {
+    param($Result, [string]$Pattern, [string]$Label)
+    Assert-True ($Result.ExitCode -ne 0) "$Label was accepted."
+    Assert-True ($Result.Output -match $Pattern) "$Label failed for the wrong reason: $($Result.Output)"
 }
 
 try {
-  [System.IO.Directory]::CreateDirectory($parent) | Out-Null
-  [System.IO.Directory]::CreateDirectory($permanentRoot) | Out-Null
-  Write-TestFile (Join-Path $pure 'bin\pure.exe') 'pure-exe'
-  Write-TestFile (Join-Path $pure 'bin\libpure.dll') 'pure-runtime'
-  Write-TestFile (Join-Path $pure 'lib\pure\prelude.pure') 'prelude'
-  Write-TestFile (Join-Path $octave 'mingw64\bin\liboctave-13.dll') 'original-octave'
-  Write-TestFile (Join-Path $octave 'mingw64\bin\libgcc_s_seh-1.dll') 'canonical-gcc'
-  Write-TestFile (Join-Path $octave 'mingw64\share\octave\11.3.0\m\optimization\__all_opts__.m') 'opts'
-  Write-TestFile (Join-Path $bridge 'octave_embed.dll') 'loader'
-  Write-TestFile (Join-Path $bridge 'octave_bridge_impl.dll') 'implementation'
-  Write-TestFile (Join-Path $bridge 'octave.pure') 'module'
-  Write-TestFile (Join-Path $probe 'embed_probe.cc') 'probe'
-  Write-TestFile $patched 'patched-octave'
+    [IO.Directory]::CreateDirectory($parent) | Out-Null
+    [IO.Directory]::CreateDirectory($permanentRoot) | Out-Null
+    Write-TestPe (Join-Path $pure 'bin\pure.exe') 'pure-exe'
+    Write-TestPe (Join-Path $pure 'bin\libpure.dll') 'pure-runtime'
+    Write-TestPe (Join-Path $pure 'bin\libgcc_s_seh-1.dll') 'pure-gcc'
+    Write-TestFile (Join-Path $pure 'lib\pure\prelude.pure') 'prelude'
+    Write-TestPe (Join-Path $octave 'mingw64\bin\liboctave-13.dll') 'original-octave'
+    Write-TestPe (Join-Path $octave 'mingw64\bin\libgcc_s_seh-1.dll') 'canonical-gcc'
+    Write-TestFile (Join-Path $octave 'mingw64\share\octave\11.3.0\m\optimization\__all_opts__.m') 'opts'
+    Write-TestPe (Join-Path $octave 'mingw64\lib\octave\packages\hidden_module.oct') 'hidden-oct'
+    Write-TestPe (Join-Path $bridge 'octave_embed.dll') 'loader'
+    Write-TestPe (Join-Path $bridge 'octave_bridge_impl.dll') 'implementation'
+    Write-TestFile (Join-Path $bridge 'octave.pure') 'module'
+    Write-TestFile (Join-Path $probe 'embed_probe.cc') 'probe'
+    Write-TestPe $patched 'patched-octave'
+    Write-TestFile $artifactEvidence 'artifact-evidence-v1'
+    Write-TestFile $objectEvidence 'object-evidence-v1'
+    Write-TestFile $buildEvidence 'build-evidence-v1'
 
-  # This must fail before the assembler exists.  Once it exists, this case
-  # catches a stage that copies the original liboctave or fails to write an
-  # audit manifest.
-  & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $scriptPath `
-    -StageRoot $stage -DisposableParent $parent -PermanentOctaveRoot $permanentRoot `
-    -PureRuntimeRoot $pure -NormalizedOctaveRoot $octave -BridgeRoot $bridge -BridgeModuleSource (Join-Path $bridge 'octave.pure') `
-    -ProbeRoot $probe -PatchedLiboctave $patched -ExpectedPatchedSha256 `
-    ((Get-FileHash -LiteralPath $patched -Algorithm SHA256).Hash) `
-    -ExpectedLibgccSha256 ((Get-FileHash -LiteralPath (Join-Path $octave 'mingw64\bin\libgcc_s_seh-1.dll') -Algorithm SHA256).Hash) `
-    -TestMode
-  Assert-True (Test-Path -LiteralPath (Join-Path $stage 'mingw64\bin\liboctave-13.dll') -PathType Leaf) 'Stage omitted liboctave.'
-  Assert-True ((Get-FileHash -LiteralPath (Join-Path $stage 'mingw64\bin\liboctave-13.dll') -Algorithm SHA256).Hash -eq (Get-FileHash -LiteralPath $patched -Algorithm SHA256).Hash) 'Stage retained original liboctave.'
-  Assert-True ((Get-FileHash -LiteralPath (Join-Path $octave 'mingw64\bin\liboctave-13.dll') -Algorithm SHA256).Hash -ne (Get-FileHash -LiteralPath $patched -Algorithm SHA256).Hash) 'Assembler modified its source Octave tree.'
-  Assert-True (Test-Path -LiteralPath (Join-Path $stage 'stage-manifest.tsv') -PathType Leaf) 'Stage omitted its manifest.'
-  Assert-True ((Get-Content -LiteralPath (Join-Path $stage 'stage-mapping.tsv') -Raw) -match 'patched-liboctave') 'Stage mapping omitted the patched-DLL provenance.'
-  Write-Output 'PASS Test-SuccessCopiesOnlyTheStage'
+    $success = Invoke-Stage 'success' (New-BaseImports)
+    Assert-True ($success.ExitCode -eq 0) "Success fixture failed: $($success.Output)"
+    Assert-True (Test-Path -LiteralPath (Join-Path $success.Stage 'pure\bin\pure.exe') -PathType Leaf) 'Stage omitted the separate Pure loader tree.'
+    Assert-True (-not (Test-Path -LiteralPath (Join-Path $success.Stage 'mingw64\bin\pure.exe'))) 'Pure executable was unsafely merged into the Octave loader root.'
+    Assert-True ((Get-Sha256File (Join-Path $success.Stage 'mingw64\bin\liboctave-13.dll')) -eq (Get-Sha256File $patched)) 'Stage retained original liboctave.'
+    Assert-True ((Get-Sha256File (Join-Path $octave 'mingw64\bin\liboctave-13.dll')) -ne (Get-Sha256File $patched)) 'Assembler modified its source Octave tree.'
+    Assert-True (Test-Path -LiteralPath (Join-Path $success.Stage 'stage-import-closure.tsv') -PathType Leaf) 'Stage omitted its static import closure.'
+    Write-Output 'PASS Test-SuccessUsesSeparateLoaderRootsAndAuditsImports'
 
-  # Same length and timestamp must not hide a content change from the
-  # streaming SHA-256 preflight.
-  $originalHash = (Get-FileHash -LiteralPath $patched -Algorithm SHA256).Hash
-  $originalTime = (Get-Item -LiteralPath $patched).LastWriteTimeUtc
-  Write-TestFile $patched 'broken--octave'
-  [IO.File]::SetLastWriteTimeUtc($patched, $originalTime)
-  Invoke-ExpectedFailure { & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $scriptPath -StageRoot (Join-Path $parent 'content-hash-reject') -DisposableParent $parent -PermanentOctaveRoot $permanentRoot -PureRuntimeRoot $pure -NormalizedOctaveRoot $octave -BridgeRoot $bridge -BridgeModuleSource (Join-Path $bridge 'octave.pure') -ProbeRoot $probe -PatchedLiboctave $patched -ExpectedPatchedSha256 $originalHash -ExpectedLibgccSha256 ((Get-FileHash (Join-Path $octave 'mingw64\bin\libgcc_s_seh-1.dll') -Algorithm SHA256).Hash) -TestMode } 'Same-length same-mtime content change'
-  Write-TestFile $patched 'patched-octave'
-  Write-Output 'PASS Test-RejectsSameLengthSameMtimeContentChange'
+    $outsideGuard = Invoke-Stage 'guard-reject' (New-BaseImports) @{} -DisposableParentOverride $testRoot
+    Assert-Failure $outsideGuard 'exact synthetic fixture' 'Unsafe TestMode fixture root'
+    Write-Output 'PASS Test-RejectsUnsafeTestModeFixture'
 
-  Invoke-ExpectedFailure { & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $scriptPath -StageRoot $stage -DisposableParent $parent -PermanentOctaveRoot $permanentRoot -PureRuntimeRoot $pure -NormalizedOctaveRoot $octave -BridgeRoot $bridge -BridgeModuleSource (Join-Path $bridge 'octave.pure') -ProbeRoot $probe -PatchedLiboctave $patched -ExpectedPatchedSha256 ((Get-FileHash $patched -Algorithm SHA256).Hash) -ExpectedLibgccSha256 ((Get-FileHash (Join-Path $octave 'mingw64\bin\libgcc_s_seh-1.dll') -Algorithm SHA256).Hash) -TestMode } 'Existing stage root'
-  Write-Output 'PASS Test-RejectsExistingStage'
+    $legacyOverride = Invoke-Stage 'legacy-override' (New-BaseImports) @{} -ExtraArguments @('-SeparateLoaderRoots')
+    Assert-Failure $legacyOverride 'parameter name.*Sepa\s*rateLoaderRoots|Sepa\s*rateLoaderRoots.*parameter' 'Legacy loader-root override'
+    Write-Output 'PASS Test-RejectsUnsafeLoaderOverride'
 
-  Invoke-ExpectedFailure { & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $scriptPath -StageRoot (Join-Path $parent 'permanent-alias') -DisposableParent $parent -PermanentOctaveRoot $octave -PureRuntimeRoot $pure -NormalizedOctaveRoot $octave -BridgeRoot $bridge -BridgeModuleSource (Join-Path $bridge 'octave.pure') -ProbeRoot $probe -PatchedLiboctave $patched -ExpectedPatchedSha256 ((Get-FileHash $patched -Algorithm SHA256).Hash) -ExpectedLibgccSha256 ((Get-FileHash (Join-Path $octave 'mingw64\bin\libgcc_s_seh-1.dll') -Algorithm SHA256).Hash) -TestMode } 'Permanent root input'
-  Write-Output 'PASS Test-RejectsPermanentOctaveRoot'
+    $productionOverride = Invoke-Stage 'production-override' (New-BaseImports) @{} -NoTestMode -OmitSyntheticTools
+    Assert-Failure $productionOverride 'Non-test staging rejects caller-controlled evidence or inventory overrides' 'Caller-controlled production evidence'
+    Write-Output 'PASS Test-RejectsCallerControlledProductionEvidence'
 
-  $link = Join-Path $testRoot 'linked-parent'
-  cmd.exe /c "mklink /J `"$link`" `"$parent`"" | Out-Null
-  if (Test-Path -LiteralPath $link) {
-    Invoke-ExpectedFailure { & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $scriptPath -StageRoot (Join-Path $link 'reparse-stage') -DisposableParent $link -PermanentOctaveRoot $permanentRoot -PureRuntimeRoot $pure -NormalizedOctaveRoot $octave -BridgeRoot $bridge -BridgeModuleSource (Join-Path $bridge 'octave.pure') -ProbeRoot $probe -PatchedLiboctave $patched -ExpectedPatchedSha256 ((Get-FileHash $patched -Algorithm SHA256).Hash) -ExpectedLibgccSha256 ((Get-FileHash (Join-Path $octave 'mingw64\bin\libgcc_s_seh-1.dll') -Algorithm SHA256).Hash) -TestMode } 'Reparse disposable parent'
-    Write-Output 'PASS Test-RejectsReparseParent'
-  }
-  Write-Output 'PASS all task3 staging tests'
+    $savedArtifact = [IO.File]::ReadAllBytes($artifactEvidence)
+    Write-TestFile $artifactEvidence 'artifact-evidence-v2'
+    $evidenceFailure = Invoke-Stage 'evidence-reject' (New-BaseImports)
+    Assert-Failure $evidenceFailure 'artifact evidence.*approved|approved.*artifact evidence' 'Changed exact evidence'
+    [IO.File]::WriteAllBytes($artifactEvidence, $savedArtifact)
+    Write-Output 'PASS Test-BindsExactProductionEvidencePath'
+
+    Write-TestFile (Join-Path $pure 'lib\pure\prelude.pure') 'PRELUDE'
+    $inventoryFailure = Invoke-Stage 'inventory-reject' (New-BaseImports)
+    Assert-Failure $inventoryFailure 'exact versioned synthetic fixture|exact approved inventory' 'Changed exact Pure inventory'
+    Write-TestFile (Join-Path $pure 'lib\pure\prelude.pure') 'prelude'
+    Write-Output 'PASS Test-BindsExactInputInventory'
+
+    $missingImports = New-BaseImports
+    $missingImports['pure/bin/pure.exe'] = @('missing-runtime.dll')
+    $missing = Invoke-Stage 'missing-import' $missingImports
+    Assert-Failure $missing 'Missing effective import missing-runtime.dll' 'Missing ordinary import'
+    Write-Output 'PASS Test-RejectsMissingImport'
+
+    $ambiguousImports = New-BaseImports
+    $ambiguousImports['bridge/octave_embed.dll'] = @('libgcc_s_seh-1.dll')
+    $ambiguous = Invoke-Stage 'ambiguous-import' $ambiguousImports
+    Assert-Failure $ambiguous 'Ambiguous effective staged import libgcc_s_seh-1.dll' 'Bridge union collision'
+    Write-Output 'PASS Test-RejectsBridgeUnionCollision'
+
+    $mappedApi = 'api-ms-win-core-synch-l1-2-0.dll'
+    $mappedImports = New-BaseImports
+    $mappedImports['bridge/octave_embed.dll'] = @($mappedApi)
+    $mapped = Invoke-Stage 'mapped-api-set' $mappedImports @{$mappedApi='kernelbase.dll'}
+    Assert-True ($mapped.ExitCode -eq 0) "Authoritative API-set fixture failed: $($mapped.Output)"
+    Assert-True ((Get-Content -LiteralPath (Join-Path $mapped.Stage 'stage-api-set-contracts.tsv') -Raw) -match 'api-ms-win-core-synch-l1-2-0\.dll\tkernelbase\.dll|api-ms-win-core-synch-l1-2-0\.dll\tsynthetic-system32\\kernelbase\.dll') 'API-set audit omitted the exact authoritative host mapping.'
+    Write-Output 'PASS Test-RecordsAuthoritativeApiSetMapping'
+
+    $apiImports = New-BaseImports
+    $apiImports['bridge/octave_embed.dll'] = @('api-ms-win-core-unapproved-l1-1-0.dll')
+    $unknownApi = Invoke-Stage 'unknown-api-set' $apiImports @{}
+    Assert-Failure $unknownApi 'API-set contract.*authoritative.*mapping|authoritative.*API-set' 'Unknown API-set lookalike'
+    Write-Output 'PASS Test-RejectsUnknownApiSetLookalike'
+
+    $moduleImports = New-BaseImports
+    $moduleImports['mingw64/lib/octave/packages/hidden_module.oct'] = @('missing-module-runtime.dll')
+    $moduleFailure = Invoke-Stage 'full-tree-module' $moduleImports
+    Assert-Failure $moduleFailure 'Missing effective import missing-module-runtime.dll' 'Full-tree PE module coverage'
+    Write-Output 'PASS Test-AuditsLoadablePeOutsideBin'
+
+    $outsideModule = Join-Path $testRoot 'outside-module.pure'
+    Write-TestFile $outsideModule 'module'
+    $boundary = Invoke-Stage 'bridge-boundary' (New-BaseImports) @{} -BridgeModuleOverride $outsideModule
+    Assert-Failure $boundary 'Bridge module source is not a strict child' 'Bridge module provenance boundary'
+    Write-Output 'PASS Test-RejectsBridgeModuleOutsideBridgeRoot'
+
+    $originalHash = Get-Sha256File $patched
+    $originalTime = (Get-Item -LiteralPath $patched).LastWriteTimeUtc
+    Write-TestPe $patched 'broken--octave'
+    [IO.File]::SetLastWriteTimeUtc($patched, $originalTime)
+    $content = Invoke-Stage 'content-hash' (New-BaseImports) @{} -ExpectedPatchedOverride $originalHash
+    Assert-Failure $content 'Patched liboctave SHA-256' 'Same-length same-mtime content change'
+    Write-TestPe $patched 'patched-octave'
+    Write-Output 'PASS Test-RejectsSameLengthSameMtimeContentChange'
+
+    $existing = Invoke-Stage 'existing-stage' (New-BaseImports)
+    Assert-True ($existing.ExitCode -eq 0) "Existing-stage setup failed: $($existing.Output)"
+    $existingAgain = Invoke-Stage 'existing-stage' (New-BaseImports)
+    Assert-Failure $existingAgain 'Stage root must be absent' 'Existing stage root'
+    Write-Output 'PASS Test-RejectsExistingStage'
+
+    $permanentAlias = Invoke-Stage 'permanent-alias' (New-BaseImports) @{} -PermanentRootOverride $octave
+    Assert-Failure $permanentAlias 'resolves to the permanent Octave root' 'Permanent root input'
+    Write-Output 'PASS Test-RejectsPermanentOctaveRoot'
+
+    $link = Join-Path $testRoot 'linked-parent'
+    cmd.exe /c "mklink /J `"$link`" `"$parent`"" | Out-Null
+    if (Test-Path -LiteralPath $link) {
+        $reparse = Invoke-Stage 'reparse-stage' (New-BaseImports) @{} -DisposableParentOverride $link
+        Assert-Failure $reparse 'reparse point|exact synthetic fixture|not a strict child' 'Reparse disposable parent'
+        Write-Output 'PASS Test-RejectsReparseParent'
+    }
+
+    Write-Output 'PASS all task3 staging tests'
 }
 finally {
-  if (Test-Path -LiteralPath $testRoot) { Remove-Item -LiteralPath $testRoot -Recurse -Force }
+    $resolved = [IO.Path]::GetFullPath($testRoot).TrimEnd('\')
+    if ($resolved -match '^C:\\tmp\\todo51-stage-tests-[0-9a-f]{32}$' -and (Test-Path -LiteralPath $resolved)) {
+        Remove-Item -LiteralPath $resolved -Recurse -Force
+    }
 }

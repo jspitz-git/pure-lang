@@ -6,11 +6,20 @@ param(
     [Parameter(Mandatory = $true)][string] $PureRuntimeRoot,
     [Parameter(Mandatory = $true)][string] $NormalizedOctaveRoot,
     [Parameter(Mandatory = $true)][string] $BridgeRoot,
+    [string] $BridgeBinaryRoot = '',
     [Parameter(Mandatory = $true)][string] $BridgeModuleSource,
     [Parameter(Mandatory = $true)][string] $ProbeRoot,
     [Parameter(Mandatory = $true)][string] $PatchedLiboctave,
     [Parameter(Mandatory = $true)][ValidatePattern('^[0-9A-Fa-f]{64}$')][string] $ExpectedPatchedSha256,
     [Parameter(Mandatory = $true)][ValidatePattern('^[0-9A-Fa-f]{64}$')][string] $ExpectedLibgccSha256,
+    [long] $ExpectedPureFileCount = 4769,
+    [long] $ExpectedPureTotalBytes = 260533868,
+    [ValidatePattern('^[0-9A-Fa-f]{64}$')][string] $ExpectedPureManifestSha256 = '52DA19745D9F33DEC4CEAF09E24E3836C04E82E1651BB695990D18B14D667FE3',
+    [long] $ExpectedBridgeFileCount = 2,
+    [long] $ExpectedBridgeTotalBytes = 4771866,
+    [ValidatePattern('^[0-9A-Fa-f]{64}$')][string] $ExpectedBridgeManifestSha256 = '974C07999D4EBC62C218F0EDA7D271B6CCC7AFDEBD1EBFA063C7A25109C4CE11',
+    [ValidatePattern('^[0-9A-Fa-f]{64}$')][string] $ExpectedBridgeModuleSha256 = '51A4FADE279C91CB63103EFD7A0A97FB1DF9E674F807A7E0BF65991D6E6066F0',
+    [ValidatePattern('^[0-9A-Fa-f]{64}$')][string] $ExpectedProbeSha256 = '8924A6A2FC79FB1C0F0B97248014079D685D1724C1708523FE08240CA87424A5',
     [string] $Objdump = 'C:\tmp\todo51-task3\toolchain-normalize-pristine\mingw64\bin\objdump.exe',
     [string] $NormalizedSnapshot = 'C:\tmp\todo51-task3\toolchain-normalized-before-msys.tsv',
     [string] $PermanentSnapshot = 'C:\tmp\todo51-task3\permanent-before.tsv',
@@ -19,7 +28,11 @@ param(
     [ValidatePattern('^[0-9A-Fa-f]{64}$')][string] $ExpectedNormalizedIdempotenceEvidenceSha256 = 'FA3FD0315B4B32B68A0C3FD860D83DCAE8A268E978B5C576A64006912428AF59',
     [ValidatePattern('^[0-9A-Fa-f]{64}$')][string] $ExpectedNormalizedManifestSha256 = '9417DC1DC935E33ACADACA3A0AD86389F500B937F7670E3D177A8D58B3C68CED',
     [ValidatePattern('^[0-9A-Fa-f]{64}$')][string] $ExpectedPermanentManifestSha256 = '95D51222C8000706D235A309EF1CAEA6D986B08F1B04A08671475AD041A18CCD',
-    [switch] $SeparateLoaderRoots,
+    [string] $SyntheticImportManifest = '',
+    [string] $SyntheticSystemMappingManifest = '',
+    [string] $SyntheticArtifactEvidence = '',
+    [string] $SyntheticObjectEvidence = '',
+    [string] $SyntheticBuildEvidence = '',
     [switch] $TestMode
 )
 
@@ -29,6 +42,57 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+$acceptedPatchedSha256 = 'A10BBD461B628379F02CF87E059F89C2F4485F69D88AD2C51466E8789DAF2663'
+$acceptedLibgccSha256 = '592E6966F66D7993726D3CE329E81B658188E5CB286ACE9DE56C2FAB939EA491'
+$acceptedPermanentRoot = 'C:\Tools\GNU Octave\11.3.0'
+$acceptedPureRoot = 'C:\tmp\Relocated Pure Gplot Final Bundle 20260729'
+$acceptedBridgeRoot = 'C:\pure-lang\pure-octave'
+$acceptedBridgeBinaryRoot = 'C:\tmp\Pure Octave Permanent Build 20260730\lib\pure'
+$acceptedOctaveRoot = 'C:\tmp\todo51-task3\toolchain-normalize-pristine'
+$acceptedPatchedPath = 'C:\tmp\todo51-task3\build-normalized-confined\liboctave\.libs\liboctave-13.dll'
+$acceptedProbeRoot = 'C:\pure-lang\pure-octave\probes'
+$acceptedBridgeModulePath = 'C:\pure-lang\pure-octave\octave.pure'
+$acceptedPackageRoot = 'C:\pure-lang\pure-octave'
+$acceptedObjdump = 'C:\tmp\todo51-task3\toolchain-normalize-pristine\mingw64\bin\objdump.exe'
+$acceptedPatchPath = 'C:\pure-lang\pure-octave\patches\octave-11.3.0-appcontainer-canonicalization.patch'
+$acceptedPatchSha256 = '521C6C501B1146A253E306314A454D4C545D0385450BAC6068D3FC6A7C968E71'
+$acceptedHelperHeaderPath = 'C:\pure-lang\pure-octave\probes\windows_system_volume_canonicalization.h'
+$acceptedHelperHeaderSha256 = '7C7A46B7202F9A7E6F89CD7D53C28F0F48AFFB495E18FCE34E525AC5DA0D0D44'
+$acceptedArtifactEvidence = 'C:\tmp\todo51-task3\liboctave-normalized-confined-artifact-audit.log'
+$acceptedObjectEvidence = 'C:\tmp\todo51-task3\liboctave-normalized-confined-patch-object-audit.log'
+$acceptedBuildEvidence = 'C:\tmp\todo51-task3\liboctave-normalized-confined.log'
+$acceptedArtifactEvidenceSha256 = 'C56E0746AA0673447F6BD64117772BEC9D450321C53F508A96352818F7EB964C'
+$acceptedObjectEvidenceSha256 = 'DFB6BA01DCDDCBDDEDA4FAA278556284F68C89B2AA79E417FDDFDA463893B9F0'
+$acceptedBuildEvidenceSha256 = '842678BFBBC560B4258EE15920C1E36B030D334B2B8BC948C6768CA6613E3608'
+$acceptedApiSchemaSha256 = '8FFADF5FF3D8D3843FC393E9D03C2091AC5DDFC6227B8097DC182E2A8F8463FC'
+$acceptedOsVersion = 'Microsoft Windows NT 10.0.26200.0'
+$acceptedStageFiles = 64309
+$acceptedStageBytes = 3327729829
+$acceptedStageManifestSha256 = 'E142C07EDA4D71184D1892189834818B9DCE7AD44B8F0A6708A51C54FA56476F'
+$syntheticArtifactEvidenceSha256 = '86083033EE13E6B733D2F59393B28009D0A3C635F288AFF492F6D964788CE479'
+$syntheticObjectEvidenceSha256 = '0C7F800EE9C9696F5BEF78524D8021DDE617255734C5940BF5B922FB47ABB302'
+$syntheticBuildEvidenceSha256 = '58CFBD17EEBEB306E5251A63B0EE5EF0425B6C7C51767303156EEF1A6F93F01B'
+$syntheticPatchedSha256 = 'DD8C8FC072699F2AE0767DEDAF66276E536E85737B9EF3FDF95C9D9C052577DC'
+$syntheticLibgccSha256 = '66679E04C91C3FEA75FF8CC85C0DD2F09BB2007EB1439DE8F236A56980BDEA52'
+$syntheticPureFileCount = 4
+$syntheticPureTotalBytes = 41
+$syntheticPureManifestSha256 = 'A20CD63507F946EE07E9B9419662F3BD754FF7151B99468C49AAB6985EDAD3AE'
+$syntheticBridgeFileCount = 3
+$syntheticBridgeTotalBytes = 30
+$syntheticBridgeManifestSha256 = '025D6C9E917AA89AE1B068CD87598E96C00896F1D2BEE6AD139C7BF1BCD78648'
+$syntheticBridgeModuleSha256 = '120970D812836F19888625587A4606A5AD23CEF31C8684E601771552548FC6B9'
+$syntheticProbeSha256 = 'BA9C736F19E7F60B7F6764ADB0B7908C0A2B394E09B6C09863528C7F2BC86095'
+$acceptedInput = [ordered]@{
+    PureFileCount = 4769; PureTotalBytes = 260533868; PureManifestSha256 = '52DA19745D9F33DEC4CEAF09E24E3836C04E82E1651BB695990D18B14D667FE3'
+    BridgeFileCount = 2; BridgeTotalBytes = 4771866; BridgeManifestSha256 = '974C07999D4EBC62C218F0EDA7D271B6CCC7AFDEBD1EBFA063C7A25109C4CE11'
+    BridgeModuleSha256 = '51A4FADE279C91CB63103EFD7A0A97FB1DF9E674F807A7E0BF65991D6E6066F0'
+    ProbeSha256 = '8924A6A2FC79FB1C0F0B97248014079D685D1724C1708523FE08240CA87424A5'
+}
+$acceptedRepositoryFiles = [ordered]@{
+    'tests\basic.pure' = '23C378107498CF605C4777132C817CDAE6D090306007F0E67A83CCD4D726346D'
+    'cmake\RunEmbedProbe.cmake' = '73BEE376A8D2A23897D9FBA85277F5B59439C45BE442300B43AC63388F003DCB'
+    'cmake\RunPureTest.cmake' = 'A45618D605CB6B70F6D5008351731F786F7C3D97CF0537A4BEFC47DEF2BA08CB'
+}
 
 function Get-Sha256File([string] $Path) {
     # Streaming avoids loading large DLLs and avoids the per-file cmdlet
@@ -70,6 +134,22 @@ function Assert-StrictChild([string] $Child, [string] $Parent, [string] $Descrip
     if (-not $childFull.StartsWith($parentFull + '\', [StringComparison]::OrdinalIgnoreCase)) {
         throw "$Description is not a strict child of disposable parent: $childFull"
     }
+}
+
+function Assert-ExactPath([string] $Actual, [string] $Expected, [string] $Description) {
+    if (-not ([IO.Path]::GetFullPath($Actual).TrimEnd('\')).Equals(([IO.Path]::GetFullPath($Expected).TrimEnd('\')), [StringComparison]::OrdinalIgnoreCase)) {
+        throw "$Description is not the fixed approved path: $Expected"
+    }
+}
+
+function Assert-SourceBoundary([string] $Source, [string] $Root, [string] $Description) {
+    $sourceFull = [IO.Path]::GetFullPath($Source).TrimEnd('\')
+    $rootFull = [IO.Path]::GetFullPath($Root).TrimEnd('\')
+    if (-not $sourceFull.Equals($rootFull, [StringComparison]::OrdinalIgnoreCase) -and
+        -not $sourceFull.StartsWith($rootFull + '\', [StringComparison]::OrdinalIgnoreCase)) {
+        throw "$Description escapes its explicit provenance root: $sourceFull"
+    }
+    Assert-NoReparsePath $sourceFull $Description
 }
 
 function Assert-NoReparseTree([string] $Root, [string] $Description) {
@@ -154,23 +234,26 @@ function Get-Sha256Bytes([byte[]] $Bytes) {
     finally { $sha.Dispose() }
 }
 
-function Copy-TreeTracked([string] $Source, [string] $Destination, [string] $Role, [Collections.Generic.List[string]] $Mappings) {
+function Copy-TreeTracked([string] $Source, [string] $Destination, [string] $Role, [string] $ProvenanceRoot, [Collections.Generic.List[string]] $Mappings) {
+    Assert-SourceBoundary $Source $ProvenanceRoot "$Role source root"
     [IO.Directory]::CreateDirectory($Destination) | Out-Null
     foreach ($file in Get-ChildItem -LiteralPath $Source -Recurse -Force -File) {
+        Assert-SourceBoundary $file.FullName $ProvenanceRoot "$Role source file"
         $relative = $file.FullName.Substring($Source.Length + 1)
         $target = Join-Path $Destination $relative
         [IO.Directory]::CreateDirectory((Split-Path -Parent $target)) | Out-Null
         if (Test-Path -LiteralPath $target) { throw "Stage collision for $target while copying $Role" }
         [IO.File]::Copy($file.FullName, $target, $false)
-        $Mappings.Add(('"{0}"`t"{1}"`t{2}`t{3}' -f $file.FullName, $target, $Role, (Get-Sha256File $file.FullName)))
+        $Mappings.Add(('"{0}"' -f $file.FullName) + "`t" + ('"{0}"' -f $target) + "`t$Role`t" + (Get-Sha256File $file.FullName))
     }
 }
 
-function Copy-FileTracked([string] $Source, [string] $Destination, [string] $Role, [Collections.Generic.List[string]] $Mappings) {
+function Copy-FileTracked([string] $Source, [string] $Destination, [string] $Role, [string] $ProvenanceRoot, [Collections.Generic.List[string]] $Mappings) {
+    Assert-SourceBoundary $Source $ProvenanceRoot "$Role source file"
     [IO.Directory]::CreateDirectory((Split-Path -Parent $Destination)) | Out-Null
     if (Test-Path -LiteralPath $Destination) { throw "Stage collision for $Destination while copying $Role" }
     [IO.File]::Copy($Source, $Destination, $false)
-    $Mappings.Add(('"{0}"`t"{1}"`t{2}`t{3}' -f $Source, $Destination, $Role, (Get-Sha256File $Source)))
+    $Mappings.Add(('"{0}"' -f $Source) + "`t" + ('"{0}"' -f $Destination) + "`t$Role`t" + (Get-Sha256File $Source))
 }
 
 function Assert-RegularFile([string] $Path, [string] $Description) {
@@ -182,6 +265,93 @@ function Get-PeImports([string] $Tool, [string] $File) {
     $output = & $Tool -p $File 2>&1
     if ($LASTEXITCODE -ne 0) { throw "objdump failed for staged PE file: $File`n$output" }
     return @($output | ForEach-Object { if ($_ -match '^\s*DLL Name:\s*(.+?)\s*$') { $Matches[1].Trim() } })
+}
+
+function Test-PortableExecutable([string] $Path) {
+    $stream = New-Object IO.FileStream($Path, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)
+    try {
+        if ($stream.Length -lt 2) { return $false }
+        return ($stream.ReadByte() -eq 0x4d -and $stream.ReadByte() -eq 0x5a)
+    }
+    finally { $stream.Dispose() }
+}
+
+function Read-SyntheticImports([string] $Manifest, [string] $FixtureRoot) {
+    Assert-SourceBoundary $Manifest $FixtureRoot 'Synthetic import manifest'
+    Assert-RegularFile $Manifest 'Synthetic import manifest'
+    $result = @{}
+    foreach ($line in Get-Content -LiteralPath $Manifest) {
+        $fields = $line.Split("`t")
+        if ($fields.Count -ne 2 -or $fields[0] -notmatch '^[^:\\]+(?:/[^:\\]+)*$' -or $fields[0] -match '(^|/)\.\.?(?:/|$)') { throw "Invalid synthetic import record: $line" }
+        $key = $fields[0].ToLowerInvariant()
+        if ($result.ContainsKey($key)) { throw "Duplicate synthetic import record: $($fields[0])" }
+        $result[$key] = if ($fields[1] -eq '-') { @() } else { [string[]]@($fields[1].Split(';') | ForEach-Object { $_.Trim() }) }
+    }
+    return $result
+}
+
+function Read-SyntheticSystemMappings([string] $Manifest, [string] $FixtureRoot) {
+    Assert-SourceBoundary $Manifest $FixtureRoot 'Synthetic system mapping manifest'
+    Assert-RegularFile $Manifest 'Synthetic system mapping manifest'
+    $result = @{}
+    foreach ($line in Get-Content -LiteralPath $Manifest) {
+        if ([string]::IsNullOrWhiteSpace($line)) { continue }
+        $fields = $line.Split("`t")
+        if ($fields.Count -ne 2 -or $fields[0] -notmatch '^(api|ext)-ms-win-[a-z0-9][a-z0-9-]*-l[0-9]+-[0-9]+-[0-9]+\.dll$' -or $fields[1] -notmatch '^[A-Za-z0-9_.-]+\.dll$') { throw "Invalid synthetic system mapping record: $line" }
+        $key = $fields[0].ToLowerInvariant()
+        if ($result.ContainsKey($key)) { throw "Duplicate synthetic system mapping: $($fields[0])" }
+        $result[$key] = $fields[1]
+    }
+    return $result
+}
+
+function Initialize-ApiSetResolver([string] $WriteRoot) {
+    $helperTemp = Join-Path $WriteRoot ('.task3-api-resolver-' + [guid]::NewGuid().ToString('N'))
+    Assert-StrictChild $helperTemp $WriteRoot 'API-set resolver temporary directory'
+    [IO.Directory]::CreateDirectory($helperTemp) | Out-Null
+    $saved = @{}
+    foreach ($name in @('TEMP','TMP','TMPDIR')) {
+        $saved[$name] = [pscustomobject]@{ Present = [Environment]::GetEnvironmentVariables('Process').Contains($name); Value = [Environment]::GetEnvironmentVariable($name, 'Process') }
+        [Environment]::SetEnvironmentVariable($name, $helperTemp, 'Process')
+    }
+    try {
+        Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+using System.Text;
+public static class Task3ApiSetResolver {
+  [DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true)] public static extern IntPtr LoadLibraryExW(string name, IntPtr file, uint flags);
+  [DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true)] public static extern uint GetModuleFileNameW(IntPtr module, StringBuilder path, int size);
+  [DllImport("kernel32.dll", SetLastError=true)] [return: MarshalAs(UnmanagedType.Bool)] public static extern bool FreeLibrary(IntPtr module);
+}
+'@
+    }
+    finally {
+        foreach ($name in @('TEMP','TMP','TMPDIR')) {
+            if ($saved[$name].Present) { [Environment]::SetEnvironmentVariable($name, $saved[$name].Value, 'Process') }
+            else { [Environment]::SetEnvironmentVariable($name, $null, 'Process') }
+        }
+        if (Test-Path -LiteralPath $helperTemp) { [IO.Directory]::Delete($helperTemp, $true) }
+    }
+}
+
+function Resolve-ApiSetContract([string] $Contract, [string] $System32) {
+    $handle = [Task3ApiSetResolver]::LoadLibraryExW($Contract, [IntPtr]::Zero, 0x00000800)
+    if ($handle -eq [IntPtr]::Zero) { throw "API-set contract has no authoritative local OS mapping: $Contract (Win32 $([Runtime.InteropServices.Marshal]::GetLastWin32Error()))" }
+    $freeError = 0
+    try {
+        $buffer = New-Object Text.StringBuilder 32768
+        $length = [Task3ApiSetResolver]::GetModuleFileNameW($handle, $buffer, $buffer.Capacity)
+        if ($length -eq 0 -or $length -ge $buffer.Capacity) { throw "API-set contract mapping path could not be read: $Contract" }
+        $resolved = [IO.Path]::GetFullPath($buffer.ToString()).TrimEnd('\')
+    }
+    finally {
+        if (-not [Task3ApiSetResolver]::FreeLibrary($handle)) { $freeError = [Runtime.InteropServices.Marshal]::GetLastWin32Error() }
+    }
+    if ($freeError -ne 0) { throw "API-set contract mapping could not be freed: $Contract (Win32 $freeError)" }
+    Assert-SourceBoundary $resolved $System32 "API-set host for $Contract"
+    Assert-RegularFile $resolved "API-set host for $Contract"
+    return $resolved
 }
 
 Assert-LocalDosPath $DisposableParent 'Disposable parent'
@@ -196,32 +366,159 @@ $permanent = Get-CanonicalExistingPath $PermanentOctaveRoot 'Permanent Octave ro
 $pure = Get-CanonicalExistingPath $PureRuntimeRoot 'Pure runtime root'
 $octave = Get-CanonicalExistingPath $NormalizedOctaveRoot 'Normalized Octave root'
 $bridge = Get-CanonicalExistingPath $BridgeRoot 'Bridge root'
+$bridgeBinary = Get-CanonicalExistingPath $(if ($BridgeBinaryRoot) { $BridgeBinaryRoot } else { $BridgeRoot }) 'Bridge binary root'
 $bridgeModule = Get-CanonicalExistingPath $BridgeModuleSource 'Bridge module source'
 $probe = Get-CanonicalExistingPath $ProbeRoot 'Probe root'
 $patched = Get-CanonicalExistingPath $PatchedLiboctave 'Patched liboctave'
-foreach ($pair in @(@($pure,'Pure runtime root'), @($octave,'Normalized Octave root'), @($bridge,'Bridge root'), @($probe,'Probe root'))) { Assert-NoReparseTree $pair[0] $pair[1] }
+Assert-NoReparseTree $permanent 'Permanent Octave root'
+Assert-StrictChild $bridgeModule $bridge 'Bridge module source'
+foreach ($pair in @(@($pure,'Pure runtime root'), @($octave,'Normalized Octave root'), @($bridge,'Bridge root'), @($bridgeBinary,'Bridge binary root'), @($probe,'Probe root'))) { Assert-NoReparseTree $pair[0] $pair[1] }
 Assert-RegularFile $patched 'Patched liboctave'
+Assert-NoReparsePath $patched 'Patched liboctave'
 Assert-RegularFile $bridgeModule 'Bridge module source'
 if ($octave.Equals($permanent, [StringComparison]::OrdinalIgnoreCase)) { throw 'Normalized Octave root resolves to the permanent Octave root.' }
-if ((Get-Sha256File $patched) -ne $ExpectedPatchedSha256.ToUpperInvariant()) { throw 'Patched liboctave SHA-256 does not match the required artifact.' }
+$packageRoot = [IO.Path]::GetFullPath((Split-Path -Parent $PSScriptRoot)).TrimEnd('\')
+Assert-NoReparsePath $packageRoot 'Repository package root'
+
+if ($TestMode) {
+    $fixtureRoot = [IO.Path]::GetDirectoryName($parent)
+    if (-not (Split-Path -Leaf $parent).Equals('parent', [StringComparison]::OrdinalIgnoreCase) -or
+        $fixtureRoot -notmatch '^C:\\tmp\\todo51-stage-tests-[0-9a-f]{32}$') {
+        throw 'TestMode is allowed only within the exact synthetic fixture C:\tmp\todo51-stage-tests-<32 hex>\parent.'
+    }
+    Assert-ExactPath $parent (Join-Path $fixtureRoot 'parent') 'Synthetic disposable parent'
+    foreach ($pair in @(
+        @($permanent,'Synthetic permanent root'), @($pure,'Synthetic Pure root'), @($octave,'Synthetic Octave root'),
+        @($bridge,'Synthetic bridge root'), @($bridgeBinary,'Synthetic bridge binary root'), @($probe,'Synthetic probe root'), @($patched,'Synthetic patched DLL'),
+        @($SyntheticImportManifest,'Synthetic import manifest'), @($SyntheticSystemMappingManifest,'Synthetic system mapping manifest'),
+        @($SyntheticArtifactEvidence,'Synthetic artifact evidence'), @($SyntheticObjectEvidence,'Synthetic object evidence'),
+        @($SyntheticBuildEvidence,'Synthetic build evidence'))) {
+        Assert-StrictChild $pair[0] $fixtureRoot $pair[1]
+        Assert-NoReparsePath $pair[0] $pair[1]
+    }
+    if ($ExpectedPatchedSha256 -ne $syntheticPatchedSha256 -or $ExpectedLibgccSha256 -ne $syntheticLibgccSha256 -or
+        $ExpectedPureFileCount -ne $syntheticPureFileCount -or $ExpectedPureTotalBytes -ne $syntheticPureTotalBytes -or $ExpectedPureManifestSha256 -ne $syntheticPureManifestSha256 -or
+        $ExpectedBridgeFileCount -ne $syntheticBridgeFileCount -or $ExpectedBridgeTotalBytes -ne $syntheticBridgeTotalBytes -or $ExpectedBridgeManifestSha256 -ne $syntheticBridgeManifestSha256 -or
+        $ExpectedBridgeModuleSha256 -ne $syntheticBridgeModuleSha256 -or $ExpectedProbeSha256 -ne $syntheticProbeSha256) {
+        throw 'TestMode input expectations must equal the exact versioned synthetic fixture.'
+    }
+    $requiredPatchedSha256 = $syntheticPatchedSha256
+    $requiredLibgccSha256 = $syntheticLibgccSha256
+    $requiredPureFileCount = $syntheticPureFileCount
+    $requiredPureTotalBytes = $syntheticPureTotalBytes
+    $requiredPureManifestSha256 = $syntheticPureManifestSha256
+    $requiredBridgeFileCount = $syntheticBridgeFileCount
+    $requiredBridgeTotalBytes = $syntheticBridgeTotalBytes
+    $requiredBridgeManifestSha256 = $syntheticBridgeManifestSha256
+    $requiredBridgeModuleSha256 = $syntheticBridgeModuleSha256
+    $requiredProbeSha256 = $syntheticProbeSha256
+    $artifactEvidencePath = $SyntheticArtifactEvidence
+    $objectEvidencePath = $SyntheticObjectEvidence
+    $buildEvidencePath = $SyntheticBuildEvidence
+    $requiredArtifactEvidenceSha256 = $syntheticArtifactEvidenceSha256
+    $requiredObjectEvidenceSha256 = $syntheticObjectEvidenceSha256
+    $requiredBuildEvidenceSha256 = $syntheticBuildEvidenceSha256
+}
+else {
+    if ($SyntheticImportManifest -or $SyntheticSystemMappingManifest -or $SyntheticArtifactEvidence -or $SyntheticObjectEvidence -or $SyntheticBuildEvidence) {
+        throw 'Synthetic tool or evidence inputs are TestMode-only.'
+    }
+    if ($ExpectedPatchedSha256 -ne $acceptedPatchedSha256 -or $ExpectedLibgccSha256 -ne $acceptedLibgccSha256 -or
+        $ExpectedPureFileCount -ne $acceptedInput.PureFileCount -or $ExpectedPureTotalBytes -ne $acceptedInput.PureTotalBytes -or $ExpectedPureManifestSha256 -ne $acceptedInput.PureManifestSha256 -or
+        $ExpectedBridgeFileCount -ne $acceptedInput.BridgeFileCount -or $ExpectedBridgeTotalBytes -ne $acceptedInput.BridgeTotalBytes -or $ExpectedBridgeManifestSha256 -ne $acceptedInput.BridgeManifestSha256 -or
+        $ExpectedBridgeModuleSha256 -ne $acceptedInput.BridgeModuleSha256 -or $ExpectedProbeSha256 -ne $acceptedInput.ProbeSha256 -or
+        $ExpectedNormalizedSnapshotSha256 -ne 'B19A1BAB6293EBAAD7D0076B43D5E8F466BA896EAADFD81EED7E0C7C8F96FB31' -or
+        $ExpectedNormalizedIdempotenceEvidenceSha256 -ne 'FA3FD0315B4B32B68A0C3FD860D83DCAE8A268E978B5C576A64006912428AF59' -or
+        $ExpectedNormalizedManifestSha256 -ne '9417DC1DC935E33ACADACA3A0AD86389F500B937F7670E3D177A8D58B3C68CED' -or
+        $ExpectedPermanentManifestSha256 -ne '95D51222C8000706D235A309EF1CAEA6D986B08F1B04A08671475AD041A18CCD') {
+        throw 'Non-test staging rejects caller-controlled evidence or inventory overrides.'
+    }
+    Assert-ExactPath $octave $acceptedOctaveRoot 'Normalized Octave root'
+    Assert-ExactPath $permanent $acceptedPermanentRoot 'Permanent Octave root'
+    Assert-ExactPath $pure $acceptedPureRoot 'Pure runtime root'
+    Assert-ExactPath $bridge $acceptedBridgeRoot 'Bridge root'
+    Assert-ExactPath $bridgeBinary $acceptedBridgeBinaryRoot 'Bridge binary root'
+    Assert-ExactPath $probe $acceptedProbeRoot 'Probe root'
+    Assert-ExactPath $bridgeModule $acceptedBridgeModulePath 'Bridge module source'
+    Assert-ExactPath $patched $acceptedPatchedPath 'Patched liboctave'
+    Assert-ExactPath $packageRoot $acceptedPackageRoot 'Repository package root'
+    Assert-ExactPath $Objdump $acceptedObjdump 'Static import auditor'
+    Assert-ExactPath $NormalizedSnapshot 'C:\tmp\todo51-task3\toolchain-normalized-before-msys.tsv' 'Normalized snapshot evidence'
+    Assert-ExactPath $PermanentSnapshot 'C:\tmp\todo51-task3\permanent-before.tsv' 'Permanent snapshot evidence'
+    Assert-ExactPath $NormalizedIdempotenceEvidence 'C:\tmp\todo51-task3\normalizer-idempotence-apply.stdout.json' 'Normalizer idempotence evidence'
+    $requiredPatchedSha256 = $acceptedPatchedSha256
+    $requiredLibgccSha256 = $acceptedLibgccSha256
+    $requiredPureFileCount = $acceptedInput.PureFileCount
+    $requiredPureTotalBytes = $acceptedInput.PureTotalBytes
+    $requiredPureManifestSha256 = $acceptedInput.PureManifestSha256
+    $requiredBridgeFileCount = $acceptedInput.BridgeFileCount
+    $requiredBridgeTotalBytes = $acceptedInput.BridgeTotalBytes
+    $requiredBridgeManifestSha256 = $acceptedInput.BridgeManifestSha256
+    $requiredBridgeModuleSha256 = $acceptedInput.BridgeModuleSha256
+    $requiredProbeSha256 = $acceptedInput.ProbeSha256
+    $artifactEvidencePath = $acceptedArtifactEvidence
+    $objectEvidencePath = $acceptedObjectEvidence
+    $buildEvidencePath = $acceptedBuildEvidence
+    $requiredArtifactEvidenceSha256 = $acceptedArtifactEvidenceSha256
+    $requiredObjectEvidenceSha256 = $acceptedObjectEvidenceSha256
+    $requiredBuildEvidenceSha256 = $acceptedBuildEvidenceSha256
+}
+
+if (-not $TestMode) {
+    foreach ($sourceEvidence in @(
+        @($acceptedPatchPath,$acceptedPatchSha256,'Accepted canonicalization patch'),
+        @($acceptedHelperHeaderPath,$acceptedHelperHeaderSha256,'Accepted canonicalization helper header'))) {
+        Assert-RegularFile $sourceEvidence[0] $sourceEvidence[2]
+        Assert-SourceBoundary $sourceEvidence[0] $packageRoot $sourceEvidence[2]
+        if ((Get-Sha256File $sourceEvidence[0]) -ne $sourceEvidence[1]) { throw "$($sourceEvidence[2]) is not the exact approved provenance input." }
+    }
+}
+
+if ((Get-Sha256File $patched) -ne $requiredPatchedSha256) { throw 'Patched liboctave SHA-256 does not match the required artifact.' }
 $octaveDll = Join-Path $octave 'mingw64\bin\liboctave-13.dll'
 $gcc = Join-Path $octave 'mingw64\bin\libgcc_s_seh-1.dll'
 Assert-RegularFile $octaveDll 'Normalized source liboctave'
 Assert-RegularFile $gcc 'Normalized runtime libgcc'
-if ((Get-Sha256File $gcc) -ne $ExpectedLibgccSha256.ToUpperInvariant()) { throw 'Normalized runtime libgcc SHA-256 is not the approved loader copy.' }
+if ((Get-Sha256File $gcc) -ne $requiredLibgccSha256) { throw 'Normalized runtime libgcc SHA-256 is not the approved loader copy.' }
+
+$pureBefore = Get-TreeManifest $pure
+if ($pureBefore.FileCount -ne $requiredPureFileCount -or $pureBefore.TotalBytes -ne $requiredPureTotalBytes -or $pureBefore.Sha256 -ne $requiredPureManifestSha256) {
+    throw "Pure runtime input does not match its exact approved inventory: actual $($pureBefore.FileCount) / $($pureBefore.TotalBytes) / $($pureBefore.Sha256)."
+}
+$bridgeBefore = Get-TreeManifest $bridgeBinary
+if ($bridgeBefore.FileCount -ne $requiredBridgeFileCount -or $bridgeBefore.TotalBytes -ne $requiredBridgeTotalBytes -or $bridgeBefore.Sha256 -ne $requiredBridgeManifestSha256) {
+    throw "Bridge binary input does not match its exact approved inventory: actual $($bridgeBefore.FileCount) / $($bridgeBefore.TotalBytes) / $($bridgeBefore.Sha256)."
+}
+if ((Get-Sha256File $bridgeModule) -ne $requiredBridgeModuleSha256) { throw 'Bridge module source does not match its exact approved SHA-256.' }
+$probeSource = Join-Path $probe 'embed_probe.cc'
+Assert-RegularFile $probeSource 'Public embed probe source'
+Assert-SourceBoundary $probeSource $probe 'Public embed probe source'
+if ((Get-Sha256File $probeSource) -ne $requiredProbeSha256) { throw 'Public embed probe does not match its exact approved SHA-256.' }
+
+foreach ($evidencePair in @(
+    @($artifactEvidencePath,$requiredArtifactEvidenceSha256,'Patched artifact evidence'),
+    @($objectEvidencePath,$requiredObjectEvidenceSha256,'Patched object evidence'),
+    @($buildEvidencePath,$requiredBuildEvidenceSha256,'Confined build evidence'))) {
+    Assert-RegularFile $evidencePair[0] $evidencePair[2]
+    Assert-NoReparsePath $evidencePair[0] $evidencePair[2]
+    if ((Get-Sha256File $evidencePair[0]) -ne $evidencePair[1]) { throw "$($evidencePair[2]) is not the exact approved evidence." }
+}
+
+foreach ($relative in $acceptedRepositoryFiles.Keys) {
+    $source = Join-Path $packageRoot $relative
+    Assert-RegularFile $source "Required public test script $relative"
+    Assert-SourceBoundary $source $packageRoot "Required public test script $relative"
+    if ((Get-Sha256File $source) -ne $acceptedRepositoryFiles[$relative]) { throw "Required public test script $relative does not match its exact approved SHA-256." }
+}
 
 if (-not $TestMode) {
-    $expectedRoot = 'C:\tmp\todo51-task3\toolchain-normalize-pristine'
-    if (-not $octave.Equals($expectedRoot, [StringComparison]::OrdinalIgnoreCase)) { throw "Non-test staging requires the verified normalized root: $expectedRoot" }
-    Assert-SnapshotTree $octave $NormalizedSnapshot $ExpectedNormalizedSnapshotSha256 59533 2797722565 'Normalized source runtime'
-    Assert-SnapshotTree $permanent $PermanentSnapshot $ExpectedPermanentManifestSha256 59533 2797722287 'Permanent Octave runtime before staging'
+    Assert-SnapshotTree $octave $NormalizedSnapshot 'B19A1BAB6293EBAAD7D0076B43D5E8F466BA896EAADFD81EED7E0C7C8F96FB31' 59533 2797722565 'Normalized source runtime'
+    Assert-SnapshotTree $permanent $PermanentSnapshot '95D51222C8000706D235A309EF1CAEA6D986B08F1B04A08671475AD041A18CCD' 59533 2797722287 'Permanent Octave runtime before staging'
     Assert-RegularFile $NormalizedIdempotenceEvidence 'Normalized idempotence evidence'
-    if ((Get-Sha256File $NormalizedIdempotenceEvidence) -ne $ExpectedNormalizedIdempotenceEvidenceSha256.ToUpperInvariant()) { throw 'Normalized idempotence evidence hash is not approved.' }
+    if ((Get-Sha256File $NormalizedIdempotenceEvidence) -ne 'FA3FD0315B4B32B68A0C3FD860D83DCAE8A268E978B5C576A64006912428AF59') { throw 'Normalized idempotence evidence hash is not approved.' }
     $evidence = Get-Content -LiteralPath $NormalizedIdempotenceEvidence -Raw | ConvertFrom-Json
-    if ($evidence.ResultFileCount -ne 59533 -or $evidence.ResultTotalBytes -ne 2797722565 -or $evidence.ResultManifestSha256 -ne $ExpectedNormalizedManifestSha256) { throw 'Normalized idempotence evidence does not attest the required canonical manifest.' }
+    if ($evidence.ResultFileCount -ne 59533 -or $evidence.ResultTotalBytes -ne 2797722565 -or $evidence.ResultManifestSha256 -ne '9417DC1DC935E33ACADACA3A0AD86389F500B937F7670E3D177A8D58B3C68CED') { throw 'Normalized idempotence evidence does not attest the required canonical manifest.' }
 }
-$pureBefore = Get-TreeManifest $pure
-$bridgeBefore = Get-TreeManifest $bridge
 $bridgeModuleBefore = Get-Sha256File $bridgeModule
 $patchedBefore = Get-Sha256File $patched
 
@@ -229,94 +526,137 @@ $patchedBefore = Get-Sha256File $patched
 [IO.Directory]::CreateDirectory($StageRoot) | Out-Null
 $mappings = New-Object 'Collections.Generic.List[string]'
 try {
-    Copy-TreeTracked $octave $StageRoot 'normalized-octave' $mappings
-    Copy-TreeTracked $pure (Join-Path $StageRoot 'pure') 'verified-pure-runtime' $mappings
+    Copy-TreeTracked $octave $StageRoot 'normalized-octave' $octave $mappings
+    Copy-TreeTracked $pure (Join-Path $StageRoot 'pure') 'verified-pure-runtime' $pure $mappings
     foreach ($name in @('octave_embed.dll','octave_bridge_impl.dll')) {
-        Copy-FileTracked (Join-Path $bridge $name) (Join-Path $StageRoot ('bridge\\' + $name)) 'verified-bridge' $mappings
+        Copy-FileTracked (Join-Path $bridgeBinary $name) (Join-Path $StageRoot ('bridge\\' + $name)) 'verified-bridge' $bridgeBinary $mappings
     }
-    Copy-FileTracked $bridgeModule (Join-Path $StageRoot 'bridge\\octave.pure') 'repository-bridge-module' $mappings
-    foreach ($name in @('embed_probe.cc')) { Copy-FileTracked (Join-Path $probe $name) (Join-Path $StageRoot ('probes\\' + $name)) 'public-embed-probe' $mappings }
-    $packageRoot = Split-Path -Parent $PSScriptRoot
+    Copy-FileTracked $bridgeModule (Join-Path $StageRoot 'bridge\\octave.pure') 'repository-bridge-module' $bridge $mappings
+    foreach ($name in @('embed_probe.cc')) { Copy-FileTracked (Join-Path $probe $name) (Join-Path $StageRoot ('probes\\' + $name)) 'public-embed-probe' $probe $mappings }
     foreach ($entry in @(@('tests\\basic.pure','tests\\basic.pure'), @('cmake\\RunEmbedProbe.cmake','cmake\\RunEmbedProbe.cmake'), @('cmake\\RunPureTest.cmake','cmake\\RunPureTest.cmake'))) {
         $source = Join-Path $packageRoot $entry[0]
-        Assert-RegularFile $source "Required public test script $($entry[0])"
-        Copy-FileTracked $source (Join-Path $StageRoot ('scripts\\' + $entry[1].Replace('tests\\','').Replace('cmake\\',''))) 'public-test-script' $mappings
+        Copy-FileTracked $source (Join-Path $StageRoot ('scripts\\' + $entry[1].Replace('tests\\','').Replace('cmake\\',''))) 'public-test-script' $packageRoot $mappings
     }
     # Only the stage copy is replaced; source and permanent roots were never opened for write.
     [IO.File]::Copy($patched, (Join-Path $StageRoot 'mingw64\bin\liboctave-13.dll'), $true)
-    $mappings.Add(('"{0}"`t"{1}"`tpatched-liboctave`t{2}' -f $patched, (Join-Path $StageRoot 'mingw64\bin\liboctave-13.dll'), (Get-Sha256File $patched)))
-    if ((Get-Sha256File (Join-Path $StageRoot 'mingw64\bin\liboctave-13.dll')) -ne $ExpectedPatchedSha256.ToUpperInvariant()) { throw 'Staged liboctave does not match the patched artifact.' }
-    if ((Get-Sha256File $octaveDll) -eq $ExpectedPatchedSha256.ToUpperInvariant()) { throw 'Source normalized Octave unexpectedly already contains the patched DLL.' }
+    $mappings.Add(('"{0}"' -f $patched) + "`t" + ('"{0}"' -f (Join-Path $StageRoot 'mingw64\bin\liboctave-13.dll')) + "`tpatched-liboctave`t" + (Get-Sha256File $patched))
+    if ((Get-Sha256File (Join-Path $StageRoot 'mingw64\bin\liboctave-13.dll')) -ne $requiredPatchedSha256) { throw 'Staged liboctave does not match the patched artifact.' }
+    if ((Get-Sha256File $octaveDll) -eq $requiredPatchedSha256) { throw 'Source normalized Octave unexpectedly already contains the patched DLL.' }
 
     # Production uses separate Pure and Octave loader roots: their same-named
     # vendor DLLs must never be silently merged.
     $stageBin = Join-Path $StageRoot 'mingw64\bin'
-    if (-not $SeparateLoaderRoots) { foreach ($file in Get-ChildItem -LiteralPath (Join-Path $pure 'bin') -File -Force) {
-        $target = Join-Path $stageBin $file.Name
-        if (Test-Path -LiteralPath $target) {
-            if ((Get-Sha256File $target) -ne (Get-Sha256File $file.FullName)) { throw "Pure/Octave runtime DLL collision: $($file.Name)" }
-            $mappings.Add(('"{0}"`t"{1}"`tpure-runtime-loader-closure-identical-name-approved`t{2}' -f $file.FullName, $target, (Get-Sha256File $file.FullName)))
-        } else { Copy-FileTracked $file.FullName $target 'pure-runtime-loader-closure' $mappings }
-    } }
-    if (-not $SeparateLoaderRoots) { foreach ($file in Get-ChildItem -LiteralPath $bridge -File -Force | Where-Object { $_.Extension -ieq '.dll' }) {
-        $target = Join-Path $stageBin $file.Name
-        if (-not (Test-Path -LiteralPath $target)) { Copy-FileTracked $file.FullName $target 'bridge-loader-closure' $mappings }
-        elseif ((Get-Sha256File $target) -ne (Get-Sha256File $file.FullName)) { throw "Bridge/Octave runtime DLL collision: $($file.Name)" }
-        else { $mappings.Add(('"{0}"`t"{1}"`tbridge-loader-closure-identical-name-approved`t{2}' -f $file.FullName, $target, (Get-Sha256File $file.FullName))) }
-    } }
     Assert-NoReparseTree $StageRoot 'Staged runtime'
 
     $runtimeFiles = @('mingw64\\bin\\liboctave-13.dll','mingw64\\bin\\libgcc_s_seh-1.dll')
     foreach ($relative in $runtimeFiles) { Assert-RegularFile (Join-Path $StageRoot $relative) "Staged $relative" }
-    if ((Get-Sha256File (Join-Path $StageRoot 'mingw64\bin\libgcc_s_seh-1.dll')) -ne $ExpectedLibgccSha256.ToUpperInvariant()) { throw 'Staged loader directory does not contain the approved libgcc.' }
+    if ((Get-Sha256File (Join-Path $StageRoot 'mingw64\bin\libgcc_s_seh-1.dll')) -ne $requiredLibgccSha256) { throw 'Staged loader directory does not contain the approved libgcc.' }
     $compilerCopies = @(Get-ChildItem -LiteralPath $StageRoot -Recurse -Force -File -Filter 'libgcc_s_seh-1.dll')
     foreach ($copy in $compilerCopies) {
         if ($copy.FullName -ne (Join-Path $StageRoot 'mingw64\bin\libgcc_s_seh-1.dll') -and $copy.FullName.StartsWith($stageBin + '\', [StringComparison]::OrdinalIgnoreCase)) { throw "Unapproved libgcc duplicate is in the effective loader directory: $($copy.FullName)" }
     }
 
-    if (-not $TestMode) {
-        Assert-RegularFile $Objdump 'External objdump'
-        $apiSetSchema = Join-Path $env:WINDIR 'System32\apisetschema.dll'
-        Assert-RegularFile $apiSetSchema 'Windows API-set schema'
-        $apiContracts = New-Object 'Collections.Generic.List[string]'
-        $pureBin = Join-Path $StageRoot 'pure\bin'
-        $octaveSet = @{}; foreach ($item in Get-ChildItem -LiteralPath $stageBin -File -Force) { $octaveSet[$item.Name.ToLowerInvariant()] = @($item.FullName) }
-        $pureSet = @{}; foreach ($item in Get-ChildItem -LiteralPath $pureBin -File -Force) { $pureSet[$item.Name.ToLowerInvariant()] = @($item.FullName) }
-        $peFiles = @()
-        foreach ($f in Get-ChildItem -LiteralPath $stageBin -File -Force | Where-Object { $_.Extension -in @('.dll','.exe') }) { $peFiles += [pscustomobject]@{File=$f;Group='octave'} }
-        foreach ($f in Get-ChildItem -LiteralPath $pureBin -File -Force | Where-Object { $_.Extension -in @('.dll','.exe') }) { $peFiles += [pscustomobject]@{File=$f;Group='pure'} }
-        foreach ($f in Get-ChildItem -LiteralPath (Join-Path $StageRoot 'bridge') -File -Force | Where-Object { $_.Extension -ieq '.dll' }) { $peFiles += [pscustomobject]@{File=$f;Group='bridge'} }
-        $imports = New-Object 'Collections.Generic.List[string]'
-        foreach ($pe in $peFiles) {
-            $effective = if ($pe.Group -eq 'octave') { $octaveSet } elseif ($pe.Group -eq 'pure') { $pureSet } else { $both=@{}; foreach($set in @($pureSet,$octaveSet)){foreach($key in $set.Keys){if(-not $both.ContainsKey($key)){$both[$key]=@()};$both[$key]+=$set[$key]}}; $both }
-            foreach ($dll in Get-PeImports $Objdump $pe.File.FullName) {
-                $key = $dll.ToLowerInvariant(); $resolved = ''
-                if ($effective.ContainsKey($key)) { if ($effective[$key].Count -ne 1) { throw "Ambiguous effective staged import $dll" }; $resolved = $effective[$key][0] }
-                else {
-                    if ($dll -match '^(api-ms-win-|ext-ms-win-).+\.dll$') {
-                        $resolved = 'virtual-api-set-contract; runtime-loader-gate-required'
-                        $apiContracts.Add($dll.ToLowerInvariant())
-                    } else { $system = Join-Path $env:WINDIR ('System32\\' + $dll); if (-not (Test-Path -LiteralPath $system -PathType Leaf)) { throw "Missing effective import $dll needed by $($pe.File.FullName)" }; $resolved = $system }
-                }
-                $imports.Add(('"{0}"`t{1}`t{2}`t"{3}"' -f $pe.File.FullName,$pe.Group,$dll,$resolved))
+    $pureBin = Join-Path $StageRoot 'pure\bin'
+    $octaveSet = @{}; foreach ($item in Get-ChildItem -LiteralPath $stageBin -File -Force) { $octaveSet[$item.Name.ToLowerInvariant()] = @($item.FullName) }
+    $pureSet = @{}; foreach ($item in Get-ChildItem -LiteralPath $pureBin -File -Force) { $pureSet[$item.Name.ToLowerInvariant()] = @($item.FullName) }
+    $peFiles = @(
+        foreach ($file in Get-ChildItem -LiteralPath $StageRoot -Recurse -Force -File) {
+            $isPe = Test-PortableExecutable $file.FullName
+            if ($file.Extension -in @('.dll','.exe','.oct','.mex','.mexw64') -and -not $isPe) { throw "Staged loadable file does not contain a PE image: $($file.FullName)" }
+            if ($isPe) {
+                $relative = $file.FullName.Substring($StageRoot.Length + 1).Replace('\','/')
+                $group = if ($relative.StartsWith('pure/', [StringComparison]::OrdinalIgnoreCase)) { 'pure' } elseif ($relative.StartsWith('bridge/', [StringComparison]::OrdinalIgnoreCase)) { 'bridge' } else { 'octave' }
+                [pscustomobject]@{ File=$file; Relative=$relative; Group=$group }
             }
         }
-        [IO.File]::WriteAllText((Join-Path $StageRoot 'stage-import-closure.tsv'), (($imports | Sort-Object) -join "`n") + "`n", $utf8NoBom)
-        $apiSetText = "OSBuild`t$([Environment]::OSVersion.VersionString)`nApiSetSchema`t$apiSetSchema`t$(Get-Sha256File $apiSetSchema)`n" + (($apiContracts | Sort-Object -Unique) -join "`n") + "`n"
-        [IO.File]::WriteAllText((Join-Path $StageRoot 'stage-api-set-contracts.tsv'), $apiSetText, $utf8NoBom)
+    )
+
+    if ($TestMode) {
+        $syntheticImports = Read-SyntheticImports $SyntheticImportManifest $fixtureRoot
+        $syntheticSystemMappings = Read-SyntheticSystemMappings $SyntheticSystemMappingManifest $fixtureRoot
+        $peSet = @{}
+        foreach ($pe in $peFiles) {
+            $key = $pe.Relative.ToLowerInvariant(); $peSet[$key] = $true
+            if (-not $syntheticImports.ContainsKey($key)) { throw "Synthetic import manifest omits staged PE file: $($pe.Relative)" }
+        }
+        foreach ($key in $syntheticImports.Keys) { if (-not $peSet.ContainsKey($key)) { throw "Synthetic import manifest names a non-PE or absent file: $key" } }
+        $apiSetSchema = 'synthetic-system32\apisetschema.dll'
+        $apiSetSchemaHash = 'synthetic-fixture'
+        $osVersion = 'synthetic-fixture'
     }
+    else {
+        Assert-RegularFile $Objdump 'External objdump'
+        Assert-NoReparsePath $Objdump 'External objdump'
+        $system32 = Get-CanonicalExistingPath (Join-Path $env:WINDIR 'System32') 'Windows System32'
+        $apiSetSchema = Join-Path $system32 'apisetschema.dll'
+        Assert-RegularFile $apiSetSchema 'Windows API-set schema'
+        Assert-NoReparsePath $apiSetSchema 'Windows API-set schema'
+        $apiSetSchemaHash = Get-Sha256File $apiSetSchema
+        $osVersion = [Environment]::OSVersion.VersionString
+        if ($osVersion -ne $acceptedOsVersion -or $apiSetSchemaHash -ne $acceptedApiSchemaSha256) { throw 'Local OS API-set schema is not the exact approved authoritative mapping source.' }
+    }
+
+    $imports = New-Object 'Collections.Generic.List[string]'
+    $apiMappings = @{}
+    $resolverReady = $false
+    foreach ($pe in $peFiles) {
+        $effective = if ($pe.Group -eq 'octave') { $octaveSet } elseif ($pe.Group -eq 'pure') { $pureSet } else { $both=@{}; foreach($set in @($pureSet,$octaveSet)){foreach($key in $set.Keys){if(-not $both.ContainsKey($key)){$both[$key]=@()};$both[$key]+=$set[$key]}}; $both }
+        $peImports = if ($TestMode) { [string[]]$syntheticImports[$pe.Relative.ToLowerInvariant()] } else { Get-PeImports $Objdump $pe.File.FullName }
+        foreach ($dll in $peImports) {
+            if ([string]::IsNullOrWhiteSpace($dll) -or $dll -match '[\\/:]') { throw "Unsafe import name in $($pe.File.FullName): $dll" }
+            $key = $dll.ToLowerInvariant(); $resolved = ''
+            if ($effective.ContainsKey($key)) {
+                if ($effective[$key].Count -ne 1) { throw "Ambiguous effective staged import $dll needed by $($pe.File.FullName)" }
+                $resolved = $effective[$key][0]
+            }
+            elseif ($key.StartsWith('api-ms-win-') -or $key.StartsWith('ext-ms-win-')) {
+                if ($key -notmatch '^(api|ext)-ms-win-[a-z0-9][a-z0-9-]*-l[0-9]+-[0-9]+-[0-9]+\.dll$') { throw "API-set lookalike has invalid contract syntax: $dll" }
+                if ($TestMode) {
+                    if (-not $syntheticSystemMappings.ContainsKey($key)) { throw "API-set contract has no authoritative synthetic mapping: $dll" }
+                    $resolved = 'synthetic-system32\' + $syntheticSystemMappings[$key]
+                    $hostHash = 'synthetic-fixture'
+                }
+                else {
+                    if (-not $resolverReady) { Initialize-ApiSetResolver $StageRoot; $resolverReady = $true }
+                    $resolved = Resolve-ApiSetContract $dll $system32
+                    $hostHash = Get-Sha256File $resolved
+                }
+                if ($apiMappings.ContainsKey($key) -and $apiMappings[$key].Path -ne $resolved) { throw "API-set contract mapped inconsistently: $dll" }
+                $apiMappings[$key] = [pscustomobject]@{ Path=$resolved; Sha256=$hostHash }
+            }
+            else {
+                if ($TestMode) { throw "Missing effective import $dll needed by $($pe.File.FullName)" }
+                $system = Join-Path $system32 $dll
+                if (-not (Test-Path -LiteralPath $system -PathType Leaf)) { throw "Missing effective import $dll needed by $($pe.File.FullName)" }
+                Assert-NoReparsePath $system "System import $dll"
+                $resolved = [IO.Path]::GetFullPath($system)
+            }
+            $imports.Add(('"{0}"' -f $pe.File.FullName) + "`t$($pe.Group)`t$dll`t" + ('"{0}"' -f $resolved))
+        }
+    }
+    [IO.File]::WriteAllText((Join-Path $StageRoot 'stage-import-closure.tsv'), (($imports | Sort-Object) -join "`n") + "`n", $utf8NoBom)
+    $apiLines = @($apiMappings.Keys | Sort-Object | ForEach-Object { "$_`t$($apiMappings[$_].Path)`t$($apiMappings[$_].Sha256)" })
+    $apiSetText = "OSBuild`t$osVersion`nApiSetSchema`t$apiSetSchema`t$apiSetSchemaHash`n" + $(if ($apiLines.Count -eq 0) { '' } else { ($apiLines -join "`n") + "`n" })
+    [IO.File]::WriteAllText((Join-Path $StageRoot 'stage-api-set-contracts.tsv'), $apiSetText, $utf8NoBom)
     $excluded = @('stage-manifest.tsv','stage-mapping.tsv','stage-import-closure.tsv','stage-api-set-contracts.tsv')
     $manifest = Get-TreeManifest $StageRoot $excluded
+    if (-not $TestMode -and ($manifest.FileCount -ne $acceptedStageFiles -or $manifest.TotalBytes -ne $acceptedStageBytes -or $manifest.Sha256 -ne $acceptedStageManifestSha256)) {
+        throw "Final stage does not match the exact accepted v5 postcondition: actual $($manifest.FileCount) / $($manifest.TotalBytes) / $($manifest.Sha256)."
+    }
     [IO.File]::WriteAllText((Join-Path $StageRoot 'stage-manifest.tsv'), $manifest.Text, $utf8NoBom)
     [IO.File]::WriteAllText((Join-Path $StageRoot 'stage-mapping.tsv'), (($mappings | Sort-Object) -join "`n") + "`n", $utf8NoBom)
     $pureAfter = Get-TreeManifest $pure
-    $bridgeAfter = Get-TreeManifest $bridge
+    $bridgeAfter = Get-TreeManifest $bridgeBinary
     if ($pureAfter.FileCount -ne $pureBefore.FileCount -or $pureAfter.TotalBytes -ne $pureBefore.TotalBytes -or $pureAfter.Sha256 -ne $pureBefore.Sha256) { throw 'Pure runtime source changed during staging.' }
     if ($bridgeAfter.FileCount -ne $bridgeBefore.FileCount -or $bridgeAfter.TotalBytes -ne $bridgeBefore.TotalBytes -or $bridgeAfter.Sha256 -ne $bridgeBefore.Sha256) { throw 'Bridge source changed during staging.' }
     if ((Get-Sha256File $bridgeModule) -ne $bridgeModuleBefore) { throw 'Bridge module source changed during staging.' }
     if ((Get-Sha256File $patched) -ne $patchedBefore) { throw 'Patched DLL artifact changed during staging.' }
-    if (-not $TestMode) { Assert-SnapshotTree $octave $NormalizedSnapshot $ExpectedNormalizedSnapshotSha256 59533 2797722565 'Normalized source runtime after staging'; Assert-SnapshotTree $permanent $PermanentSnapshot $ExpectedPermanentManifestSha256 59533 2797722287 'Permanent Octave runtime after staging' }
-    [pscustomobject]@{ StageRoot=$StageRoot; FileCount=$manifest.FileCount; TotalBytes=$manifest.TotalBytes; ManifestSha256=$manifest.Sha256; PatchedLiboctaveSha256=(Get-Sha256File (Join-Path $StageRoot 'mingw64\bin\liboctave-13.dll')); LibgccSha256=(Get-Sha256File (Join-Path $StageRoot 'mingw64\bin\libgcc_s_seh-1.dll')); ImportAuditSkipped=[bool]$TestMode } | ConvertTo-Json -Depth 3
+    if ((Get-Sha256File $probeSource) -ne $requiredProbeSha256) { throw 'Public embed probe source changed during staging.' }
+    foreach ($relative in $acceptedRepositoryFiles.Keys) {
+        if ((Get-Sha256File (Join-Path $packageRoot $relative)) -ne $acceptedRepositoryFiles[$relative]) { throw "Required public test script $relative changed during staging." }
+    }
+    if (-not $TestMode) { Assert-SnapshotTree $octave $NormalizedSnapshot 'B19A1BAB6293EBAAD7D0076B43D5E8F466BA896EAADFD81EED7E0C7C8F96FB31' 59533 2797722565 'Normalized source runtime after staging'; Assert-SnapshotTree $permanent $PermanentSnapshot '95D51222C8000706D235A309EF1CAEA6D986B08F1B04A08671475AD041A18CCD' 59533 2797722287 'Permanent Octave runtime after staging' }
+    [pscustomobject]@{ StageRoot=$StageRoot; FileCount=$manifest.FileCount; TotalBytes=$manifest.TotalBytes; ManifestSha256=$manifest.Sha256; PatchedLiboctaveSha256=(Get-Sha256File (Join-Path $StageRoot 'mingw64\bin\liboctave-13.dll')); LibgccSha256=(Get-Sha256File (Join-Path $StageRoot 'mingw64\bin\libgcc_s_seh-1.dll')); ImportAuditSkipped=$false; AuditedPeFileCount=$peFiles.Count; ApiSetContractCount=$apiMappings.Count } | ConvertTo-Json -Depth 3
 }
 catch {
     throw

@@ -565,3 +565,134 @@ The disposable v5 stage was assembled without running a staged executable:
 Its patched `mingw64/bin/liboctave-13.dll` is `A10BBD461B628379F02CF87E059F89C2F4485F69D88AD2C51466E8789DAF2663`; canonical
 `libgcc_s_seh-1.dll` is `592E6966F66D7993726D3CE329E81B658188E5CB286ACE9DE56C2FAB939EA491`.
 The static import audit completed with no ordinary missing/ambiguous import and zero reparse entries. Pure and Octave keep separate loader directories; bridge imports are audited against their explicit union. API-set contracts are separately recorded for Windows 10.0.26200.0 with regular `apisetschema.dll` SHA-256 `8FFADF5FF3D8D3843FC393E9D03C2091AC5DDFC6227B8097DC182E2A8F8463FC`; their runtime binding is deferred to the later loader gate. The normalized/Pure/bridge/module sources were fully hashed before and after copy. v1-v4 remain untouched for explicit later cleanup.
+
+## Static staging independent-review fix round 1
+
+This round was code, test, and report only. It did not create a new real
+stage, run a staged executable, change an ACL/AppContainer/profile, delete any
+retained stage, or mutate a permanent/source runtime root. The accepted
+checkpoint under repair was commit `bf2756e1`; its small uncommitted hardening
+diff was preserved and completed.
+
+### RED and versioned synthetic fixture
+
+The expanded harness was written first and run against the accepted staging
+implementation. The first regression group exited 1 before any stage write
+because the production script had no exact Pure-inventory contract:
+
+```text
+A parameter cannot be found that matches parameter name
+'ExpectedPureFileCount'.
+```
+
+The final test fixture is permitted only at an exact
+`C:\tmp\todo51-stage-tests-<32 lowercase hex>\parent` root. Its Pure,
+bridge, patched-DLL, libgcc, module, probe, and build-evidence contents have
+versioned literal hashes and inventories in the assembler; caller-supplied
+expectations must equal those literals. `TestMode` therefore does not skip
+closure logic or redefine accepted inputs. It injects only two external tool
+boundaries: the static-import result for every detected synthetic PE and the
+authoritative OS contract-to-host mapping. Both injected manifests must be
+regular non-reparse files strictly inside that exact fixture.
+
+### Immutable production inputs and provenance
+
+Non-test staging now rejects every caller override that differs from the
+versioned checkpoint. It binds the exact permanent, normalized, Pure,
+repository bridge, bridge-binary, probe, patched-artifact, objdump, snapshot,
+and idempotence-evidence paths. The approved copied inputs are:
+
+- Pure: `4,769 / 260,533,868 /
+  52DA19745D9F33DEC4CEAF09E24E3836C04E82E1651BB695990D18B14D667FE3`;
+- bridge binaries: `2 / 4,771,866 /
+  974C07999D4EBC62C218F0EDA7D271B6CCC7AFDEBD1EBFA063C7A25109C4CE11`;
+- bridge module: `51A4FADE279C91CB63103EFD7A0A97FB1DF9E674F807A7E0BF65991D6E6066F0`;
+- embed probe: `8924A6A2FC79FB1C0F0B97248014079D685D1724C1708523FE08240CA87424A5`;
+- `basic.pure`: `23C378107498CF605C4777132C817CDAE6D090306007F0E67A83CCD4D726346D`;
+- `RunEmbedProbe.cmake`: `73BEE376A8D2A23897D9FBA85277F5B59439C45BE442300B43AC63388F003DCB`;
+- `RunPureTest.cmake`: `A45618D605CB6B70F6D5008351731F786F7C3D97CF0537A4BEFC47DEF2BA08CB`.
+
+The patched DLL is production-hard-bound to
+`A10BBD461B628379F02CF87E059F89C2F4485F69D88AD2C51466E8789DAF2663`;
+the canonical loader libgcc remains hard-bound to
+`592E6966F66D7993726D3CE329E81B658188E5CB286ACE9DE56C2FAB939EA491`.
+The confined build log, artifact audit, and patched-object audit are now
+required at their exact retained paths with respective SHA-256 values
+`842678BFBBC560B4258EE15920C1E36B030D334B2B8BC948C6768CA6613E3608`,
+`C56E0746AA0673447F6BD64117772BEC9D450321C53F508A96352818F7EB964C`,
+and `DFB6BA01DCDDCBDDEDA4FAA278556284F68C89B2AA79E417FDDFDA463893B9F0`.
+The accepted patch and shared header are also path- and hash-bound.
+
+`BridgeRoot` is now the repository provenance boundary containing
+`BridgeModuleSource`; the distinct `BridgeBinaryRoot` is the exact audited
+two-DLL build output. Every copy helper asserts its source against an explicit
+provenance root. The permanent root, repository root, every repository
+test-script source, patched artifact, evidence file, and copied tree are
+checked for reparse traversal. Source manifests and individual hashes are
+rechecked after staging.
+
+The unsafe Pure/bridge merge path and opt-in separate-root switch no longer
+exist. Pure stays below `pure\bin`, Octave below `mingw64\bin`, and bridge
+imports are resolved only against their explicit union. The final pre-audit
+stage is required to equal the accepted v5 postcondition exactly:
+`64,309 / 3,327,729,829 /
+E142C07EDA4D71184D1892189834818B9DCE7AD44B8F0A6708A51C54FA56476F`.
+
+### Complete PE and API-set audit
+
+A read-only magic-byte census of retained v5 opened each file only as data.
+It found 1,536 PE files. The previous three top-level-directory audit had
+records for 536 unique PEs; 1,000 PEs were outside that scope, including all
+219 `.oct` modules. The hardened assembler discovers every `MZ` PE anywhere
+in the staged tree and invokes only the trusted external objdump on each file.
+It never executes a staged file. Missing and ambiguous ordinary imports fail
+closed under the Pure, Octave, or explicit bridge-union loader set.
+
+API/ext lookalikes must first match the strict contract grammar. Production
+then uses `LoadLibraryExW(LOAD_LIBRARY_SEARCH_SYSTEM32)`, obtains the exact
+host through `GetModuleFileNameW`, proves that host is a regular non-reparse
+System32 file, hashes it, records contract/host/hash, and calls `FreeLibrary`
+for every successful load. Resolver compilation has `TEMP`, `TMP`, and
+`TMPDIR` confined to a unique temporary child of the stage and restores the
+process environment before deleting that exact child.
+
+A separate read-only resolver check against the retained 16-contract v5 list
+mapped all 16 and freed every handle. There were two unique hosts:
+`KERNELBASE.dll` SHA-256
+`8E8499FC4750EBC487A30CD07DC7DB635BA6DBE9B66F83EC695A5AF70B71C07C`
+and `ucrtbase.dll` SHA-256
+`5E7709A6B71BB818260B6F05C5BB3B6CA0C3CA9BC2F58C6242C1CD9D826D0079`.
+The bound OS/schema evidence remained Windows `10.0.26200.0` and
+`apisetschema.dll`
+`8FFADF5FF3D8D3843FC393E9D03C2091AC5DDFC6227B8097DC182E2A8F8463FC`.
+
+### GREEN
+
+The fresh full command was:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File `
+  C:\pure-lang\pure-octave\probes\test_stage_task3_runtime.ps1
+```
+
+It exited 0 in 14,043 ms:
+
+```text
+PASS Test-SuccessUsesSeparateLoaderRootsAndAuditsImports
+PASS Test-RejectsUnsafeTestModeFixture
+PASS Test-RejectsUnsafeLoaderOverride
+PASS Test-RejectsCallerControlledProductionEvidence
+PASS Test-BindsExactProductionEvidencePath
+PASS Test-BindsExactInputInventory
+PASS Test-RejectsMissingImport
+PASS Test-RejectsBridgeUnionCollision
+PASS Test-RecordsAuthoritativeApiSetMapping
+PASS Test-RejectsUnknownApiSetLookalike
+PASS Test-AuditsLoadablePeOutsideBin
+PASS Test-RejectsBridgeModuleOutsideBridgeRoot
+PASS Test-RejectsSameLengthSameMtimeContentChange
+PASS Test-RejectsExistingStage
+PASS Test-RejectsPermanentOctaveRoot
+PASS Test-RejectsReparseParent
+PASS all task3 staging tests
+```
