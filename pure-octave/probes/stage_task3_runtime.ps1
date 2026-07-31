@@ -85,7 +85,7 @@ $syntheticProbeSha256 = 'BA9C736F19E7F60B7F6764ADB0B7908C0A2B394E09B6C09863528C7
 $approvedInertPlaceholders = @(
     [pscustomobject]@{ Relative = 'mingw64/qt6/bin/qhelpgenerator.exe'; Length = [long]0; Sha256 = 'E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855' }
 )
-$acceptedAuditedPeFileCount = 1535
+$acceptedAuditedPeFileCount = 1536
 $acceptedAuditedOctFileCount = 219
 $acceptedInput = [ordered]@{
     PureFileCount = 4769; PureTotalBytes = 260533868; PureManifestSha256 = '52DA19745D9F33DEC4CEAF09E24E3836C04E82E1651BB695990D18B14D667FE3'
@@ -601,7 +601,7 @@ try {
     )
     $octPeFiles = @($peFiles | Where-Object { $_.Relative.EndsWith('.oct', [StringComparison]::OrdinalIgnoreCase) })
     if (-not $TestMode -and ($peFiles.Count -ne $acceptedAuditedPeFileCount -or $octPeFiles.Count -ne $acceptedAuditedOctFileCount -or $stagedPinnedInertPlaceholders.Count -ne 1)) {
-        throw "Static import audit cardinality is not the approved 1,535 PE + 1 pinned inert placeholder, including 219 PE .oct files: actual $($peFiles.Count) PE / $($stagedPinnedInertPlaceholders.Count) placeholders / $($octPeFiles.Count) .oct."
+        throw "Static import audit cardinality is not the approved 1,536 PE + 1 pinned inert placeholder, including 219 PE .oct files: actual $($peFiles.Count) PE / $($stagedPinnedInertPlaceholders.Count) placeholders / $($octPeFiles.Count) .oct."
     }
 
     if ($TestMode) {

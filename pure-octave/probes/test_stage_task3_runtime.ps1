@@ -154,6 +154,14 @@ function Assert-Failure {
 }
 
 try {
+    $productionSource = Get-Content -LiteralPath $scriptPath -Raw
+    $productionPeCount = [regex]::Match($productionSource, '(?m)^\$acceptedAuditedPeFileCount\s*=\s*(?<count>\d+)\s*$')
+    $productionOctCount = [regex]::Match($productionSource, '(?m)^\$acceptedAuditedOctFileCount\s*=\s*(?<count>\d+)\s*$')
+    $productionPlaceholder = [regex]::Match($productionSource, '(?s)\$approvedInertPlaceholders\s*=\s*@\(.*?Relative\s*=\s*''mingw64/qt6/bin/qhelpgenerator\.exe''.*?Length\s*=\s*\[long\]0.*?Sha256\s*=\s*''E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855''.*?\)')
+    $productionPlaceholderCount = if ($productionPlaceholder.Success) { [regex]::Matches($productionPlaceholder.Value, 'Relative\s*=').Count } else { 0 }
+    Assert-True ($productionPeCount.Success -and [long]$productionPeCount.Groups['count'].Value -eq 1536 -and $productionOctCount.Success -and [long]$productionOctCount.Groups['count'].Value -eq 219 -and $productionPlaceholderCount -eq 1) 'Production static-import contract must hard-bind 1,536 PE + 1 pinned inert placeholder + 219 .oct files.'
+    Write-Output 'PASS Test-HardBindsProductionAuditCardinalityTo1536PePlusOnePlaceholderAnd219Oct'
+
     [IO.Directory]::CreateDirectory($parent) | Out-Null
     [IO.Directory]::CreateDirectory($permanentRoot) | Out-Null
     Write-TestPe (Join-Path $pure 'bin\pure.exe') 'pure-exe'

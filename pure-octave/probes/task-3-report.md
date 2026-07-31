@@ -781,3 +781,77 @@ The final PowerShell parser check of `stage_task3_runtime.ps1` and
 exception is keyed by the exact verified relative path rather than filename or
 extension, that it is unavailable to production callers, and that all other
 magic-byte PEs remain on the existing audit path.
+
+## v9 production staging attempt: fail-closed cardinality blocker
+
+The v6-v8 RED lineage, including the v8 inert-placeholder cardinality failure,
+is recorded above.  Using accepted assembler commit `af82904f`, a new literal
+hashtable wrapper was created only for the absent disposable target
+`C:\tmp\todo51-task3\stage-runtime-v9` and its v9 exit marker.  Before the
+single hidden invocation, the wrapper parsed cleanly; its decoded JSON had the
+exact required 16 keys exactly once; every key resolved through the assembler
+parameter metadata; and it contained neither `TestMode` nor hook text.  The
+wrapper SHA-256 was
+`7D0D51C9997E86E0088CBB7667799CD7483D4C2335C3217E28BD2B0899DDD5F8`; the
+assembler SHA-256 was
+`3F7458A3E1C237D21CBCCD3D974FCCA6C3B50FF952CB102621957049511C871A`.
+The v9 target and marker were absent, and all parents, sources, and evidence
+were regular/non-reparse (zero source-tree reparse points).
+
+The permanent Octave preflight rehash was exact:
+`59,533 / 2,797,722,287 /
+95D51222C8000706D235A309EF1CAEA6D986B08F1B04A08671475AD041A18CCD`, with
+zero record mismatches and zero reparse points.
+
+The one permitted hidden assembler process (PID 18188) was polled only through
+its PID, redirected logs, and exit marker; no in-progress stage inspection and
+no staged executable invocation occurred.  It eventually exited `1`, wrote a
+zero-byte stdout log and a 424-byte stderr log, and recorded exit marker `1`.
+The exact fail-closed blocker was the production static import cardinality
+guard: it found `1,536` magic-byte PE files rather than the approved `1,535`,
+while still finding the required one pinned inert placeholder and all `219`
+PE `.oct` modules.  Consequently no post-audit, runtime execution, ACL,
+AppContainer, profile, or source/permanent-tree mutation was performed.  The
+partially created v9 stage and all prior retained stages/evidence are
+preserved for diagnosis; this is explicitly not a successful staging
+checkpoint and no success commit is made.
+
+## v9 cardinality correction: 1,536 PE + 1 inert placeholder
+
+The v9 fail-closed section above is preserved as the failed production
+checkpoint. Its read-only whole-tree census established the root cause of the
+prior hard-bound `1,535` count: the magic-byte count already excluded the
+single pinned zero-byte Qt placeholder, so the earlier calculation subtracted
+that placeholder a second time. The correct disjoint count is `791` `.dll` +
+`492` `.exe` + `34` `.mex` + `219` `.oct` = `1,536` PE files, plus the one
+separately pinned inert `mingw64/qt6/bin/qhelpgenerator.exe` placeholder.
+
+The focused regression was added first and run against the prior production
+constant. It exited 1 with:
+
+```text
+Production static-import contract must hard-bind 1,536 PE + 1 pinned inert
+placeholder + 219 .oct files.
+```
+
+The minimal production correction changes only the approved PE cardinality and
+the corresponding fail-closed diagnostic to `1,536`; the one-placeholder and
+219-`.oct` guards, exact placeholder pin, and every other audit guard remain
+unchanged. No new real stage was created, no staged executable was run, and no
+ACL, AppContainer, profile, permanent tree, or source tree was mutated.
+
+The final fresh full harness command exited 0 in 21.3 seconds and began with:
+
+```text
+PASS Test-HardBindsProductionAuditCardinalityTo1536PePlusOnePlaceholderAnd219Oct
+PASS Test-AcceptsAndRecordsPinnedInertQtDocumentationPlaceholder
+PASS Test-RejectsCallerControlledPinnedPlaceholderApproval
+PASS Test-RejectsNonzeroOrWrongHashPinnedPlaceholder
+PASS Test-RejectsAllOtherNonPeLoadableExtensionsAndSameNameElsewhere
+PASS all task3 staging tests
+```
+
+PowerShell parsing of both staging scripts and `git diff --check` also exited
+0. Static self-review confirmed the change is limited to the PE cardinality
+literal and matching diagnostic, that the preserved v9 evidence is unchanged,
+and that the placeholder and `.oct` guards are unchanged.
