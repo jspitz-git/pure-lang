@@ -527,8 +527,13 @@ The generated-header gate exited 0 with 372 unique `BUILT_INCS` and 374
 unique present regular non-reparse files. The sole build command,
 `make -j4 liboctave/liboctave.la`, exited 0. Its complete log is 2,355,813
 bytes, SHA-256 `842678BFBBC560B4258EE15920C1E36B030D334B2B8BC948C6768CA6613E3608`.
-There were no error/fatal diagnostics and one upstream `setlocale.c`
-discarded-const warning.
+There were zero error/fatal diagnostics and 13 `warning:` diagnostics: eight
+accepted old-style C-cast warnings from the shared helper header, three from
+`oct-sysdep`, one from `unistd-wrappers`, and one `setlocale.c`
+discarded-const warning.  The helper header is deliberately C-compatible but
+is compiled in a C++ context, so its C-style casts trigger those eight
+nonfatal warnings; their strict C/C++ behavior is already covered by the
+Task 2 behavior matrix.
 
 The x86-64 PE `liboctave-13.dll` is 283,425,385 bytes, SHA-256
 `A10BBD461B628379F02CF87E059F89C2F4485F69D88AD2C51466E8789DAF2663`; its
