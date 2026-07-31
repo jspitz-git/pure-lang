@@ -855,3 +855,105 @@ PowerShell parsing of both staging scripts and `git diff --check` also exited
 0. Static self-review confirmed the change is limited to the PE cardinality
 literal and matching diagnostic, that the preserved v9 evidence is unchanged,
 and that the placeholder and `.oct` guards are unchanged.
+
+## v10 production staging attempt: fail-closed missing Pure-side import
+
+Using independently accepted assembler commit `9179b092` (assembler SHA-256
+`8BC7F35DE60F2790E69FA78B876FDB834F97C904BC78DC75DBF73D9C69EA5E9F`), a
+literal-hashtable wrapper was created only for the absent disposable target
+`C:\tmp\todo51-task3\stage-runtime-v10` and its v10 exit marker. Its own
+SHA-256 was `19076B111315E311636FC8C9699F97647378CF9634B58EDE5FAF70C70F66CCA8`.
+The decoded parameter JSON SHA-256 was
+`7600FDD6A591FD19369DD1303CF13D8D64DB5E5B08F93A11322C2CE5BC88FF31`; it
+contained the required 16 keys exactly once, every key was recognized by the
+assembler, and it exposed neither `TestMode` nor hooks. The target and marker
+were absent, and the disposable parent, inputs, evidence, and source trees
+were regular/non-reparse before launch.
+
+The read-only permanent-Octave preflight reproduced exactly
+`59,533 / 2,797,722,287 /
+95D51222C8000706D235A309EF1CAEA6D986B08F1B04A08671475AD041A18CCD`, with
+zero permanent or source-tree reparse points. The sole hidden assembler
+invocation (PID 18860) was polled only through its PID, redirected logs, and
+exit marker; no in-progress stage contents or staged binary were inspected or
+executed.
+
+It exited `1`, with a zero-byte stdout log, a 686-byte stderr log, and marker
+`1`. The exact fail-closed blocker was:
+
+```text
+Missing effective import librsvg-2-2.dll needed by
+C:\tmp\todo51-task3\stage-runtime-v10\pure\lib\gdk-pixbuf-2.0\2.10.0\loaders\pixbufloader_svg.dll
+```
+
+The partially created v10 stage is retained unchanged for diagnosis. No
+post-success stage audit, staged execution, ACL/AppContainer/profile action,
+or success commit was performed. A fresh 20-test staging harness passed in
+20.3 seconds; PowerShell parsing of the assembler, harness, and v10 wrapper
+passed; and `git diff --check` was clean before recording this failure.
+
+## Immutable Pure SVG supplement v1 checkpoint
+
+TDD RED was observed before either new artifact existed. The exact command
+`& .\pure-octave\probes\test_prepare_task3_pure_rsvg_supplement.ps1` exited 1
+at the harness gate with `TDD RED: preparer does not exist` for
+`prepare_task3_pure_rsvg_supplement.ps1`. After implementation, the same
+command passed five exact fail-closed cases (inexact set, SHA-256 mismatch,
+unresolved import, reparse parent, and existing snapshot), exact Plan,
+transactional rollback, real synthetic Apply, and idempotent Plan. The
+injected post-first-copy failure left both final and `.tmp` roots absent and
+all three source hashes unchanged; the exact synthetic root was removed.
+
+Immediately before production Apply, the fixed v1 snapshot, its `.tmp`
+sibling, and the contract `.tmp` sibling were absent. Every component of the
+source, Pure, v5-manifest, objdump, snapshot-parent, and contract paths was
+non-reparse. Production Plan accepted manifest SHA-256
+`E142C07EDA4D71184D1892189834818B9DCE7AD44B8F0A6708A51C54FA56476F`
+and predicted exactly `64,312 / 3,334,971,045 /
+115AC1F8843FFC60A4FFD103DCB7CD9C3099CAE14F2B3B674EF5D6230DF22DE0`,
+with `1,539 / 219 / 1` audited PE, PE `.oct`, and pinned-placeholder counts.
+The read-only permanent preflight matched all 59,533 snapshot records,
+2,797,722,287 bytes, zero mismatches, zero reparse points, and approved
+snapshot SHA-256
+`95D51222C8000706D235A309EF1CAEA6D986B08F1B04A08671475AD041A18CCD`.
+
+The sole production command was:
+
+```powershell
+& pwsh.exe -NoProfile -NonInteractive -File '.\pure-octave\probes\prepare_task3_pure_rsvg_supplement.ps1' -SourceBin 'C:\msys64\clang64\bin' -PureRoot 'C:\tmp\Relocated Pure Gplot Final Bundle 20260729' -AcceptedStageManifest 'C:\tmp\todo51-task3\stage-runtime-v5\stage-manifest.tsv' -SnapshotRoot 'C:\tmp\todo51-task3\pure-rsvg-supplement-v1' -ContractOutput 'C:\pure-lang\pure-octave\probes\task3-pure-rsvg-supplement-contract.psd1' -Mode Apply
+```
+
+It exited 0. Captured stdout was 104,984 bytes with SHA-256
+`33AD5491161499A73082B80516586F1303A9910278A1AE8204A7BE13B46F7FF6`;
+stderr was zero bytes with SHA-256
+`E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855`.
+The generated contract SHA-256 was
+`692341FA19E6D7AC3CF4C02894DBDB92AFAE7A5DD154B659A5CFD099AD63F2CC`.
+Its immutable snapshot manifest, in exact order, is:
+
+```text
+librsvg-2-2.dll  5882880  9F90DE3779E80F590B542AFDF79C105A403B0C566265D69EACBBF9B524338F89  pei-x86-64
+libunwind.dll       63488  60FA3C200899BC6E4A5876B82E2C656FF72FC53EC55979D99CB7C4EF640A6D96  pei-x86-64
+libxml2-16.dll    1294848  C6C34A810D86C19C034A1BC96C4C500BDE8FB789DED69B434E67EEE773605852  pei-x86-64
+```
+
+The recursive audit resolved 517 import edges: 429 system, 86 accepted-Pure,
+and two supplement edges, with zero unresolved edges. The root non-system
+edges were `librsvg-2-2.dll -> libcairo-2.dll, libgdk_pixbuf-2.0-0.dll,
+libgio-2.0-0.dll, libglib-2.0-0.dll, libgobject-2.0-0.dll,
+libpango-1.0-0.dll, libpangocairo-1.0-0.dll` from accepted Pure,
+`librsvg-2-2.dll -> libunwind.dll, libxml2-16.dll` from the supplement, and
+`libxml2-16.dll -> libiconv-2.dll, zlib1.dll` from accepted Pure. The hashed
+stdout above records every transitive edge. All 38 Pure-provided closure
+members were compared with their clang64 counterparts by length and SHA-256;
+all matched byte-for-byte, including `libiconv-2.dll` and `zlib1.dll`.
+
+After Apply, the three source DLLs retained the preflight lengths and hashes
+shown in the snapshot manifest. The full permanent audit again returned
+59,533 / 2,797,722,287 with zero mismatches and reparse points and the same
+approved snapshot hash. Production Plan then reported `Changes = 0`. The v1
+snapshot contains exactly three files / 7,241,216 bytes; its `.tmp` sibling,
+the contract `.tmp` sibling, and the synthetic fixture root are absent. No
+real stage was created, no staged binary was inspected or run, v1-v10 evidence
+was not deleted, and no ACL, AppContainer, profile, accepted-Pure, permanent
+Octave, or source-tree mutation was performed.
