@@ -11,6 +11,7 @@ param(
     [string] $SyntheticImportManifest = '',
     [switch] $InjectFailureAfterFirstCopy,
     [switch] $InjectApiSetReleaseFailure,
+    [switch] $InjectApiSetTruncatedPath,
     [switch] $TestMode
 )
 
@@ -143,6 +144,8 @@ function Resolve-SystemImport([string] $Name) {
         try {
             $builder = [Text.StringBuilder]::new(32768)
             $pathLength = [PureRsvgNative]::GetModuleFileNameW($handle, $builder, $builder.Capacity)
+            if ($InjectApiSetTruncatedPath) { $pathLength = $builder.Capacity }
+            if ($pathLength -ge $builder.Capacity) { throw "Truncated API-set module path for $Name." }
             if ($pathLength -gt 0 -and $pathLength -lt $builder.Capacity) {
                 $candidate = [IO.Path]::GetFullPath($builder.ToString())
                 if ($candidate.StartsWith($system32 + '\', [StringComparison]::OrdinalIgnoreCase)) {
@@ -305,6 +308,9 @@ else {
 }
 if ($InjectApiSetReleaseFailure -and (-not $TestMode -or -not $SnapshotRoot.StartsWith($testRoot + '\', [StringComparison]::OrdinalIgnoreCase))) {
     throw 'API-set release failure injection is restricted to the exact synthetic root.'
+}
+if ($InjectApiSetTruncatedPath -and (-not $TestMode -or -not $SnapshotRoot.StartsWith($testRoot + '\', [StringComparison]::OrdinalIgnoreCase))) {
+    throw 'API-set truncation injection is restricted to the exact synthetic root.'
 }
 Assert-RegularFile $ObjdumpPath 'objdump'
 Assert-RegularFile $AcceptedStageManifest 'Accepted stage manifest'

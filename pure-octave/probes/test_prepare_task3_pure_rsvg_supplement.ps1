@@ -12,6 +12,12 @@ $pureRoot = 'C:\tmp\Relocated Pure Gplot Final Bundle 20260729'
 $acceptedManifest = 'C:\tmp\todo51-task3\stage-runtime-v5\stage-manifest.tsv'
 $names = @('librsvg-2-2.dll','libunwind.dll','libxml2-16.dll')
 $expectedBytes = [long]7241216
+$goldenFiles = @(
+    [pscustomobject]@{ Name='librsvg-2-2.dll'; Length=[long]5882880; Sha256='9F90DE3779E80F590B542AFDF79C105A403B0C566265D69EACBBF9B524338F89'; PeMachine='pei-x86-64' },
+    [pscustomobject]@{ Name='libunwind.dll'; Length=[long]63488; Sha256='60FA3C200899BC6E4A5876B82E2C656FF72FC53EC55979D99CB7C4EF640A6D96'; PeMachine='pei-x86-64' },
+    [pscustomobject]@{ Name='libxml2-16.dll'; Length=[long]1294848; Sha256='C6C34A810D86C19C034A1BC96C4C500BDE8FB789DED69B434E67EEE773605852'; PeMachine='pei-x86-64' }
+)
+$goldenContract = $null
 
 function Assert-True([bool] $Condition, [string] $Message) {
     if (-not $Condition) { throw "ASSERT: $Message" }
@@ -27,11 +33,36 @@ function Get-Sha256([string] $Path) {
 
 function Write-ExpectedFiles([string] $Path, [string[]] $Files) {
     $lines = @($Files | ForEach-Object {
-        $file = Join-Path $sourceBin $_
-        $hash = Get-Sha256 $file
-        "$_`t$((Get-Item -LiteralPath $file).Length)`t$hash`tpei-x86-64"
+        $name = $_
+        $golden = @($goldenFiles | Where-Object { $_.Name -eq $name })
+        if ($golden.Count -ne 1) { throw "Test fixture has no unique golden supplement record: $name" }
+        "$name`t$($golden[0].Length)`t$($golden[0].Sha256)`t$($golden[0].PeMachine)"
     })
     [IO.File]::WriteAllText($Path, (($lines -join "`n") + "`n"), [Text.UTF8Encoding]::new($false))
+}
+
+function Assert-GoldenFiles([object[]] $Actual) {
+    Assert-Equal $Actual.Count $goldenFiles.Count 'Pinned supplement file count'
+    for ($index = 0; $index -lt $goldenFiles.Count; $index++) {
+        $want = $goldenFiles[$index]; $got = $Actual[$index]
+        Assert-Equal $got.Name $want.Name "Pinned supplement name at index $index"
+        Assert-Equal ([long]$got.Length) $want.Length "Pinned supplement length for $($want.Name)"
+        Assert-Equal $got.Sha256 $want.Sha256 "Pinned supplement SHA-256 for $($want.Name)"
+        Assert-Equal $got.PeMachine $want.PeMachine "Pinned supplement PE machine for $($want.Name)"
+    }
+}
+
+function Assert-GoldenReuse([object[]] $Actual) {
+    $expected = @($goldenContract.ReusedPureDependencies)
+    Assert-Equal $Actual.Count 38 'Reused Pure dependency count'
+    Assert-Equal $Actual.Count $expected.Count 'Reused Pure dependency contract count'
+    for ($index = 0; $index -lt $expected.Count; $index++) {
+        $want = $expected[$index]; $got = $Actual[$index]
+        Assert-Equal $got.Name $want.Name "Reused Pure dependency name at index $index"
+        Assert-Equal ([long]$got.Length) ([long]$want.Length) "Reused Pure dependency length for $($want.Name)"
+        Assert-Equal $got.PureSha256 $want.PureSha256 "Reused Pure SHA-256 for $($want.Name)"
+        Assert-Equal $got.SourceSha256 $want.SourceSha256 "Reused clang64 SHA-256 for $($want.Name)"
+    }
 }
 
 function Write-ImportOverride([string] $Path, [string] $ExtraImport) {
@@ -48,7 +79,8 @@ function Invoke-Preparer {
         [ValidateSet('Plan','Apply')][string] $Mode = 'Plan',
         [string] $Case = 'case',
         [switch] $InjectFailureAfterFirstCopy,
-        [switch] $InjectApiSetReleaseFailure
+        [switch] $InjectApiSetReleaseFailure,
+        [switch] $InjectApiSetTruncatedPath
     )
     $caseRoot = Join-Path $testRoot $Case
     [IO.Directory]::CreateDirectory($caseRoot) | Out-Null
@@ -89,6 +121,7 @@ function Invoke-Preparer {
     if ($ExtraImport) { $arguments.SyntheticImportManifest = $imports }
     if ($InjectFailureAfterFirstCopy) { $arguments.InjectFailureAfterFirstCopy = $true }
     if ($InjectApiSetReleaseFailure) { $arguments.InjectApiSetReleaseFailure = $true }
+    if ($InjectApiSetTruncatedPath) { $arguments.InjectApiSetTruncatedPath = $true }
     $json = & $preparer @arguments
     return [pscustomobject]@{
         Result = ($json | ConvertFrom-Json)
@@ -110,6 +143,7 @@ function Assert-Throws([scriptblock] $Action, [string] $Expected) {
 
 if (-not (Test-Path -LiteralPath $preparer -PathType Leaf)) { throw "TDD RED: preparer does not exist: $preparer" }
 if (-not (Test-Path -LiteralPath $repoContract -PathType Leaf)) { throw "TDD RED: repository contract does not exist: $repoContract" }
+$goldenContract = Import-PowerShellDataFile -LiteralPath $repoContract
 
 if (Test-Path -LiteralPath $testRoot) { Remove-Item -LiteralPath $testRoot -Recurse -Force }
 [IO.Directory]::CreateDirectory($testRoot) | Out-Null
@@ -130,6 +164,9 @@ try {
     Assert-Throws { Invoke-Preparer -InjectApiSetReleaseFailure -Case 'api-set-release' } 'Failed to release API-set module'
     Write-Output 'PASS Test-RejectsApiSetReleaseFailure'
 
+    Assert-Throws { Invoke-Preparer -InjectApiSetTruncatedPath -Case 'api-set-truncated' } 'Truncated API-set module path'
+    Write-Output 'PASS Test-RejectsTruncatedApiSetPath'
+
     Assert-Throws { Invoke-Preparer -ReparseSnapshotParent -Case 'reparse' } 'contains a reparse point'
     Write-Output 'PASS Test-RejectsReparseSnapshotParent'
 
@@ -145,14 +182,14 @@ try {
     Assert-Equal $plan.Result.ExpectedAuditedPeCount 1539 'Plan predicts exact PE audit count'
     Assert-Equal $plan.Result.ExpectedAuditedOctCount 219 'Plan preserves exact OCT audit count'
     Assert-Equal $plan.Result.ExpectedPinnedPlaceholderCount 1 'Plan preserves placeholder count'
-    Assert-Equal ([string]::Join(',', [string[]]$plan.Result.Files.Name)) ([string]::Join(',', $names)) 'Plan preserves exact file ordering'
-    foreach ($file in $plan.Result.Files) { Assert-Equal $file.PeMachine 'pei-x86-64' "PE machine for $($file.Name)" }
-    foreach ($required in @('zlib1.dll','libiconv-2.dll')) {
-        Assert-True ($required -in [string[]]$plan.Result.ReusedPureDependencies.Name) "closure includes $required"
-    }
-    foreach ($reused in $plan.Result.ReusedPureDependencies) {
-        Assert-Equal $reused.PureSha256 $reused.SourceSha256 "Pure dependency is byte-identical to clang64: $($reused.Name)"
-    }
+    Assert-GoldenFiles @($plan.Result.Files)
+    Assert-GoldenReuse @($plan.Result.ReusedPureDependencies)
+    $mutatedFiles = @($plan.Result.Files | Select-Object Name,Length,Sha256,PeMachine)
+    $mutatedFiles[0].Sha256 = '0000000000000000000000000000000000000000000000000000000000000000'
+    Assert-Throws { Assert-GoldenFiles $mutatedFiles } 'Pinned supplement SHA-256'
+    Write-Output 'PASS Test-GoldenFileAssertionRejectsMutation'
+    Assert-Throws { Assert-GoldenReuse @($plan.Result.ReusedPureDependencies | Select-Object -Skip 1) } 'Reused Pure dependency count'
+    Write-Output 'PASS Test-GoldenClosureAssertionRejectsOmission'
     Write-Output 'PASS Test-PlansExactImmutableContract'
 
     $sourceBefore = @{}; foreach ($name in $names) { $sourceBefore[$name] = Get-Sha256 (Join-Path $sourceBin $name) }
