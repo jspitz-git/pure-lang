@@ -7,7 +7,8 @@ libtool-metadata normalizer are implemented.  Independent review rounds 1,
 2, and 3 identified confinement, postcondition, manifest, and closure-scope
 gaps; each now has isolated RED/GREEN coverage.  A final write-free `Plan`
 against the pristine disposable toolchain copy passed every exact contract.
-The normalizer has not been applied.
+The separately authorized transactional `Apply` has now been performed only
+on the pristine disposable toolchain copy, then independently audited below.
 No permanent Octave file was used as an executable or modified.  All source,
 build, and toolchain paths used by Task 3 are disposable children of
 `C:\tmp\todo51-task3`.
@@ -452,10 +453,58 @@ path, and that all 192 unselected `.la` hashes still match the pristine
 reference.  The full 59,533-file post-Plan rehash also reproduced the exact
 baseline above.  No `Apply` invocation occurred.
 
+## Selected-closure Apply, idempotence, and independent audit
+
+The only real Apply used the established strict-CRLF baseline order reference,
+the 22-record role-tagged selection, and the 34-token seed contract against
+`C:\tmp\todo51-task3\toolchain-normalize-pristine`.  Its retained JSON reports
+exactly 22 changed files and the exact result:
+
+- files: 59,533
+- bytes: 2,797,722,565
+- ordered path/size/SHA-256 manifest SHA-256:
+  `9417DC1DC935E33ACADACA3A0AD86389F500B937F7670E3D177A8D58B3C68CED`
+
+The retained evidence hashes are:
+
+- `normalizer-apply-selected.stdout.json`: 9,870 bytes,
+  `8709CFA082F28EF8D2C60F29D2E86E8C963A32B919C9D9DCFE99873BB538138F`
+- `normalizer-apply-selected.stderr.log`: 0 bytes,
+  `E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855`
+- `normalizer-idempotence-plan.stdout.json`: 2,079 bytes,
+  `6CEE19EC051D986700ADBA26C3A30AC9B0744C43975724BE265A6D6E4CDA1074`
+- `normalizer-idempotence-plan.stderr.log`: 0 bytes,
+  `E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855`
+- `normalizer-idempotence-apply.stdout.json`: 2,080 bytes,
+  `FA3FD0315B4B32B68A0C3FD860D83DCAE8A268E978B5C576A64006912428AF59`
+- `normalizer-idempotence-apply.stderr.log`: 0 bytes,
+  `E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855`
+
+The subsequent retained `Plan` and `Apply` idempotence JSONs both report
+`ChangedFileCount = 0` and the same
+`59,533 / 2,797,722,565 / 9417DC1DC935E33ACADACA3A0AD86389F500B937F7670E3D177A8D58B3C68CED`
+result.  All three stderr files are empty.
+
+An independent, read-only audit rehashed every file in the exact baseline TSV
+order.  It reproduced the result manifest above; the 22 differing paths equal
+the selection manifest exactly, every selected file matches the first Apply
+JSON's reported new SHA-256, and all 192 unselected `.la` files remain
+byte-identical to the baseline.  The 22 selected files contain zero stale
+`/usr`, permanent-Octave, Task-3 scratch, or `libiberty` references.  All 18
+unique emitted directory and `.la` targets exist and are non-reparse.  The
+normalized tree has zero reparse points, zero extra paths, and zero retained
+`.todo51-add-type-*` or `.todo51-la-normalize-*` helper/transaction
+directories.
+
+The permanent `C:\Tools\GNU Octave\11.3.0` tree was separately rehashed in
+the same 59,533-record baseline order after Apply.  It remains exactly
+`59,533 / 2,797,722,287 /
+95D51222C8000706D235A309EF1CAEA6D986B08F1B04A08671475AD041A18CCD`,
+with zero baseline record mismatches and zero reparse points.  No permanent
+toolchain path was written during this Apply/audit checkpoint.
+
 ## Next verified step
 
-After this checkpoint is committed and independently reviewed, the next step
-is the separately authorized transactional `Apply` of the exact 22-file plan
-to the pristine disposable copy.  A second dry run must be idempotent before
-a new clean configure, generated-header gate, and the sole
-`liboctave/liboctave.la` target are attempted.
+After this report-only checkpoint is independently reviewed, a fresh,
+separately authorized clean configure, generated-header gate, and sole
+`liboctave/liboctave.la` target may use the normalized disposable toolchain.
