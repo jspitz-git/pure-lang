@@ -696,3 +696,88 @@ PASS Test-RejectsPermanentOctaveRoot
 PASS Test-RejectsReparseParent
 PASS all task3 staging tests
 ```
+
+## Static staging independent-review fix round 2: pinned inert Qt placeholder
+
+This round was code, test, and report only. It did not create a real stage,
+execute a staged binary, change an ACL/AppContainer/profile, delete v1-v8, or
+mutate a permanent or source runtime root.
+
+### v8 fail-closed root cause and RED
+
+The v8 assembler correctly stopped at
+`stage_task3_runtime.ps1:565`, but its generic extension guard classified the
+Qt documentation-tool packaging placeholder
+`mingw64/qt6/bin/qhelpgenerator.exe` as a loadable executable solely from its
+`.exe` suffix. A read-only comparison found that the permanent Octave tree,
+normalized source, and v8 stage all contain the same regular zero-byte file
+with SHA-256
+`E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855`.
+It is the only zero-length `.exe`, `.dll`, or `.oct` in the normalized source;
+it is a Qt documentation packaging placeholder, not a PE image and cannot be
+loaded or executed.
+
+The minimal regression first added only that exact zero-byte path to the
+existing guarded synthetic fixture and ran the full harness against the
+pre-fix assembler. It exited 1 at the intended guard:
+
+```text
+Success fixture failed: Staged loadable file does not contain a PE image:
+...\mingw64\qt6\bin\qhelpgenerator.exe
+```
+
+### GREEN and retained fail-closed scope
+
+The production assembler now hard-binds exactly one inert artifact: the
+literal relative path above, length zero, and the exact empty-file SHA-256.
+It validates that record in both the normalized source and copied stage,
+records it in `stage-pinned-inert-placeholders.tsv`, and excludes only that
+exact verified artifact from the PE-import loop. There is no production
+caller parameter for placeholder approval; an attempted caller override is
+rejected at parameter binding. The final content inventory/hash contract is
+unchanged because the separately generated report is excluded alongside the
+pre-existing generated stage reports.
+
+Production audit cardinality is explicit and fail-closed: `1,535` magic-byte
+PE files are import-audited plus `1` pinned inert placeholder, and all `219`
+`.oct` files are among the audited PEs. Every other non-PE `.exe`, `.dll`,
+`.oct`, `.mex`, or `.mexw64` still fails at the generic guard; there is no
+broad extension exemption.
+
+The fresh full command was:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File `
+  C:\pure-lang\pure-octave\probes\test_stage_task3_runtime.ps1
+```
+
+It exited 0 in 20.2 seconds:
+
+```text
+PASS Test-AcceptsAndRecordsPinnedInertQtDocumentationPlaceholder
+PASS Test-RejectsCallerControlledPinnedPlaceholderApproval
+PASS Test-RejectsNonzeroOrWrongHashPinnedPlaceholder
+PASS Test-RejectsAllOtherNonPeLoadableExtensionsAndSameNameElsewhere
+PASS Test-RejectsUnsafeTestModeFixture
+PASS Test-RejectsUnsafeLoaderOverride
+PASS Test-RejectsCallerControlledProductionEvidence
+PASS Test-BindsExactProductionEvidencePath
+PASS Test-BindsExactInputInventory
+PASS Test-RejectsMissingImport
+PASS Test-RejectsBridgeUnionCollision
+PASS Test-RecordsAuthoritativeApiSetMapping
+PASS Test-RejectsUnknownApiSetLookalike
+PASS Test-AuditsLoadablePeOutsideBin
+PASS Test-RejectsBridgeModuleOutsideBridgeRoot
+PASS Test-RejectsSameLengthSameMtimeContentChange
+PASS Test-RejectsExistingStage
+PASS Test-RejectsPermanentOctaveRoot
+PASS Test-RejectsReparseParent
+PASS all task3 staging tests
+```
+
+The final PowerShell parser check of `stage_task3_runtime.ps1` and
+`git diff --check` both exited 0. Static self-review confirmed that the
+exception is keyed by the exact verified relative path rather than filename or
+extension, that it is unavailable to production callers, and that all other
+magic-byte PEs remain on the existing audit path.

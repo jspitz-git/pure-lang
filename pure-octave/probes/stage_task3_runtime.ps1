@@ -82,6 +82,11 @@ $syntheticBridgeTotalBytes = 30
 $syntheticBridgeManifestSha256 = '025D6C9E917AA89AE1B068CD87598E96C00896F1D2BEE6AD139C7BF1BCD78648'
 $syntheticBridgeModuleSha256 = '120970D812836F19888625587A4606A5AD23CEF31C8684E601771552548FC6B9'
 $syntheticProbeSha256 = 'BA9C736F19E7F60B7F6764ADB0B7908C0A2B394E09B6C09863528C7F2BC86095'
+$approvedInertPlaceholders = @(
+    [pscustomobject]@{ Relative = 'mingw64/qt6/bin/qhelpgenerator.exe'; Length = [long]0; Sha256 = 'E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855' }
+)
+$acceptedAuditedPeFileCount = 1535
+$acceptedAuditedOctFileCount = 219
 $acceptedInput = [ordered]@{
     PureFileCount = 4769; PureTotalBytes = 260533868; PureManifestSha256 = '52DA19745D9F33DEC4CEAF09E24E3836C04E82E1651BB695990D18B14D667FE3'
     BridgeFileCount = 2; BridgeTotalBytes = 4771866; BridgeManifestSha256 = '974C07999D4EBC62C218F0EDA7D271B6CCC7AFDEBD1EBFA063C7A25109C4CE11'
@@ -274,6 +279,25 @@ function Test-PortableExecutable([string] $Path) {
         return ($stream.ReadByte() -eq 0x4d -and $stream.ReadByte() -eq 0x5a)
     }
     finally { $stream.Dispose() }
+}
+
+function Get-PinnedInertPlaceholders([string] $Root, [string] $Description) {
+    if ($approvedInertPlaceholders.Count -ne 1) { throw 'The production inert-placeholder approval cardinality must be exactly one.' }
+    $records = New-Object 'Collections.Generic.List[object]'
+    foreach ($approved in $approvedInertPlaceholders) {
+        if ($approved.Relative -ne 'mingw64/qt6/bin/qhelpgenerator.exe' -or $approved.Length -ne 0 -or $approved.Sha256 -ne 'E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855') {
+            throw 'The production inert-placeholder approval is not the exact pinned artifact.'
+        }
+        $path = Join-Path $Root $approved.Relative.Replace('/','\')
+        Assert-RegularFile $path "$Description pinned inert placeholder"
+        $item = Get-Item -LiteralPath $path -Force
+        $sha256 = Get-Sha256File $path
+        if ($item.Length -ne $approved.Length -or $sha256 -ne $approved.Sha256) {
+            throw "$Description pinned inert placeholder does not have the approved length and SHA-256: $($approved.Relative)"
+        }
+        $records.Add([pscustomobject]@{ Relative = $approved.Relative; Length = [long]$item.Length; Sha256 = $sha256 })
+    }
+    return [object[]]$records.ToArray()
 }
 
 function Read-SyntheticImports([string] $Manifest, [string] $FixtureRoot) {
@@ -519,6 +543,7 @@ if (-not $TestMode) {
     $evidence = Get-Content -LiteralPath $NormalizedIdempotenceEvidence -Raw | ConvertFrom-Json
     if ($evidence.ResultFileCount -ne 59533 -or $evidence.ResultTotalBytes -ne 2797722565 -or $evidence.ResultManifestSha256 -ne '9417DC1DC935E33ACADACA3A0AD86389F500B937F7670E3D177A8D58B3C68CED') { throw 'Normalized idempotence evidence does not attest the required canonical manifest.' }
 }
+$sourcePinnedInertPlaceholders = @(Get-PinnedInertPlaceholders $octave 'Normalized source runtime')
 $bridgeModuleBefore = Get-Sha256File $bridgeModule
 $patchedBefore = Get-Sha256File $patched
 
@@ -559,17 +584,25 @@ try {
     $pureBin = Join-Path $StageRoot 'pure\bin'
     $octaveSet = @{}; foreach ($item in Get-ChildItem -LiteralPath $stageBin -File -Force) { $octaveSet[$item.Name.ToLowerInvariant()] = @($item.FullName) }
     $pureSet = @{}; foreach ($item in Get-ChildItem -LiteralPath $pureBin -File -Force) { $pureSet[$item.Name.ToLowerInvariant()] = @($item.FullName) }
+    $stagedPinnedInertPlaceholders = @(Get-PinnedInertPlaceholders $StageRoot 'Staged runtime')
+    $pinnedInertByRelative = @{}
+    foreach ($placeholder in $stagedPinnedInertPlaceholders) { $pinnedInertByRelative[$placeholder.Relative.ToLowerInvariant()] = $true }
     $peFiles = @(
         foreach ($file in Get-ChildItem -LiteralPath $StageRoot -Recurse -Force -File) {
+            $relative = $file.FullName.Substring($StageRoot.Length + 1).Replace('\','/')
+            if ($pinnedInertByRelative.ContainsKey($relative.ToLowerInvariant())) { continue }
             $isPe = Test-PortableExecutable $file.FullName
             if ($file.Extension -in @('.dll','.exe','.oct','.mex','.mexw64') -and -not $isPe) { throw "Staged loadable file does not contain a PE image: $($file.FullName)" }
             if ($isPe) {
-                $relative = $file.FullName.Substring($StageRoot.Length + 1).Replace('\','/')
                 $group = if ($relative.StartsWith('pure/', [StringComparison]::OrdinalIgnoreCase)) { 'pure' } elseif ($relative.StartsWith('bridge/', [StringComparison]::OrdinalIgnoreCase)) { 'bridge' } else { 'octave' }
                 [pscustomobject]@{ File=$file; Relative=$relative; Group=$group }
             }
         }
     )
+    $octPeFiles = @($peFiles | Where-Object { $_.Relative.EndsWith('.oct', [StringComparison]::OrdinalIgnoreCase) })
+    if (-not $TestMode -and ($peFiles.Count -ne $acceptedAuditedPeFileCount -or $octPeFiles.Count -ne $acceptedAuditedOctFileCount -or $stagedPinnedInertPlaceholders.Count -ne 1)) {
+        throw "Static import audit cardinality is not the approved 1,535 PE + 1 pinned inert placeholder, including 219 PE .oct files: actual $($peFiles.Count) PE / $($stagedPinnedInertPlaceholders.Count) placeholders / $($octPeFiles.Count) .oct."
+    }
 
     if ($TestMode) {
         $syntheticImports = Read-SyntheticImports $SyntheticImportManifest $fixtureRoot
@@ -638,7 +671,9 @@ try {
     $apiLines = @($apiMappings.Keys | Sort-Object | ForEach-Object { "$_`t$($apiMappings[$_].Path)`t$($apiMappings[$_].Sha256)" })
     $apiSetText = "OSBuild`t$osVersion`nApiSetSchema`t$apiSetSchema`t$apiSetSchemaHash`n" + $(if ($apiLines.Count -eq 0) { '' } else { ($apiLines -join "`n") + "`n" })
     [IO.File]::WriteAllText((Join-Path $StageRoot 'stage-api-set-contracts.tsv'), $apiSetText, $utf8NoBom)
-    $excluded = @('stage-manifest.tsv','stage-mapping.tsv','stage-import-closure.tsv','stage-api-set-contracts.tsv')
+    $pinnedPlaceholderLines = @($stagedPinnedInertPlaceholders | Sort-Object Relative | ForEach-Object { "$($_.Relative)`t$($_.Length)`t$($_.Sha256)" })
+    [IO.File]::WriteAllText((Join-Path $StageRoot 'stage-pinned-inert-placeholders.tsv'), (($pinnedPlaceholderLines -join "`n") + "`n"), $utf8NoBom)
+    $excluded = @('stage-manifest.tsv','stage-mapping.tsv','stage-import-closure.tsv','stage-api-set-contracts.tsv','stage-pinned-inert-placeholders.tsv')
     $manifest = Get-TreeManifest $StageRoot $excluded
     if (-not $TestMode -and ($manifest.FileCount -ne $acceptedStageFiles -or $manifest.TotalBytes -ne $acceptedStageBytes -or $manifest.Sha256 -ne $acceptedStageManifestSha256)) {
         throw "Final stage does not match the exact accepted v5 postcondition: actual $($manifest.FileCount) / $($manifest.TotalBytes) / $($manifest.Sha256)."
@@ -656,7 +691,7 @@ try {
         if ((Get-Sha256File (Join-Path $packageRoot $relative)) -ne $acceptedRepositoryFiles[$relative]) { throw "Required public test script $relative changed during staging." }
     }
     if (-not $TestMode) { Assert-SnapshotTree $octave $NormalizedSnapshot 'B19A1BAB6293EBAAD7D0076B43D5E8F466BA896EAADFD81EED7E0C7C8F96FB31' 59533 2797722565 'Normalized source runtime after staging'; Assert-SnapshotTree $permanent $PermanentSnapshot '95D51222C8000706D235A309EF1CAEA6D986B08F1B04A08671475AD041A18CCD' 59533 2797722287 'Permanent Octave runtime after staging' }
-    [pscustomobject]@{ StageRoot=$StageRoot; FileCount=$manifest.FileCount; TotalBytes=$manifest.TotalBytes; ManifestSha256=$manifest.Sha256; PatchedLiboctaveSha256=(Get-Sha256File (Join-Path $StageRoot 'mingw64\bin\liboctave-13.dll')); LibgccSha256=(Get-Sha256File (Join-Path $StageRoot 'mingw64\bin\libgcc_s_seh-1.dll')); ImportAuditSkipped=$false; AuditedPeFileCount=$peFiles.Count; ApiSetContractCount=$apiMappings.Count } | ConvertTo-Json -Depth 3
+    [pscustomobject]@{ StageRoot=$StageRoot; FileCount=$manifest.FileCount; TotalBytes=$manifest.TotalBytes; ManifestSha256=$manifest.Sha256; PatchedLiboctaveSha256=(Get-Sha256File (Join-Path $StageRoot 'mingw64\bin\liboctave-13.dll')); LibgccSha256=(Get-Sha256File (Join-Path $StageRoot 'mingw64\bin\libgcc_s_seh-1.dll')); ImportAuditSkipped=$false; AuditedPeFileCount=$peFiles.Count; AuditedOctFileCount=$octPeFiles.Count; PinnedInertPlaceholderCount=$stagedPinnedInertPlaceholders.Count; ApiSetContractCount=$apiMappings.Count } | ConvertTo-Json -Depth 3
 }
 catch {
     throw

@@ -162,6 +162,8 @@ try {
     Write-TestFile (Join-Path $pure 'lib\pure\prelude.pure') 'prelude'
     Write-TestPe (Join-Path $octave 'mingw64\bin\liboctave-13.dll') 'original-octave'
     Write-TestPe (Join-Path $octave 'mingw64\bin\libgcc_s_seh-1.dll') 'canonical-gcc'
+    [IO.Directory]::CreateDirectory((Join-Path $octave 'mingw64\qt6\bin')) | Out-Null
+    [IO.File]::WriteAllBytes((Join-Path $octave 'mingw64\qt6\bin\qhelpgenerator.exe'), [byte[]]@())
     Write-TestFile (Join-Path $octave 'mingw64\share\octave\11.3.0\m\optimization\__all_opts__.m') 'opts'
     Write-TestPe (Join-Path $octave 'mingw64\lib\octave\packages\hidden_module.oct') 'hidden-oct'
     Write-TestPe (Join-Path $bridge 'octave_embed.dll') 'loader'
@@ -180,7 +182,37 @@ try {
     Assert-True ((Get-Sha256File (Join-Path $success.Stage 'mingw64\bin\liboctave-13.dll')) -eq (Get-Sha256File $patched)) 'Stage retained original liboctave.'
     Assert-True ((Get-Sha256File (Join-Path $octave 'mingw64\bin\liboctave-13.dll')) -ne (Get-Sha256File $patched)) 'Assembler modified its source Octave tree.'
     Assert-True (Test-Path -LiteralPath (Join-Path $success.Stage 'stage-import-closure.tsv') -PathType Leaf) 'Stage omitted its static import closure.'
-    Write-Output 'PASS Test-SuccessUsesSeparateLoaderRootsAndAuditsImports'
+    $successReport = $success.Output | ConvertFrom-Json
+    Assert-True ($successReport.AuditedPeFileCount -eq 8 -and $successReport.AuditedOctFileCount -eq 1) 'Every synthetic PE, including the .oct module, was not audited.'
+    Assert-True ($successReport.PinnedInertPlaceholderCount -eq 1) 'The exact inert placeholder was not recorded separately.'
+    $placeholderRecord = Get-Content -LiteralPath (Join-Path $success.Stage 'stage-pinned-inert-placeholders.tsv') -Raw
+    Assert-True ($placeholderRecord -eq "mingw64/qt6/bin/qhelpgenerator.exe`t0`tE3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855`n") 'The staged inert-placeholder report is not the exact pinned record.'
+    Write-Output 'PASS Test-AcceptsAndRecordsPinnedInertQtDocumentationPlaceholder'
+
+    $productionPlaceholderOverride = Invoke-Stage 'production-placeholder-override' (New-BaseImports) @{} -NoTestMode -OmitSyntheticTools -ExtraArguments @('-ExpectedPinnedInertPlaceholderSha256','0000000000000000000000000000000000000000000000000000000000000000')
+    Assert-Failure $productionPlaceholderOverride 'parameter cannot be found' 'Caller-controlled pinned placeholder approval'
+    Write-Output 'PASS Test-RejectsCallerControlledPinnedPlaceholderApproval'
+
+    $placeholder = Join-Path $octave 'mingw64\qt6\bin\qhelpgenerator.exe'
+    [IO.File]::WriteAllBytes($placeholder, [byte[]](0x51))
+    $nonzeroPlaceholder = Invoke-Stage 'nonzero-placeholder' (New-BaseImports)
+    Assert-Failure $nonzeroPlaceholder 'Pinned inert placeholder.*length.*SHA-256|Pinned inert placeholder.*SHA-256.*length' 'Nonzero or wrong-hash pinned placeholder'
+    [IO.File]::WriteAllBytes($placeholder, [byte[]]@())
+    Write-Output 'PASS Test-RejectsNonzeroOrWrongHashPinnedPlaceholder'
+
+    foreach ($extension in @('.exe','.dll','.oct')) {
+        $unapproved = Join-Path $octave ('mingw64\qt6\bin\unapproved-placeholder' + $extension)
+        [IO.File]::WriteAllBytes($unapproved, [byte[]]@())
+        $unapprovedResult = Invoke-Stage ('unapproved-' + $extension.Substring(1)) (New-BaseImports)
+        Assert-Failure $unapprovedResult 'Staged loadable file does not contain a PE image' "Unapproved non-PE $extension"
+        Remove-Item -LiteralPath $unapproved -Force
+    }
+    $sameNameElsewhere = Join-Path $octave 'mingw64\bin\qhelpgenerator.exe'
+    [IO.File]::WriteAllBytes($sameNameElsewhere, [byte[]]@())
+    $sameNameResult = Invoke-Stage 'same-name-elsewhere' (New-BaseImports)
+    Assert-Failure $sameNameResult 'Staged loadable file does not contain a PE image' 'Same filename outside the pinned path'
+    Remove-Item -LiteralPath $sameNameElsewhere -Force
+    Write-Output 'PASS Test-RejectsAllOtherNonPeLoadableExtensionsAndSameNameElsewhere'
 
     $outsideGuard = Invoke-Stage 'guard-reject' (New-BaseImports) @{} -DisposableParentOverride $testRoot
     Assert-Failure $outsideGuard 'exact synthetic fixture' 'Unsafe TestMode fixture root'
