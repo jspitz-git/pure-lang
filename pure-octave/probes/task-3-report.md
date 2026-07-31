@@ -508,3 +508,47 @@ toolchain path was written during this Apply/audit checkpoint.
 After this report-only checkpoint is independently reviewed, a fresh,
 separately authorized clean configure, generated-header gate, and sole
 `liboctave/liboctave.la` target may use the normalized disposable toolchain.
+
+## Confined liboctave build checkpoint
+
+The initial fresh normalized configure was retained as RED evidence: its
+`config.log` recorded 113 compiler intermediates in MSYS user temp.  MSYS
+maps `/tmp` to the user temp mount.  A minimal copied GCC/G++ probe confirmed
+that setting process-local `TEMP`, `TMP`, and `TMPDIR` to a validated
+disposable Windows directory confines all temporary paths and cleans them.
+
+Fresh `build-normalized-confined` and `build-temp-confined` roots were then
+configured with those three variables set. Configure exited 0; all 113
+compiler temporary paths resolved below the confined directory, with zero
+residual files/reparse points. Config, Makefile, and logs had zero user-temp,
+permanent-Octave, or global-msys paths.
+
+The generated-header gate exited 0 with 372 unique `BUILT_INCS` and 374
+unique present regular non-reparse files. The sole build command,
+`make -j4 liboctave/liboctave.la`, exited 0. Its complete log is 2,355,813
+bytes, SHA-256 `842678BFBBC560B4258EE15920C1E36B030D334B2B8BC948C6768CA6613E3608`.
+There were no error/fatal diagnostics and one upstream `setlocale.c`
+discarded-const warning.
+
+The x86-64 PE `liboctave-13.dll` is 283,425,385 bytes, SHA-256
+`A10BBD461B628379F02CF87E059F89C2F4485F69D88AD2C51466E8789DAF2663`; its
+import library is 12,671,822 bytes, SHA-256
+`A34F1B10250412439366306BCCC2A3B4C4C745B4E8315ABB57709577417B6065`.
+The compiled `file-ops.o` contains canonicalization entry points and strings
+for `pure_windows_system_volume_canonical_path` and the shared helper header.
+
+Effective future resolution is staged `bin` plus System32. All 19 non-system
+imports resolve uniquely in normalized `mingw64\bin`. The canonical staged
+`libgcc_s_seh-1.dll` SHA-256 is
+`592E6966F66D7993726D3CE329E81B658188E5CB286ACE9DE56C2FAB939EA491`.
+The distinct global `mingw64\lib\gcc` duplicate
+`C01AC5BFCCDC91BCE10CDA45075D73E6E0964440FC3673C2DD2A63B0BE2D4699` is
+outside that search and must not be staged. No DLL was run, installed, or
+staged. Confined temp and build processes were empty at completion. Final
+post-build normalized-toolchain rehash compared all 59,533 records with the
+pre-build normalized capture: `59,533 / 2,797,722,565`, zero differences,
+and zero reparse points. This preserves the independently established
+normalized manifest `9417DC1DC935E33ACADACA3A0AD86389F500B937F7670E3D177A8D58B3C68CED`.
+Final permanent Octave rehash remained `59,533 / 2,797,722,287 /
+95D51222C8000706D235A309EF1CAEA6D986B08F1B04A08671475AD041A18CCD`, with
+zero baseline differences and zero reparse points.
