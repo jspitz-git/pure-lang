@@ -133,6 +133,7 @@ function Invoke-Stage {
         [switch]$InjectFourthSupplementDependency,
         [switch]$InjectSupplementContractSchemaFault,
         [switch]$InjectSupplementPostconditionFault,
+        [string]$InjectSupplementPostAuditFault = '',
         [string[]]$ExtraArguments = @()
     )
     $stage = Join-Path $parent $Name
@@ -179,6 +180,7 @@ function Invoke-Stage {
     if ($InjectFourthSupplementDependency) { $args += '-InjectFourthSupplementDependency' }
     if ($InjectSupplementContractSchemaFault) { $args += '-InjectSupplementContractSchemaFault' }
     if ($InjectSupplementPostconditionFault) { $args += '-InjectSupplementPostconditionFault' }
+    if ($InjectSupplementPostAuditFault) { $args += @('-InjectSupplementPostAuditFault',$InjectSupplementPostAuditFault) }
     $args += $ExtraArguments
     $savedPreference = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'
@@ -417,6 +419,20 @@ try {
     Reset-SupplementFixture
     $postconditionFault = Invoke-Stage 'supplement-postcondition' (New-SupplementImports) @{} -InjectSupplementPostconditionFault
     Assert-Failure $postconditionFault 'Supplement contract.*fixed.*postcondition|fixed arithmetic' 'Changed supplement postcondition'
+    $postAuditAssertionFailures = New-Object 'Collections.Generic.List[string]'
+    foreach ($fault in @(
+        @('PeCount','Staged PE audit count does not match the expected postcondition'),
+        @('OctCount','Staged \.oct audit count does not match the expected postcondition'),
+        @('PlaceholderCount','Pinned inert placeholder audit count does not match the expected postcondition'),
+        @('FileCount','Final stage file count does not match the expected postcondition'),
+        @('ByteCount','Final stage byte count does not match the expected postcondition'),
+        @('ManifestSha256','Final stage manifest SHA-256 does not match the expected postcondition'))) {
+        Reset-SupplementFixture
+        $postAuditFault = Invoke-Stage ('supplement-post-audit-' + $fault[0].ToLowerInvariant()) (New-SupplementImports) @{} -InjectSupplementPostAuditFault $fault[0]
+        try { Assert-Failure $postAuditFault $fault[1] "Post-audit $($fault[0]) fault" }
+        catch { $postAuditAssertionFailures.Add($_.Exception.Message) }
+    }
+    Assert-True ($postAuditAssertionFailures.Count -eq 0) ([string]::Join("`n", $postAuditAssertionFailures))
     $supplementOverride = Invoke-Stage 'supplement-override' (New-SupplementImports) @{} -ExtraArguments @('-SupplementRoot',$supplementSnapshot)
     Assert-Failure $supplementOverride 'parameter cannot be found' 'Caller supplement path override'
     Write-Output 'PASS Test-HardBindsSupplementStagePostconditions'

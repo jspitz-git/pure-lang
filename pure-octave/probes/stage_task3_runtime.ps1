@@ -38,6 +38,7 @@ param(
     [switch] $InjectFourthSupplementDependency,
     [switch] $InjectSupplementContractSchemaFault,
     [switch] $InjectSupplementPostconditionFault,
+    [ValidateSet('','PeCount','OctCount','PlaceholderCount','FileCount','ByteCount','ManifestSha256')][string] $InjectSupplementPostAuditFault = '',
     [switch] $TestMode
 )
 
@@ -46,6 +47,7 @@ param(
 # below that root.  The strict runner is a later Task 3 checkpoint.
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+if ($InjectSupplementPostAuditFault -and -not $TestMode) { throw 'Post-audit supplement failure injection is TestMode-only and has no production access.' }
 $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 $acceptedPatchedSha256 = 'A10BBD461B628379F02CF87E059F89C2F4485F69D88AD2C51466E8789DAF2663'
 $acceptedLibgccSha256 = '592E6966F66D7993726D3CE329E81B658188E5CB286ACE9DE56C2FAB939EA491'
@@ -330,6 +332,32 @@ function Assert-ExactSupplementTree([string] $Root, $Records, [string] $Descript
     foreach ($record in $Records) { Assert-PinnedSupplementFile (Join-Path $Root $record.Name) $record "$Description $($record.Name)" }
 }
 
+function Assert-StageAuditPostconditions(
+    [long] $ActualPeCount,
+    [long] $ActualOctCount,
+    [long] $ActualPlaceholderCount,
+    [long] $ExpectedPeCount,
+    [long] $ExpectedOctCount,
+    [long] $ExpectedPlaceholderCount
+) {
+    if ($ActualPeCount -ne $ExpectedPeCount) { throw 'Staged PE audit count does not match the expected postcondition.' }
+    if ($ActualOctCount -ne $ExpectedOctCount) { throw 'Staged .oct audit count does not match the expected postcondition.' }
+    if ($ActualPlaceholderCount -ne $ExpectedPlaceholderCount) { throw 'Pinned inert placeholder audit count does not match the expected postcondition.' }
+}
+
+function Assert-FinalStagePostconditions(
+    [long] $ActualFileCount,
+    [long] $ActualByteCount,
+    [string] $ActualManifestSha256,
+    [long] $ExpectedFileCount,
+    [long] $ExpectedByteCount,
+    [string] $ExpectedManifestSha256
+) {
+    if ($ActualFileCount -ne $ExpectedFileCount) { throw 'Final stage file count does not match the expected postcondition.' }
+    if ($ActualByteCount -ne $ExpectedByteCount) { throw 'Final stage byte count does not match the expected postcondition.' }
+    if ($ActualManifestSha256 -cne $ExpectedManifestSha256) { throw 'Final stage manifest SHA-256 does not match the expected postcondition.' }
+}
+
 function Get-PeImports([string] $Tool, [string] $File) {
     $output = & $Tool -p $File 2>&1
     if ($LASTEXITCODE -ne 0) { throw "objdump failed for staged PE file: $File`n$output" }
@@ -467,7 +495,7 @@ Assert-RegularFile $bridgeModule 'Bridge module source'
 if ($octave.Equals($permanent, [StringComparison]::OrdinalIgnoreCase)) { throw 'Normalized Octave root resolves to the permanent Octave root.' }
 $packageRoot = [IO.Path]::GetFullPath((Split-Path -Parent $PSScriptRoot)).TrimEnd('\')
 Assert-NoReparsePath $packageRoot 'Repository package root'
-$hasSupplementInjection = $InjectSupplementDestinationCollision -or $InjectSupplementMappingMismatch -or $InjectFourthSupplementDependency -or $InjectSupplementContractSchemaFault -or $InjectSupplementPostconditionFault
+$hasSupplementInjection = $InjectSupplementDestinationCollision -or $InjectSupplementMappingMismatch -or $InjectFourthSupplementDependency -or $InjectSupplementContractSchemaFault -or $InjectSupplementPostconditionFault -or [bool]$InjectSupplementPostAuditFault
 if ($hasSupplementInjection -and -not $TestMode) { throw 'Supplement failure injection is TestMode-only and restricted to the exact synthetic fixture root.' }
 
 if ($TestMode) {
@@ -764,9 +792,20 @@ try {
         $matches = @($peFiles | Where-Object { $_.Relative.Equals($relative, [StringComparison]::OrdinalIgnoreCase) })
         if ($matches.Count -ne 1 -or $matches[0].Group -cne 'pure') { throw "Pinned supplement PE is not unique in the Pure loader group: $relative" }
     }
-    if (-not $TestMode -and ($peFiles.Count -ne [long]$supplementContract.ExpectedAuditedPeCount -or $octPeFiles.Count -ne [long]$supplementContract.ExpectedAuditedOctCount -or $stagedPinnedInertPlaceholders.Count -ne [long]$supplementContract.ExpectedPinnedPlaceholderCount)) {
-        throw "Static import audit cardinality is not the approved 1,539 PE + 1 pinned inert placeholder, including 219 PE .oct files: actual $($peFiles.Count) PE / $($stagedPinnedInertPlaceholders.Count) placeholders / $($octPeFiles.Count) .oct."
+    [long]$expectedPeCount = if ($TestMode) { $peFiles.Count } else { $supplementContract.ExpectedAuditedPeCount }
+    [long]$expectedOctCount = if ($TestMode) { $octPeFiles.Count } else { $supplementContract.ExpectedAuditedOctCount }
+    [long]$expectedPlaceholderCount = if ($TestMode) { $stagedPinnedInertPlaceholders.Count } else { $supplementContract.ExpectedPinnedPlaceholderCount }
+    [long]$observedPeCount = $peFiles.Count
+    [long]$observedOctCount = $octPeFiles.Count
+    [long]$observedPlaceholderCount = $stagedPinnedInertPlaceholders.Count
+    if ($TestMode) {
+        switch ($InjectSupplementPostAuditFault) {
+            'PeCount' { $observedPeCount++ }
+            'OctCount' { $observedOctCount++ }
+            'PlaceholderCount' { $observedPlaceholderCount++ }
+        }
     }
+    Assert-StageAuditPostconditions $observedPeCount $observedOctCount $observedPlaceholderCount $expectedPeCount $expectedOctCount $expectedPlaceholderCount
 
     if ($TestMode) {
         $syntheticImports = Read-SyntheticImports $SyntheticImportManifest $fixtureRoot
@@ -856,9 +895,20 @@ try {
     [IO.File]::WriteAllText((Join-Path $StageRoot 'stage-pinned-inert-placeholders.tsv'), (($pinnedPlaceholderLines -join "`n") + "`n"), $utf8NoBom)
     $excluded = @('stage-manifest.tsv','stage-mapping.tsv','stage-import-closure.tsv','stage-api-set-contracts.tsv','stage-pinned-inert-placeholders.tsv')
     $manifest = Get-TreeManifest $StageRoot $excluded
-    if (-not $TestMode -and ($manifest.FileCount -ne [long]$supplementContract.ExpectedStageFileCount -or $manifest.TotalBytes -ne [long]$supplementContract.ExpectedStageBytes -or $manifest.Sha256 -cne $supplementContract.ExpectedStageManifestSha256)) {
-        throw "Final stage does not match the exact pinned supplement postcondition: actual $($manifest.FileCount) / $($manifest.TotalBytes) / $($manifest.Sha256)."
+    [long]$expectedStageFileCount = if ($TestMode) { $manifest.FileCount } else { $supplementContract.ExpectedStageFileCount }
+    [long]$expectedStageByteCount = if ($TestMode) { $manifest.TotalBytes } else { $supplementContract.ExpectedStageBytes }
+    [string]$expectedStageManifestSha256 = if ($TestMode) { $manifest.Sha256 } else { $supplementContract.ExpectedStageManifestSha256 }
+    [long]$observedStageFileCount = $manifest.FileCount
+    [long]$observedStageByteCount = $manifest.TotalBytes
+    [string]$observedStageManifestSha256 = $manifest.Sha256
+    if ($TestMode) {
+        switch ($InjectSupplementPostAuditFault) {
+            'FileCount' { $observedStageFileCount++ }
+            'ByteCount' { $observedStageByteCount++ }
+            'ManifestSha256' { $observedStageManifestSha256 = '0000000000000000000000000000000000000000000000000000000000000000' }
+        }
     }
+    Assert-FinalStagePostconditions $observedStageFileCount $observedStageByteCount $observedStageManifestSha256 $expectedStageFileCount $expectedStageByteCount $expectedStageManifestSha256
     [IO.File]::WriteAllText((Join-Path $StageRoot 'stage-manifest.tsv'), $manifest.Text, $utf8NoBom)
     [IO.File]::WriteAllText((Join-Path $StageRoot 'stage-mapping.tsv'), (($mappings | Sort-Object) -join "`n") + "`n", $utf8NoBom)
     $pureAfter = Get-TreeManifest $pure
