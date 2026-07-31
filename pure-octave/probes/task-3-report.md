@@ -957,3 +957,34 @@ the contract `.tmp` sibling, and the synthetic fixture root are absent. No
 real stage was created, no staged binary was inspected or run, v1-v10 evidence
 was not deleted, and no ACL, AppContainer, profile, accepted-Pure, permanent
 Octave, or source-tree mutation was performed.
+
+### Independent-review remediation
+
+Independent read-only review of `69fd2160..b7522757` found no Critical issues
+and two Important fail-closed gaps. TDD regressions were added before their
+fixes. A fabricated but syntactically valid API-set name was initially trusted
+by prefix, and Plan initially ignored an extra nested snapshot directory. The
+test assertion helper was also corrected so absence of an expected exception
+cannot satisfy `Assert-Throws`; the API-set regression then produced genuine
+RED before production changed.
+
+System imports are now resolved only to regular, non-reparse files under the
+authoritative local `System32`: API-set names require strict contract syntax
+and successful `LoadLibraryExW` mapping, with the returned handle always freed.
+Plan now inventories every top-level snapshot child and rejects directories,
+reparse points, nested content, or any other contaminant before reporting zero
+changes. Focused re-review also required rejection of truncated
+`GetModuleFileNameW` output and failed `FreeLibrary`; both are now checked,
+module release failure is a guarded synthetic regression, and the handle
+lifecycle no longer returns from inside its release-protected block. The fresh
+harness passes eleven named cases with no warning/error noise.
+
+A post-review production Plan against the immutable v1 snapshot exited 0 with
+`Changes = 0`, re-resolved all 517 import edges, and placed all 429 system
+edges under `C:\Windows\System32` with zero outside hosts. Its captured stdout
+was 107,633 bytes / SHA-256
+`9AC8D2F152F8DBDD8A8620579AEE9279CF7EC229F495559EA8F4F6BD2DE8C27D`;
+stderr remained zero bytes / SHA-256
+`E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855`.
+The real snapshot, contract, accepted inputs, and permanent/source baselines
+were not modified by this read-only remediation audit.

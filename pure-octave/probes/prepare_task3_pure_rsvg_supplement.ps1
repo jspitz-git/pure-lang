@@ -10,6 +10,7 @@ param(
     [string] $SyntheticExpectedFiles = '',
     [string] $SyntheticImportManifest = '',
     [switch] $InjectFailureAfterFirstCopy,
+    [switch] $InjectApiSetReleaseFailure,
     [switch] $TestMode
 )
 
@@ -31,6 +32,23 @@ $pinned = @(
     [pscustomobject]@{ Name='libunwind.dll'; Length=[long]63488; Sha256='60FA3C200899BC6E4A5876B82E2C656FF72FC53EC55979D99CB7C4EF640A6D96'; PeMachine='pei-x86-64' },
     [pscustomobject]@{ Name='libxml2-16.dll'; Length=[long]1294848; Sha256='C6C34A810D86C19C034A1BC96C4C500BDE8FB789DED69B434E67EEE773605852'; PeMachine='pei-x86-64' }
 )
+
+if (-not ('PureRsvgNative' -as [type])) {
+    Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+using System.Text;
+public static class PureRsvgNative {
+  [DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true)]
+  public static extern IntPtr LoadLibraryExW(string name, IntPtr file, uint flags);
+  [DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true)]
+  public static extern uint GetModuleFileNameW(IntPtr module, StringBuilder path, int size);
+  [DllImport("kernel32.dll", SetLastError=true)]
+  [return: MarshalAs(UnmanagedType.Bool)]
+  public static extern bool FreeLibrary(IntPtr module);
+}
+'@
+}
 
 function Get-Sha256File([string] $Path) {
     $stream = [IO.File]::Open($Path, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)
@@ -111,10 +129,40 @@ function Get-SyntheticImports([string] $Name) {
     return @()
 }
 
-function Test-SystemImport([string] $Name) {
+function Resolve-SystemImport([string] $Name) {
     $lower = $Name.ToLowerInvariant()
-    if ($lower.StartsWith('api-ms-win-') -or $lower.StartsWith('ext-ms-win-')) { return $true }
-    return (Test-Path -LiteralPath (Join-Path $env:WINDIR "System32\$Name") -PathType Leaf)
+    $system32 = [IO.Path]::GetFullPath((Join-Path $env:WINDIR 'System32')).TrimEnd('\')
+    Assert-NoReparsePath $system32 'Windows System32'
+    if ($lower.StartsWith('api-ms-win-') -or $lower.StartsWith('ext-ms-win-')) {
+        if ($lower -notmatch '^(api|ext)-ms-win-[a-z0-9][a-z0-9-]*-l[0-9]+-[0-9]+-[0-9]+\.dll$') { return '' }
+        $handle = [PureRsvgNative]::LoadLibraryExW($Name, [IntPtr]::Zero, 0x00000800)
+        if ($handle -eq [IntPtr]::Zero) { return '' }
+        $hostPath = ''
+        $releaseSucceeded = $false
+        $releaseError = 0
+        try {
+            $builder = [Text.StringBuilder]::new(32768)
+            $pathLength = [PureRsvgNative]::GetModuleFileNameW($handle, $builder, $builder.Capacity)
+            if ($pathLength -gt 0 -and $pathLength -lt $builder.Capacity) {
+                $candidate = [IO.Path]::GetFullPath($builder.ToString())
+                if ($candidate.StartsWith($system32 + '\', [StringComparison]::OrdinalIgnoreCase)) {
+                    Assert-RegularFile $candidate "API-set host for $Name"
+                    $hostPath = $candidate
+                }
+            }
+        }
+        finally {
+            $releaseSucceeded = [PureRsvgNative]::FreeLibrary($handle)
+            $releaseError = [Runtime.InteropServices.Marshal]::GetLastWin32Error()
+            if ($InjectApiSetReleaseFailure) { $releaseSucceeded = $false; $releaseError = 5 }
+        }
+        if (-not $releaseSucceeded) { throw "Failed to release API-set module $Name (Win32 error $releaseError)." }
+        return $hostPath
+    }
+    $physical = Join-Path $system32 $Name
+    if (-not (Test-Path -LiteralPath $physical -PathType Leaf)) { return '' }
+    Assert-RegularFile $physical "System import $Name"
+    return [IO.Path]::GetFullPath($physical)
 }
 
 function Resolve-SupplementClosure([string[]] $RootNames, [string] $SourceBin, [string] $PureBin) {
@@ -158,8 +206,11 @@ function Resolve-SupplementClosure([string[]] $RootNames, [string] $SourceBin, [
                 elseif (Test-Path -LiteralPath $sourcePath -PathType Leaf) {
                     throw "Unresolved supplement import $import from $($current.Name)"
                 }
-                elseif (Test-SystemImport $import) { $origin = 'System'; $resolvedPath = $import }
-                else { throw "Unresolved supplement import $import from $($current.Name)" }
+                else {
+                    $systemPath = Resolve-SystemImport $import
+                    if ($systemPath) { $origin = 'System'; $resolvedPath = $systemPath }
+                    else { throw "Unresolved supplement import $import from $($current.Name)" }
+                }
             }
             $edges.Add([pscustomobject]@{ From=$current.Name; Import=$import; Origin=$origin; Resolved=$resolvedPath })
             if (($origin -eq 'Supplement' -or $origin -eq 'Pure') -and -not $resolved.ContainsKey($key)) {
@@ -252,6 +303,9 @@ else {
     if (-not $SnapshotRoot.StartsWith($testRoot + '\', [StringComparison]::OrdinalIgnoreCase)) { throw 'Synthetic snapshot escapes the exact test root.' }
     if (-not $ContractOutput.StartsWith($testRoot + '\', [StringComparison]::OrdinalIgnoreCase)) { throw 'Synthetic contract escapes the exact test root.' }
 }
+if ($InjectApiSetReleaseFailure -and (-not $TestMode -or -not $SnapshotRoot.StartsWith($testRoot + '\', [StringComparison]::OrdinalIgnoreCase))) {
+    throw 'API-set release failure injection is restricted to the exact synthetic root.'
+}
 Assert-RegularFile $ObjdumpPath 'objdump'
 Assert-RegularFile $AcceptedStageManifest 'Accepted stage manifest'
 if ((Get-Sha256File $AcceptedStageManifest) -ne $acceptedManifestSha256) { throw 'Accepted stage manifest SHA-256 is not the pinned v5 contract.' }
@@ -295,8 +349,12 @@ if (Test-Path -LiteralPath $SnapshotRoot) {
     if ($Mode -eq 'Apply') { throw 'Snapshot root must be absent' }
     if (-not (Test-Path -LiteralPath $SnapshotRoot -PathType Container)) { throw 'Existing snapshot root is not a directory.' }
     Assert-NoReparsePath $SnapshotRoot 'Existing snapshot root'
+    $actualItems = @(Get-ChildItem -LiteralPath $SnapshotRoot -Force)
+    if ($actualItems.Count -ne 3 -or @($actualItems | Where-Object {
+        -not ($_ -is [IO.FileInfo]) -or (($_.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0)
+    }).Count -ne 0) { throw 'Existing snapshot file set is not exact.' }
     foreach ($file in $audited) { Get-RegularPinnedFile (Join-Path $SnapshotRoot $file.Name) $file.Length $file.Sha256 | Out-Null }
-    $actualNames = @((Get-ChildItem -LiteralPath $SnapshotRoot -Force -File | Sort-Object Name).Name)
+    $actualNames = @(($actualItems | Sort-Object Name).Name)
     if ([string]::Join(',', [string[]]$actualNames) -ne [string]::Join(',', ([string[]]$pinned.Name | Sort-Object))) { throw 'Existing snapshot file set is not exact.' }
     $changes = 0
 }

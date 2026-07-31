@@ -47,7 +47,8 @@ function Invoke-Preparer {
         [switch] $ExistingSnapshot,
         [ValidateSet('Plan','Apply')][string] $Mode = 'Plan',
         [string] $Case = 'case',
-        [switch] $InjectFailureAfterFirstCopy
+        [switch] $InjectFailureAfterFirstCopy,
+        [switch] $InjectApiSetReleaseFailure
     )
     $caseRoot = Join-Path $testRoot $Case
     [IO.Directory]::CreateDirectory($caseRoot) | Out-Null
@@ -87,6 +88,7 @@ function Invoke-Preparer {
     }
     if ($ExtraImport) { $arguments.SyntheticImportManifest = $imports }
     if ($InjectFailureAfterFirstCopy) { $arguments.InjectFailureAfterFirstCopy = $true }
+    if ($InjectApiSetReleaseFailure) { $arguments.InjectApiSetReleaseFailure = $true }
     $json = & $preparer @arguments
     return [pscustomobject]@{
         Result = ($json | ConvertFrom-Json)
@@ -97,10 +99,13 @@ function Invoke-Preparer {
 }
 
 function Assert-Throws([scriptblock] $Action, [string] $Expected) {
-    try { & $Action; throw "ASSERT: expected failure containing '$Expected'" }
+    $caught = $null
+    try { $null = & $Action }
     catch {
-        if ($_.Exception.Message -notlike "*$Expected*") { throw "ASSERT: wrong failure: $($_.Exception.Message)" }
+        $caught = $_
     }
+    if ($null -eq $caught) { throw "ASSERT: expected failure containing '$Expected'" }
+    if ($caught.Exception.Message -notlike "*$Expected*") { throw "ASSERT: wrong failure: $($caught.Exception.Message)" }
 }
 
 if (-not (Test-Path -LiteralPath $preparer -PathType Leaf)) { throw "TDD RED: preparer does not exist: $preparer" }
@@ -118,6 +123,12 @@ try {
 
     Assert-Throws { Invoke-Preparer -ExtraImport 'libunexpected.dll' -Case 'unresolved' } 'Unresolved supplement import'
     Write-Output 'PASS Test-RejectsUnresolvedSupplementImport'
+
+    Assert-Throws { Invoke-Preparer -ExtraImport 'api-ms-win-fabricated-l1-1-0.dll' -Case 'fabricated-api-set' } 'Unresolved supplement import'
+    Write-Output 'PASS Test-RejectsFabricatedApiSetImport'
+
+    Assert-Throws { Invoke-Preparer -InjectApiSetReleaseFailure -Case 'api-set-release' } 'Failed to release API-set module'
+    Write-Output 'PASS Test-RejectsApiSetReleaseFailure'
 
     Assert-Throws { Invoke-Preparer -ReparseSnapshotParent -Case 'reparse' } 'contains a reparse point'
     Write-Output 'PASS Test-RejectsReparseSnapshotParent'
@@ -166,6 +177,14 @@ try {
     $idempotent = & $preparer -SourceBin $sourceBin -PureRoot $pureRoot -AcceptedStageManifest $acceptedManifest -SnapshotRoot $apply.Snapshot -ContractOutput $apply.Contract -Mode Plan -TestMode -SyntheticExpectedFiles (Join-Path (Join-Path $testRoot 'apply') 'expected-files.tsv') | ConvertFrom-Json
     Assert-Equal $idempotent.Changes 0 'Plan is idempotent against matching snapshot'
     Write-Output 'PASS Test-AppliesTransactionallyAndPlansIdempotently'
+
+    $nested = Join-Path $apply.Snapshot 'nested'
+    [IO.Directory]::CreateDirectory($nested) | Out-Null
+    [IO.File]::WriteAllText((Join-Path $nested 'contaminant.txt'), 'contaminant', [Text.UTF8Encoding]::new($false))
+    Assert-Throws {
+        & $preparer -SourceBin $sourceBin -PureRoot $pureRoot -AcceptedStageManifest $acceptedManifest -SnapshotRoot $apply.Snapshot -ContractOutput $apply.Contract -Mode Plan -TestMode -SyntheticExpectedFiles (Join-Path (Join-Path $testRoot 'apply') 'expected-files.tsv')
+    } 'Existing snapshot file set is not exact'
+    Write-Output 'PASS Test-RejectsContaminatedExistingSnapshot'
 
     Write-Output 'PASS all supplement preparer tests'
 }
