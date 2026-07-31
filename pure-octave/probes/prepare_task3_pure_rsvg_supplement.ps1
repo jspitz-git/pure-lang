@@ -321,6 +321,17 @@ $expectedFiles = @(Read-ExpectedFiles)
 if ($expectedFiles.Count -ne 3 -or [string]::Join(',', [string[]]$expectedFiles.Name) -ne [string]::Join(',', [string[]]$pinned.Name)) {
     throw 'Supplement file set is not exact'
 }
+if ($TestMode) {
+    for ($index = 0; $index -lt $pinned.Count; $index++) {
+        $expected = $expectedFiles[$index]; $production = $pinned[$index]
+        if (-not $expected.Name.Equals($production.Name, [StringComparison]::Ordinal) -or
+            $expected.Length -ne $production.Length -or
+            -not $expected.Sha256.Equals($production.Sha256, [StringComparison]::Ordinal) -or
+            -not $expected.PeMachine.Equals($production.PeMachine, [StringComparison]::Ordinal)) {
+            throw "Synthetic expected supplement contract differs from production pins at index $index."
+        }
+    }
+}
 $audited = [Collections.Generic.List[object]]::new()
 foreach ($expected in $expectedFiles) {
     $regular = Get-RegularPinnedFile (Join-Path $SourceBin $expected.Name) $expected.Length $expected.Sha256

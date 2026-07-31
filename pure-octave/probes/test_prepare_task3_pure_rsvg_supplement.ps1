@@ -80,7 +80,8 @@ function Invoke-Preparer {
         [string] $Case = 'case',
         [switch] $InjectFailureAfterFirstCopy,
         [switch] $InjectApiSetReleaseFailure,
-        [switch] $InjectApiSetTruncatedPath
+        [switch] $InjectApiSetTruncatedPath,
+        [switch] $MutateProductionPin
     )
     $caseRoot = Join-Path $testRoot $Case
     [IO.Directory]::CreateDirectory($caseRoot) | Out-Null
@@ -122,7 +123,19 @@ function Invoke-Preparer {
     if ($InjectFailureAfterFirstCopy) { $arguments.InjectFailureAfterFirstCopy = $true }
     if ($InjectApiSetReleaseFailure) { $arguments.InjectApiSetReleaseFailure = $true }
     if ($InjectApiSetTruncatedPath) { $arguments.InjectApiSetTruncatedPath = $true }
-    $json = & $preparer @arguments
+    $invokePreparer = $preparer
+    if ($MutateProductionPin) {
+        $invokePreparer = Join-Path $caseRoot 'mutated-preparer.ps1'
+        $originalPin = '9F90DE3779E80F590B542AFDF79C105A403B0C566265D69EACBBF9B524338F89'
+        $mutatedPin = '0000000000000000000000000000000000000000000000000000000000000000'
+        $source = [IO.File]::ReadAllText($preparer)
+        if ($source.IndexOf($originalPin, [StringComparison]::Ordinal) -lt 0 -or
+            $source.IndexOf($originalPin, $source.IndexOf($originalPin, [StringComparison]::Ordinal) + 1, [StringComparison]::Ordinal) -ge 0) {
+            throw 'Test mutation requires exactly one production pin occurrence.'
+        }
+        [IO.File]::WriteAllText($invokePreparer, $source.Replace($originalPin, $mutatedPin), [Text.UTF8Encoding]::new($false))
+    }
+    $json = & $invokePreparer @arguments
     return [pscustomobject]@{
         Result = ($json | ConvertFrom-Json)
         Snapshot = $snapshot
@@ -149,6 +162,9 @@ if (Test-Path -LiteralPath $testRoot) { Remove-Item -LiteralPath $testRoot -Recu
 [IO.Directory]::CreateDirectory($testRoot) | Out-Null
 
 try {
+    Assert-Throws { Invoke-Preparer -MutateProductionPin -Case 'production-pin-mutation' } 'Synthetic expected supplement contract differs from production pins'
+    Write-Output 'PASS Test-RejectsProductionPinMutation'
+
     Assert-Throws { Invoke-Preparer -Files @('librsvg-2-2.dll','libunwind.dll') -Case 'wrong-set' } 'Supplement file set is not exact'
     Write-Output 'PASS Test-RejectsInexactSupplementSet'
 
