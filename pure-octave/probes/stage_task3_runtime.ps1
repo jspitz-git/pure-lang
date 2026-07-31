@@ -33,6 +33,11 @@ param(
     [string] $SyntheticArtifactEvidence = '',
     [string] $SyntheticObjectEvidence = '',
     [string] $SyntheticBuildEvidence = '',
+    [switch] $InjectSupplementDestinationCollision,
+    [switch] $InjectSupplementMappingMismatch,
+    [switch] $InjectFourthSupplementDependency,
+    [switch] $InjectSupplementContractSchemaFault,
+    [switch] $InjectSupplementPostconditionFault,
     [switch] $TestMode
 )
 
@@ -69,6 +74,14 @@ $acceptedOsVersion = 'Microsoft Windows NT 10.0.26200.0'
 $acceptedStageFiles = 64309
 $acceptedStageBytes = 3327729829
 $acceptedStageManifestSha256 = 'E142C07EDA4D71184D1892189834818B9DCE7AD44B8F0A6708A51C54FA56476F'
+$acceptedSupplementContractSha256 = '692341FA19E6D7AC3CF4C02894DBDB92AFAE7A5DD154B659A5CFD099AD63F2CC'
+$acceptedSupplementSnapshotRoot = 'C:\tmp\todo51-task3\pure-rsvg-supplement-v1'
+$acceptedSupplementSourceRoot = 'C:\msys64\clang64\bin'
+$acceptedSupplementFiles = @(
+    [pscustomobject]@{ Name='librsvg-2-2.dll'; Length=[long]5882880; Sha256='9F90DE3779E80F590B542AFDF79C105A403B0C566265D69EACBBF9B524338F89'; PeMachine='pei-x86-64' },
+    [pscustomobject]@{ Name='libunwind.dll'; Length=[long]63488; Sha256='60FA3C200899BC6E4A5876B82E2C656FF72FC53EC55979D99CB7C4EF640A6D96'; PeMachine='pei-x86-64' },
+    [pscustomobject]@{ Name='libxml2-16.dll'; Length=[long]1294848; Sha256='C6C34A810D86C19C034A1BC96C4C500BDE8FB789DED69B434E67EEE773605852'; PeMachine='pei-x86-64' }
+)
 $syntheticArtifactEvidenceSha256 = '86083033EE13E6B733D2F59393B28009D0A3C635F288AFF492F6D964788CE479'
 $syntheticObjectEvidenceSha256 = '0C7F800EE9C9696F5BEF78524D8021DDE617255734C5940BF5B922FB47ABB302'
 $syntheticBuildEvidenceSha256 = '58CFBD17EEBEB306E5251A63B0EE5EF0425B6C7C51767303156EEF1A6F93F01B'
@@ -266,6 +279,57 @@ function Assert-RegularFile([string] $Path, [string] $Description) {
     if (((Get-Item -LiteralPath $Path -Force).Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) { throw "$Description is a reparse point: $Path" }
 }
 
+function Assert-ExactDataKeys([Collections.IDictionary] $Value, [string[]] $Expected, [string] $Description) {
+    $actual = [string[]]@($Value.Keys)
+    [Array]::Sort($actual, [StringComparer]::Ordinal)
+    $wanted = [string[]]@($Expected)
+    [Array]::Sort($wanted, [StringComparer]::Ordinal)
+    if ($actual.Count -ne $wanted.Count -or [string]::Join("`n", $actual) -cne [string]::Join("`n", $wanted)) {
+        throw "$Description does not contain exactly the declared schema keys."
+    }
+}
+
+function Get-PeMachine([string] $Path, [string] $Description) {
+    Assert-RegularFile $Path $Description
+    $stream = New-Object IO.FileStream($Path, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)
+    $reader = New-Object IO.BinaryReader($stream)
+    try {
+        if ($stream.Length -lt 64 -or $reader.ReadUInt16() -ne 0x5a4d) { throw "$Description is not a PE image." }
+        [void]$stream.Seek(0x3c, [IO.SeekOrigin]::Begin)
+        $peOffset = $reader.ReadUInt32()
+        if ($peOffset -gt $stream.Length - 6) { throw "$Description has an invalid PE header offset." }
+        [void]$stream.Seek($peOffset, [IO.SeekOrigin]::Begin)
+        if ($reader.ReadUInt32() -ne 0x00004550) { throw "$Description has an invalid PE signature." }
+        $machine = $reader.ReadUInt16()
+        if ($machine -eq 0x8664) { return 'pei-x86-64' }
+        return ('0x{0:X4}' -f $machine)
+    }
+    finally { $reader.Dispose(); $stream.Dispose() }
+}
+
+function Assert-PinnedSupplementFile([string] $Path, $Record, [string] $Description) {
+    Assert-RegularFile $Path $Description
+    $item = Get-Item -LiteralPath $Path -Force
+    $machine = Get-PeMachine $Path $Description
+    if ($machine -cne $Record.PeMachine) { throw "$Description PE machine is $machine, expected $($Record.PeMachine)." }
+    $sha256 = Get-Sha256File $Path
+    if ($item.Length -ne [long]$Record.Length -or $sha256 -cne $Record.Sha256) {
+        throw "$Description length or SHA-256 does not match the pinned contract."
+    }
+}
+
+function Assert-ExactSupplementTree([string] $Root, $Records, [string] $Description) {
+    Assert-NoReparseTree $Root $Description
+    $items = @(Get-ChildItem -LiteralPath $Root -Force)
+    if ($items.Count -ne $Records.Count -or @($items | Where-Object { -not $_.PSIsContainer -and ($_.Attributes -band [IO.FileAttributes]::ReparsePoint) -eq 0 }).Count -ne $Records.Count) {
+        throw "$Description must contain exactly three regular non-reparse files."
+    }
+    $actualNames = [string[]]@($items.Name); [Array]::Sort($actualNames, [StringComparer]::Ordinal)
+    $expectedNames = [string[]]@($Records.Name); [Array]::Sort($expectedNames, [StringComparer]::Ordinal)
+    if ([string]::Join("`n", $actualNames) -cne [string]::Join("`n", $expectedNames)) { throw "$Description contains a missing or unlisted snapshot file." }
+    foreach ($record in $Records) { Assert-PinnedSupplementFile (Join-Path $Root $record.Name) $record "$Description $($record.Name)" }
+}
+
 function Get-PeImports([string] $Tool, [string] $File) {
     $output = & $Tool -p $File 2>&1
     if ($LASTEXITCODE -ne 0) { throw "objdump failed for staged PE file: $File`n$output" }
@@ -403,6 +467,8 @@ Assert-RegularFile $bridgeModule 'Bridge module source'
 if ($octave.Equals($permanent, [StringComparison]::OrdinalIgnoreCase)) { throw 'Normalized Octave root resolves to the permanent Octave root.' }
 $packageRoot = [IO.Path]::GetFullPath((Split-Path -Parent $PSScriptRoot)).TrimEnd('\')
 Assert-NoReparsePath $packageRoot 'Repository package root'
+$hasSupplementInjection = $InjectSupplementDestinationCollision -or $InjectSupplementMappingMismatch -or $InjectFourthSupplementDependency -or $InjectSupplementContractSchemaFault -or $InjectSupplementPostconditionFault
+if ($hasSupplementInjection -and -not $TestMode) { throw 'Supplement failure injection is TestMode-only and restricted to the exact synthetic fixture root.' }
 
 if ($TestMode) {
     $fixtureRoot = [IO.Path]::GetDirectoryName($parent)
@@ -488,6 +554,77 @@ else {
     $requiredBuildEvidenceSha256 = $acceptedBuildEvidenceSha256
 }
 
+$supplementContractPath = Join-Path $PSScriptRoot 'task3-pure-rsvg-supplement-contract.psd1'
+Assert-RegularFile $supplementContractPath 'Pinned Pure SVG supplement contract'
+Assert-SourceBoundary $supplementContractPath $PSScriptRoot 'Pinned Pure SVG supplement contract'
+if ((Get-Sha256File $supplementContractPath) -cne $acceptedSupplementContractSha256) { throw 'Pinned Pure SVG supplement contract SHA-256 is not approved.' }
+$supplementContract = Import-PowerShellDataFile -LiteralPath $supplementContractPath
+if ($TestMode -and $InjectSupplementContractSchemaFault) { $supplementContract['UnapprovedSchemaKey'] = 'synthetic fault' }
+if ($TestMode -and $InjectSupplementPostconditionFault) { $supplementContract.ExpectedStageFileCount = [long]$supplementContract.ExpectedStageFileCount + 1 }
+Assert-ExactDataKeys $supplementContract @('SnapshotRoot','Files','ReusedPureDependencies','AddedFileCount','AddedBytes','ExpectedStageFileCount','ExpectedStageBytes','ExpectedStageManifestSha256','ExpectedAuditedPeCount','ExpectedAuditedOctCount','ExpectedPinnedPlaceholderCount') 'Pinned Pure SVG supplement contract'
+if ($supplementContract.SnapshotRoot -cne $acceptedSupplementSnapshotRoot) { throw 'Pinned Pure SVG supplement contract snapshot root is not exact.' }
+$contractFiles = @($supplementContract.Files)
+if ($contractFiles.Count -ne 3) { throw 'Pinned Pure SVG supplement contract must declare exactly three files.' }
+for ($index = 0; $index -lt $acceptedSupplementFiles.Count; $index++) {
+    $actual = $contractFiles[$index]; $expected = $acceptedSupplementFiles[$index]
+    Assert-ExactDataKeys $actual @('Name','Length','Sha256','PeMachine') "Pinned supplement file record $index"
+    if ($actual.Name -cne $expected.Name -or [long]$actual.Length -ne $expected.Length -or $actual.Sha256 -cne $expected.Sha256 -or $actual.PeMachine -cne $expected.PeMachine) {
+        throw "Pinned supplement file record $index does not match the production pin."
+    }
+}
+$reusedPureDependencies = @($supplementContract.ReusedPureDependencies)
+if ($reusedPureDependencies.Count -ne 38) { throw 'Pinned Pure SVG supplement contract must declare exactly 38 reused Pure dependencies.' }
+$reusedNames = @{}
+foreach ($record in $reusedPureDependencies) {
+    Assert-ExactDataKeys $record @('Name','Length','PureSha256','SourceSha256') "Reused Pure dependency $($record.Name)"
+    if ($record.Name -notmatch '^[A-Za-z0-9_.+-]+\.dll$' -or $record.Name -match '[\\/:]' -or
+        $record.PureSha256 -notmatch '^[0-9A-F]{64}$' -or $record.SourceSha256 -notmatch '^[0-9A-F]{64}$' -or $reusedNames.ContainsKey($record.Name)) {
+        throw 'Pinned Pure SVG supplement contract has an invalid or duplicate reused dependency record.'
+    }
+    $reusedNames[$record.Name] = $true
+}
+if ([long]$supplementContract.AddedFileCount -ne 3 -or [long]$supplementContract.AddedBytes -ne 7241216 -or
+    [long]$supplementContract.ExpectedStageFileCount -ne 64312 -or [long]$supplementContract.ExpectedStageFileCount -ne ($acceptedStageFiles + [long]$supplementContract.AddedFileCount) -or
+    [long]$supplementContract.ExpectedStageBytes -ne 3334971045 -or [long]$supplementContract.ExpectedStageBytes -ne ($acceptedStageBytes + [long]$supplementContract.AddedBytes) -or
+    $supplementContract.ExpectedStageManifestSha256 -cne '115AC1F8843FFC60A4FFD103DCB7CD9C3099CAE14F2B3B674EF5D6230DF22DE0' -or
+    [long]$supplementContract.ExpectedAuditedPeCount -ne 1539 -or [long]$supplementContract.ExpectedAuditedPeCount -ne ($acceptedAuditedPeFileCount + 3) -or
+    [long]$supplementContract.ExpectedAuditedOctCount -ne 219 -or [long]$supplementContract.ExpectedAuditedOctCount -ne $acceptedAuditedOctFileCount -or
+    [long]$supplementContract.ExpectedPinnedPlaceholderCount -ne 1) {
+    throw 'Pinned Pure SVG supplement contract does not have the exact fixed arithmetic and stage postconditions.'
+}
+if ($TestMode) {
+    $supplementSnapshotRoot = Get-CanonicalExistingPath (Join-Path $fixtureRoot 'supplement-snapshot') 'Synthetic supplement snapshot'
+    $supplementSourceRoot = Get-CanonicalExistingPath (Join-Path $fixtureRoot 'supplement-source') 'Synthetic supplement source'
+    Assert-StrictChild $supplementSnapshotRoot $fixtureRoot 'Synthetic supplement snapshot'
+    Assert-StrictChild $supplementSourceRoot $fixtureRoot 'Synthetic supplement source'
+}
+else {
+    $supplementSnapshotRoot = Get-CanonicalExistingPath $supplementContract.SnapshotRoot 'Pinned supplement snapshot'
+    $supplementSourceRoot = Get-CanonicalExistingPath $acceptedSupplementSourceRoot 'Pinned supplement source'
+    Assert-ExactPath $supplementSnapshotRoot $acceptedSupplementSnapshotRoot 'Pinned supplement snapshot'
+    Assert-ExactPath $supplementSourceRoot $acceptedSupplementSourceRoot 'Pinned supplement source'
+}
+Assert-ExactSupplementTree $supplementSnapshotRoot $contractFiles 'Supplement snapshot'
+foreach ($record in $contractFiles) {
+    $source = Join-Path $supplementSourceRoot $record.Name
+    Assert-SourceBoundary $source $supplementSourceRoot "Supplement source $($record.Name)"
+    Assert-PinnedSupplementFile $source $record "Supplement source $($record.Name)"
+}
+if (-not $TestMode) {
+    foreach ($record in $reusedPureDependencies) {
+        $pureDependency = Join-Path $pure ('bin\' + $record.Name)
+        $sourceDependency = Join-Path $supplementSourceRoot $record.Name
+        Assert-SourceBoundary $pureDependency $pure "Reused Pure dependency $($record.Name)"
+        Assert-SourceBoundary $sourceDependency $supplementSourceRoot "Reused source dependency $($record.Name)"
+        Assert-RegularFile $pureDependency "Reused Pure dependency $($record.Name)"
+        Assert-RegularFile $sourceDependency "Reused source dependency $($record.Name)"
+        if ((Get-Item -LiteralPath $pureDependency).Length -ne [long]$record.Length -or (Get-Sha256File $pureDependency) -cne $record.PureSha256 -or
+            (Get-Item -LiteralPath $sourceDependency).Length -ne [long]$record.Length -or (Get-Sha256File $sourceDependency) -cne $record.SourceSha256) {
+            throw "Reused Pure dependency does not match the exact contract: $($record.Name)"
+        }
+    }
+}
+
 if (-not $TestMode) {
     foreach ($sourceEvidence in @(
         @($acceptedPatchPath,$acceptedPatchSha256,'Accepted canonicalization patch'),
@@ -553,6 +690,27 @@ $mappings = New-Object 'Collections.Generic.List[string]'
 try {
     Copy-TreeTracked $octave $StageRoot 'normalized-octave' $octave $mappings
     Copy-TreeTracked $pure (Join-Path $StageRoot 'pure') 'verified-pure-runtime' $pure $mappings
+    $supplementMappingStart = $mappings.Count
+    if ($TestMode -and $InjectSupplementDestinationCollision) {
+        [IO.File]::WriteAllText((Join-Path $StageRoot 'pure\bin\librsvg-2-2.dll'), 'synthetic collision', $utf8NoBom)
+    }
+    foreach ($record in $contractFiles) {
+        $source = Join-Path $supplementSnapshotRoot $record.Name
+        $destination = Join-Path $StageRoot ('pure\bin\' + $record.Name)
+        Copy-FileTracked $source $destination 'pinned-pure-rsvg-supplement' $supplementSnapshotRoot $mappings
+        Assert-PinnedSupplementFile $destination $record "Staged supplement $($record.Name)"
+    }
+    if ($TestMode -and $InjectSupplementMappingMismatch) { $mappings[$supplementMappingStart] = $mappings[$supplementMappingStart] + '-synthetic-mismatch' }
+    if ($mappings.Count - $supplementMappingStart -ne 3) { throw 'Pinned supplement tracked-copy mapping count is not exactly three.' }
+    for ($index = 0; $index -lt $contractFiles.Count; $index++) {
+        $record = $contractFiles[$index]
+        $source = Join-Path $supplementSnapshotRoot $record.Name
+        $destination = Join-Path $StageRoot ('pure\bin\' + $record.Name)
+        $expectedMapping = ('"{0}"' -f $source) + "`t" + ('"{0}"' -f $destination) + "`tpinned-pure-rsvg-supplement`t$($record.Sha256)"
+        if ($mappings[$supplementMappingStart + $index] -cne $expectedMapping) { throw "Pinned supplement tracked-copy mapping mismatch for $($record.Name)." }
+    }
+    Assert-ExactSupplementTree $supplementSnapshotRoot $contractFiles 'Supplement snapshot after copying'
+    foreach ($record in $contractFiles) { Assert-PinnedSupplementFile (Join-Path $supplementSourceRoot $record.Name) $record "Supplement source after copying $($record.Name)" }
     foreach ($name in @('octave_embed.dll','octave_bridge_impl.dll')) {
         Copy-FileTracked (Join-Path $bridgeBinary $name) (Join-Path $StageRoot ('bridge\\' + $name)) 'verified-bridge' $bridgeBinary $mappings
     }
@@ -584,6 +742,8 @@ try {
     $pureBin = Join-Path $StageRoot 'pure\bin'
     $octaveSet = @{}; foreach ($item in Get-ChildItem -LiteralPath $stageBin -File -Force) { $octaveSet[$item.Name.ToLowerInvariant()] = @($item.FullName) }
     $pureSet = @{}; foreach ($item in Get-ChildItem -LiteralPath $pureBin -File -Force) { $pureSet[$item.Name.ToLowerInvariant()] = @($item.FullName) }
+    $supplementRelativeSet = @{}
+    foreach ($record in $contractFiles) { $supplementRelativeSet[('pure/bin/' + $record.Name).ToLowerInvariant()] = $record.Name }
     $stagedPinnedInertPlaceholders = @(Get-PinnedInertPlaceholders $StageRoot 'Staged runtime')
     $pinnedInertByRelative = @{}
     foreach ($placeholder in $stagedPinnedInertPlaceholders) { $pinnedInertByRelative[$placeholder.Relative.ToLowerInvariant()] = $true }
@@ -600,8 +760,12 @@ try {
         }
     )
     $octPeFiles = @($peFiles | Where-Object { $_.Relative.EndsWith('.oct', [StringComparison]::OrdinalIgnoreCase) })
-    if (-not $TestMode -and ($peFiles.Count -ne $acceptedAuditedPeFileCount -or $octPeFiles.Count -ne $acceptedAuditedOctFileCount -or $stagedPinnedInertPlaceholders.Count -ne 1)) {
-        throw "Static import audit cardinality is not the approved 1,536 PE + 1 pinned inert placeholder, including 219 PE .oct files: actual $($peFiles.Count) PE / $($stagedPinnedInertPlaceholders.Count) placeholders / $($octPeFiles.Count) .oct."
+    foreach ($relative in $supplementRelativeSet.Keys) {
+        $matches = @($peFiles | Where-Object { $_.Relative.Equals($relative, [StringComparison]::OrdinalIgnoreCase) })
+        if ($matches.Count -ne 1 -or $matches[0].Group -cne 'pure') { throw "Pinned supplement PE is not unique in the Pure loader group: $relative" }
+    }
+    if (-not $TestMode -and ($peFiles.Count -ne [long]$supplementContract.ExpectedAuditedPeCount -or $octPeFiles.Count -ne [long]$supplementContract.ExpectedAuditedOctCount -or $stagedPinnedInertPlaceholders.Count -ne [long]$supplementContract.ExpectedPinnedPlaceholderCount)) {
+        throw "Static import audit cardinality is not the approved 1,539 PE + 1 pinned inert placeholder, including 219 PE .oct files: actual $($peFiles.Count) PE / $($stagedPinnedInertPlaceholders.Count) placeholders / $($octPeFiles.Count) .oct."
     }
 
     if ($TestMode) {
@@ -610,7 +774,7 @@ try {
         $peSet = @{}
         foreach ($pe in $peFiles) {
             $key = $pe.Relative.ToLowerInvariant(); $peSet[$key] = $true
-            if (-not $syntheticImports.ContainsKey($key)) { throw "Synthetic import manifest omits staged PE file: $($pe.Relative)" }
+            if (-not $syntheticImports.ContainsKey($key) -and -not $supplementRelativeSet.ContainsKey($key)) { throw "Synthetic import manifest omits staged PE file: $($pe.Relative)" }
         }
         foreach ($key in $syntheticImports.Keys) { if (-not $peSet.ContainsKey($key)) { throw "Synthetic import manifest names a non-PE or absent file: $key" } }
         $apiSetSchema = 'synthetic-system32\apisetschema.dll'
@@ -632,9 +796,19 @@ try {
     $imports = New-Object 'Collections.Generic.List[string]'
     $apiMappings = @{}
     $resolverReady = $false
+    [long]$svgLoaderRsvgEdgeCount = 0
     foreach ($pe in $peFiles) {
         $effective = if ($pe.Group -eq 'octave') { $octaveSet } elseif ($pe.Group -eq 'pure') { $pureSet } else { $both=@{}; foreach($set in @($pureSet,$octaveSet)){foreach($key in $set.Keys){if(-not $both.ContainsKey($key)){$both[$key]=@()};$both[$key]+=$set[$key]}}; $both }
-        $peImports = if ($TestMode) { [string[]]$syntheticImports[$pe.Relative.ToLowerInvariant()] } else { Get-PeImports $Objdump $pe.File.FullName }
+        if ($TestMode -and $supplementRelativeSet.ContainsKey($pe.Relative.ToLowerInvariant())) {
+            $peImports = switch ($pe.File.Name.ToLowerInvariant()) {
+                'librsvg-2-2.dll' { @('libunwind.dll','libxml2-16.dll','libpure.dll') }
+                'libunwind.dll' { @('libpure.dll') }
+                'libxml2-16.dll' { @('libpure.dll') }
+                default { throw "Unexpected synthetic supplement PE: $($pe.Relative)" }
+            }
+            if ($InjectFourthSupplementDependency -and $pe.File.Name.Equals('librsvg-2-2.dll', [StringComparison]::OrdinalIgnoreCase)) { $peImports += 'libunexpected-fourth.dll' }
+        }
+        else { $peImports = if ($TestMode) { [string[]]$syntheticImports[$pe.Relative.ToLowerInvariant()] } else { Get-PeImports $Objdump $pe.File.FullName } }
         foreach ($dll in $peImports) {
             if ([string]::IsNullOrWhiteSpace($dll) -or $dll -match '[\\/:]') { throw "Unsafe import name in $($pe.File.FullName): $dll" }
             $key = $dll.ToLowerInvariant(); $resolved = ''
@@ -664,9 +838,16 @@ try {
                 Assert-NoReparsePath $system "System import $dll"
                 $resolved = [IO.Path]::GetFullPath($system)
             }
+            if ($pe.Relative.Equals('pure/lib/gdk-pixbuf-2.0/2.10.0/loaders/pixbufloader_svg.dll', [StringComparison]::OrdinalIgnoreCase) -and $key -eq 'librsvg-2-2.dll') {
+                $expectedRsvg = Join-Path $StageRoot 'pure\bin\librsvg-2-2.dll'
+                if ($pe.Group -cne 'pure' -or -not $resolved.Equals($expectedRsvg, [StringComparison]::OrdinalIgnoreCase)) { throw 'The SVG loader does not resolve librsvg-2-2.dll uniquely inside the Pure loader group.' }
+                $svgLoaderRsvgEdgeCount++
+            }
             $imports.Add(('"{0}"' -f $pe.File.FullName) + "`t$($pe.Group)`t$dll`t" + ('"{0}"' -f $resolved))
         }
     }
+    $svgLoaderPeCount = @($peFiles | Where-Object { $_.Relative.Equals('pure/lib/gdk-pixbuf-2.0/2.10.0/loaders/pixbufloader_svg.dll', [StringComparison]::OrdinalIgnoreCase) }).Count
+    if ((-not $TestMode -and $svgLoaderPeCount -ne 1) -or ($svgLoaderPeCount -gt 0 -and $svgLoaderRsvgEdgeCount -ne 1)) { throw 'The exact pixbufloader_svg.dll to librsvg-2-2.dll stage edge was not observed once.' }
     [IO.File]::WriteAllText((Join-Path $StageRoot 'stage-import-closure.tsv'), (($imports | Sort-Object) -join "`n") + "`n", $utf8NoBom)
     $apiLines = @($apiMappings.Keys | Sort-Object | ForEach-Object { "$_`t$($apiMappings[$_].Path)`t$($apiMappings[$_].Sha256)" })
     $apiSetText = "OSBuild`t$osVersion`nApiSetSchema`t$apiSetSchema`t$apiSetSchemaHash`n" + $(if ($apiLines.Count -eq 0) { '' } else { ($apiLines -join "`n") + "`n" })
@@ -675,8 +856,8 @@ try {
     [IO.File]::WriteAllText((Join-Path $StageRoot 'stage-pinned-inert-placeholders.tsv'), (($pinnedPlaceholderLines -join "`n") + "`n"), $utf8NoBom)
     $excluded = @('stage-manifest.tsv','stage-mapping.tsv','stage-import-closure.tsv','stage-api-set-contracts.tsv','stage-pinned-inert-placeholders.tsv')
     $manifest = Get-TreeManifest $StageRoot $excluded
-    if (-not $TestMode -and ($manifest.FileCount -ne $acceptedStageFiles -or $manifest.TotalBytes -ne $acceptedStageBytes -or $manifest.Sha256 -ne $acceptedStageManifestSha256)) {
-        throw "Final stage does not match the exact accepted v5 postcondition: actual $($manifest.FileCount) / $($manifest.TotalBytes) / $($manifest.Sha256)."
+    if (-not $TestMode -and ($manifest.FileCount -ne [long]$supplementContract.ExpectedStageFileCount -or $manifest.TotalBytes -ne [long]$supplementContract.ExpectedStageBytes -or $manifest.Sha256 -cne $supplementContract.ExpectedStageManifestSha256)) {
+        throw "Final stage does not match the exact pinned supplement postcondition: actual $($manifest.FileCount) / $($manifest.TotalBytes) / $($manifest.Sha256)."
     }
     [IO.File]::WriteAllText((Join-Path $StageRoot 'stage-manifest.tsv'), $manifest.Text, $utf8NoBom)
     [IO.File]::WriteAllText((Join-Path $StageRoot 'stage-mapping.tsv'), (($mappings | Sort-Object) -join "`n") + "`n", $utf8NoBom)
@@ -687,11 +868,13 @@ try {
     if ((Get-Sha256File $bridgeModule) -ne $bridgeModuleBefore) { throw 'Bridge module source changed during staging.' }
     if ((Get-Sha256File $patched) -ne $patchedBefore) { throw 'Patched DLL artifact changed during staging.' }
     if ((Get-Sha256File $probeSource) -ne $requiredProbeSha256) { throw 'Public embed probe source changed during staging.' }
+    Assert-ExactSupplementTree $supplementSnapshotRoot $contractFiles 'Supplement snapshot after staging'
+    foreach ($record in $contractFiles) { Assert-PinnedSupplementFile (Join-Path $supplementSourceRoot $record.Name) $record "Supplement source after staging $($record.Name)" }
     foreach ($relative in $acceptedRepositoryFiles.Keys) {
         if ((Get-Sha256File (Join-Path $packageRoot $relative)) -ne $acceptedRepositoryFiles[$relative]) { throw "Required public test script $relative changed during staging." }
     }
     if (-not $TestMode) { Assert-SnapshotTree $octave $NormalizedSnapshot 'B19A1BAB6293EBAAD7D0076B43D5E8F466BA896EAADFD81EED7E0C7C8F96FB31' 59533 2797722565 'Normalized source runtime after staging'; Assert-SnapshotTree $permanent $PermanentSnapshot '95D51222C8000706D235A309EF1CAEA6D986B08F1B04A08671475AD041A18CCD' 59533 2797722287 'Permanent Octave runtime after staging' }
-    [pscustomobject]@{ StageRoot=$StageRoot; FileCount=$manifest.FileCount; TotalBytes=$manifest.TotalBytes; ManifestSha256=$manifest.Sha256; PatchedLiboctaveSha256=(Get-Sha256File (Join-Path $StageRoot 'mingw64\bin\liboctave-13.dll')); LibgccSha256=(Get-Sha256File (Join-Path $StageRoot 'mingw64\bin\libgcc_s_seh-1.dll')); ImportAuditSkipped=$false; AuditedPeFileCount=$peFiles.Count; AuditedOctFileCount=$octPeFiles.Count; PinnedInertPlaceholderCount=$stagedPinnedInertPlaceholders.Count; ApiSetContractCount=$apiMappings.Count } | ConvertTo-Json -Depth 3
+    [pscustomobject]@{ StageRoot=$StageRoot; FileCount=$manifest.FileCount; TotalBytes=$manifest.TotalBytes; ManifestSha256=$manifest.Sha256; PatchedLiboctaveSha256=(Get-Sha256File (Join-Path $StageRoot 'mingw64\bin\liboctave-13.dll')); LibgccSha256=(Get-Sha256File (Join-Path $StageRoot 'mingw64\bin\libgcc_s_seh-1.dll')); ImportAuditSkipped=$false; AuditedPeFileCount=$peFiles.Count; AuditedOctFileCount=$octPeFiles.Count; PinnedInertPlaceholderCount=$stagedPinnedInertPlaceholders.Count; PinnedPureRsvgSupplementCount=$contractFiles.Count; ApiSetContractCount=$apiMappings.Count } | ConvertTo-Json -Depth 3
 }
 catch {
     throw

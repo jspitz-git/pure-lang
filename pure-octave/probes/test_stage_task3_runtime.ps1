@@ -16,6 +16,11 @@ $patched = Join-Path $testRoot 'patched\liboctave-13.dll'
 $artifactEvidence = Join-Path $testRoot 'evidence\artifact.txt'
 $objectEvidence = Join-Path $testRoot 'evidence\object.txt'
 $buildEvidence = Join-Path $testRoot 'evidence\build.txt'
+$supplementContractPath = Join-Path $PSScriptRoot 'task3-pure-rsvg-supplement-contract.psd1'
+$supplementContract = Import-PowerShellDataFile -LiteralPath $supplementContractPath
+$supplementSnapshot = Join-Path $testRoot 'supplement-snapshot'
+$supplementSource = Join-Path $testRoot 'supplement-source'
+$supplementNames = [string[]]@('librsvg-2-2.dll','libunwind.dll','libxml2-16.dll')
 
 function Write-TestFile {
     param([string]$Path, [string]$Text)
@@ -84,6 +89,34 @@ function New-BaseImports {
     }
 }
 
+function New-SupplementImports {
+    $imports = New-BaseImports
+    $imports['pure/lib/gdk-pixbuf-2.0/2.10.0/loaders/pixbufloader_svg.dll'] = @('librsvg-2-2.dll')
+    return $imports
+}
+
+function Reset-SupplementFixture {
+    foreach ($root in @($supplementSnapshot,$supplementSource)) {
+        $full = [IO.Path]::GetFullPath($root)
+        Assert-True ($full.StartsWith($testRoot + '\', [StringComparison]::OrdinalIgnoreCase)) "Synthetic supplement root escaped the exact test root: $full"
+        if (Test-Path -LiteralPath $full) { Remove-Item -LiteralPath $full -Recurse -Force }
+        [IO.Directory]::CreateDirectory($full) | Out-Null
+    }
+    foreach ($name in $supplementNames) {
+        [IO.File]::Copy((Join-Path $supplementContract.SnapshotRoot $name), (Join-Path $supplementSnapshot $name), $false)
+        [IO.File]::Copy((Join-Path 'C:\msys64\clang64\bin' $name), (Join-Path $supplementSource $name), $false)
+    }
+}
+
+function Set-TestPeMachine {
+    param([string]$Path, [uint16]$Machine)
+    $bytes = [IO.File]::ReadAllBytes($Path)
+    $peOffset = [BitConverter]::ToInt32($bytes, 0x3c)
+    $bytes[$peOffset + 4] = [byte]($Machine -band 0xff)
+    $bytes[$peOffset + 5] = [byte](($Machine -shr 8) -band 0xff)
+    [IO.File]::WriteAllBytes($Path, $bytes)
+}
+
 function Invoke-Stage {
     param(
         [string]$Name,
@@ -95,6 +128,11 @@ function Invoke-Stage {
         [string]$BridgeModuleOverride = '',
         [string]$PermanentRootOverride = '',
         [string]$ExpectedPatchedOverride = '',
+        [switch]$InjectSupplementDestinationCollision,
+        [switch]$InjectSupplementMappingMismatch,
+        [switch]$InjectFourthSupplementDependency,
+        [switch]$InjectSupplementContractSchemaFault,
+        [switch]$InjectSupplementPostconditionFault,
         [string[]]$ExtraArguments = @()
     )
     $stage = Join-Path $parent $Name
@@ -136,6 +174,11 @@ function Invoke-Stage {
         )
     }
     if (-not $NoTestMode) { $args += '-TestMode' }
+    if ($InjectSupplementDestinationCollision) { $args += '-InjectSupplementDestinationCollision' }
+    if ($InjectSupplementMappingMismatch) { $args += '-InjectSupplementMappingMismatch' }
+    if ($InjectFourthSupplementDependency) { $args += '-InjectFourthSupplementDependency' }
+    if ($InjectSupplementContractSchemaFault) { $args += '-InjectSupplementContractSchemaFault' }
+    if ($InjectSupplementPostconditionFault) { $args += '-InjectSupplementPostconditionFault' }
     $args += $ExtraArguments
     $savedPreference = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'
@@ -182,6 +225,7 @@ try {
     Write-TestFile $artifactEvidence 'artifact-evidence-v1'
     Write-TestFile $objectEvidence 'object-evidence-v1'
     Write-TestFile $buildEvidence 'build-evidence-v1'
+    Reset-SupplementFixture
 
     $success = Invoke-Stage 'success' (New-BaseImports)
     Assert-True ($success.ExitCode -eq 0) "Success fixture failed: $($success.Output)"
@@ -191,7 +235,7 @@ try {
     Assert-True ((Get-Sha256File (Join-Path $octave 'mingw64\bin\liboctave-13.dll')) -ne (Get-Sha256File $patched)) 'Assembler modified its source Octave tree.'
     Assert-True (Test-Path -LiteralPath (Join-Path $success.Stage 'stage-import-closure.tsv') -PathType Leaf) 'Stage omitted its static import closure.'
     $successReport = $success.Output | ConvertFrom-Json
-    Assert-True ($successReport.AuditedPeFileCount -eq 8 -and $successReport.AuditedOctFileCount -eq 1) 'Every synthetic PE, including the .oct module, was not audited.'
+    Assert-True ($successReport.AuditedPeFileCount -eq 11 -and $successReport.AuditedOctFileCount -eq 1 -and $successReport.PinnedPureRsvgSupplementCount -eq 3) 'Every synthetic PE, including the pinned supplement and .oct module, was not audited.'
     Assert-True ($successReport.PinnedInertPlaceholderCount -eq 1) 'The exact inert placeholder was not recorded separately.'
     $placeholderRecord = Get-Content -LiteralPath (Join-Path $success.Stage 'stage-pinned-inert-placeholders.tsv') -Raw
     Assert-True ($placeholderRecord -eq "mingw64/qt6/bin/qhelpgenerator.exe`t0`tE3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855`n") 'The staged inert-placeholder report is not the exact pinned record.'
@@ -303,6 +347,79 @@ try {
     $permanentAlias = Invoke-Stage 'permanent-alias' (New-BaseImports) @{} -PermanentRootOverride $octave
     Assert-Failure $permanentAlias 'resolves to the permanent Octave root' 'Permanent root input'
     Write-Output 'PASS Test-RejectsPermanentOctaveRoot'
+
+    Write-TestPe (Join-Path $octave 'pure\lib\gdk-pixbuf-2.0\2.10.0\loaders\pixbufloader_svg.dll') 'svg-loader'
+    $supplementSuccess = Invoke-Stage 'supplement-success' (New-SupplementImports)
+    Assert-True ($supplementSuccess.ExitCode -eq 0) "Pinned supplement fixture failed: $($supplementSuccess.Output)"
+    foreach ($record in $supplementContract.Files) {
+        $staged = Join-Path $supplementSuccess.Stage ('pure\bin\' + $record.Name)
+        Assert-True (Test-Path -LiteralPath $staged -PathType Leaf) "Stage omitted pinned supplement file $($record.Name)."
+        Assert-True ((Get-Item -LiteralPath $staged).Length -eq [long]$record.Length -and (Get-Sha256File $staged) -eq $record.Sha256) "Staged supplement identity changed for $($record.Name)."
+    }
+    $supplementClosure = Get-Content -LiteralPath (Join-Path $supplementSuccess.Stage 'stage-import-closure.tsv') -Raw
+    Assert-True ($supplementClosure -match 'pixbufloader_svg\.dll"\tpure\tlibrsvg-2-2\.dll\t"[^"\r\n]+\\pure\\bin\\librsvg-2-2\.dll"') 'SVG loader did not resolve uniquely to stage/pure/bin/librsvg-2-2.dll.'
+    foreach ($name in $supplementNames) { Assert-True ($supplementClosure -match ([regex]::Escape("pure\bin\$name") + '"\tpure\t')) "Supplement closure member left the Pure loader group: $name" }
+    Write-Output 'PASS Test-AcceptsExactPinnedPureRsvgSupplement'
+
+    Reset-SupplementFixture
+    Remove-Item -LiteralPath (Join-Path $supplementSnapshot 'libunwind.dll') -Force
+    $missingSupplement = Invoke-Stage 'supplement-missing' (New-SupplementImports)
+    Assert-Failure $missingSupplement 'Supplement snapshot.*exactly three|missing.*libunwind|inventory' 'Missing supplement file'
+    Reset-SupplementFixture
+    Write-TestFile (Join-Path $supplementSnapshot 'extra.dll') 'MZextra'
+    $extraSupplement = Invoke-Stage 'supplement-extra' (New-SupplementImports)
+    Assert-Failure $extraSupplement 'Supplement snapshot.*exactly three|unlisted.*snapshot|inventory' 'Extra supplement file'
+    Write-Output 'PASS Test-RejectsMissingOrExtraSupplementFile'
+
+    Reset-SupplementFixture
+    $hashPath = Join-Path $supplementSnapshot 'libunwind.dll'
+    $hashBytes = [IO.File]::ReadAllBytes($hashPath); $hashBytes[$hashBytes.Length - 1] = $hashBytes[$hashBytes.Length - 1] -bxor 0x01; [IO.File]::WriteAllBytes($hashPath, $hashBytes)
+    $changedHash = Invoke-Stage 'supplement-hash' (New-SupplementImports)
+    Assert-Failure $changedHash 'Supplement snapshot.*SHA-256|hash' 'Changed supplement hash'
+    Reset-SupplementFixture
+    Set-TestPeMachine (Join-Path $supplementSnapshot 'libxml2-16.dll') 0x014c
+    $changedMachine = Invoke-Stage 'supplement-machine' (New-SupplementImports)
+    Assert-Failure $changedMachine 'Supplement snapshot.*machine|PE machine' 'Changed supplement machine'
+    Write-Output 'PASS Test-RejectsChangedSupplementHashOrMachine'
+
+    Reset-SupplementFixture
+    $snapshotReal = $supplementSnapshot + '-real'
+    [IO.Directory]::Move($supplementSnapshot, $snapshotReal)
+    cmd.exe /c "mklink /J `"$supplementSnapshot`" `"$snapshotReal`"" | Out-Null
+    Assert-True (Test-Path -LiteralPath $supplementSnapshot) 'Could not create the synthetic supplement reparse fixture.'
+    $reparseSupplement = Invoke-Stage 'supplement-reparse' (New-SupplementImports)
+    Assert-Failure $reparseSupplement 'Supplement snapshot.*reparse point|reparse point.*Supplement snapshot' 'Reparse supplement snapshot'
+    [IO.Directory]::Delete($supplementSnapshot)
+    Remove-Item -LiteralPath $snapshotReal -Recurse -Force
+    Reset-SupplementFixture
+    $sourcePath = Join-Path $supplementSource 'librsvg-2-2.dll'
+    $sourceBytes = [IO.File]::ReadAllBytes($sourcePath); $sourceBytes[$sourceBytes.Length - 1] = $sourceBytes[$sourceBytes.Length - 1] -bxor 0x01; [IO.File]::WriteAllBytes($sourcePath, $sourceBytes)
+    $sourceSubstitution = Invoke-Stage 'supplement-source-substitution' (New-SupplementImports)
+    Assert-Failure $sourceSubstitution 'Supplement source.*SHA-256|source.*hash' 'Supplement source substitution'
+    Write-Output 'PASS Test-RejectsSupplementReparseAndSourceSubstitution'
+
+    Reset-SupplementFixture
+    $collision = Invoke-Stage 'supplement-collision' (New-SupplementImports) @{} -InjectSupplementDestinationCollision
+    Assert-Failure $collision 'pinned-pure-rsvg-supplement' 'Supplement destination collision'
+    Reset-SupplementFixture
+    $mappingMismatch = Invoke-Stage 'supplement-mapping' (New-SupplementImports) @{} -InjectSupplementMappingMismatch
+    Assert-Failure $mappingMismatch 'tracked-copy mapping mismatch' 'Supplement tracked-copy mapping mismatch'
+    Write-Output 'PASS Test-RejectsSupplementDestinationCollision'
+
+    Reset-SupplementFixture
+    $fourthDependency = Invoke-Stage 'supplement-fourth-dependency' (New-SupplementImports) @{} -InjectFourthSupplementDependency
+    Assert-Failure $fourthDependency 'Missing effective import libunexpected-fourth\.dll' 'Fourth transitive supplement dependency'
+    Write-Output 'PASS Test-RejectsFourthTransitiveDependency'
+
+    Reset-SupplementFixture
+    $schemaFault = Invoke-Stage 'supplement-schema' (New-SupplementImports) @{} -InjectSupplementContractSchemaFault
+    Assert-Failure $schemaFault 'exactly the declared schema keys' 'Changed supplement contract schema'
+    Reset-SupplementFixture
+    $postconditionFault = Invoke-Stage 'supplement-postcondition' (New-SupplementImports) @{} -InjectSupplementPostconditionFault
+    Assert-Failure $postconditionFault 'Supplement contract.*fixed.*postcondition|fixed arithmetic' 'Changed supplement postcondition'
+    $supplementOverride = Invoke-Stage 'supplement-override' (New-SupplementImports) @{} -ExtraArguments @('-SupplementRoot',$supplementSnapshot)
+    Assert-Failure $supplementOverride 'parameter cannot be found' 'Caller supplement path override'
+    Write-Output 'PASS Test-HardBindsSupplementStagePostconditions'
 
     $link = Join-Path $testRoot 'linked-parent'
     cmd.exe /c "mklink /J `"$link`" `"$parent`"" | Out-Null

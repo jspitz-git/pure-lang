@@ -988,3 +988,47 @@ stderr remained zero bytes / SHA-256
 `E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855`.
 The real snapshot, contract, accepted inputs, and permanent/source baselines
 were not modified by this read-only remediation audit.
+
+## Pinned Pure SVG staging integration checkpoint
+
+Task 2 followed strict TDD. Seven named staging regressions were present before
+production changed. The unchanged assembler exited 1 at the new success fixture
+with `Missing effective import librsvg-2-2.dll needed by` the exact staged
+`pure/lib/gdk-pixbuf-2.0/2.10.0/loaders/pixbufloader_svg.dll`. After integration,
+the full harness passed 27 named checks (the prior 20 plus seven) and its final
+aggregate PASS. The independent supplement-preparer harness retained all 15
+named PASS checks and its aggregate PASS.
+
+The assembler now imports only the fixed sibling
+`task3-pure-rsvg-supplement-contract.psd1`, whose approved SHA-256 is
+`692341FA19E6D7AC3CF4C02894DBDB92AFAE7A5DD154B659A5CFD099AD63F2CC`.
+There is no caller supplement path, contract, hash, count, or manifest
+override. It fail-closes on any contract schema, exact pin, root, 38-member
+reuse closure, or fixed-arithmetic mismatch. Before the first stage write, it
+validates the immutable snapshot and original `C:\msys64\clang64\bin` copies
+by exact file set, length, SHA-256, non-reparse status, and x86-64 PE machine.
+
+Exactly `librsvg-2-2.dll`, `libunwind.dll`, and `libxml2-16.dll` are copied
+through the tracked-copy mechanism to `stage/pure/bin`, with collision and
+mapping-identity checks. Both snapshot and original-source pins are rehashed
+after copying and after the full audit. The full-tree PE audit requires every
+supplement DLL exactly once in the Pure loader group and the SVG loader edge to
+resolve uniquely to `stage/pure/bin/librsvg-2-2.dll`. Pure/Octave loader
+separation, authoritative API-set handling, bridge collision rejection, 219
+`.oct` files, and the single pinned inert Qt placeholder remain unconditional.
+
+Production postconditions are hard-bound to 64,312 files / 3,334,971,045
+bytes / `115AC1F8843FFC60A4FFD103DCB7CD9C3099CAE14F2B3B674EF5D6230DF22DE0`,
+with 1,539 audited PE files, 219 PE `.oct` files, and one inert placeholder.
+Negative coverage rejects missing/extra supplement files, hash/machine change,
+reparse/source substitution, destination collision, tracked mapping mismatch,
+a fourth transitive dependency, schema/arithmetic change, and a caller root
+argument. All test-only injections remain within the existing exact GUID
+synthetic-root gate.
+
+Fresh parser checks for the assembler and staging harness and `git diff
+--check` exited 0. Fresh read-only hashes showed all three real snapshot and
+clang64 source DLLs unchanged. No real stage was created or inspected; no
+staged binary was executed; and no ACL, AppContainer, profile, accepted-Pure,
+permanent-Octave, normalized-toolchain, patched-artifact, immutable-snapshot,
+or v1-v10 evidence mutation occurred.
