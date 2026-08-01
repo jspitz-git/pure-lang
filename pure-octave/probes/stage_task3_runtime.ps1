@@ -1001,18 +1001,6 @@ try {
         if ([long]$apiSetSchemaItem.Length -ne 24 -or (Get-Sha256File $apiSetSchema) -cne '6251FC42BCBC8353101386F8A2A1C01B96CEAE9898A0C757C0842862737E3316') {
             throw 'TestMode API-set schema must equal the exact versioned synthetic fixture.'
         }
-        $expectedPlatformIdentity = [pscustomobject]@{
-            OsVersion='Microsoft Windows NT 10.0.99999.0'
-            CurrentBuild='99999'
-            CurrentBuildKind='String'
-            Ubr=[int]42
-            UbrKind='DWord'
-            ApiSetSchemaPath=$apiSetSchema
-            FileVersion='10.0.99999.42 (Synthetic.000000.0000)'
-            ProductVersion='10.0.99999.42'
-            Length=[long]24
-            Sha256='6251FC42BCBC8353101386F8A2A1C01B96CEAE9898A0C757C0842862737E3316'
-        }
         $platformIdentity = [pscustomobject]@{
             OsVersion='Microsoft Windows NT 10.0.99999.0'
             CurrentBuild='99999'
@@ -1025,6 +1013,7 @@ try {
             Length=[long]24
             Sha256='6251FC42BCBC8353101386F8A2A1C01B96CEAE9898A0C757C0842862737E3316'
         }
+        $expectedPlatformIdentity = $platformIdentity.PSObject.Copy()
         switch ($InjectPlatformIdentityFault) {
             'OsVersion' { $platformIdentity.OsVersion = 'synthetic fault' }
             'CurrentBuild' { $platformIdentity.CurrentBuild = '99998' }

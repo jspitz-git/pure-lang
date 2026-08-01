@@ -274,6 +274,13 @@ try {
     $forbiddenPlatformParameters = @((Get-Command $scriptPath).Parameters.Keys | Where-Object { $_ -match '^(ExpectedWindows|ExpectedUbr|ExpectedCurrentBuild|ExpectedApiSet)' })
     Assert-True ($forbiddenPlatformParameters.Count -eq 0) "Production exposes caller-controlled platform identity parameters: $([string]::Join(', ', [string[]]$forbiddenPlatformParameters))"
     Write-Output 'PASS Test-HardBindsWindowsPlatformIdentityContract'
+    $syntheticIdentityFlow = [regex]::Match($productionSource, '(?s)\$platformIdentity\s*=\s*\[pscustomobject\]@\{(?<Identity>.*?)\r?\n\s*\}\s*\r?\n\s*\$expectedPlatformIdentity\s*=\s*\$platformIdentity\.PSObject\.Copy\(\)\s*\r?\n\s*switch \(\$InjectPlatformIdentityFault\) \{(?<Faults>.*?)\r?\n\s*\}\s*\r?\n\s*\}\s*\r?\n\s*else')
+    $literalExpectedIdentityCount = [regex]::Matches($productionSource, '\$expectedPlatformIdentity\s*=\s*\[pscustomobject\]@\{').Count
+    Assert-True (
+        $syntheticIdentityFlow.Success -and $literalExpectedIdentityCount -eq 1 -and
+        $syntheticIdentityFlow.Groups['Faults'].Value -notmatch '\$expectedPlatformIdentity\.'
+    ) 'Production TestMode must construct one synthetic platform identity, snapshot it before fault injection, and mutate only the actual object.'
+    Write-Output 'PASS Test-SnapshotsSingleSyntheticPlatformIdentityBeforeFaultInjection'
     foreach ($assignment in @(
         "`$acceptedGnuplotRelativeRoot = 'pure/tools/gnuplot/bin'",
         '$acceptedGnuplotFileCount = 65',
