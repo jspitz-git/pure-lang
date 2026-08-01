@@ -41,6 +41,8 @@ param(
     [ValidateSet('','PeCount','OctCount','PlaceholderCount','FileCount','ByteCount','ManifestSha256')][string] $InjectSupplementPostAuditFault = '',
     [switch] $InjectGnuplotCaseCollision,
     [ValidateSet('','Sibling','Nested','NonPe','ReparseRoot','ReparseFile')][string] $InjectGnuplotAuditFault = '',
+    [ValidateSet('FileCount','PeCount','ImportEdgeCount','ApplicationDirectoryEdgeCount','ApiSetEdgeCount','System32EdgeCount','UnresolvedEdgeCount')][string] $InjectGnuplotPostAuditFault = '',
+    [switch] $InjectGnuplotApiSetReleaseFailure,
     [switch] $TestMode
 )
 
@@ -51,6 +53,8 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 if ($InjectGnuplotCaseCollision -and -not $TestMode) { throw 'Gnuplot case-collision injection is TestMode-only and has no production access.' }
 if ($InjectGnuplotAuditFault -and -not $TestMode) { throw 'Gnuplot audit fault injection is TestMode-only and has no production access.' }
+if ($InjectGnuplotPostAuditFault -and -not $TestMode) { throw 'Gnuplot post-audit fault injection is TestMode-only and has no production access.' }
+if ($InjectGnuplotApiSetReleaseFailure -and -not $TestMode) { throw 'Gnuplot API-set release injection is TestMode-only and has no production access.' }
 if ($InjectSupplementPostAuditFault -and -not $TestMode) { throw 'Post-audit supplement failure injection is TestMode-only and has no production access.' }
 $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 $acceptedPatchedSha256 = 'A10BBD461B628379F02CF87E059F89C2F4485F69D88AD2C51466E8789DAF2663'
@@ -77,6 +81,14 @@ $acceptedObjectEvidenceSha256 = 'DFB6BA01DCDDCBDDEDA4FAA278556284F68C89B2AA79E41
 $acceptedBuildEvidenceSha256 = '842678BFBBC560B4258EE15920C1E36B030D334B2B8BC948C6768CA6613E3608'
 $acceptedApiSchemaSha256 = '8FFADF5FF3D8D3843FC393E9D03C2091AC5DDFC6227B8097DC182E2A8F8463FC'
 $acceptedOsVersion = 'Microsoft Windows NT 10.0.26200.0'
+$acceptedGnuplotRelativeRoot = 'pure/tools/gnuplot/bin'
+$acceptedGnuplotFileCount = 65
+$acceptedGnuplotPeFileCount = 63
+$acceptedGnuplotImportEdgeCount = 1002
+$acceptedGnuplotApplicationDirectoryEdgeCount = 249
+$acceptedGnuplotApiSetEdgeCount = 563
+$acceptedGnuplotSystem32EdgeCount = 190
+$acceptedGnuplotUnresolvedEdgeCount = 0
 $acceptedStageFiles = 64309
 $acceptedStageBytes = 3327729829
 $acceptedStageManifestSha256 = 'E142C07EDA4D71184D1892189834818B9DCE7AD44B8F0A6708A51C54FA56476F'
@@ -352,6 +364,32 @@ function Assert-StageAuditPostconditions(
     if ($ActualPlaceholderCount -ne $ExpectedPlaceholderCount) { throw 'Pinned inert placeholder audit count does not match the expected postcondition.' }
 }
 
+function Assert-GnuplotLoaderPostconditions(
+    [long] $ActualFileCount,
+    [long] $ActualPeCount,
+    [long] $ActualImportEdgeCount,
+    [long] $ActualApplicationDirectoryEdgeCount,
+    [long] $ActualApiSetEdgeCount,
+    [long] $ActualSystem32EdgeCount,
+    [long] $ActualUnresolvedEdgeCount,
+    [long] $ExpectedFileCount,
+    [long] $ExpectedPeCount,
+    [long] $ExpectedImportEdgeCount,
+    [long] $ExpectedApplicationDirectoryEdgeCount,
+    [long] $ExpectedApiSetEdgeCount,
+    [long] $ExpectedSystem32EdgeCount,
+    [long] $ExpectedUnresolvedEdgeCount
+) {
+    if ($ActualFileCount -ne $ExpectedFileCount) { throw 'Gnuplot loader file count does not match the expected postcondition.' }
+    if ($ActualPeCount -ne $ExpectedPeCount) { throw 'Gnuplot loader PE file count does not match the expected postcondition.' }
+    if ($ActualImportEdgeCount -ne $ExpectedImportEdgeCount) { throw 'Gnuplot loader import edge count does not match the expected postcondition.' }
+    if ($ActualApplicationDirectoryEdgeCount -ne $ExpectedApplicationDirectoryEdgeCount) { throw 'Gnuplot loader application-directory edge count does not match the expected postcondition.' }
+    if ($ActualApiSetEdgeCount -ne $ExpectedApiSetEdgeCount) { throw 'Gnuplot loader API-set edge count does not match the expected postcondition.' }
+    if ($ActualSystem32EdgeCount -ne $ExpectedSystem32EdgeCount) { throw 'Gnuplot loader System32 edge count does not match the expected postcondition.' }
+    if ($ActualUnresolvedEdgeCount -ne $ExpectedUnresolvedEdgeCount) { throw 'Gnuplot loader unresolved edge count does not match the expected postcondition.' }
+    if ($ActualApplicationDirectoryEdgeCount + $ActualApiSetEdgeCount + $ActualSystem32EdgeCount + $ActualUnresolvedEdgeCount -ne $ActualImportEdgeCount) { throw 'Gnuplot loader edge origin counts do not sum to the total import edge count.' }
+}
+
 function Assert-FinalStagePostconditions(
     [long] $ActualFileCount,
     [long] $ActualByteCount,
@@ -380,7 +418,7 @@ function Test-PortableExecutable([string] $Path) {
     finally { $stream.Dispose() }
 }
 function Get-LoaderDomain([string] $Relative) {
-    $gnuplotPrefix = 'pure/tools/gnuplot/bin/'
+    $gnuplotPrefix = $acceptedGnuplotRelativeRoot + '/'
     if ($Relative.StartsWith($gnuplotPrefix, [StringComparison]::OrdinalIgnoreCase)) {
         $leaf = $Relative.Substring($gnuplotPrefix.Length)
         if ($leaf.Length -gt 0 -and $leaf.IndexOf('/') -lt 0) { return 'pure-gnuplot-app' }
@@ -463,7 +501,10 @@ function Read-SyntheticSystemMappings([string] $Manifest, [string] $FixtureRoot)
     foreach ($line in Get-Content -LiteralPath $Manifest) {
         if ([string]::IsNullOrWhiteSpace($line)) { continue }
         $fields = $line.Split("`t")
-        if ($fields.Count -ne 2 -or $fields[0] -notmatch '^(api|ext)-ms-win-[a-z0-9][a-z0-9-]*-l[0-9]+-[0-9]+-[0-9]+\.dll$' -or $fields[1] -notmatch '^[A-Za-z0-9_.-]+\.dll$') { throw "Invalid synthetic system mapping record: $line" }
+        if ($fields.Count -ne 2) { throw "Invalid synthetic system mapping record: $line" }
+        $isApiSetContract = $fields[0] -match '^(api|ext)-ms-win-[a-z0-9][a-z0-9-]*-l[0-9]+-[0-9]+-[0-9]+\.dll$'
+        $isApiSetLookalike = $fields[0] -match '^(api|ext)-ms-win-'
+        if ($fields[0] -notmatch '^[A-Za-z0-9][A-Za-z0-9_.-]*\.dll$' -or ($isApiSetLookalike -and -not $isApiSetContract) -or $fields[1] -notmatch '^[A-Za-z0-9][A-Za-z0-9_.-]*\.dll$') { throw "Invalid synthetic system mapping record: $line" }
         $key = $fields[0].ToLowerInvariant()
         if ($result.ContainsKey($key)) { throw "Duplicate synthetic system mapping: $($fields[0])" }
         $result[$key] = $fields[1]
@@ -827,7 +868,7 @@ try {
     $octaveSet = @{}; foreach ($item in Get-ChildItem -LiteralPath $stageBin -File -Force) { $octaveSet[$item.Name.ToLowerInvariant()] = @($item.FullName) }
     $pureSet = @{}; foreach ($item in Get-ChildItem -LiteralPath $pureBin -File -Force) { $pureSet[$item.Name.ToLowerInvariant()] = @($item.FullName) }
     $supplementRelativeSet = @{}
-    $gnuplotRoot = Join-Path $StageRoot 'pure\tools\gnuplot\bin'
+    $gnuplotRoot = Join-Path $StageRoot $acceptedGnuplotRelativeRoot.Replace('/','\')
     $gnuplotSet = if ($TestMode -and -not (Test-Path -LiteralPath $gnuplotRoot -PathType Container)) { @{} } else { New-DirectLoaderSet $gnuplotRoot 'Staged Gnuplot application loader root' }
     if ($TestMode -and $InjectGnuplotCaseCollision) {
         if (-not $gnuplotSet.ContainsKey('qt6core.dll')) { throw 'Gnuplot case-collision injection requires the exact Qt6Core fixture candidate.' }
@@ -861,6 +902,8 @@ try {
             }
         }
     )
+    [long]$gnuplotFileCount = $gnuplotSet.Count
+    [long]$gnuplotPeFileCount = @($peFiles | Where-Object { $_.Group -ceq 'pure-gnuplot-app' }).Count
     $octPeFiles = @($peFiles | Where-Object { $_.Relative.EndsWith('.oct', [StringComparison]::OrdinalIgnoreCase) })
     foreach ($relative in $supplementRelativeSet.Keys) {
         $matches = @($peFiles | Where-Object { $_.Relative.Equals($relative, [StringComparison]::OrdinalIgnoreCase) })
@@ -913,6 +956,11 @@ try {
     $apiMappings = @{}
     $resolverReady = $false
     [long]$svgLoaderRsvgEdgeCount = 0
+    [long]$gnuplotImportEdgeCount = 0
+    [long]$gnuplotApplicationDirectoryEdgeCount = 0
+    [long]$gnuplotApiSetEdgeCount = 0
+    [long]$gnuplotSystem32EdgeCount = 0
+    [long]$gnuplotUnresolvedEdgeCount = 0
     foreach ($pe in $peFiles) {
         $effective = Get-EffectiveLoaderSet $pe.Group $pureSet $octaveSet $gnuplotSet
         if ($TestMode -and $supplementRelativeSet.ContainsKey($pe.Relative.ToLowerInvariant())) {
@@ -928,6 +976,12 @@ try {
         foreach ($dll in $peImports) {
             if ([string]::IsNullOrWhiteSpace($dll) -or $dll -match '[\\/:]') { throw "Unsafe import name in $($pe.File.FullName): $dll" }
             $key = $dll.ToLowerInvariant(); $resolved = ''
+            if ($pe.Group -ceq 'pure-gnuplot-app') {
+                $gnuplotImportEdgeCount++
+                if ($effective.ContainsKey($key)) { $gnuplotApplicationDirectoryEdgeCount++ }
+                elseif ($key.StartsWith('api-ms-win-') -or $key.StartsWith('ext-ms-win-')) { $gnuplotApiSetEdgeCount++ }
+                else { $gnuplotSystem32EdgeCount++ }
+            }
             if ($effective.ContainsKey($key)) {
                 if ($effective[$key].Count -ne 1) { throw "Ambiguous effective staged import $dll needed by $($pe.File.FullName)" }
                 $resolved = $effective[$key][0]
@@ -935,24 +989,50 @@ try {
             elseif ($key.StartsWith('api-ms-win-') -or $key.StartsWith('ext-ms-win-')) {
                 if ($key -notmatch '^(api|ext)-ms-win-[a-z0-9][a-z0-9-]*-l[0-9]+-[0-9]+-[0-9]+\.dll$') { throw "API-set lookalike has invalid contract syntax: $dll" }
                 if ($TestMode) {
-                    if (-not $syntheticSystemMappings.ContainsKey($key)) { throw "API-set contract has no authoritative synthetic mapping: $dll" }
+                    if (-not $syntheticSystemMappings.ContainsKey($key)) {
+                        if ($pe.Group -ceq 'pure-gnuplot-app') { $gnuplotUnresolvedEdgeCount++ }
+                        throw "API-set contract has no authoritative synthetic mapping: $dll"
+                    }
                     $resolved = 'synthetic-system32\' + $syntheticSystemMappings[$key]
                     $hostHash = 'synthetic-fixture'
+                    if ($InjectGnuplotApiSetReleaseFailure -and $pe.Group -ceq 'pure-gnuplot-app') { throw "API-set contract mapping could not be freed: $dll (synthetic injected failure)" }
                 }
                 else {
                     if (-not $resolverReady) { Initialize-ApiSetResolver $StageRoot; $resolverReady = $true }
-                    $resolved = Resolve-ApiSetContract $dll $system32
+                    try {
+                        $resolved = Resolve-ApiSetContract $dll $system32
+                    }
+                    catch {
+                        $isUnresolvedApiSetEdge =
+                            $_.Exception.Message.StartsWith('API-set contract has no authoritative local OS mapping:', [StringComparison]::Ordinal) -or
+                            ($_.Exception.Message.StartsWith("API-set host for $dll ", [StringComparison]::Ordinal) -and (
+                                $_.Exception.Message.Contains(' escapes its explicit provenance root:') -or
+                                $_.Exception.Message.Contains(' is missing:')))
+                        if ($pe.Group -ceq 'pure-gnuplot-app' -and $isUnresolvedApiSetEdge) { $gnuplotUnresolvedEdgeCount++ }
+                        throw
+                    }
                     $hostHash = Get-Sha256File $resolved
                 }
                 if ($apiMappings.ContainsKey($key) -and $apiMappings[$key].Path -ne $resolved) { throw "API-set contract mapped inconsistently: $dll" }
                 $apiMappings[$key] = [pscustomobject]@{ Path=$resolved; Sha256=$hostHash }
             }
             else {
-                if ($TestMode) { throw "Missing effective import $dll needed by $($pe.File.FullName)" }
-                $system = Join-Path $system32 $dll
-                if (-not (Test-Path -LiteralPath $system -PathType Leaf)) { throw "Missing effective import $dll needed by $($pe.File.FullName)" }
-                Assert-NoReparsePath $system "System import $dll"
-                $resolved = [IO.Path]::GetFullPath($system)
+                if ($TestMode) {
+                    if (-not $syntheticSystemMappings.ContainsKey($key)) {
+                        if ($pe.Group -ceq 'pure-gnuplot-app') { $gnuplotUnresolvedEdgeCount++ }
+                        throw "Missing effective import $dll needed by $($pe.File.FullName)"
+                    }
+                    $resolved = 'synthetic-system32\' + $syntheticSystemMappings[$key]
+                }
+                else {
+                    $system = Join-Path $system32 $dll
+                    if (-not (Test-Path -LiteralPath $system -PathType Leaf)) {
+                        if ($pe.Group -ceq 'pure-gnuplot-app') { $gnuplotUnresolvedEdgeCount++ }
+                        throw "Missing effective import $dll needed by $($pe.File.FullName)"
+                    }
+                    Assert-NoReparsePath $system "System import $dll"
+                    $resolved = [IO.Path]::GetFullPath($system)
+                }
             }
             if ($pe.Relative.Equals('pure/lib/gdk-pixbuf-2.0/2.10.0/loaders/pixbufloader_svg.dll', [StringComparison]::OrdinalIgnoreCase) -and $key -eq 'librsvg-2-2.dll') {
                 $expectedRsvg = Join-Path $StageRoot 'pure\bin\librsvg-2-2.dll'
@@ -962,6 +1042,33 @@ try {
             $imports.Add(('"{0}"' -f $pe.File.FullName) + "`t$($pe.Group)`t$dll`t" + ('"{0}"' -f $resolved))
         }
     }
+    [long]$expectedGnuplotFileCount = if ($TestMode) { $gnuplotFileCount } else { $acceptedGnuplotFileCount }
+    [long]$expectedGnuplotPeFileCount = if ($TestMode) { $gnuplotPeFileCount } else { $acceptedGnuplotPeFileCount }
+    [long]$expectedGnuplotImportEdgeCount = if ($TestMode) { $gnuplotImportEdgeCount } else { $acceptedGnuplotImportEdgeCount }
+    [long]$expectedGnuplotApplicationDirectoryEdgeCount = if ($TestMode) { $gnuplotApplicationDirectoryEdgeCount } else { $acceptedGnuplotApplicationDirectoryEdgeCount }
+    [long]$expectedGnuplotApiSetEdgeCount = if ($TestMode) { $gnuplotApiSetEdgeCount } else { $acceptedGnuplotApiSetEdgeCount }
+    [long]$expectedGnuplotSystem32EdgeCount = if ($TestMode) { $gnuplotSystem32EdgeCount } else { $acceptedGnuplotSystem32EdgeCount }
+    [long]$expectedGnuplotUnresolvedEdgeCount = if ($TestMode) { $gnuplotUnresolvedEdgeCount } else { $acceptedGnuplotUnresolvedEdgeCount }
+    [long]$observedGnuplotFileCount = $gnuplotFileCount
+    [long]$observedGnuplotPeFileCount = $gnuplotPeFileCount
+    [long]$observedGnuplotImportEdgeCount = $gnuplotImportEdgeCount
+    [long]$observedGnuplotApplicationDirectoryEdgeCount = $gnuplotApplicationDirectoryEdgeCount
+    [long]$observedGnuplotApiSetEdgeCount = $gnuplotApiSetEdgeCount
+    [long]$observedGnuplotSystem32EdgeCount = $gnuplotSystem32EdgeCount
+    [long]$observedGnuplotUnresolvedEdgeCount = $gnuplotUnresolvedEdgeCount
+    if ($TestMode) {
+        switch ($InjectGnuplotPostAuditFault) {
+            'FileCount' { $observedGnuplotFileCount++ }
+            'PeCount' { $observedGnuplotPeFileCount++ }
+            'ImportEdgeCount' { $observedGnuplotImportEdgeCount++ }
+            'ApplicationDirectoryEdgeCount' { $observedGnuplotApplicationDirectoryEdgeCount++ }
+            'ApiSetEdgeCount' { $observedGnuplotApiSetEdgeCount++ }
+            'System32EdgeCount' { $observedGnuplotSystem32EdgeCount++ }
+            'UnresolvedEdgeCount' { $observedGnuplotUnresolvedEdgeCount++ }
+        }
+    }
+    Assert-GnuplotLoaderPostconditions $observedGnuplotFileCount $observedGnuplotPeFileCount $observedGnuplotImportEdgeCount $observedGnuplotApplicationDirectoryEdgeCount $observedGnuplotApiSetEdgeCount $observedGnuplotSystem32EdgeCount $observedGnuplotUnresolvedEdgeCount $expectedGnuplotFileCount $expectedGnuplotPeFileCount $expectedGnuplotImportEdgeCount $expectedGnuplotApplicationDirectoryEdgeCount $expectedGnuplotApiSetEdgeCount $expectedGnuplotSystem32EdgeCount $expectedGnuplotUnresolvedEdgeCount
+
     $svgLoaderPeCount = @($peFiles | Where-Object { $_.Relative.Equals('pure/lib/gdk-pixbuf-2.0/2.10.0/loaders/pixbufloader_svg.dll', [StringComparison]::OrdinalIgnoreCase) }).Count
     if ((-not $TestMode -and $svgLoaderPeCount -ne 1) -or ($svgLoaderPeCount -gt 0 -and $svgLoaderRsvgEdgeCount -ne 1)) { throw 'The exact pixbufloader_svg.dll to librsvg-2-2.dll stage edge was not observed once.' }
     [IO.File]::WriteAllText((Join-Path $StageRoot 'stage-import-closure.tsv'), (($imports | Sort-Object) -join "`n") + "`n", $utf8NoBom)
@@ -1001,7 +1108,27 @@ try {
         if ((Get-Sha256File (Join-Path $packageRoot $relative)) -ne $acceptedRepositoryFiles[$relative]) { throw "Required public test script $relative changed during staging." }
     }
     if (-not $TestMode) { Assert-SnapshotTree $octave $NormalizedSnapshot 'B19A1BAB6293EBAAD7D0076B43D5E8F466BA896EAADFD81EED7E0C7C8F96FB31' 59533 2797722565 'Normalized source runtime after staging'; Assert-SnapshotTree $permanent $PermanentSnapshot '95D51222C8000706D235A309EF1CAEA6D986B08F1B04A08671475AD041A18CCD' 59533 2797722287 'Permanent Octave runtime after staging' }
-    [pscustomobject]@{ StageRoot=$StageRoot; FileCount=$manifest.FileCount; TotalBytes=$manifest.TotalBytes; ManifestSha256=$manifest.Sha256; PatchedLiboctaveSha256=(Get-Sha256File (Join-Path $StageRoot 'mingw64\bin\liboctave-13.dll')); LibgccSha256=(Get-Sha256File (Join-Path $StageRoot 'mingw64\bin\libgcc_s_seh-1.dll')); ImportAuditSkipped=$false; AuditedPeFileCount=$peFiles.Count; AuditedOctFileCount=$octPeFiles.Count; PinnedInertPlaceholderCount=$stagedPinnedInertPlaceholders.Count; PinnedPureRsvgSupplementCount=$contractFiles.Count; ApiSetContractCount=$apiMappings.Count } | ConvertTo-Json -Depth 3
+    [pscustomobject]@{
+        StageRoot=$StageRoot
+        FileCount=$manifest.FileCount
+        TotalBytes=$manifest.TotalBytes
+        ManifestSha256=$manifest.Sha256
+        PatchedLiboctaveSha256=(Get-Sha256File (Join-Path $StageRoot 'mingw64\bin\liboctave-13.dll'))
+        LibgccSha256=(Get-Sha256File (Join-Path $StageRoot 'mingw64\bin\libgcc_s_seh-1.dll'))
+        ImportAuditSkipped=$false
+        AuditedPeFileCount=$peFiles.Count
+        AuditedOctFileCount=$octPeFiles.Count
+        PinnedInertPlaceholderCount=$stagedPinnedInertPlaceholders.Count
+        PinnedPureRsvgSupplementCount=$contractFiles.Count
+        ApiSetContractCount=$apiMappings.Count
+        GnuplotLoaderFileCount=$gnuplotFileCount
+        GnuplotLoaderPeFileCount=$gnuplotPeFileCount
+        GnuplotLoaderImportEdgeCount=$gnuplotImportEdgeCount
+        GnuplotLoaderApplicationDirectoryEdgeCount=$gnuplotApplicationDirectoryEdgeCount
+        GnuplotLoaderApiSetEdgeCount=$gnuplotApiSetEdgeCount
+        GnuplotLoaderSystem32EdgeCount=$gnuplotSystem32EdgeCount
+        GnuplotLoaderUnresolvedEdgeCount=$gnuplotUnresolvedEdgeCount
+    } | ConvertTo-Json -Depth 3
 }
 catch {
     throw

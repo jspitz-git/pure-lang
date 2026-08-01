@@ -98,7 +98,7 @@ function New-SupplementImports {
 function Add-GnuplotFixture([hashtable] $Imports) {
     Write-TestPe (Join-Path $pure 'tools\gnuplot\bin\gnuplot_qt.exe') 'gnuplot-qt'
     Write-TestPe (Join-Path $pure 'tools\gnuplot\bin\Qt6Core.dll') 'qt6-core'
-    $Imports['pure/tools/gnuplot/bin/gnuplot_qt.exe'] = @('Qt6Core.dll')
+    $Imports['pure/tools/gnuplot/bin/gnuplot_qt.exe'] = @('Qt6Core.dll','api-ms-win-core-synch-l1-2-0.dll','kernel32.dll')
     $Imports['pure/tools/gnuplot/bin/Qt6Core.dll'] = @()
     return $Imports
 }
@@ -136,8 +136,10 @@ function Invoke-Stage {
         [hashtable]$Imports,
         [hashtable]$SystemMappings = @{},
         [string]$InjectGnuplotAuditFault = '',
+        [string]$InjectGnuplotPostAuditFault = '',
         [switch]$NoTestMode,
         [switch]$InjectGnuplotCaseCollision,
+        [switch]$InjectGnuplotApiSetReleaseFailure,
         [switch]$OmitSyntheticTools,
         [string]$DisposableParentOverride = '',
         [string]$BridgeModuleOverride = '',
@@ -192,6 +194,8 @@ function Invoke-Stage {
     if (-not $NoTestMode) { $args += '-TestMode' }
     if ($InjectGnuplotCaseCollision) { $args += '-InjectGnuplotCaseCollision' }
     if ($InjectGnuplotAuditFault) { $args += @('-InjectGnuplotAuditFault',$InjectGnuplotAuditFault) }
+    if ($InjectGnuplotPostAuditFault) { $args += @('-InjectGnuplotPostAuditFault',$InjectGnuplotPostAuditFault) }
+    if ($InjectGnuplotApiSetReleaseFailure) { $args += '-InjectGnuplotApiSetReleaseFailure' }
     if ($InjectSupplementDestinationCollision) { $args += '-InjectSupplementDestinationCollision' }
     if ($InjectSupplementMappingMismatch) { $args += '-InjectSupplementMappingMismatch' }
     if ($InjectFourthSupplementDependency) { $args += '-InjectFourthSupplementDependency' }
@@ -223,6 +227,29 @@ try {
     $productionPlaceholderCount = if ($productionPlaceholder.Success) { [regex]::Matches($productionPlaceholder.Value, 'Relative\s*=').Count } else { 0 }
     Assert-True ($productionPeCount.Success -and [long]$productionPeCount.Groups['count'].Value -eq 1536 -and $productionOctCount.Success -and [long]$productionOctCount.Groups['count'].Value -eq 219 -and $productionPlaceholderCount -eq 1) 'Production static-import contract must hard-bind 1,536 PE + 1 pinned inert placeholder + 219 .oct files.'
     Write-Output 'PASS Test-HardBindsProductionAuditCardinalityTo1536PePlusOnePlaceholderAnd219Oct'
+    foreach ($assignment in @(
+        "`$acceptedGnuplotRelativeRoot = 'pure/tools/gnuplot/bin'",
+        '$acceptedGnuplotFileCount = 65',
+        '$acceptedGnuplotPeFileCount = 63',
+        '$acceptedGnuplotImportEdgeCount = 1002',
+        '$acceptedGnuplotApplicationDirectoryEdgeCount = 249',
+        '$acceptedGnuplotApiSetEdgeCount = 563',
+        '$acceptedGnuplotSystem32EdgeCount = 190',
+        '$acceptedGnuplotUnresolvedEdgeCount = 0'
+    )) {
+        Assert-True ([regex]::IsMatch($productionSource, ('(?m)^' + [regex]::Escape($assignment) + '$'))) "Production Gnuplot loader contract omits exact literal assignment: $assignment"
+    }
+    $gnuplotPostAuditValidateSet = [regex]::Match($productionSource, "(?m)^\s*\[ValidateSet\('FileCount','PeCount','ImportEdgeCount','ApplicationDirectoryEdgeCount','ApiSetEdgeCount','System32EdgeCount','UnresolvedEdgeCount'\)\]\[string\] \`$InjectGnuplotPostAuditFault = '',\s*$")
+    Assert-True $gnuplotPostAuditValidateSet.Success 'Production Gnuplot post-audit fault switch does not expose exactly the seven approved values.'
+    $gnuplotApiSetCatch = [regex]::Match($productionSource, '(?s)\$resolved = Resolve-ApiSetContract \$dll \$system32\s*}\s*catch \{(?<Body>.*?)\s*throw\s*}')
+    Assert-True ($gnuplotApiSetCatch.Success -and
+        $gnuplotApiSetCatch.Groups['Body'].Value -match '\$isUnresolvedApiSetEdge\s*=' -and
+        $gnuplotApiSetCatch.Groups['Body'].Value -match 'no authoritative local OS mapping' -and
+        $gnuplotApiSetCatch.Groups['Body'].Value -match 'escapes its explicit provenance root' -and
+        $gnuplotApiSetCatch.Groups['Body'].Value -match ' is missing:' -and
+        $gnuplotApiSetCatch.Groups['Body'].Value -match "(?s)if \(\`$pe\.Group -ceq 'pure-gnuplot-app' -and \`$isUnresolvedApiSetEdge\) \{ \`$gnuplotUnresolvedEdgeCount\+\+ \}" -and
+        $gnuplotApiSetCatch.Groups['Body'].Value -notmatch 'mapping path could not be read|mapping could not be freed') 'Production Gnuplot API-set accounting must count only missing or cross-domain resolution failures as unresolved edges.'
+    Write-Output 'PASS Test-HardBindsProductionGnuplotLoaderContract'
 
     [IO.Directory]::CreateDirectory($parent) | Out-Null
     [IO.Directory]::CreateDirectory($permanentRoot) | Out-Null
@@ -246,11 +273,60 @@ try {
     Write-TestFile $buildEvidence 'build-evidence-v1'
     Reset-SupplementFixture
 
-    $gnuplotSuccess = Invoke-Stage 'gnuplot-appdir-success' (Add-GnuplotFixture (New-BaseImports))
+    $gnuplotApi = 'api-ms-win-core-synch-l1-2-0.dll'
+    $gnuplotSystemMappings = @{$gnuplotApi='kernelbase.dll'; 'kernel32.dll'='kernel32.dll'}
+    $gnuplotSuccess = Invoke-Stage 'gnuplot-appdir-success' (Add-GnuplotFixture (New-BaseImports)) $gnuplotSystemMappings
     Assert-True ($gnuplotSuccess.ExitCode -eq 0) "Gnuplot application-directory fixture failed: $($gnuplotSuccess.Output)"
     $closure = Get-Content -LiteralPath (Join-Path $gnuplotSuccess.Stage 'stage-import-closure.tsv') -Raw
     Assert-True ($closure -match 'gnuplot_qt\.exe"\tpure-gnuplot-app\tQt6Core\.dll\t"[^"\r\n]+\\pure\\tools\\gnuplot\\bin\\Qt6Core\.dll"') 'Gnuplot Qt6Core import did not resolve in its exact application directory.'
+    Assert-True ($closure -match 'gnuplot_qt\.exe"\tpure-gnuplot-app\tapi-ms-win-core-synch-l1-2-0\.dll\t"synthetic-system32\\kernelbase\.dll"') 'Gnuplot API-set import did not resolve through its explicit synthetic mapping.'
+    Assert-True ($closure -match 'gnuplot_qt\.exe"\tpure-gnuplot-app\tkernel32\.dll\t"synthetic-system32\\kernel32\.dll"') 'Gnuplot ordinary System32 import did not resolve through its explicit synthetic mapping.'
+    $gnuplotReport = $gnuplotSuccess.Output | ConvertFrom-Json
+    Assert-True (
+        $gnuplotReport.GnuplotLoaderFileCount -eq 2 -and
+        $gnuplotReport.GnuplotLoaderPeFileCount -eq 2 -and
+        $gnuplotReport.GnuplotLoaderImportEdgeCount -eq 3 -and
+        $gnuplotReport.GnuplotLoaderApplicationDirectoryEdgeCount -eq 1 -and
+        $gnuplotReport.GnuplotLoaderApiSetEdgeCount -eq 1 -and
+        $gnuplotReport.GnuplotLoaderSystem32EdgeCount -eq 1 -and
+        $gnuplotReport.GnuplotLoaderUnresolvedEdgeCount -eq 0
+    ) 'Gnuplot loader JSON audit did not report exact 2 / 2 / 3 / 1 / 1 / 1 / 0 fixture cardinalities.'
     Remove-GnuplotFixture
+    Write-Output 'PASS Test-ReportsExactGnuplotLoaderCardinalitiesAndOrigins'
+
+    $gnuplotPostAuditFailures = [ordered]@{
+        FileCount = 'Gnuplot loader file count does not match the expected postcondition'
+        PeCount = 'Gnuplot loader PE file count does not match the expected postcondition'
+        ImportEdgeCount = 'Gnuplot loader import edge count does not match the expected postcondition'
+        ApplicationDirectoryEdgeCount = 'Gnuplot loader application-directory edge count does not match the expected postcondition'
+        ApiSetEdgeCount = 'Gnuplot loader API-set edge count does not match the expected postcondition'
+        System32EdgeCount = 'Gnuplot loader System32 edge count does not match the expected postcondition'
+        UnresolvedEdgeCount = 'Gnuplot loader unresolved edge count does not match the expected postcondition'
+    }
+    foreach ($fault in $gnuplotPostAuditFailures.Keys) {
+        $faultImports = Add-GnuplotFixture (New-BaseImports)
+        Assert-Failure (Invoke-Stage ("gnuplot-post-audit-$fault") $faultImports $gnuplotSystemMappings -InjectGnuplotPostAuditFault $fault) $gnuplotPostAuditFailures[$fault] "Gnuplot $fault postcondition fault"
+        Remove-GnuplotFixture
+    }
+    Write-Output 'PASS Test-RejectsEveryGnuplotPostAuditCardinalityFault'
+
+    $unknownGnuplotApiImports = Add-GnuplotFixture (New-BaseImports)
+    $unknownGnuplotApiImports['pure/tools/gnuplot/bin/gnuplot_qt.exe'] = @('api-ms-win-core-unapproved-l1-1-0.dll')
+    Assert-Failure (Invoke-Stage 'gnuplot-unknown-api-set' $unknownGnuplotApiImports @{}) 'API-set contract.*authoritative.*mapping|authoritative.*API-set' 'Unknown Gnuplot API-set mapping'
+    Remove-GnuplotFixture
+    Write-Output 'PASS Test-RejectsUnknownGnuplotApiSetMapping'
+
+    $missingGnuplotSystemImports = Add-GnuplotFixture (New-BaseImports)
+    $missingGnuplotSystemImports['pure/tools/gnuplot/bin/gnuplot_qt.exe'] = @('Qt6Core.dll','kernel32.dll')
+    Assert-Failure (Invoke-Stage 'gnuplot-missing-system32' $missingGnuplotSystemImports @{}) 'Missing effective import kernel32\.dll' 'Missing Gnuplot System32 mapping'
+    Remove-GnuplotFixture
+    Write-Output 'PASS Test-RejectsMissingGnuplotSystem32Mapping'
+
+    $gnuplotReleaseImports = Add-GnuplotFixture (New-BaseImports)
+    Assert-Failure (Invoke-Stage 'gnuplot-api-set-release-failure' $gnuplotReleaseImports $gnuplotSystemMappings -InjectGnuplotApiSetReleaseFailure) 'API-set contract mapping could not be freed' 'Gnuplot API-set release failure'
+    Remove-GnuplotFixture
+    Write-Output 'PASS Test-RejectsGnuplotApiSetReleaseFailure'
+
     $onlyPure = Add-GnuplotFixture (New-BaseImports)
     $onlyPure['pure/tools/gnuplot/bin/gnuplot_qt.exe'] = @('libpure.dll')
     Assert-Failure (Invoke-Stage 'gnuplot-no-pure-fallback' $onlyPure) 'Missing effective import libpure\.dll' 'Gnuplot Pure fallback'
@@ -281,6 +357,8 @@ try {
     Write-Output 'PASS Test-RejectsGnuplotCaseCollision'
 
     $productionGnuplotInjection = Invoke-Stage 'production-gnuplot-injection' (New-BaseImports) @{} -NoTestMode -OmitSyntheticTools -InjectGnuplotCaseCollision
+    $productionGnuplotPostAuditInjection = Invoke-Stage 'production-gnuplot-post-audit-injection' (New-BaseImports) @{} -InjectGnuplotPostAuditFault FileCount -NoTestMode -OmitSyntheticTools
+    $productionGnuplotReleaseInjection = Invoke-Stage 'production-gnuplot-release-injection' (New-BaseImports) @{} -InjectGnuplotApiSetReleaseFailure -NoTestMode -OmitSyntheticTools
     $siblingImports = Add-GnuplotFixture (New-BaseImports)
     $siblingImports['pure/tools/gnuplot/bin/gnuplot_qt.exe'] = @('sibling-only.dll')
     Assert-Failure (Invoke-Stage 'gnuplot-no-sibling-fallback' $siblingImports -InjectGnuplotAuditFault Sibling) 'Missing effective import sibling-only\.dll' 'Gnuplot sibling fallback'
@@ -309,7 +387,9 @@ try {
     Write-Output 'PASS Test-RejectsGnuplotLoaderFileReparsePoint'
 
     Assert-Failure $productionGnuplotInjection 'Gnuplot case-collision injection is TestMode-only' 'Production Gnuplot case-collision injection'
-    Write-Output 'PASS Test-RejectsProductionGnuplotCaseCollisionInjection'
+    Assert-Failure $productionGnuplotPostAuditInjection 'Gnuplot post-audit fault injection is TestMode-only' 'Production Gnuplot post-audit fault injection'
+    Assert-Failure $productionGnuplotReleaseInjection 'Gnuplot API-set release injection is TestMode-only' 'Production Gnuplot API-set release injection'
+    Write-Output 'PASS Test-RejectsProductionGnuplotTestInjections'
 
 
     $success = Invoke-Stage 'success' (New-BaseImports)

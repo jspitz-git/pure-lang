@@ -1032,3 +1032,138 @@ clang64 source DLLs unchanged. No real stage was created or inspected; no
 staged binary was executed; and no ACL, AppContainer, profile, accepted-Pure,
 permanent-Octave, normalized-toolchain, patched-artifact, immutable-snapshot,
 or v1-v10 evidence mutation occurred.
+
+## v11 supplemented production staging attempt: fail-closed Qt import
+
+Task 3 selected only the exact absent root
+`C:\tmp\todo51-task3\stage-runtime-v11`. A literal 16-key hashtable wrapper
+was validated through `Get-Command`; it contained no `TestMode`, synthetic,
+injection, or hook key. Wrapper, assembler, contract, and decoded-parameter
+JSON SHA-256 values were respectively
+`FF6B21D3AF1C87E31AC9D9705F75809D0A18D0A55FA5692D8EED9E89CCA1160F`,
+`3C9DB35270340A2E39601C0CFA54DD23D7472A8509D7F160441FE6DEC2A32163`,
+`692341FA19E6D7AC3CF4C02894DBDB92AFAE7A5DD154B659A5CFD099AD63F2CC`,
+and `F751F7EC214F30FEE5117AA07D750AE51F6B487B06B454F2A91A46F1F242B8BB`.
+
+The exact pwsh 7.6.4 bootstrap and final hidden read-only preflight both
+completed with marker 0, one JSON object, and empty stderr. The full preflight
+reproduced the immutable permanent, normalized, accepted-Pure, bridge, patched
+liboctave, canonical libgcc, accepted-v5, supplement snapshot/source, 38-member
+reuse-closure, repository-test, build-evidence, and authoritative API-set pins.
+Its stdout was 1,361 bytes / SHA-256
+`91E9A366C952BE51EB6A019052D15DE3E890BFB4E7ED657BFF677FFD7A610936`;
+stderr was empty. The target and assembler marker were absent immediately
+before launch.
+
+The one permitted hidden assembler invocation (PID 31864) was polled only
+through PID, separate stdout/stderr logs, and its exit marker. No in-progress
+stage file was inspected and no staged binary was executed. It ended with
+marker `1`, zero-byte stdout / SHA-256
+`E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855`,
+and 387-byte stderr / SHA-256
+`9DA403FD36B841C2779FF88D7D86AA267DB0AAA709B6D0D2EBCE31A517B3B2B2`.
+The exact blocker was:
+
+```text
+Missing effective import Qt6Core.dll needed by
+C:\tmp\todo51-task3\stage-runtime-v11\pure\tools\gnuplot\bin\gnuplot_qt.exe
+```
+
+The partial v11 stage is preserved. Per the reviewed failure policy there was
+no retry, implicit v12 selection, post-success static audit, regression suite,
+runtime execution, cleanup, or success commit. No ACL/AppContainer/profile,
+accepted-Pure, permanent-Octave, normalized-toolchain, supplement, or v1-v10
+evidence mutation was performed. The plan requires amendment before another
+stage version can be selected.
+
+
+## Tasks 1-2 Gnuplot loader-domain diagnosis and contract
+
+The preserved v11 attempt remains the decisive fail-closed production evidence.
+Its only assembler invocation ended at the exact unresolved edge
+`gnuplot_qt.exe -> Qt6Core.dll` under
+`pure/tools/gnuplot/bin`; marker 1, stdout/stderr identities, wrapper hashes,
+and the preserved partial-stage policy remain recorded above. Tasks 1-2 did
+not retry v11 or select another stage version.
+
+The prior reviewed read-only diagnosis established that the exact preserved
+v11 Gnuplot application directory contains 65 direct files, of which 63 are PE
+members. Those 63 members expose 1,002 static import edges: 249 resolve inside
+that same application directory, 563 resolve through authoritative API-set
+contracts, 190 resolve through ordinary System32 names, and zero are missing.
+The three resolved origins sum exactly to 1,002. The required application
+member is `Qt6Core.dll`, 7,481,344 bytes, SHA-256
+`7C9D615B82CE3971A05484D610DC4D920FD889525096F53A0820B1A150D89F6F`;
+the preserved v11 copy is byte-identical to the accepted relocated Pure
+Gnuplot source copy. This identity was established by that prior read-only
+diagnosis; Tasks 1-2 did not reopen either preserved root to derive it.
+
+Task 1 introduced the exact direct-file `pure-gnuplot-app` loader domain,
+case-insensitive collision rejection, non-reparse direct-member validation,
+and application-directory-only effective set. Its negative tests continue to
+reject fallback into Pure, Octave, PATH, sibling directories, and nested
+directories, as well as case collisions, non-PE loadable files, and reparse
+roots or members.
+
+Task 2 hard-binds the non-overridable production root
+`pure/tools/gnuplot/bin` and exact `65 / 63 / 1,002 / 249 / 563 / 190 / 0`
+file, PE, total-edge, application-directory, API-set, System32, and unresolved
+cardinalities. `Assert-GnuplotLoaderPostconditions` checks all seven values
+and the origin-sum invariant. The existing final JSON now reports the seven
+`GnuplotLoader*` fields. `stage-import-closure.tsv` remains the per-edge
+evidence; no new staged report file or other inventory member was added, so
+the existing 64,312-file final manifest contract is unchanged.
+
+The expanded two-PE synthetic fixture records exactly
+`2 / 2 / 3 / 1 / 1 / 1 / 0` and exercises Qt6Core application-directory,
+mapped API-set, and explicit ordinary System32 origins. Seven guarded
+post-audit mutations each fail their matching postcondition. Additional
+negatives reject an unknown Gnuplot API-set contract, a manifest-unlisted
+ordinary System32 DLL, and an injected API-set release failure with
+`API-set contract mapping could not be freed`. Both new switches are
+TestMode-only and production rejects them before input validation.
+
+TDD RED was observed before production changes. The full staging harness
+exited 1 after the existing audit-cardinality test with:
+
+```text
+Production Gnuplot loader contract omits exact literal assignment:
+$acceptedGnuplotRelativeRoot = 'pure/tools/gnuplot/bin'
+```
+
+After the minimal implementation, fresh GREEN verification completed with
+`PASS all supplement preparer tests` (15/15) and
+`PASS all task3 staging tests` (43 named tests). Both changed PowerShell
+scripts parsed with zero errors and `git diff --check` exited 0.
+
+The repository-owned verification used only exact GUID TestMode roots under
+`C:\tmp`. No new production stage was created or inspected, and no staged
+binary was executed in either Task 1 or Task 2. Accepted-Pure,
+permanent-Octave, normalized-toolchain, supplement snapshot/source, patched
+artifact, bridge, probe, immutable-snapshot, ACL/AppContainer/profile, and
+v1-v11 evidence roots were not modified; the pre-existing source and inventory
+evidence remains unchanged.
+
+### Final Task 2 review ruling
+
+Two independent read-only reviews found no Critical or Important issue. The
+three suggested minor points were adjudicated against the production source.
+The unresolved production pin already had an exact literal source assertion,
+so no change was required for that suggestion. The resolver concern was
+confirmed: its production catch incremented the unresolved counter for every
+API-set exception, including path-read and release failures. A focused
+source-contract regression first exited 1 with `Production Gnuplot API-set
+accounting must count only missing or cross-domain resolution failures as
+unresolved edges.` The catch now increments only for no authoritative local
+OS mapping, a host escaping System32, or a missing mapped host; path-read,
+release, and reparse failures still abort but are not reclassified as missing
+edges. The combined production-injection PASS label was also renamed to cover
+case-collision, post-audit, and API-set-release switches accurately.
+
+After that remediation, the full staging harness exited 0 with all 43 named
+checks and `PASS all task3 staging tests`; the supplement harness exited 0
+with 15/15 and `PASS all supplement preparer tests`. Both changed PowerShell
+scripts parsed with zero errors, `git diff --check` exited 0, and the worktree
+contained exactly the three authorized Task 2 files with no added inventory
+file. The existing no-stage and no-staged-execution statement above remains
+unchanged.
