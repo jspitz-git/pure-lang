@@ -39,6 +39,8 @@ param(
     [switch] $InjectSupplementContractSchemaFault,
     [switch] $InjectSupplementPostconditionFault,
     [ValidateSet('','PeCount','OctCount','PlaceholderCount','FileCount','ByteCount','ManifestSha256')][string] $InjectSupplementPostAuditFault = '',
+    [switch] $InjectGnuplotCaseCollision,
+    [ValidateSet('','Sibling','Nested','NonPe')][string] $InjectGnuplotAuditFault = '',
     [switch] $TestMode
 )
 
@@ -47,6 +49,8 @@ param(
 # below that root.  The strict runner is a later Task 3 checkpoint.
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+if ($InjectGnuplotCaseCollision -and -not $TestMode) { throw 'Gnuplot case-collision injection is TestMode-only and has no production access.' }
+if ($InjectGnuplotAuditFault -and -not $TestMode) { throw 'Gnuplot audit fault injection is TestMode-only and has no production access.' }
 if ($InjectSupplementPostAuditFault -and -not $TestMode) { throw 'Post-audit supplement failure injection is TestMode-only and has no production access.' }
 $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 $acceptedPatchedSha256 = 'A10BBD461B628379F02CF87E059F89C2F4485F69D88AD2C51466E8789DAF2663'
@@ -96,6 +100,9 @@ $syntheticBridgeFileCount = 3
 $syntheticBridgeTotalBytes = 30
 $syntheticBridgeManifestSha256 = '025D6C9E917AA89AE1B068CD87598E96C00896F1D2BEE6AD139C7BF1BCD78648'
 $syntheticBridgeModuleSha256 = '120970D812836F19888625587A4606A5AD23CEF31C8684E601771552548FC6B9'
+$syntheticGnuplotPureFileCount = 6
+$syntheticGnuplotPureTotalBytes = 63
+$syntheticGnuplotPureManifestSha256 = 'D5C9A7FB7C74CC7E937FF2FF3B0586EC519492EE1823821BE4DD40B5F1DA3C3A'
 $syntheticProbeSha256 = 'BA9C736F19E7F60B7F6764ADB0B7908C0A2B394E09B6C09863528C7F2BC86095'
 $approvedInertPlaceholders = @(
     [pscustomobject]@{ Relative = 'mingw64/qt6/bin/qhelpgenerator.exe'; Length = [long]0; Sha256 = 'E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855' }
@@ -372,6 +379,49 @@ function Test-PortableExecutable([string] $Path) {
     }
     finally { $stream.Dispose() }
 }
+function Get-LoaderDomain([string] $Relative) {
+    $gnuplotPrefix = 'pure/tools/gnuplot/bin/'
+    if ($Relative.StartsWith($gnuplotPrefix, [StringComparison]::OrdinalIgnoreCase)) {
+        $leaf = $Relative.Substring($gnuplotPrefix.Length)
+        if ($leaf.Length -gt 0 -and $leaf.IndexOf('/') -lt 0) { return 'pure-gnuplot-app' }
+    }
+    if ($Relative.StartsWith('pure/', [StringComparison]::OrdinalIgnoreCase)) { return 'pure' }
+    if ($Relative.StartsWith('bridge/', [StringComparison]::OrdinalIgnoreCase)) { return 'bridge' }
+    return 'octave'
+}
+
+function New-DirectLoaderSet([string] $Root, [string] $Description) {
+    if (-not (Test-Path -LiteralPath $Root -PathType Container)) { throw "$Description is absent or is not a directory: $Root" }
+    Assert-NoReparsePath $Root $Description
+    $set = @{}
+    foreach ($item in Get-ChildItem -LiteralPath $Root -File -Force) {
+        Assert-NoReparsePath $item.FullName "$Description file"
+        $key = $item.Name.ToLowerInvariant()
+        if ($set.ContainsKey($key)) { throw "$Description has an ambiguous case-insensitive filename: $($item.Name)" }
+        $set[$key] = @($item.FullName)
+    }
+    return $set
+}
+
+function Get-EffectiveLoaderSet([string] $Domain, [hashtable] $PureSet, [hashtable] $OctaveSet, [hashtable] $GnuplotSet) {
+    switch ($Domain) {
+        'pure' { return $PureSet }
+        'octave' { return $OctaveSet }
+        'pure-gnuplot-app' { return $GnuplotSet }
+        'bridge' {
+            $union = @{}
+            foreach ($set in @($PureSet,$OctaveSet)) {
+                foreach ($key in $set.Keys) {
+                    if (-not $union.ContainsKey($key)) { $union[$key] = @() }
+                    $union[$key] += $set[$key]
+                }
+            }
+            return $union
+        }
+        default { throw "Unknown staged loader domain: $Domain" }
+    }
+}
+
 
 function Get-PinnedInertPlaceholders([string] $Root, [string] $Description) {
     if ($approvedInertPlaceholders.Count -ne 1) { throw 'The production inert-placeholder approval cardinality must be exactly one.' }
@@ -513,6 +563,12 @@ if ($TestMode) {
         @($SyntheticBuildEvidence,'Synthetic build evidence'))) {
         Assert-StrictChild $pair[0] $fixtureRoot $pair[1]
         Assert-NoReparsePath $pair[0] $pair[1]
+    }
+    $syntheticGnuplotRoot = Join-Path $pure 'tools\gnuplot\bin'
+    if (Test-Path -LiteralPath $syntheticGnuplotRoot -PathType Container) {
+        $syntheticPureFileCount = $syntheticGnuplotPureFileCount
+        $syntheticPureTotalBytes = $syntheticGnuplotPureTotalBytes
+        $syntheticPureManifestSha256 = $syntheticGnuplotPureManifestSha256
     }
     if ($ExpectedPatchedSha256 -ne $syntheticPatchedSha256 -or $ExpectedLibgccSha256 -ne $syntheticLibgccSha256 -or
         $ExpectedPureFileCount -ne $syntheticPureFileCount -or $ExpectedPureTotalBytes -ne $syntheticPureTotalBytes -or $ExpectedPureManifestSha256 -ne $syntheticPureManifestSha256 -or
@@ -771,10 +827,24 @@ try {
     $octaveSet = @{}; foreach ($item in Get-ChildItem -LiteralPath $stageBin -File -Force) { $octaveSet[$item.Name.ToLowerInvariant()] = @($item.FullName) }
     $pureSet = @{}; foreach ($item in Get-ChildItem -LiteralPath $pureBin -File -Force) { $pureSet[$item.Name.ToLowerInvariant()] = @($item.FullName) }
     $supplementRelativeSet = @{}
+    $gnuplotRoot = Join-Path $StageRoot 'pure\tools\gnuplot\bin'
+    $gnuplotSet = if ($TestMode -and -not (Test-Path -LiteralPath $gnuplotRoot -PathType Container)) { @{} } else { New-DirectLoaderSet $gnuplotRoot 'Staged Gnuplot application loader root' }
+    if ($TestMode -and $InjectGnuplotCaseCollision) {
+        if (-not $gnuplotSet.ContainsKey('qt6core.dll')) { throw 'Gnuplot case-collision injection requires the exact Qt6Core fixture candidate.' }
+        $gnuplotSet['qt6core.dll'] += (Join-Path $gnuplotRoot 'Qt6Core.dll')
+    }
+
     foreach ($record in $contractFiles) { $supplementRelativeSet[('pure/bin/' + $record.Name).ToLowerInvariant()] = $record.Name }
     $stagedPinnedInertPlaceholders = @(Get-PinnedInertPlaceholders $StageRoot 'Staged runtime')
     $pinnedInertByRelative = @{}
     foreach ($placeholder in $stagedPinnedInertPlaceholders) { $pinnedInertByRelative[$placeholder.Relative.ToLowerInvariant()] = $true }
+    if ($TestMode -and $InjectGnuplotAuditFault) {
+        switch ($InjectGnuplotAuditFault) {
+            'Sibling' { [IO.Directory]::CreateDirectory((Join-Path $StageRoot 'pure\tools\other\bin')) | Out-Null; [IO.File]::WriteAllBytes((Join-Path $StageRoot 'pure\tools\other\bin\sibling-only.dll'), [Text.Encoding]::ASCII.GetBytes('MZsibling-only')) }
+            'Nested' { [IO.Directory]::CreateDirectory((Join-Path $StageRoot 'pure\tools\gnuplot\bin\plugins')) | Out-Null; [IO.File]::WriteAllBytes((Join-Path $StageRoot 'pure\tools\gnuplot\bin\plugins\nested-only.dll'), [Text.Encoding]::ASCII.GetBytes('MZnested-only')) }
+            'NonPe' { [IO.File]::WriteAllText((Join-Path $StageRoot 'pure\tools\gnuplot\bin\bad.dll'), 'not a PE', [Text.Encoding]::ASCII) }
+        }
+    }
     $peFiles = @(
         foreach ($file in Get-ChildItem -LiteralPath $StageRoot -Recurse -Force -File) {
             $relative = $file.FullName.Substring($StageRoot.Length + 1).Replace('\','/')
@@ -782,7 +852,8 @@ try {
             $isPe = Test-PortableExecutable $file.FullName
             if ($file.Extension -in @('.dll','.exe','.oct','.mex','.mexw64') -and -not $isPe) { throw "Staged loadable file does not contain a PE image: $($file.FullName)" }
             if ($isPe) {
-                $group = if ($relative.StartsWith('pure/', [StringComparison]::OrdinalIgnoreCase)) { 'pure' } elseif ($relative.StartsWith('bridge/', [StringComparison]::OrdinalIgnoreCase)) { 'bridge' } else { 'octave' }
+                $group = Get-LoaderDomain $relative
+
                 [pscustomobject]@{ File=$file; Relative=$relative; Group=$group }
             }
         }
@@ -809,6 +880,9 @@ try {
 
     if ($TestMode) {
         $syntheticImports = Read-SyntheticImports $SyntheticImportManifest $fixtureRoot
+        if ($InjectGnuplotAuditFault -eq 'Sibling') { $syntheticImports['pure/tools/other/bin/sibling-only.dll'] = @() }
+        if ($InjectGnuplotAuditFault -eq 'Nested') { $syntheticImports['pure/tools/gnuplot/bin/plugins/nested-only.dll'] = @() }
+
         $syntheticSystemMappings = Read-SyntheticSystemMappings $SyntheticSystemMappingManifest $fixtureRoot
         $peSet = @{}
         foreach ($pe in $peFiles) {
@@ -837,7 +911,7 @@ try {
     $resolverReady = $false
     [long]$svgLoaderRsvgEdgeCount = 0
     foreach ($pe in $peFiles) {
-        $effective = if ($pe.Group -eq 'octave') { $octaveSet } elseif ($pe.Group -eq 'pure') { $pureSet } else { $both=@{}; foreach($set in @($pureSet,$octaveSet)){foreach($key in $set.Keys){if(-not $both.ContainsKey($key)){$both[$key]=@()};$both[$key]+=$set[$key]}}; $both }
+        $effective = Get-EffectiveLoaderSet $pe.Group $pureSet $octaveSet $gnuplotSet
         if ($TestMode -and $supplementRelativeSet.ContainsKey($pe.Relative.ToLowerInvariant())) {
             $peImports = switch ($pe.File.Name.ToLowerInvariant()) {
                 'librsvg-2-2.dll' { @('libunwind.dll','libxml2-16.dll','libpure.dll') }

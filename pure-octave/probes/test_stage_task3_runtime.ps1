@@ -95,6 +95,19 @@ function New-SupplementImports {
     return $imports
 }
 
+function Add-GnuplotFixture([hashtable] $Imports) {
+    Write-TestPe (Join-Path $pure 'tools\gnuplot\bin\gnuplot_qt.exe') 'gnuplot-qt'
+    Write-TestPe (Join-Path $pure 'tools\gnuplot\bin\Qt6Core.dll') 'qt6-core'
+    $Imports['pure/tools/gnuplot/bin/gnuplot_qt.exe'] = @('Qt6Core.dll')
+    $Imports['pure/tools/gnuplot/bin/Qt6Core.dll'] = @()
+    return $Imports
+}
+
+function Remove-GnuplotFixture {
+    $root = Join-Path $pure 'tools\gnuplot'
+    if (Test-Path -LiteralPath $root) { Remove-Item -LiteralPath $root -Recurse -Force }
+}
+
 function Reset-SupplementFixture {
     foreach ($root in @($supplementSnapshot,$supplementSource)) {
         $full = [IO.Path]::GetFullPath($root)
@@ -122,7 +135,9 @@ function Invoke-Stage {
         [string]$Name,
         [hashtable]$Imports,
         [hashtable]$SystemMappings = @{},
+        [string]$InjectGnuplotAuditFault = '',
         [switch]$NoTestMode,
+        [switch]$InjectGnuplotCaseCollision,
         [switch]$OmitSyntheticTools,
         [string]$DisposableParentOverride = '',
         [string]$BridgeModuleOverride = '',
@@ -175,6 +190,8 @@ function Invoke-Stage {
         )
     }
     if (-not $NoTestMode) { $args += '-TestMode' }
+    if ($InjectGnuplotCaseCollision) { $args += '-InjectGnuplotCaseCollision' }
+    if ($InjectGnuplotAuditFault) { $args += @('-InjectGnuplotAuditFault',$InjectGnuplotAuditFault) }
     if ($InjectSupplementDestinationCollision) { $args += '-InjectSupplementDestinationCollision' }
     if ($InjectSupplementMappingMismatch) { $args += '-InjectSupplementMappingMismatch' }
     if ($InjectFourthSupplementDependency) { $args += '-InjectFourthSupplementDependency' }
@@ -228,6 +245,62 @@ try {
     Write-TestFile $objectEvidence 'object-evidence-v1'
     Write-TestFile $buildEvidence 'build-evidence-v1'
     Reset-SupplementFixture
+
+    $gnuplotSuccess = Invoke-Stage 'gnuplot-appdir-success' (Add-GnuplotFixture (New-BaseImports))
+    Assert-True ($gnuplotSuccess.ExitCode -eq 0) "Gnuplot application-directory fixture failed: $($gnuplotSuccess.Output)"
+    $closure = Get-Content -LiteralPath (Join-Path $gnuplotSuccess.Stage 'stage-import-closure.tsv') -Raw
+    Assert-True ($closure -match 'gnuplot_qt\.exe"\tpure-gnuplot-app\tQt6Core\.dll\t"[^"\r\n]+\\pure\\tools\\gnuplot\\bin\\Qt6Core\.dll"') 'Gnuplot Qt6Core import did not resolve in its exact application directory.'
+    Remove-GnuplotFixture
+    $onlyPure = Add-GnuplotFixture (New-BaseImports)
+    $onlyPure['pure/tools/gnuplot/bin/gnuplot_qt.exe'] = @('libpure.dll')
+    Assert-Failure (Invoke-Stage 'gnuplot-no-pure-fallback' $onlyPure) 'Missing effective import libpure\.dll' 'Gnuplot Pure fallback'
+    Remove-GnuplotFixture
+    Write-Output 'PASS Test-RejectsGnuplotPureFallback'
+
+    $onlyOctave = Add-GnuplotFixture (New-BaseImports)
+    $onlyOctave['pure/tools/gnuplot/bin/gnuplot_qt.exe'] = @('liboctave-13.dll')
+    Assert-Failure (Invoke-Stage 'gnuplot-no-octave-fallback' $onlyOctave) 'Missing effective import liboctave-13\.dll' 'Gnuplot Octave fallback'
+    Remove-GnuplotFixture
+    Write-Output 'PASS Test-RejectsGnuplotOctaveFallback'
+
+    $pathOnly = Join-Path $testRoot 'path-only'
+    Write-TestPe (Join-Path $pathOnly 'path-only.dll') 'path-only'
+    $savedPath = $env:PATH
+    try {
+        $env:PATH = $pathOnly + [IO.Path]::PathSeparator + $savedPath
+        $pathImports = Add-GnuplotFixture (New-BaseImports)
+        $pathImports['pure/tools/gnuplot/bin/gnuplot_qt.exe'] = @('path-only.dll')
+        Assert-Failure (Invoke-Stage 'gnuplot-no-path-fallback' $pathImports) 'Missing effective import path-only\.dll' 'Gnuplot PATH fallback'
+    }
+    finally { $env:PATH = $savedPath; Remove-GnuplotFixture }
+    Write-Output 'PASS Test-RejectsGnuplotPathFallback'
+
+    $caseCollisionImports = Add-GnuplotFixture (New-BaseImports)
+    Assert-Failure (Invoke-Stage 'gnuplot-case-collision' $caseCollisionImports -InjectGnuplotCaseCollision) 'Ambiguous effective staged import Qt6Core\.dll|ambiguous case-insensitive filename' 'Gnuplot case collision'
+    Remove-GnuplotFixture
+    Write-Output 'PASS Test-RejectsGnuplotCaseCollision'
+
+    $productionGnuplotInjection = Invoke-Stage 'production-gnuplot-injection' (New-BaseImports) @{} -NoTestMode -OmitSyntheticTools -InjectGnuplotCaseCollision
+    $siblingImports = Add-GnuplotFixture (New-BaseImports)
+    $siblingImports['pure/tools/gnuplot/bin/gnuplot_qt.exe'] = @('sibling-only.dll')
+    Assert-Failure (Invoke-Stage 'gnuplot-no-sibling-fallback' $siblingImports -InjectGnuplotAuditFault Sibling) 'Missing effective import sibling-only\.dll' 'Gnuplot sibling fallback'
+    Remove-GnuplotFixture
+    Write-Output 'PASS Test-RejectsGnuplotSiblingFallback'
+
+    $nestedImports = Add-GnuplotFixture (New-BaseImports)
+    $nestedImports['pure/tools/gnuplot/bin/gnuplot_qt.exe'] = @('nested-only.dll')
+    Assert-Failure (Invoke-Stage 'gnuplot-no-nested-fallback' $nestedImports -InjectGnuplotAuditFault Nested) 'Missing effective import nested-only\.dll' 'Gnuplot nested fallback'
+    Remove-GnuplotFixture
+    Write-Output 'PASS Test-RejectsGnuplotNestedFallback'
+
+    $nonPeImports = Add-GnuplotFixture (New-BaseImports)
+    Assert-Failure (Invoke-Stage 'gnuplot-non-pe' $nonPeImports -InjectGnuplotAuditFault NonPe) 'Staged loadable file does not contain a PE image' 'Gnuplot non-PE file'
+    Remove-GnuplotFixture
+    Write-Output 'PASS Test-RejectsGnuplotNonPeFile'
+
+    Assert-Failure $productionGnuplotInjection 'Gnuplot case-collision injection is TestMode-only' 'Production Gnuplot case-collision injection'
+    Write-Output 'PASS Test-RejectsProductionGnuplotCaseCollisionInjection'
+
 
     $success = Invoke-Stage 'success' (New-BaseImports)
     Assert-True ($success.ExitCode -eq 0) "Success fixture failed: $($success.Output)"
