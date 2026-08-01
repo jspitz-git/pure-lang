@@ -40,7 +40,7 @@ param(
     [switch] $InjectSupplementPostconditionFault,
     [ValidateSet('','PeCount','OctCount','PlaceholderCount','FileCount','ByteCount','ManifestSha256')][string] $InjectSupplementPostAuditFault = '',
     [switch] $InjectGnuplotCaseCollision,
-    [ValidateSet('','Sibling','Nested','NonPe')][string] $InjectGnuplotAuditFault = '',
+    [ValidateSet('','Sibling','Nested','NonPe','ReparseRoot','ReparseFile')][string] $InjectGnuplotAuditFault = '',
     [switch] $TestMode
 )
 
@@ -843,8 +843,11 @@ try {
             'Sibling' { [IO.Directory]::CreateDirectory((Join-Path $StageRoot 'pure\tools\other\bin')) | Out-Null; [IO.File]::WriteAllBytes((Join-Path $StageRoot 'pure\tools\other\bin\sibling-only.dll'), [Text.Encoding]::ASCII.GetBytes('MZsibling-only')) }
             'Nested' { [IO.Directory]::CreateDirectory((Join-Path $StageRoot 'pure\tools\gnuplot\bin\plugins')) | Out-Null; [IO.File]::WriteAllBytes((Join-Path $StageRoot 'pure\tools\gnuplot\bin\plugins\nested-only.dll'), [Text.Encoding]::ASCII.GetBytes('MZnested-only')) }
             'NonPe' { [IO.File]::WriteAllText((Join-Path $StageRoot 'pure\tools\gnuplot\bin\bad.dll'), 'not a PE', [Text.Encoding]::ASCII) }
+            'ReparseRoot' { $realRoot = $gnuplotRoot + '-real'; [IO.Directory]::Move($gnuplotRoot, $realRoot); cmd.exe /c ('mklink /J "{0}" "{1}"' -f $gnuplotRoot, $realRoot) | Out-Null }
+            'ReparseFile' { $source = Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::LocalApplicationData)) 'Microsoft\WindowsApps\pwsh.exe'; New-Item -ItemType HardLink -Path (Join-Path $gnuplotRoot 'reparse-file.dll') -Target $source | Out-Null }
         }
     }
+    if ($TestMode -and $InjectGnuplotAuditFault) { $gnuplotSet = New-DirectLoaderSet $gnuplotRoot 'Staged Gnuplot application loader root' }
     $peFiles = @(
         foreach ($file in Get-ChildItem -LiteralPath $StageRoot -Recurse -Force -File) {
             $relative = $file.FullName.Substring($StageRoot.Length + 1).Replace('\','/')

@@ -298,6 +298,16 @@ try {
     Remove-GnuplotFixture
     Write-Output 'PASS Test-RejectsGnuplotNonPeFile'
 
+    $reparseRootImports = Add-GnuplotFixture (New-BaseImports)
+    Assert-Failure (Invoke-Stage 'gnuplot-reparse-root' $reparseRootImports -InjectGnuplotAuditFault ReparseRoot) 'Staged Gnuplot application loader root.*reparse point|reparse point.*Staged Gnuplot application loader root' 'Gnuplot loader root reparse point'
+    Remove-GnuplotFixture
+    Write-Output 'PASS Test-RejectsGnuplotLoaderRootReparsePoint'
+
+    $reparseFileImports = Add-GnuplotFixture (New-BaseImports)
+    Assert-Failure (Invoke-Stage 'gnuplot-reparse-file' $reparseFileImports -InjectGnuplotAuditFault ReparseFile) 'Staged Gnuplot application loader root file.*reparse point|reparse point.*Staged Gnuplot application loader root file' 'Gnuplot loader file reparse point'
+    Remove-GnuplotFixture
+    Write-Output 'PASS Test-RejectsGnuplotLoaderFileReparsePoint'
+
     Assert-Failure $productionGnuplotInjection 'Gnuplot case-collision injection is TestMode-only' 'Production Gnuplot case-collision injection'
     Write-Output 'PASS Test-RejectsProductionGnuplotCaseCollisionInjection'
 
