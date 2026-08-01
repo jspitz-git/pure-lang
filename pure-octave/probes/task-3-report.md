@@ -1167,3 +1167,137 @@ scripts parsed with zero errors, `git diff --check` exited 0, and the worktree
 contained exactly the three authorized Task 2 files with no added inventory
 file. The existing no-stage and no-staged-execution statement above remains
 unchanged.
+
+## v12 production preflight: BLOCKED by changed API-set schema identity
+
+Task 3 began from exact `e06d904bbc4bef5a304f669859283970cda70be8`
+with a clean worktree. Preserved v11 was present, all 23 selected v12
+target/evidence/helper paths were absent, the disposable parent was a regular
+non-reparse directory, and the permanent Octave, accepted Pure, normalized
+Octave, bridge-binary, SVG-supplement snapshot, and clang64 source-bin roots
+were reparse-free before either v12 helper was created.
+
+The new wrapper is the literal v11 wrapper with only the v12 exit-marker and
+stage-root values changed. Its SHA-256 is
+`26B519558047D0E79A22E3FF83B81D8E10A6E3CBF2C321B0612723EFA766F9F2`.
+`Get-Command` accepted all 16 literal bound keys; the decoded parameter JSON
+SHA-256 is
+`A7C2DAC8F284EB48B68A90DBC91BED72232509AC9F263D99D03DC9C586B17C8F`.
+The wrapper and preflight parsed with zero errors, and the wrapper contained no
+`TestMode`, synthetic, injection, hook, or inventory-override surface. The v12
+preflight SHA-256 is
+`DE4646ECF9624894D5199F085DCB3B86D14CA3ED6E00542EA64959AD10A02862`.
+It retained the reviewed v11 checks, changed only v11-owned names, replaced the
+assembler pin with
+`466092C4AAC99E7342D17938B0238BB01B8981DF067594667191ED397E6C35C9`,
+and added fresh literal repository pins for the preparer
+(`95382BEB41DCBAAF4925494455A03A603E4898670967C3C8E8713CC0A3404950`),
+preparer harness
+(`4D94E1BDE1F73678CC0040F544540C6825CD464766FE0EDC890CDD5EFF1E2793`),
+and staging harness
+(`3A118AD04C31288448E450D4016C0E4259B99254A39CEB3381B17E95006612FF`).
+
+The full preflight ran hidden under exact PowerShell 7.6.4 at
+`C:\Program Files\WindowsApps\Microsoft.PowerShell_7.6.4.0_x64__8wekyb3d8bbwe\pwsh.exe`,
+SHA-256
+`DB6DD81183FE57D22E03B911EC9A30A2FD7C40542E97743615355A6FB44F458F`,
+as PID 6248. It started at `2026-08-01T11:16:08.5015190Z` and wrote its
+marker at `2026-08-01T12:07:02.2976952Z`. The PID file is 6 bytes / SHA-256
+`B5A7E7F51E88215DAB9273B9E1BC1F5F572C85DDDDBE75749D1A0FC06C36D0CA`.
+The exit marker is `1`, 3 bytes / SHA-256
+`F1B2F662800122BED0FF255693DF89C4487FBDCF453D3524A42D4EC20C3D9C04`.
+Stdout is empty, 0 bytes / SHA-256
+`E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855`.
+Stderr is 287 bytes / SHA-256
+`2F82EE30C8B44DEFFBC99E45BC6CEC1AACBFB3917BE1F11AD643E41B23F1802A`.
+The exact terminating error is:
+
+```text
+Exception: C:\tmp\todo51-task3\stage_v12_preflight_audit.ps1:240
+Authoritative API-set baseline mismatch.
+```
+
+The reported OS identity still equals the pin,
+`Microsoft Windows NT 10.0.26200.0`, but the current regular
+`C:\WINDOWS\System32\apisetschema.dll` is 194,048 bytes / SHA-256
+`E485E3CF63919CD5DC5EC8624E94C3645E8BF3C4445AE937FBA045BEA3D88BB8`,
+not the reviewed immutable pin
+`8FFADF5FF3D8D3843FC393E9D03C2091AC5DDFC6227B8097DC182E2A8F8463FC`.
+
+The preflight therefore failed closed before the production gate. The v12
+stage root is absent, all assembler PID/stdout/stderr/marker paths are absent,
+and the assembler launch count is zero. Preserved v11 and all v12 helper and
+preflight evidence remain in place. Per the no-recycle rule there was no
+preflight retry, assembler launch, staged-binary inspection or execution,
+static post-audit, regression harness, success review, cleanup, or commit.
+
+## Task 1: serviced Windows platform identity repin
+
+Read-only root-cause evidence identifies a Windows servicing transition rather
+than source, stage, supplement, or loader-domain corruption. The previously
+accepted WinSxS API-set component was `10.0.26100.8521`, 194,040 bytes,
+SHA-256
+`8FFADF5FF3D8D3843FC393E9D03C2091AC5DDFC6227B8097DC182E2A8F8463FC`.
+The current System32 hard link resolves to WinSxS component
+`10.0.26100.8972`, 194,048 bytes, SHA-256
+`E485E3CF63919CD5DC5EC8624E94C3645E8BF3C4445AE937FBA045BEA3D88BB8`.
+The System32 and WinSxS paths are byte-identical hard links, and the current
+component has a valid Authenticode signature from Microsoft Windows. The
+coarse OS string remained `Microsoft Windows NT 10.0.26200.0` while the
+registry reports `CurrentBuild = 26200` as `String` and `UBR = 8973` as
+`DWord`; relevant updates were installed on 2026-07-31 and 2026-08-01.
+
+The accepted production identity is now exactly:
+
+- OS version `Microsoft Windows NT 10.0.26200.0`;
+- CurrentBuild `26200` / `String`, UBR `8973` / `DWord`;
+- canonical `C:\WINDOWS\System32\apisetschema.dll`, regular and non-reparse;
+- file version `10.0.26100.8972 (WinBuild.160101.0800)`;
+- product version `10.0.26100.8972`;
+- length 194,048;
+- SHA-256
+  `E485E3CF63919CD5DC5EC8624E94C3645E8BF3C4445AE937FBA045BEA3D88BB8`.
+
+`Get-WindowsPlatformIdentity` reads this complete production identity and
+disposes the Windows CurrentVersion registry handle in `finally`.
+`Assert-PlatformIdentity` checks every string ordinally and both numeric
+fields numerically before import resolution. TestMode instead validates its
+exact disposable `synthetic-system32\apisetschema.dll` leaf and constructs
+a separate fixed synthetic identity; it never reads production registry
+metadata. Final JSON now records all eight platform fields. The existing
+`stage-api-set-contracts.tsv` format still uses the observed OS string,
+canonical schema path, and observed hash, remains excluded from the manifest,
+and no staged evidence file was added.
+
+TDD RED was observed with staging harness exit 1 at
+`Test-HardBindsWindowsPlatformIdentityContract`:
+
+```text
+Production platform identity contract omits exact literal assignment:
+$acceptedCurrentBuild = '26200'
+```
+
+GREEN then emitted all four new platform PASS markers and the final
+`PASS all task3 staging tests` sentinel: 47/47 named staging tests, comprising
+the existing 43 plus four platform-identity tests. The exact synthetic success
+identity reached the eight JSON fields. All 14 fixed faults failed with their
+field-specific errors, including missing/wrong-kind registry fields,
+outside-System32, reparse, and non-regular schema cases. A no-TestMode
+`OsVersion` injection failed before input validation with
+`Platform identity fault injection is TestMode-only and has no production
+access.`; source-contract inspection also found no parameter beginning with
+`ExpectedWindows`, `ExpectedUbr`, `ExpectedCurrentBuild`, or
+`ExpectedApiSet`.
+
+The focused supplement harness passed 15/15 and emitted
+`PASS all supplement preparer tests`. Both changed PowerShell files parsed
+with zero errors and `git diff --check` exited 0. The final stage pins remain
+64,312 files / 3,334,971,045 bytes / manifest
+`115AC1F8843FFC60A4FFD103DCB7CD9C3099CAE14F2B3B674EF5D6230DF22DE0`,
+with 1,539 PE files, 219 PE `.oct` modules, and one inert placeholder. The
+Gnuplot loader contract remains `65 / 63 / 1002 / 249 / 563 / 190 / 0`.
+
+Task 1 did not perform production staging or start any staged binary. The
+assembler launch count remains zero, `C:\tmp\todo51-task3\stage-runtime-v12`
+remains absent, and all preserved v11/v12 helpers, logs, markers, and evidence
+remain unchanged.

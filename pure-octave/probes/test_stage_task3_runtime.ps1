@@ -21,6 +21,15 @@ $supplementContract = Import-PowerShellDataFile -LiteralPath $supplementContract
 $supplementSnapshot = Join-Path $testRoot 'supplement-snapshot'
 $supplementSource = Join-Path $testRoot 'supplement-source'
 $supplementNames = [string[]]@('librsvg-2-2.dll','libunwind.dll','libxml2-16.dll')
+$syntheticSystem32 = Join-Path $testRoot 'synthetic-system32'
+$syntheticApiSetSchema = Join-Path $syntheticSystem32 'apisetschema.dll'
+$syntheticPlatformOsVersion = 'Microsoft Windows NT 10.0.99999.0'
+$syntheticPlatformCurrentBuild = '99999'
+$syntheticPlatformUbr = [int]42
+$syntheticPlatformFileVersion = '10.0.99999.42 (Synthetic.000000.0000)'
+$syntheticPlatformProductVersion = '10.0.99999.42'
+$syntheticPlatformLength = [long]24
+$syntheticPlatformSha256 = '6251FC42BCBC8353101386F8A2A1C01B96CEAE9898A0C757C0842862737E3316'
 
 function Write-TestFile {
     param([string]$Path, [string]$Text)
@@ -121,6 +130,13 @@ function Reset-SupplementFixture {
     }
 }
 
+function Reset-PlatformIdentityFixture {
+    $root = Join-Path $testRoot 'synthetic-system32'
+    if (Test-Path -LiteralPath $root) { Remove-Item -LiteralPath $root -Recurse -Force }
+    [IO.Directory]::CreateDirectory($root) | Out-Null
+    Write-TestFile (Join-Path $root 'apisetschema.dll') 'synthetic-api-set-schema'
+}
+
 function Set-TestPeMachine {
     param([string]$Path, [uint16]$Machine)
     $bytes = [IO.File]::ReadAllBytes($Path)
@@ -140,6 +156,7 @@ function Invoke-Stage {
         [switch]$NoTestMode,
         [switch]$InjectGnuplotCaseCollision,
         [switch]$InjectGnuplotApiSetReleaseFailure,
+        [string]$InjectPlatformIdentityFault = '',
         [switch]$OmitSyntheticTools,
         [string]$DisposableParentOverride = '',
         [string]$BridgeModuleOverride = '',
@@ -158,6 +175,16 @@ function Invoke-Stage {
     $systemFile = Join-Path $testRoot ("fixtures\$Name-system.tsv")
     Write-ImportFixture $importFile $Imports
     Write-SystemFixture $systemFile $SystemMappings
+    Reset-PlatformIdentityFixture
+    if ($InjectPlatformIdentityFault -eq 'ReparseSchema') {
+        Remove-Item -LiteralPath $syntheticApiSetSchema -Force
+        $reparseSource = Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::LocalApplicationData)) 'Microsoft\WindowsApps\pwsh.exe'
+        New-Item -ItemType HardLink -Path $syntheticApiSetSchema -Target $reparseSource | Out-Null
+    }
+    elseif ($InjectPlatformIdentityFault -eq 'NonRegularSchema') {
+        Remove-Item -LiteralPath $syntheticApiSetSchema -Force
+        [IO.Directory]::CreateDirectory($syntheticApiSetSchema) | Out-Null
+    }
     $pureManifest = Get-TreeManifest $pure
     $bridgeManifest = Get-TreeManifest $bridge
     $args = @(
@@ -196,6 +223,7 @@ function Invoke-Stage {
     if ($InjectGnuplotAuditFault) { $args += @('-InjectGnuplotAuditFault',$InjectGnuplotAuditFault) }
     if ($InjectGnuplotPostAuditFault) { $args += @('-InjectGnuplotPostAuditFault',$InjectGnuplotPostAuditFault) }
     if ($InjectGnuplotApiSetReleaseFailure) { $args += '-InjectGnuplotApiSetReleaseFailure' }
+    if ($InjectPlatformIdentityFault) { $args += @('-InjectPlatformIdentityFault',$InjectPlatformIdentityFault) }
     if ($InjectSupplementDestinationCollision) { $args += '-InjectSupplementDestinationCollision' }
     if ($InjectSupplementMappingMismatch) { $args += '-InjectSupplementMappingMismatch' }
     if ($InjectFourthSupplementDependency) { $args += '-InjectFourthSupplementDependency' }
@@ -227,6 +255,25 @@ try {
     $productionPlaceholderCount = if ($productionPlaceholder.Success) { [regex]::Matches($productionPlaceholder.Value, 'Relative\s*=').Count } else { 0 }
     Assert-True ($productionPeCount.Success -and [long]$productionPeCount.Groups['count'].Value -eq 1536 -and $productionOctCount.Success -and [long]$productionOctCount.Groups['count'].Value -eq 219 -and $productionPlaceholderCount -eq 1) 'Production static-import contract must hard-bind 1,536 PE + 1 pinned inert placeholder + 219 .oct files.'
     Write-Output 'PASS Test-HardBindsProductionAuditCardinalityTo1536PePlusOnePlaceholderAnd219Oct'
+    foreach ($assignment in @(
+        "`$acceptedOsVersion = 'Microsoft Windows NT 10.0.26200.0'",
+        "`$acceptedCurrentBuild = '26200'",
+        "`$acceptedCurrentBuildKind = 'String'",
+        '$acceptedUbr = [int]8973',
+        "`$acceptedUbrKind = 'DWord'",
+        "`$acceptedApiSchemaFileVersion = '10.0.26100.8972 (WinBuild.160101.0800)'",
+        "`$acceptedApiSchemaProductVersion = '10.0.26100.8972'",
+        '$acceptedApiSchemaLength = [long]194048',
+        "`$acceptedApiSchemaSha256 = 'E485E3CF63919CD5DC5EC8624E94C3645E8BF3C4445AE937FBA045BEA3D88BB8'"
+    )) {
+        Assert-True ([regex]::IsMatch($productionSource, ('(?m)^' + [regex]::Escape($assignment) + '\r?$'))) "Production platform identity contract omits exact literal assignment: $assignment"
+    }
+    foreach ($field in @('WindowsOsVersion','WindowsCurrentBuild','WindowsUbr','ApiSetSchemaPath','ApiSetSchemaFileVersion','ApiSetSchemaProductVersion','ApiSetSchemaLength','ApiSetSchemaSha256')) {
+        Assert-True ($productionSource -match ("(?m)^\s+" + [regex]::Escape($field) + '\s*=')) "Production final JSON omits platform identity field: $field"
+    }
+    $forbiddenPlatformParameters = @((Get-Command $scriptPath).Parameters.Keys | Where-Object { $_ -match '^(ExpectedWindows|ExpectedUbr|ExpectedCurrentBuild|ExpectedApiSet)' })
+    Assert-True ($forbiddenPlatformParameters.Count -eq 0) "Production exposes caller-controlled platform identity parameters: $([string]::Join(', ', [string[]]$forbiddenPlatformParameters))"
+    Write-Output 'PASS Test-HardBindsWindowsPlatformIdentityContract'
     foreach ($assignment in @(
         "`$acceptedGnuplotRelativeRoot = 'pure/tools/gnuplot/bin'",
         '$acceptedGnuplotFileCount = 65',
@@ -272,6 +319,47 @@ try {
     Write-TestFile $objectEvidence 'object-evidence-v1'
     Write-TestFile $buildEvidence 'build-evidence-v1'
     Reset-SupplementFixture
+    Reset-PlatformIdentityFixture
+
+    $platformSuccess = Invoke-Stage 'platform-identity-success' (New-BaseImports)
+    Assert-True ($platformSuccess.ExitCode -eq 0) "Synthetic platform identity fixture failed: $($platformSuccess.Output)"
+    $platformReport = $platformSuccess.Output | ConvertFrom-Json
+    Assert-True (
+        $platformReport.WindowsOsVersion -ceq $syntheticPlatformOsVersion -and
+        $platformReport.WindowsCurrentBuild -ceq $syntheticPlatformCurrentBuild -and
+        [int]$platformReport.WindowsUbr -eq $syntheticPlatformUbr -and
+        $platformReport.ApiSetSchemaPath -ceq $syntheticApiSetSchema -and
+        $platformReport.ApiSetSchemaFileVersion -ceq $syntheticPlatformFileVersion -and
+        $platformReport.ApiSetSchemaProductVersion -ceq $syntheticPlatformProductVersion -and
+        [long]$platformReport.ApiSetSchemaLength -eq $syntheticPlatformLength -and
+        $platformReport.ApiSetSchemaSha256 -ceq $syntheticPlatformSha256
+    ) "Final JSON did not report the exact synthetic platform identity: $($platformSuccess.Output)"
+    Write-Output 'PASS Test-ReportsExactSyntheticWindowsPlatformIdentity'
+
+    $platformFaultMessages = [ordered]@{
+        OsVersion = 'Windows OS version does not match the expected platform identity'
+        CurrentBuild = 'Windows CurrentBuild does not match the expected platform identity'
+        Ubr = 'Windows UBR does not match the expected platform identity'
+        MissingCurrentBuild = 'Windows CurrentBuild is missing'
+        MissingUbr = 'Windows UBR is missing'
+        CurrentBuildKind = 'Windows CurrentBuild registry kind does not match the expected platform identity'
+        UbrKind = 'Windows UBR registry kind does not match the expected platform identity'
+        FileVersion = 'Windows API-set schema file version does not match the expected platform identity'
+        ProductVersion = 'Windows API-set schema product version does not match the expected platform identity'
+        Length = 'Windows API-set schema length does not match the expected platform identity'
+        Sha256 = 'Windows API-set schema SHA-256 does not match the expected platform identity'
+        OutsideSystem32 = 'Windows API-set schema path does not match the expected platform identity'
+        ReparseSchema = 'Windows API-set schema.*reparse point|reparse point.*Windows API-set schema'
+        NonRegularSchema = 'Windows API-set schema is missing'
+    }
+    foreach ($fault in $platformFaultMessages.Keys) {
+        Assert-Failure (Invoke-Stage ("platform-identity-$($fault.ToLowerInvariant())") (New-BaseImports) -InjectPlatformIdentityFault $fault) $platformFaultMessages[$fault] "Platform identity $fault fault"
+    }
+    Write-Output 'PASS Test-RejectsEverySyntheticWindowsPlatformIdentityFault'
+
+    $productionPlatformInjection = Invoke-Stage 'production-platform-identity-injection' (New-BaseImports) @{} -NoTestMode -OmitSyntheticTools -InjectPlatformIdentityFault OsVersion
+    Assert-Failure $productionPlatformInjection 'Platform identity fault injection is TestMode-only and has no production access' 'Production platform identity injection'
+    Write-Output 'PASS Test-RejectsProductionPlatformIdentityInjection'
 
     $gnuplotApi = 'api-ms-win-core-synch-l1-2-0.dll'
     $gnuplotSystemMappings = @{$gnuplotApi='kernelbase.dll'; 'kernel32.dll'='kernel32.dll'}

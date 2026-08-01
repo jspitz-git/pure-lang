@@ -43,6 +43,7 @@ param(
     [ValidateSet('','Sibling','Nested','NonPe','ReparseRoot','ReparseFile')][string] $InjectGnuplotAuditFault = '',
     [ValidateSet('FileCount','PeCount','ImportEdgeCount','ApplicationDirectoryEdgeCount','ApiSetEdgeCount','System32EdgeCount','UnresolvedEdgeCount')][string] $InjectGnuplotPostAuditFault = '',
     [switch] $InjectGnuplotApiSetReleaseFailure,
+    [ValidateSet('','OsVersion','CurrentBuild','Ubr','MissingCurrentBuild','MissingUbr','CurrentBuildKind','UbrKind','FileVersion','ProductVersion','Length','Sha256','OutsideSystem32','ReparseSchema','NonRegularSchema')][string] $InjectPlatformIdentityFault = '',
     [switch] $TestMode
 )
 
@@ -51,6 +52,7 @@ param(
 # below that root.  The strict runner is a later Task 3 checkpoint.
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+if ($InjectPlatformIdentityFault -and -not $TestMode) { throw 'Platform identity fault injection is TestMode-only and has no production access.' }
 if ($InjectGnuplotCaseCollision -and -not $TestMode) { throw 'Gnuplot case-collision injection is TestMode-only and has no production access.' }
 if ($InjectGnuplotAuditFault -and -not $TestMode) { throw 'Gnuplot audit fault injection is TestMode-only and has no production access.' }
 if ($InjectGnuplotPostAuditFault -and -not $TestMode) { throw 'Gnuplot post-audit fault injection is TestMode-only and has no production access.' }
@@ -79,8 +81,15 @@ $acceptedBuildEvidence = 'C:\tmp\todo51-task3\liboctave-normalized-confined.log'
 $acceptedArtifactEvidenceSha256 = 'C56E0746AA0673447F6BD64117772BEC9D450321C53F508A96352818F7EB964C'
 $acceptedObjectEvidenceSha256 = 'DFB6BA01DCDDCBDDEDA4FAA278556284F68C89B2AA79E417FDDFDA463893B9F0'
 $acceptedBuildEvidenceSha256 = '842678BFBBC560B4258EE15920C1E36B030D334B2B8BC948C6768CA6613E3608'
-$acceptedApiSchemaSha256 = '8FFADF5FF3D8D3843FC393E9D03C2091AC5DDFC6227B8097DC182E2A8F8463FC'
 $acceptedOsVersion = 'Microsoft Windows NT 10.0.26200.0'
+$acceptedCurrentBuild = '26200'
+$acceptedCurrentBuildKind = 'String'
+$acceptedUbr = [int]8973
+$acceptedUbrKind = 'DWord'
+$acceptedApiSchemaFileVersion = '10.0.26100.8972 (WinBuild.160101.0800)'
+$acceptedApiSchemaProductVersion = '10.0.26100.8972'
+$acceptedApiSchemaLength = [long]194048
+$acceptedApiSchemaSha256 = 'E485E3CF63919CD5DC5EC8624E94C3645E8BF3C4445AE937FBA045BEA3D88BB8'
 $acceptedGnuplotRelativeRoot = 'pure/tools/gnuplot/bin'
 $acceptedGnuplotFileCount = 65
 $acceptedGnuplotPeFileCount = 63
@@ -542,6 +551,52 @@ public static class Task3ApiSetResolver {
     }
 }
 
+function Assert-PlatformIdentity([pscustomobject] $Actual, [pscustomobject] $Expected) {
+    if (-not [string]::Equals([string]$Actual.OsVersion, [string]$Expected.OsVersion, [StringComparison]::Ordinal)) { throw 'Windows OS version does not match the expected platform identity.' }
+    if ($null -eq $Actual.CurrentBuild) { throw 'Windows CurrentBuild is missing.' }
+    if (-not [string]::Equals([string]$Actual.CurrentBuild, [string]$Expected.CurrentBuild, [StringComparison]::Ordinal)) { throw 'Windows CurrentBuild does not match the expected platform identity.' }
+    if (-not [string]::Equals([string]$Actual.CurrentBuildKind, [string]$Expected.CurrentBuildKind, [StringComparison]::Ordinal)) { throw 'Windows CurrentBuild registry kind does not match the expected platform identity.' }
+    if ($null -eq $Actual.Ubr) { throw 'Windows UBR is missing.' }
+    if ([int]$Actual.Ubr -ne [int]$Expected.Ubr) { throw 'Windows UBR does not match the expected platform identity.' }
+    if (-not [string]::Equals([string]$Actual.UbrKind, [string]$Expected.UbrKind, [StringComparison]::Ordinal)) { throw 'Windows UBR registry kind does not match the expected platform identity.' }
+    if (-not [string]::Equals([string]$Actual.ApiSetSchemaPath, [string]$Expected.ApiSetSchemaPath, [StringComparison]::Ordinal)) { throw 'Windows API-set schema path does not match the expected platform identity.' }
+    if (-not [string]::Equals([string]$Actual.FileVersion, [string]$Expected.FileVersion, [StringComparison]::Ordinal)) { throw 'Windows API-set schema file version does not match the expected platform identity.' }
+    if (-not [string]::Equals([string]$Actual.ProductVersion, [string]$Expected.ProductVersion, [StringComparison]::Ordinal)) { throw 'Windows API-set schema product version does not match the expected platform identity.' }
+    if ([long]$Actual.Length -ne [long]$Expected.Length) { throw 'Windows API-set schema length does not match the expected platform identity.' }
+    if (-not [string]::Equals([string]$Actual.Sha256, [string]$Expected.Sha256, [StringComparison]::Ordinal)) { throw 'Windows API-set schema SHA-256 does not match the expected platform identity.' }
+}
+
+function Get-WindowsPlatformIdentity([string] $System32) {
+    $schema = Get-CanonicalExistingPath (Join-Path $System32 'apisetschema.dll') 'Windows API-set schema'
+    Assert-SourceBoundary $schema $System32 'Windows API-set schema'
+    Assert-RegularFile $schema 'Windows API-set schema'
+    Assert-NoReparsePath $schema 'Windows API-set schema'
+    $key = [Microsoft.Win32.Registry]::LocalMachine.OpenSubKey('SOFTWARE\Microsoft\Windows NT\CurrentVersion', $false)
+    if ($null -eq $key) { throw 'Windows CurrentVersion registry key is missing.' }
+    try {
+        $currentBuild = $key.GetValue('CurrentBuild', $null, [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
+        $ubr = $key.GetValue('UBR', $null, [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
+        if ($null -eq $currentBuild) { throw 'Windows CurrentBuild registry value is missing.' }
+        if ($null -eq $ubr) { throw 'Windows UBR registry value is missing.' }
+        $currentBuildKind = $key.GetValueKind('CurrentBuild').ToString()
+        $ubrKind = $key.GetValueKind('UBR').ToString()
+    }
+    finally { $key.Dispose() }
+    $item = Get-Item -LiteralPath $schema -Force
+    return [pscustomobject]@{
+        OsVersion=[Environment]::OSVersion.VersionString
+        CurrentBuild=[string]$currentBuild
+        CurrentBuildKind=$currentBuildKind
+        Ubr=[int]$ubr
+        UbrKind=$ubrKind
+        ApiSetSchemaPath=$schema
+        FileVersion=$item.VersionInfo.FileVersion
+        ProductVersion=$item.VersionInfo.ProductVersion
+        Length=[long]$item.Length
+        Sha256=Get-Sha256File $schema
+    }
+}
+
 function Resolve-ApiSetContract([string] $Contract, [string] $System32) {
     $handle = [Task3ApiSetResolver]::LoadLibraryExW($Contract, [IntPtr]::Zero, 0x00000800)
     if ($handle -eq [IntPtr]::Zero) { throw "API-set contract has no authoritative local OS mapping: $Contract (Win32 $([Runtime.InteropServices.Marshal]::GetLastWin32Error()))" }
@@ -936,22 +991,79 @@ try {
             if (-not $syntheticImports.ContainsKey($key) -and -not $supplementRelativeSet.ContainsKey($key)) { throw "Synthetic import manifest omits staged PE file: $($pe.Relative)" }
         }
         foreach ($key in $syntheticImports.Keys) { if (-not $peSet.ContainsKey($key)) { throw "Synthetic import manifest names a non-PE or absent file: $key" } }
-        $apiSetSchema = 'synthetic-system32\apisetschema.dll'
-        $apiSetSchemaHash = 'synthetic-fixture'
-        $osVersion = 'synthetic-fixture'
+        $system32 = Get-CanonicalExistingPath (Join-Path $fixtureRoot 'synthetic-system32') 'Synthetic Windows System32'
+        Assert-StrictChild $system32 $fixtureRoot 'Synthetic Windows System32'
+        $apiSetSchema = Get-CanonicalExistingPath (Join-Path $system32 'apisetschema.dll') 'Windows API-set schema'
+        Assert-SourceBoundary $apiSetSchema $system32 'Windows API-set schema'
+        Assert-RegularFile $apiSetSchema 'Windows API-set schema'
+        Assert-NoReparsePath $apiSetSchema 'Windows API-set schema'
+        $apiSetSchemaItem = Get-Item -LiteralPath $apiSetSchema -Force
+        if ([long]$apiSetSchemaItem.Length -ne 24 -or (Get-Sha256File $apiSetSchema) -cne '6251FC42BCBC8353101386F8A2A1C01B96CEAE9898A0C757C0842862737E3316') {
+            throw 'TestMode API-set schema must equal the exact versioned synthetic fixture.'
+        }
+        $expectedPlatformIdentity = [pscustomobject]@{
+            OsVersion='Microsoft Windows NT 10.0.99999.0'
+            CurrentBuild='99999'
+            CurrentBuildKind='String'
+            Ubr=[int]42
+            UbrKind='DWord'
+            ApiSetSchemaPath=$apiSetSchema
+            FileVersion='10.0.99999.42 (Synthetic.000000.0000)'
+            ProductVersion='10.0.99999.42'
+            Length=[long]24
+            Sha256='6251FC42BCBC8353101386F8A2A1C01B96CEAE9898A0C757C0842862737E3316'
+        }
+        $platformIdentity = [pscustomobject]@{
+            OsVersion='Microsoft Windows NT 10.0.99999.0'
+            CurrentBuild='99999'
+            CurrentBuildKind='String'
+            Ubr=[int]42
+            UbrKind='DWord'
+            ApiSetSchemaPath=$apiSetSchema
+            FileVersion='10.0.99999.42 (Synthetic.000000.0000)'
+            ProductVersion='10.0.99999.42'
+            Length=[long]24
+            Sha256='6251FC42BCBC8353101386F8A2A1C01B96CEAE9898A0C757C0842862737E3316'
+        }
+        switch ($InjectPlatformIdentityFault) {
+            'OsVersion' { $platformIdentity.OsVersion = 'synthetic fault' }
+            'CurrentBuild' { $platformIdentity.CurrentBuild = '99998' }
+            'Ubr' { $platformIdentity.Ubr++ }
+            'MissingCurrentBuild' { $platformIdentity.CurrentBuild = $null }
+            'MissingUbr' { $platformIdentity.Ubr = $null }
+            'CurrentBuildKind' { $platformIdentity.CurrentBuildKind = 'DWord' }
+            'UbrKind' { $platformIdentity.UbrKind = 'String' }
+            'FileVersion' { $platformIdentity.FileVersion = 'synthetic fault' }
+            'ProductVersion' { $platformIdentity.ProductVersion = 'synthetic fault' }
+            'Length' { $platformIdentity.Length++ }
+            'Sha256' { $platformIdentity.Sha256 = '0000000000000000000000000000000000000000000000000000000000000000' }
+            'OutsideSystem32' { $platformIdentity.ApiSetSchemaPath = [IO.Path]::GetFullPath((Join-Path $fixtureRoot 'outside-api-set-schema.dll')) }
+        }
     }
     else {
         Assert-RegularFile $Objdump 'External objdump'
         Assert-NoReparsePath $Objdump 'External objdump'
         $system32 = Get-CanonicalExistingPath (Join-Path $env:WINDIR 'System32') 'Windows System32'
-        $apiSetSchema = Join-Path $system32 'apisetschema.dll'
-        Assert-RegularFile $apiSetSchema 'Windows API-set schema'
-        Assert-NoReparsePath $apiSetSchema 'Windows API-set schema'
-        $apiSetSchemaHash = Get-Sha256File $apiSetSchema
-        $osVersion = [Environment]::OSVersion.VersionString
-        if ($osVersion -ne $acceptedOsVersion -or $apiSetSchemaHash -ne $acceptedApiSchemaSha256) { throw 'Local OS API-set schema is not the exact approved authoritative mapping source.' }
+        $expectedApiSetSchema = Get-CanonicalExistingPath (Join-Path $system32 'apisetschema.dll') 'Expected Windows API-set schema'
+        $expectedPlatformIdentity = [pscustomobject]@{
+            OsVersion=$acceptedOsVersion
+            CurrentBuild=$acceptedCurrentBuild
+            CurrentBuildKind=$acceptedCurrentBuildKind
+            Ubr=$acceptedUbr
+            UbrKind=$acceptedUbrKind
+            ApiSetSchemaPath=$expectedApiSetSchema
+            FileVersion=$acceptedApiSchemaFileVersion
+            ProductVersion=$acceptedApiSchemaProductVersion
+            Length=$acceptedApiSchemaLength
+            Sha256=$acceptedApiSchemaSha256
+        }
+        $platformIdentity = Get-WindowsPlatformIdentity $system32
     }
 
+    Assert-PlatformIdentity $platformIdentity $expectedPlatformIdentity
+    $apiSetSchema = $platformIdentity.ApiSetSchemaPath
+    $apiSetSchemaHash = $platformIdentity.Sha256
+    $osVersion = $platformIdentity.OsVersion
     $imports = New-Object 'Collections.Generic.List[string]'
     $apiMappings = @{}
     $resolverReady = $false
@@ -1121,6 +1233,14 @@ try {
         PinnedInertPlaceholderCount=$stagedPinnedInertPlaceholders.Count
         PinnedPureRsvgSupplementCount=$contractFiles.Count
         ApiSetContractCount=$apiMappings.Count
+        WindowsOsVersion=$platformIdentity.OsVersion
+        WindowsCurrentBuild=$platformIdentity.CurrentBuild
+        WindowsUbr=$platformIdentity.Ubr
+        ApiSetSchemaPath=$platformIdentity.ApiSetSchemaPath
+        ApiSetSchemaFileVersion=$platformIdentity.FileVersion
+        ApiSetSchemaProductVersion=$platformIdentity.ProductVersion
+        ApiSetSchemaLength=$platformIdentity.Length
+        ApiSetSchemaSha256=$platformIdentity.Sha256
         GnuplotLoaderFileCount=$gnuplotFileCount
         GnuplotLoaderPeFileCount=$gnuplotPeFileCount
         GnuplotLoaderImportEdgeCount=$gnuplotImportEdgeCount
