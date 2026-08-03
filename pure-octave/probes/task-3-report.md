@@ -1562,3 +1562,250 @@ PASS parsers 0; keys 16/16; surfaces 0; normalized diff none; production paths a
 
 No v15 production preflight, assembler process, production marker/error path,
 or `stage-runtime-v15` stage was created.
+## v15 production attempt: accepted preflight, diagnostic assembler failure
+
+The sole v15 attempt began from exact clean HEAD
+1f8bb56692f5464e7dfb3f440e4616ecf0e83677 on
+todo/51-windows-strict-write-confinement. The precreation gate matched 21
+preserved helper/evidence pins, required 16 literal v15 helper/stage/runtime
+paths to be absent, verified ten immutable roots reparse-free, and checked the
+preserved partial v14 stage only with Test-Path=True; it was not enumerated
+or read.
+
+The external v15 helpers passed their static gate with zero parser errors,
+exactly 16 recognized wrapper parameters, zero forbidden TestMode/synthetic/
+injection/hook/inventory/stage-postcondition surface, and the pinned
+PowerShell 7.6.4/platform identities:
+
+- wrapper: 3,343 bytes /
+  ACF8DEFED19F5CE21F85EBFF54E6174FBA520CFA0748FC0725F54A209450584C;
+- preflight: 23,346 bytes /
+  68187605B19AABADC6E741DD8464B1ABD5D498452B3989F1AF1EC4FD490E09B7;
+- post-audit: 18,766 bytes /
+  0BB416C320D2A33AECE4723D1BBDB6916C603BF4DDB2904419C46330FEFDED7D;
+- compact decoded-parameter JSON:
+  2BED5FAFFD7A87F4F740C8F5BDB3C911E018101DF12B9231C0FEDB1A81AD5F8E.
+
+### Accepted sole v15 preflight
+
+The ProcessStartInfo/PID/poll owner ran through explicit require_escalated
+execution after a fresh HOST_WRITE_SMOKE_PASS create/read/remove/absence
+probe. PID 14664 ran from 2026-08-03T08:05:37.0595194Z through
+2026-08-03T08:43:48.4557415Z. During execution only PID, log lengths, and
+marker presence were polled. Process/marker were 0/0, stderr was empty, and
+stdout contained exactly one PASS JSON object with every pinned source
+manifest and the exact serviced Windows platform identity.
+
+| Evidence | Bytes | SHA-256 |
+|---|---:|---|
+| preflight PID | 7 | 1335E0C5EB130881A5E03F6AAD5C0CCDB45C13183480AB2FC0D618832BAFF40D |
+| preflight stdout | 1,816 | 5A28DC7055DE3DB16671F8803DDD989BD4D593D48CED9CEC8E08D9A3F13DD5F3 |
+| preflight stderr | 0 | E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855 |
+| preflight marker | 3 | 13BF7B3039C63BF5A50491FA3CFD8EB4E699D1BA1436315AEF9CBE5711530354 |
+
+### Sole v15 assembler launch and immutable blocker
+
+After accepted preflight, the second explicit require_escalated owner
+rechecked absent stage/PID/log/marker/error paths, every helper and preflight
+hash, all 16 decoded parameters, and a fresh host-write probe. PID 22952 ran
+from 2026-08-03T08:45:33.1447831Z through
+2026-08-03T09:11:25.0940810Z. Polling was restricted to PID, stdout/stderr
+lengths, and marker presence; no in-progress stage path was opened.
+
+The immutable result was process/marker 1/1, zero-byte stdout, 395-byte
+stderr, and a new regular non-reparse BOM-less UTF-8 diagnostic JSON. The JSON
+is 978 bytes, SHA-256
+918F028B0397A235F1DA7DC18472B2834E3FB55DCABE5DE013C84C55CBC27468,
+and contains exactly one object with exactly the seven reviewed fields:
+
+~~~json
+{"TimestampUtc":"2026-08-03T09:11:24.9546929Z","ExceptionType":"System.Management.Automation.RuntimeException","Message":"Missing effective import Qt6Gui.dll needed by C:\\tmp\\todo51-task3\\stage-runtime-v15\\pure\\tools\\gnuplot\\bin\\platforms\\qminimal.dll","FullyQualifiedErrorId":"Missing effective import Qt6Gui.dll needed by C:\\tmp\\todo51-task3\\stage-runtime-v15\\pure\\tools\\gnuplot\\bin\\platforms\\qminimal.dll","Category":"OperationStopped: (Missing effective i…tforms\\qminimal.dll:String) [], RuntimeException","ScriptStackTrace":"at <ScriptBlock>, C:\\pure-lang\\pure-octave\\probes\\stage_task3_runtime.ps1: line 1132\r\nat <ScriptBlock>, C:\\tmp\\todo51-task3\\stage_v15_wrapper.ps1: line 46","InvocationPosition":"At C:\\pure-lang\\pure-octave\\probes\\stage_task3_runtime.ps1:1132 char:25\r\n+ …             throw \"Missing effective import $dll needed by $($pe.File …\r\n+               ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"}
+~~~
+
+| Evidence | Bytes | SHA-256 |
+|---|---:|---|
+| assembler PID | 7 | 632E317C3F4C6DCF616CE03996FC7971F127E5C125A01EFB6B6A30214D6C5137 |
+| assembler stdout | 0 | E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855 |
+| assembler stderr | 395 | 9688E42642AD58FD43F71E5E8FA717B9DE6EB6B00ACE14EFA2D563494DAABE1C |
+| assembler marker | 3 | F1B2F662800122BED0FF255693DF89C4487FBDCF453D3524A42D4EC20C3D9C04 |
+| assembler error JSON | 978 | 918F028B0397A235F1DA7DC18472B2834E3FB55DCABE5DE013C84C55CBC27468 |
+
+The partial C:\tmp\todo51-task3\stage-runtime-v15 root is preserved and was
+checked only with Test-Path=True; it was never enumerated or read. This v15
+attempt is BLOCKED at the exact missing qminimal.dll -> Qt6Gui.dll import. Per
+the no-retry failure contract there was no second preflight or assembler
+launch, no post-audit, no supplement or staging success harness, no
+parser/diff success gate, no staged-binary execution, and no commit. Launch
+counts are preflight one, assembler one, and post-audit zero; every post-audit
+evidence path remains absent.
+
+## v16 diagnostic/helper gate
+
+Task 3 began on branch `todo/51-windows-strict-write-confinement` at reviewed
+Task 2 HEAD `7015dd1d09053ca02c99bb4db6a03a335d38532e`. The sole worktree
+modification was this preserved report. Before this append it was 85,559 bytes,
+SHA-256 `0A957FF067216F5C5ABA82734211D217A3F0D08F156B4DD3066C0BCF9A70B89B`;
+its existing v15 evidence and meaning were retained.
+
+The preserved partial `C:\tmp\todo51-task3\stage-runtime-v15` was checked only
+with literal `Test-Path=True`. It was not enumerated, read, executed, modified,
+or cleaned. The immutable v15 helpers and runtime evidence matched their
+recorded byte counts and SHA-256 values:
+
+| Preserved v15 artifact | Bytes | SHA-256 |
+|---|---:|---|
+| wrapper | 3,343 | `ACF8DEFED19F5CE21F85EBFF54E6174FBA520CFA0748FC0725F54A209450584C` |
+| preflight | 23,346 | `68187605B19AABADC6E741DD8464B1ABD5D498452B3989F1AF1EC4FD490E09B7` |
+| post-audit | 18,766 | `0BB416C320D2A33AECE4723D1BBDB6916C603BF4DDB2904419C46330FEFDED7D` |
+| preflight PID | 7 | `1335E0C5EB130881A5E03F6AAD5C0CCDB45C13183480AB2FC0D618832BAFF40D` |
+| preflight stdout | 1,816 | `5A28DC7055DE3DB16671F8803DDD989BD4D593D48CED9CEC8E08D9A3F13DD5F3` |
+| preflight stderr | 0 | `E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855` |
+| preflight marker | 3 | `13BF7B3039C63BF5A50491FA3CFD8EB4E699D1BA1436315AEF9CBE5711530354` |
+| assembler PID | 7 | `632E317C3F4C6DCF616CE03996FC7971F127E5C125A01EFB6B6A30214D6C5137` |
+| assembler stdout | 0 | `E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855` |
+| assembler stderr | 395 | `9688E42642AD58FD43F71E5E8FA717B9DE6EB6B00ACE14EFA2D563494DAABE1C` |
+| assembler marker | 3 | `F1B2F662800122BED0FF255693DF89C4487FBDCF453D3524A42D4EC20C3D9C04` |
+| assembler error JSON | 978 | `918F028B0397A235F1DA7DC18472B2834E3FB55DCABE5DE013C84C55CBC27468` |
+
+The reviewed v15 diagnostic harness and exact throw/success children remained
+pinned: 6,536 / `EBC877656DE090A8EB0925542A8A5B2F5BD8EC54653845589DED828DCE80B0E7`,
+101 / `93450D105758B968B68EC988E3B3A6E352DD8B4654CBC48AEC75D5141AB04519`,
+and 97 / `F2767CD7ED33E7156B19BB2995CA4F82261D0B36E6D5F45F8BB0C40220E7316D`.
+Every intended v16 diagnostic fixture, wrapper, helper, stage, PID, log,
+marker, and error path was absent at the initial gate.
+
+The immutable v15 production blocker remains process/marker `1/1`, empty
+stdout, 395-byte stderr, and one seven-field diagnostic object whose exact
+message is the missing effective `Qt6Gui.dll` import required by
+`stage-runtime-v15\pure\tools\gnuplot\bin\platforms\qminimal.dll`. Task 3 did
+not retry, inspect, or alter that failed production attempt.
+
+### Task 1-2 reviewed production prerequisites
+
+Task 1 RED exited 1 at the missing effective `Qt6Gui.dll` import for
+`platforms\qminimal.dll`; GREEN ended with `PASS all task3 staging tests` after
+binding only the two exact approved plugin paths and direct-Gnuplot loader
+domain. Commits were `1bcd1755` (`Audit Gnuplot platform plugin`) and fixture
+contract correction `011bc56b` (`Restore fixed Gnuplot test fixture contract`).
+
+Task 2 RED exited 1 because the exact production plugin cardinality assignment
+was absent. Its review-fix RED exited 1 because the combined diagnostic was not
+the required direct/plugin PE sum. GREEN bound the seven independent plugin
+cardinalities and ended with both repository harnesses passing. Commits were
+`80374c0b` (`Bind Gnuplot platform plugin audit`) and reviewed correction
+`7015dd1d` (`Count inconsistent plugin API-set mappings`).
+
+### v16 wrapper RED
+
+The exact throwing child contains only strict mode, stop-on-error, and
+`throw 'V16_DIAGNOSTIC_THROW_SENTINEL'`. The success child emits exactly
+`V16_DIAGNOSTIC_SUCCESS_SENTINEL`. Before the v16 wrapper existed, the harness
+used a 2,380-byte v15-derived SUT with only the diagnostic variable, guard, and
+catch diagnostic block removed. The exact host command was:
+
+```powershell
+& 'C:\Program Files\WindowsApps\Microsoft.PowerShell_7.6.4.0_x64__8wekyb3d8bbwe\pwsh.exe' -NoProfile -NonInteractive -File 'C:\tmp\todo51-task3\wrapper-diagnostic-v16\test_v16_wrapper_diagnostics.ps1'; exit $LASTEXITCODE
+```
+
+It exited 1 for the intended reason:
+
+```text
+Exception: C:\tmp\todo51-task3\wrapper-diagnostic-v16\test_v16_wrapper_diagnostics.ps1:19
+Line |
+  19 |      if (-not $Condition) { throw $Message }
+     |                             ~~~~~~~~~~~~~~
+     | Expected independent error JSON was not created.
+```
+
+The child process/marker result was `1/1`, stderr contained the exact throw
+sentinel, and error JSON was absent. Preserved RED SUT/stdout/stderr/marker
+bytes and SHA-256 values are 2,380 /
+`1DBC5E422818B8AE21A4C0B6C8C0CD1C950F9444ADB5E26F9314F7BD92A48FF8`,
+0 / `E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855`,
+217 / `DA452A1BEF58358DE08B68A6DE46CE2488154F6269BA1831118912362A9E1C2A`,
+and 3 / `F1B2F662800122BED0FF255693DF89C4487FBDCF453D3524A42D4EC20C3D9C04`.
+
+### Minimal wrapper and GREEN/stale cases
+
+The external v16 wrapper is the accepted v15 wrapper with only its exact
+stage-root, assembler-marker, and assembler-error literals changed from v15
+to v16. It retains the 16-key assembler hashtable and reviewed
+pre-existing-error guard. The catch writes its diagnostic only if that path is
+absent and uses `[Text.UTF8Encoding]::new($false)`.
+
+Final wrapper/harness/throw-child/success-child byte counts and SHA-256 values:
+
+- wrapper: 3,343 / `4CD4946325A56700EFB00B7EB0E7580775E07F7DA34256D212D42B8CB4436311`;
+- harness: 7,889 / `6D4EEB09F9B372F97EC045D7BFB848CADD12886018B2E9D7331620A317EC92DC`;
+- throw child: 101 / `4DBC5033D52B0BE64C9A9C54AF32DE440919475E083E7AC169D8EA8AB0592138`;
+- success child: 97 / `E67DF93447AFEC8E13AB4A3D6FFBDFE2BFEA8B1C0C920A2CF3A1AFACEF34E77B`.
+
+The harness decodes JSON with `[Text.UTF8Encoding]::new($false, $true)` and
+`ConvertFrom-Json -NoEnumerate`. Invalid UTF-8 throws. It rejects a BOM,
+arrays/non-objects, anything other than one object with exactly
+`TimestampUtc`, `ExceptionType`, `Message`, `FullyQualifiedErrorId`,
+`Category`, `ScriptStackTrace`, and `InvocationPosition`, a non-sentinel
+message/FQID, and a stack that does not identify `throw-child.ps1`.
+
+The exact GREEN command was the same pinned host command as RED and exited 0:
+
+```text
+PASS failure process/marker 1/1; strict BOM-less UTF-8; one seven-field JSON; sentinel message/stack/stderr
+PASS stale evidence process/marker 1/1; bytes unchanged
+PASS success process/marker 0/0; exact stdout; empty stderr; error JSON absent
+PASS all v16 wrapper diagnostic tests
+```
+
+Failure stdout/stderr/marker/JSON were 0 / 217 / 3 / 728 bytes with SHA-256
+`E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855`,
+`DA452A1BEF58358DE08B68A6DE46CE2488154F6269BA1831118912362A9E1C2A`,
+`F1B2F662800122BED0FF255693DF89C4487FBDCF453D3524A42D4EC20C3D9C04`,
+and `26E62E6F2137BCE27647FC40C148C0D124B62EB81E4F36F271DA1F7B5D40E770`.
+
+The stale case seeded the literal 29 bytes
+`V16_STALE_EVIDENCE_SENTINEL\r\n`, SHA-256
+`E8BD2FA1B5129463B2D1CFF447C6D0694BAF04EDA55DAF50D3DE41756007BFC5`.
+After process/marker `1/1` and the guard error on stderr, the file remained
+exactly 29 bytes with the same SHA-256. Success stdout/stderr/marker were
+33 / 0 / 3 bytes with SHA-256
+`6AB887404F160BC26D701A2287E2880D6167DE7D9FF6611883EDAC468638CC10`,
+`E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855`,
+and `13BF7B3039C63BF5A50491FA3CFD8EB4E699D1BA1436315AEF9CBE5711530354`;
+the success error path was absent.
+
+### Static binding and repository regression gates
+
+Wrapper, harness, and both children parsed with zero errors. Decoding
+`-PrintBoundParams` produced 16 keys, all unique and recognized by the
+reviewed assembler. TestMode, synthetic, injection, hook, inventory,
+postcondition, diagnostic, and error-evidence caller surfaces numbered zero.
+The compact decoded JSON was 1,525 BOM-less UTF-8 bytes, SHA-256
+`16BB59A9D1CF662EE26BE8DD546C962191D95DDF920FBAB8E2CD2715BCEF9938`.
+Normalizing only exact v15/v16 stage-root, marker, and error literals made the
+wrapper diff empty. The combined gate emitted:
+
+```text
+PASS parsers 0; keys 16/16; surfaces 0; normalized diff none; production paths absent
+```
+
+Fresh full pinned PowerShell 7.6.4 repository runs exited 0. The supplement
+harness passed all 15 named cases and ended `PASS all supplement preparer
+tests`. The staging harness passed all named cases and ended `PASS all task3
+staging tests`.
+
+No v16 production preflight/post-audit helper, production PID, stdout/stderr
+log, marker, error JSON, or `stage-runtime-v16` stage was created. No v16
+production assembler or preflight was launched. No staged content or binary
+was inspected or executed. Only disposable diagnostic wrapper children ran,
+each through explicit `require_escalated` host execution with pinned
+PowerShell 7.6.4.
+
+### Task-scoped review
+
+Independent review found one Important issue: PowerShell pipeline enumeration
+could unwrap a one-element top-level JSON array before the PSCustomObject type
+check. The harness was corrected to use `ConvertFrom-Json -NoEnumerate`, then
+the full diagnostic harness, static binding gate, supplement harness, and
+staging harness all passed freshly. The refreshed harness and JSON hashes above
+bind that correction. Read-only fix-round review found no Critical, Important,
+or Minor issue and assessed the gate ready to commit.
