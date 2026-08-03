@@ -40,7 +40,7 @@ param(
     [switch] $InjectSupplementPostconditionFault,
     [ValidateSet('','PeCount','OctCount','PlaceholderCount','FileCount','ByteCount','ManifestSha256')][string] $InjectSupplementPostAuditFault = '',
     [switch] $InjectGnuplotCaseCollision,
-    [ValidateSet('','Sibling','Nested','NonPe','ReparseRoot','ReparseFile','ReparsePlatformDirectory','ReparsePlatformFile')][string] $InjectGnuplotAuditFault = '',
+    [ValidateSet('','Sibling','Nested','NonPe','ReparseRoot','ReparseFile','ReparsePlatformDirectory','ReparsePlatformFile','UnapprovedPlatformPlugin','NonPePlatformPlugin')][string] $InjectGnuplotAuditFault = '',
     [ValidateSet('FileCount','PeCount','ImportEdgeCount','ApplicationDirectoryEdgeCount','ApiSetEdgeCount','System32EdgeCount','UnresolvedEdgeCount')][string] $InjectGnuplotPostAuditFault = '',
     [switch] $InjectGnuplotApiSetReleaseFailure,
     [ValidateSet('','OsVersion','CurrentBuild','Ubr','MissingCurrentBuild','MissingUbr','CurrentBuildKind','UbrKind','FileVersion','ProductVersion','Length','Sha256','OutsideSystem32','ReparseSchema','NonRegularSchema')][string] $InjectPlatformIdentityFault = '',
@@ -126,9 +126,9 @@ $syntheticBridgeFileCount = 3
 $syntheticBridgeTotalBytes = 30
 $syntheticBridgeManifestSha256 = '025D6C9E917AA89AE1B068CD87598E96C00896F1D2BEE6AD139C7BF1BCD78648'
 $syntheticBridgeModuleSha256 = '120970D812836F19888625587A4606A5AD23CEF31C8684E601771552548FC6B9'
-$syntheticGnuplotPureFileCount = 6
-$syntheticGnuplotPureTotalBytes = 63
-$syntheticGnuplotPureManifestSha256 = 'D5C9A7FB7C74CC7E937FF2FF3B0586EC519492EE1823821BE4DD40B5F1DA3C3A'
+$syntheticGnuplotPureFileCount = 9
+$syntheticGnuplotPureTotalBytes = 92
+$syntheticGnuplotPureManifestSha256 = '8A500524FFF906DB1ADD927DF22FAA7BDCB9239773D416A4E91E3C5CE716F650'
 $syntheticProbeSha256 = 'BA9C736F19E7F60B7F6764ADB0B7908C0A2B394E09B6C09863528C7F2BC86095'
 $approvedInertPlaceholders = @(
     [pscustomobject]@{ Relative = 'mingw64/qt6/bin/qhelpgenerator.exe'; Length = [long]0; Sha256 = 'E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855' }
@@ -677,9 +677,9 @@ if ($TestMode) {
     }
     $syntheticGnuplotRoot = Join-Path $pure 'tools\gnuplot\bin'
     if (Test-Path -LiteralPath $syntheticGnuplotRoot -PathType Container) {
-        $syntheticPureFileCount = $ExpectedPureFileCount
-        $syntheticPureTotalBytes = $ExpectedPureTotalBytes
-        $syntheticPureManifestSha256 = $ExpectedPureManifestSha256
+        $syntheticPureFileCount = $syntheticGnuplotPureFileCount
+        $syntheticPureTotalBytes = $syntheticGnuplotPureTotalBytes
+        $syntheticPureManifestSha256 = $syntheticGnuplotPureManifestSha256
     }
     if ($ExpectedPatchedSha256 -ne $syntheticPatchedSha256 -or $ExpectedLibgccSha256 -ne $syntheticLibgccSha256 -or
         $ExpectedPureFileCount -ne $syntheticPureFileCount -or $ExpectedPureTotalBytes -ne $syntheticPureTotalBytes -or $ExpectedPureManifestSha256 -ne $syntheticPureManifestSha256 -or
@@ -959,6 +959,8 @@ try {
             'ReparseFile' { $source = Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::LocalApplicationData)) 'Microsoft\WindowsApps\pwsh.exe'; New-Item -ItemType HardLink -Path (Join-Path $gnuplotRoot 'reparse-file.dll') -Target $source | Out-Null }
             'ReparsePlatformDirectory' { $platforms = Join-Path $gnuplotRoot 'platforms'; $realPlatforms = $platforms + '-real'; [IO.Directory]::Move($platforms, $realPlatforms); cmd.exe /c ('mklink /J "{0}" "{1}"' -f $platforms, $realPlatforms) | Out-Null }
             'ReparsePlatformFile' { $source = Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::LocalApplicationData)) 'Microsoft\WindowsApps\pwsh.exe'; New-Item -ItemType HardLink -Path (Join-Path $gnuplotRoot 'platforms\qminimal.dll') -Target $source -Force | Out-Null }
+            'UnapprovedPlatformPlugin' { [IO.File]::WriteAllBytes((Join-Path $gnuplotRoot 'platforms\qthird.dll'), [Text.Encoding]::ASCII.GetBytes('MZqthird')) }
+            'NonPePlatformPlugin' { [IO.File]::WriteAllText((Join-Path $gnuplotRoot 'platforms\qminimal.dll'), 'not a PE', [Text.Encoding]::ASCII) }
         }
     }
     if ($TestMode -and $InjectGnuplotAuditFault) { $gnuplotSet = New-DirectLoaderSet $gnuplotRoot 'Staged Gnuplot application loader root' }

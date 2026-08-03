@@ -111,7 +111,7 @@ function Add-GnuplotFixture([hashtable] $Imports) {
     $Imports['pure/tools/gnuplot/bin/gnuplot_qt.exe'] = @('Qt6Core.dll','api-ms-win-core-synch-l1-2-0.dll','kernel32.dll')
     $Imports['pure/tools/gnuplot/bin/Qt6Core.dll'] = @()
     $Imports['pure/tools/gnuplot/bin/Qt6Gui.dll'] = @()
-    return $Imports
+    return Add-GnuplotPlatformPluginFixture $Imports
 }
 function Add-GnuplotPlatformPluginFixture([hashtable] $Imports) {
     Write-TestPe (Join-Path $pure 'tools\gnuplot\bin\platforms\qminimal.dll') 'qminimal'
@@ -379,7 +379,7 @@ try {
     Write-Output 'PASS Test-RejectsProductionPlatformIdentityInjection'
 
     $gnuplotApi = 'api-ms-win-core-synch-l1-2-0.dll'
-    $gnuplotSystemMappings = @{$gnuplotApi='kernelbase.dll'; 'kernel32.dll'='kernel32.dll'}
+    $gnuplotSystemMappings = @{$gnuplotApi='kernelbase.dll'; 'kernel32.dll'='kernel32.dll'; 'user32.dll'='user32.dll'}
     $gnuplotSuccess = Invoke-Stage 'gnuplot-appdir-success' (Add-GnuplotFixture (New-BaseImports)) $gnuplotSystemMappings
     Assert-True ($gnuplotSuccess.ExitCode -eq 0) "Gnuplot application-directory fixture failed: $($gnuplotSuccess.Output)"
     $closure = Get-Content -LiteralPath (Join-Path $gnuplotSuccess.Stage 'stage-import-closure.tsv') -Raw
@@ -412,10 +412,14 @@ try {
     }
     Remove-GnuplotFixture
     Write-Output 'PASS Test-ResolvesApprovedGnuplotPlatformPluginsOnlyInDirectGnuplotLoaderRoot'
+    $changedCanonicalGnuplotImports = Add-GnuplotFixture (New-BaseImports)
+    Write-TestPe (Join-Path $pure 'tools\gnuplot\bin\canonical-inventory-mutation.dll') 'canonical-inventory-mutation'
+    $changedCanonicalGnuplotImports['pure/tools/gnuplot/bin/canonical-inventory-mutation.dll'] = @()
+    Assert-Failure (Invoke-Stage 'gnuplot-canonical-inventory-mutation' $changedCanonicalGnuplotImports $gnuplotSystemMappings) 'TestMode input expectations must equal the exact versioned synthetic fixture' 'Changed canonical Gnuplot fixture inventory'
+    Remove-GnuplotFixture
+    Write-Output 'PASS Test-RejectsChangedCanonicalGnuplotFixtureInventory'
     $thirdPlatformImports = Add-GnuplotPlatformPluginFixture (Add-GnuplotFixture (New-BaseImports))
-    Write-TestPe (Join-Path $pure 'tools\gnuplot\bin\platforms\qthird.dll') 'qthird'
-    $thirdPlatformImports['pure/tools/gnuplot/bin/platforms/qthird.dll'] = @()
-    Assert-Failure (Invoke-Stage 'gnuplot-unapproved-platform-plugin' $thirdPlatformImports $gnuplotSystemMappings) 'Unapproved Gnuplot platform plugin PE' 'Unapproved Gnuplot platform plugin PE'
+    Assert-Failure (Invoke-Stage 'gnuplot-unapproved-platform-plugin' $thirdPlatformImports $gnuplotSystemMappings -InjectGnuplotAuditFault UnapprovedPlatformPlugin) 'Unapproved Gnuplot platform plugin PE' 'Unapproved Gnuplot platform plugin PE'
     Remove-GnuplotFixture
     Write-Output 'PASS Test-RejectsUnapprovedGnuplotPlatformPluginPe'
     $pluginDirectoryFallbackImports = Add-GnuplotPlatformPluginFixture (Add-GnuplotFixture (New-BaseImports))
@@ -444,8 +448,7 @@ try {
     finally { $env:PATH = $savedPluginPath; Remove-GnuplotFixture }
     Write-Output 'PASS Test-RejectsGnuplotPlatformPluginPathFallback'
     $nonPePluginImports = Add-GnuplotPlatformPluginFixture (Add-GnuplotFixture (New-BaseImports))
-    [IO.File]::WriteAllText((Join-Path $pure 'tools\gnuplot\bin\platforms\qminimal.dll'), 'not a PE', [Text.Encoding]::ASCII)
-    Assert-Failure (Invoke-Stage 'gnuplot-platform-plugin-non-pe' $nonPePluginImports) 'Staged loadable file does not contain a PE image' 'Non-PE approved Gnuplot platform plugin'
+    Assert-Failure (Invoke-Stage 'gnuplot-platform-plugin-non-pe' $nonPePluginImports -InjectGnuplotAuditFault NonPePlatformPlugin) 'Staged loadable file does not contain a PE image' 'Non-PE approved Gnuplot platform plugin'
     Remove-GnuplotFixture
     Write-Output 'PASS Test-RejectsNonPeApprovedGnuplotPlatformPlugin'
 
