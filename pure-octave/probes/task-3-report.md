@@ -1301,3 +1301,214 @@ Task 1 did not perform production staging or start any staged binary. The
 assembler launch count remains zero, `C:\tmp\todo51-task3\stage-runtime-v12`
 remains absent, and all preserved v11/v12 helpers, logs, markers, and evidence
 remain unchanged.
+
+## v13 production preflight launch: BLOCKED by restricted evidence write
+
+Task 2 began from exact `16b0391dd7e4ac300c90f414e1891e6f5d4e2947`
+on branch `todo/51-windows-strict-write-confinement` with a clean worktree.
+The precreation audit required all 16 literal v13 target/helper/PID/log/marker
+paths to be absent, preserved v11 to exist, the v12 stage root to remain
+absent, and the disposable/permanent/Pure/normalized/bridge/probe/patched/
+supplement/clang64 roots to contain zero reparse points. All assertions
+passed before any v13 helper was created.
+
+The three new static helpers are preserved outside Git:
+
+- wrapper: 2,380 bytes / SHA-256
+  `67FDE491EAD1ACE3394DAB454E4B8A6F6CCA9AAF2D5FA30A3A7220999FE715D7`;
+- preflight: 21,025 bytes / SHA-256
+  `4AA13A140EC1F1D6171802066C92FE64FE2DB93EAB556E9B57A0EF58C3883FFE`;
+- post-audit: 18,765 bytes / SHA-256
+  `3819645916A1F2418C9F1262F3EF120CB71B6040A689DECFB65D14183D0ACA65`.
+
+All three parsed with zero errors. The wrapper is byte-for-byte equal to the
+v12 wrapper after only the v13 stage-root and assembler-marker substitutions.
+`Get-Command` decoded exactly 16 unique parameters, all recognized by the
+reviewed assembler, with zero TestMode/synthetic/injection/hook or
+inventory/stage-postcondition overrides. The compact sorted decoded-parameter
+JSON SHA-256 is
+`05D2030AF3F9A906F7B3E17A2BBC8459D8A10ACDEB69A80FD3E6C25D749142E7`.
+The reviewed assembler and staging-harness SHA-256 values are respectively
+`894518C893E44E0257546781B530E2CE4DFDC045F41744EEF919FC067163BF63`
+and
+`4109B42925EEF9994A166F4DF0428E242D436A955C43AA947F2D71C720E89E86`.
+The pinned executable was exact PowerShell 7.6.4 at
+`C:\Program Files\WindowsApps\Microsoft.PowerShell_7.6.4.0_x64__8wekyb3d8bbwe\pwsh.exe`,
+SHA-256
+`DB6DD81183FE57D22E03B911EC9A30A2FD7C40542E97743615355A6FB44F458F`.
+
+The preflight was launched through `System.Diagnostics.ProcessStartInfo`
+exactly once. `Process.Start()` returned success, but the restricted host then
+failed before it could record the returned child PID:
+
+```text
+System.UnauthorizedAccessException: Access to the path
+C:\tmp\todo51-task3\stage-runtime-v13.preflight.pid.txt was denied.
+```
+
+The child exited and no matching process remained. No PID file, stdout,
+stderr, or exit marker was created, so there is no valid preflight PASS and
+the child PID is unavailable. No retry or evidence recycling was performed.
+Root-cause comparison with the Task 1 handoff shows that this sole launcher
+was mistakenly left under the restricted-token sandbox even though that
+handoff recorded the need for approved host execution for writes in these
+fixture/evidence roots.
+The assembler launch count is exactly zero; all assembler PID/log/marker
+paths and `stage-runtime-v13` remain absent. The post-audit and repository
+regression gates were not run because they are success-only downstream gates.
+No staged binary was inspected or executed. Preserved v11 and all six
+reported v12 wrapper/preflight/PID/log/marker artifacts remain byte-identical
+to their recorded SHA-256 values. This v13 attempt is BLOCKED and has no
+success commit.
+
+## v14 production attempt: accepted preflight, fail-closed assembler exit
+
+The human explicitly authorized one new v14 attempt outside the restricted
+sandbox while keeping the v13 no-retry stop final. Task 2 retained HEAD
+`16b0391dd7e4ac300c90f414e1891e6f5d4e2947`, the dirty scope remained only
+this report, preserved v11 existed, v12/v13 stage roots remained absent, all
+six recorded v12 artifacts and all three v13 helpers matched their recorded
+SHA-256 values, all 12 v13 runtime evidence paths were absent, all 16 intended
+v14 paths were absent, and ten immutable roots contained zero reparse points.
+
+The v14 helper gate passed with zero parser errors, an exact v13 wrapper with
+only the v14 stage-root and assembler-marker substitutions, exactly 16 unique
+`Get-Command`-recognized parameters, and no TestMode/synthetic/injection/hook
+or inventory/stage-postcondition override surface:
+
+- wrapper: 2,380 bytes /
+  `95295DCE7C8CD5DE30B4301214F92A061928CFF5143C33BAC7FADB8D58D39C33`;
+- preflight: 22,658 bytes /
+  `DB909F02A6A520B8024549D4E5B577DD4E4D3D3DB9F1B30F7B5A88352D93D687`;
+- post-audit: 18,766 bytes /
+  `1E8B0F001403A4CAC50C36392FE74C22CB5590198117AEB90B0A18989321043D`;
+- compact decoded-parameter JSON:
+  `81327F4707576A9FF6A5C80C35AA45C0655F662A0F45828C42A3EE2D2C1711AA`.
+
+### Accepted v14 preflight
+
+The command owning `ProcessStartInfo`, PID evidence, and polling ran through
+explicit `require_escalated` host execution. Immediately before `Start()` it
+created, verified, removed, and required absence of a disposable
+`HOST_WRITE_SMOKE_PASS` probe outside all evidence paths. The pinned
+PowerShell 7.6.4 executable retained SHA-256
+`DB6DD81183FE57D22E03B911EC9A30A2FD7C40542E97743615355A6FB44F458F`.
+
+The one v14 preflight launch was PID 30416, started at
+`2026-08-01T21:46:56.1751445Z` and exited at
+`2026-08-01T22:30:07.1407682Z`. During execution only PID, log lengths, and
+marker presence were polled. It returned process exit 0, marker 0, empty
+stderr, and exactly one PASS JSON object:
+
+| Evidence | Bytes | SHA-256 |
+|---|---:|---|
+| preflight PID | 7 | `856D95095F7A2EE43AB0638F6ACF8573E8E29015C00B8D9415EE5133F1C07731` |
+| preflight stdout | 1764 | `8A02D4E7144E3765F31CD0BA220BE75D966FDB4FC7790D1D21ECB53B052D5BEA` |
+| preflight stderr | 0 | `E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855` |
+| preflight marker | 3 | `13BF7B3039C63BF5A50491FA3CFD8EB4E699D1BA1436315AEF9CBE5711530354` |
+
+```json
+{"Result":"PASS","WrapperSha256":"95295DCE7C8CD5DE30B4301214F92A061928CFF5143C33BAC7FADB8D58D39C33","AssemblerSha256":"894518C893E44E0257546781B530E2CE4DFDC045F41744EEF919FC067163BF63","ContractSha256":"692341FA19E6D7AC3CF4C02894DBDB92AFAE7A5DD154B659A5CFD099AD63F2CC","PostAuditSha256":"1E8B0F001403A4CAC50C36392FE74C22CB5590198117AEB90B0A18989321043D","DecodedParameterJsonSha256":"81327F4707576A9FF6A5C80C35AA45C0655F662A0F45828C42A3EE2D2C1711AA","DecodedParameterCount":16,"Permanent":{"FileCount":59533,"TotalBytes":2797722287,"ManifestSha256":"95D51222C8000706D235A309EF1CAEA6D986B08F1B04A08671475AD041A18CCD"},"Normalized":{"FileCount":59533,"TotalBytes":2797722565,"ManifestSha256":"B19A1BAB6293EBAAD7D0076B43D5E8F466BA896EAADFD81EED7E0C7C8F96FB31"},"NormalizedManifestSha256":"9417DC1DC935E33ACADACA3A0AD86389F500B937F7670E3D177A8D58B3C68CED","Pure":{"FileCount":4769,"TotalBytes":260533868,"Sha256":"52DA19745D9F33DEC4CEAF09E24E3836C04E82E1651BB695990D18B14D667FE3"},"Bridge":{"FileCount":2,"TotalBytes":4771866,"Sha256":"974C07999D4EBC62C218F0EDA7D271B6CCC7AFDEBD1EBFA063C7A25109C4CE11"},"AcceptedV5FileCount":64309,"AcceptedV5Bytes":3327729829,"SupplementFileCount":3,"SupplementBytes":7241216,"ReusedPureDependencyCount":38,"WindowsOsVersion":"Microsoft Windows NT 10.0.26200.0","WindowsCurrentBuild":"26200","WindowsCurrentBuildKind":"String","WindowsUbr":8973,"WindowsUbrKind":"DWord","ApiSetSchemaPath":"C:\\WINDOWS\\System32\\apisetschema.dll","ApiSetSchemaFileVersion":"10.0.26100.8972 (WinBuild.160101.0800)","ApiSetSchemaProductVersion":"10.0.26100.8972","ApiSetSchemaLength":194048,"ApiSetSchemaSha256":"E485E3CF63919CD5DC5EC8624E94C3645E8BF3C4445AE937FBA045BEA3D88BB8","TargetAbsent":true,"AssemblerMarkerAbsent":true,"ReparsePointCount":0}
+```
+
+This accepted the exact serviced platform identity:
+`Microsoft Windows NT 10.0.26200.0 / 26200 / 8973`, API-set file/product
+version `10.0.26100.8972 (WinBuild.160101.0800) / 10.0.26100.8972`,
+194,048 bytes, and SHA-256
+`E485E3CF63919CD5DC5EC8624E94C3645E8BF3C4445AE937FBA045BEA3D88BB8`.
+
+### Sole v14 assembler launch and blocker
+
+Only after preflight acceptance, a second explicit `require_escalated` host
+owner rechecked absent target/marker/evidence paths, all helper and immutable
+preflight hashes, all 16 decoded parameters, and a fresh
+`HOST_WRITE_SMOKE_PASS` probe which was removed and absent before `Start()`.
+
+The one production assembler launch was PID 29572, started at
+`2026-08-01T22:32:42.1231632Z` and exited at
+`2026-08-01T23:00:12.3873456Z`. During execution only PID, stdout/stderr
+lengths, and marker presence were polled. No in-progress stage path was
+opened. The exact immutable result was:
+
+```text
+Process exit: 1
+Assembler marker: 1
+Stdout: 0 bytes
+Stderr: 0 bytes
+Assembler JSON objects: 0
+```
+
+| Evidence | Bytes | SHA-256 |
+|---|---:|---|
+| assembler PID | 7 | `2AFD8356A169F20FE5BC8E819110132B6C0B72CF38DF94A1F2B7CCA1BD9BE1E8` |
+| assembler stdout | 0 | `E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855` |
+| assembler stderr | 0 | `E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855` |
+| assembler marker | 3 | `F1B2F662800122BED0FF255693DF89C4487FBDCF453D3524A42D4EC20C3D9C04` |
+
+The partial `C:\tmp\todo51-task3\stage-runtime-v14` root and every v14
+helper/evidence file are preserved. The nonzero process/marker result, empty
+logs, and absence of the required single JSON object are the exact blocker.
+Per the no-retry rule there was no second assembler launch, no static
+post-audit, no repository success gate, no stage-content inspection, no
+staged-binary execution, and no success commit. Preflight launch count is one,
+assembler launch count is one, and post-audit launch count is zero.
+
+## v15 assembler diagnostic wrapper gate
+
+Task 1 began on `todo/51-windows-strict-write-confinement` at
+`972ff33c27065df0988546cd8106596dd58032a3`, with this report as the only dirty
+path. `C:\tmp\todo51-task3\stage-runtime-v14` was verified only with
+`Test-Path` and existed; every Task 1 fixture and `stage_v15_wrapper.ps1` path
+was initially absent. Root-level v12-v14 preservation hashes all matched:
+v12 wrapper/preflight `26B519558047D0E79A22E3FF83B81D8E10A6E3CBF2C321B0612723EFA766F9F2` /
+`DE4646ECF9624894D5199F085DCB3B86D14CA3ED6E00542EA64959AD10A02862`; v13
+wrapper/preflight/post-audit `67FDE491EAD1ACE3394DAB454E4B8A6F6CCA9AAF2D5FA30A3A7220999FE715D7` /
+`4AA13A140EC1F1D6171802066C92FE64FE2DB93EAB556E9B57A0EF58C3883FFE` /
+`3819645916A1F2418C9F1262F3EF120CB71B6040A689DECFB65D14183D0ACA65`; v14
+wrapper/preflight/post-audit `95295DCE7C8CD5DE30B4301214F92A061928CFF5143C33BAC7FADB8D58D39C33` /
+`DB909F02A6A520B8024549D4E5B577DD4E4D3D3DB9F1B30F7B5A88352D93D687` /
+`1E8B0F001403A4CAC50C36392FE74C22CB5590198117AEB90B0A18989321043D`.
+Recorded v12/v14 PID/log/marker evidence also matched its report hashes.
+
+RED copied v14 into a disposable SUT and substituted only assembler, marker,
+and stage-root literals. The host-owned pinned PowerShell 7.6.4
+`ProcessStartInfo` launch gave process/marker `1/1`, stderr containing
+`V15_DIAGNOSTIC_THROW_SENTINEL`, and absent independent JSON; the harness
+failed exactly `Expected independent error JSON was not created.` Preserved RED
+replay bytes/SHA-256: SUT 2410 /
+`D824F05F221840834D3BBA35F4E093292E6D113110EB476208ABF5FC21354382`, stdout
+0 / `E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855`, stderr
+217 / `8D00442BBCEC2DFF35681FACB6AB359DAEBD826A2759049A3B4D08F24933DFEE`, marker
+3 / `F1B2F662800122BED0FF255693DF89C4487FBDCF453D3524A42D4EC20C3D9C04`; error
+JSON absent.
+
+The minimal external v15 wrapper is 3265 bytes /
+`91F21C4722B4CEC56A64131F26B8545F97801FADB926C4B5A0572FD8901DA212`; it adds
+only v15 literals, pre-existing-error rejection, and the seven-field caught
+`ErrorRecord` diagnostic before the existing `finally` marker. Harness SHA-256
+is `86A3C94028A0746C0116F28F4886FBD3352A970A1E68B27F1DB30DADDFD2B0AE` (5412
+bytes), derived from v15 by exact literal substitution. GREEN failure passed
+process/marker `1/1`, regular non-reparse UTF-8 JSON with exactly
+TimestampUtc/ExceptionType/Message/FullyQualifiedErrorId/Category/
+ScriptStackTrace/InvocationPosition, sentinel message/stderr, and nonempty
+ExceptionType/ScriptStackTrace. Its SUT/stdout/stderr/marker/JSON bytes and
+hashes were 3328 / `5AFF9CFE6D9616D7AA7E36C134A66EBD20AD18DE696954E81888D3E38D26E2B2`,
+0 / `E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855`, 217 /
+`8D00442BBCEC2DFF35681FACB6AB359DAEBD826A2759049A3B4D08F24933DFEE`, 3 /
+`F1B2F662800122BED0FF255693DF89C4487FBDCF453D3524A42D4EC20C3D9C04`, 699 /
+`C6C3FE9D4E74013FE55706CC9B846B6C305D3CB7ACBAD1E4780E12F76671FC59`.
+GREEN success passed `0/0`, exact stdout sentinel, empty stderr, and absent
+error JSON; stdout/stderr/marker were 33/0/3 bytes with hashes
+`1CC780D6B7474089B4AA0B33F43F6B5882501BDD6D7DAEB45EFEF9F0235579B1` /
+`E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855` /
+`13BF7B3039C63BF5A50491FA3CFD8EB4E699D1BA1436315AEF9CBE5711530354`.
+The aggregate result was `PASS all v15 wrapper diagnostic tests`.
+
+Wrapper and harness parsed with zero PowerShell errors. `-PrintBoundParams`
+decoded through `Get-Command` to 16 unique recognized keys; TestMode,
+Synthetic, Inject, Hook, Inventory, StagePostcondition, and caller-controlled
+diagnostic surfaces numbered zero. Normalizing solely v14/v15 stage/marker
+literals and the new diagnostic-catch block found no unrelated difference.
+`git diff --check` exited 0. No v15 production preflight, assembler process,
+production marker/error evidence, or `stage-runtime-v15` production stage was
+created; no staged content or binary was inspected or executed.
