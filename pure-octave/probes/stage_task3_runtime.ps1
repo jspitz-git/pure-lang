@@ -1191,7 +1191,10 @@ try {
                     }
                     $hostHash = Get-Sha256File $resolved
                 }
-                if ($apiMappings.ContainsKey($key) -and $apiMappings[$key].Path -ne $resolved) { throw "API-set contract mapped inconsistently: $dll" }
+                if ($apiMappings.ContainsKey($key) -and $apiMappings[$key].Path -ne $resolved) {
+                    if ($pe.Group -ceq 'pure-gnuplot-platform-plugin') { $gnuplotPlatformPluginUnresolvedEdgeCount++ }
+                    throw "API-set contract mapped inconsistently: $dll"
+                }
                 $apiMappings[$key] = [pscustomobject]@{ Path=$resolved; Sha256=$hostHash }
                 if ($pe.Group -ceq 'pure-gnuplot-platform-plugin') { $gnuplotPlatformPluginApiSetEdgeCount++ }
             }
