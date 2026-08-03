@@ -1512,3 +1512,53 @@ literals and the new diagnostic-catch block found no unrelated difference.
 `git diff --check` exited 0. No v15 production preflight, assembler process,
 production marker/error evidence, or `stage-runtime-v15` production stage was
 created; no staged content or binary was inspected or executed.
+## Review fix 1: bind stale diagnostic evidence
+
+Review verification confirmed that the v15 pre-existing-error guard threw inside
+the same top-level `try` whose `catch` unconditionally called `WriteAllText`.
+A real fixture now seeds literal hand-written bytes for
+`V15_STALE_EVIDENCE_SENTINEL`, derives a SUT from the actual v15 wrapper only by
+literal substitution, and requires guard stderr, process/marker `1/1`, and
+byte-for-byte preservation. The fixture catches the production mutation that
+would make an existing diagnostic evidence file writable.
+
+### RED exact command and output
+
+```powershell
+& 'C:\Program Files\WindowsApps\Microsoft.PowerShell_7.6.4.0_x64__8wekyb3d8bbwe\pwsh.exe' -NoProfile -NonInteractive -File 'C:\tmp\todo51-task3\wrapper-diagnostic-v15\test_v15_wrapper_diagnostics.ps1'; exit $LASTEXITCODE
+```
+
+```text
+Exception: C:\tmp\todo51-task3\wrapper-diagnostic-v15\test_v15_wrapper_diagnostics.ps1:19
+Line |
+  19 |      if (-not $Condition) { throw $Message }
+     |                             ~~~~~~~~~~~~~~
+     | Expected stale error evidence bytes to remain unchanged.
+```
+
+The minimal wrapper correction leaves the guard inside `try`, but makes the
+catch write diagnostic JSON only when the evidence path is absent. Thus the
+guard still emits the caught error to stderr and the existing `finally` writes
+marker `1`, while stale bytes remain untouched. No strict UTF-8 decoding change
+was made. Final wrapper/harness are 3,343 / 6,536 bytes with SHA-256
+`ACF8DEFED19F5CE21F85EBFF54E6174FBA520CFA0748FC0725F54A209450584C` /
+`EBC877656DE090A8EB0925542A8A5B2F5BD8EC54653845589DED828DCE80B0E7`.
+
+### GREEN exact command and output
+
+```powershell
+& 'C:\Program Files\WindowsApps\Microsoft.PowerShell_7.6.4.0_x64__8wekyb3d8bbwe\pwsh.exe' -NoProfile -NonInteractive -File 'C:\tmp\todo51-task3\wrapper-diagnostic-v15\test_v15_wrapper_diagnostics.ps1'; exit $LASTEXITCODE
+```
+
+```text
+PASS all v15 wrapper diagnostic tests
+```
+
+The full parser/parameter/diff gate then emitted exactly:
+
+```text
+PASS parsers 0; keys 16/16; surfaces 0; normalized diff none; production paths absent; git diff --check 0
+```
+
+No v15 production preflight, assembler process, production marker/error path,
+or `stage-runtime-v15` stage was created.
