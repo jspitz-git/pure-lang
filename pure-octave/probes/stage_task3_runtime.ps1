@@ -40,7 +40,7 @@ param(
     [switch] $InjectSupplementPostconditionFault,
     [ValidateSet('','PeCount','OctCount','PlaceholderCount','FileCount','ByteCount','ManifestSha256')][string] $InjectSupplementPostAuditFault = '',
     [switch] $InjectGnuplotCaseCollision,
-    [ValidateSet('','Sibling','Nested','NonPe','ReparseRoot','ReparseFile')][string] $InjectGnuplotAuditFault = '',
+    [ValidateSet('','Sibling','Nested','NonPe','ReparseRoot','ReparseFile','ReparsePlatformDirectory','ReparsePlatformFile')][string] $InjectGnuplotAuditFault = '',
     [ValidateSet('FileCount','PeCount','ImportEdgeCount','ApplicationDirectoryEdgeCount','ApiSetEdgeCount','System32EdgeCount','UnresolvedEdgeCount')][string] $InjectGnuplotPostAuditFault = '',
     [switch] $InjectGnuplotApiSetReleaseFailure,
     [ValidateSet('','OsVersion','CurrentBuild','Ubr','MissingCurrentBuild','MissingUbr','CurrentBuildKind','UbrKind','FileVersion','ProductVersion','Length','Sha256','OutsideSystem32','ReparseSchema','NonRegularSchema')][string] $InjectPlatformIdentityFault = '',
@@ -91,6 +91,11 @@ $acceptedApiSchemaProductVersion = '10.0.26100.8972'
 $acceptedApiSchemaLength = [long]194048
 $acceptedApiSchemaSha256 = 'E485E3CF63919CD5DC5EC8624E94C3645E8BF3C4445AE937FBA045BEA3D88BB8'
 $acceptedGnuplotRelativeRoot = 'pure/tools/gnuplot/bin'
+$acceptedGnuplotPlatformPluginRelatives = @(
+    'pure/tools/gnuplot/bin/platforms/qminimal.dll',
+    'pure/tools/gnuplot/bin/platforms/qwindows.dll'
+)
+
 $acceptedGnuplotFileCount = 65
 $acceptedGnuplotPeFileCount = 63
 $acceptedGnuplotImportEdgeCount = 1002
@@ -427,6 +432,9 @@ function Test-PortableExecutable([string] $Path) {
     finally { $stream.Dispose() }
 }
 function Get-LoaderDomain([string] $Relative) {
+    $gnuplotPlatformPluginPrefix = $acceptedGnuplotRelativeRoot + '/platforms/'
+    if (Test-GnuplotPlatformPluginRelative $Relative) { return 'pure-gnuplot-platform-plugin' }
+    if ($Relative.StartsWith($gnuplotPlatformPluginPrefix, [StringComparison]::OrdinalIgnoreCase)) { throw "Unapproved Gnuplot platform plugin PE: $Relative" }
     $gnuplotPrefix = $acceptedGnuplotRelativeRoot + '/'
     if ($Relative.StartsWith($gnuplotPrefix, [StringComparison]::OrdinalIgnoreCase)) {
         $leaf = $Relative.Substring($gnuplotPrefix.Length)
@@ -435,6 +443,12 @@ function Get-LoaderDomain([string] $Relative) {
     if ($Relative.StartsWith('pure/', [StringComparison]::OrdinalIgnoreCase)) { return 'pure' }
     if ($Relative.StartsWith('bridge/', [StringComparison]::OrdinalIgnoreCase)) { return 'bridge' }
     return 'octave'
+}
+function Test-GnuplotPlatformPluginRelative([string] $Relative) {
+    foreach ($approved in $acceptedGnuplotPlatformPluginRelatives) {
+        if ($Relative.Equals($approved, [StringComparison]::OrdinalIgnoreCase)) { return $true }
+    }
+    return $false
 }
 
 function New-DirectLoaderSet([string] $Root, [string] $Description) {
@@ -455,6 +469,7 @@ function Get-EffectiveLoaderSet([string] $Domain, [hashtable] $PureSet, [hashtab
         'pure' { return $PureSet }
         'octave' { return $OctaveSet }
         'pure-gnuplot-app' { return $GnuplotSet }
+        'pure-gnuplot-platform-plugin' { return $GnuplotSet }
         'bridge' {
             $union = @{}
             foreach ($set in @($PureSet,$OctaveSet)) {
@@ -662,9 +677,9 @@ if ($TestMode) {
     }
     $syntheticGnuplotRoot = Join-Path $pure 'tools\gnuplot\bin'
     if (Test-Path -LiteralPath $syntheticGnuplotRoot -PathType Container) {
-        $syntheticPureFileCount = $syntheticGnuplotPureFileCount
-        $syntheticPureTotalBytes = $syntheticGnuplotPureTotalBytes
-        $syntheticPureManifestSha256 = $syntheticGnuplotPureManifestSha256
+        $syntheticPureFileCount = $ExpectedPureFileCount
+        $syntheticPureTotalBytes = $ExpectedPureTotalBytes
+        $syntheticPureManifestSha256 = $ExpectedPureManifestSha256
     }
     if ($ExpectedPatchedSha256 -ne $syntheticPatchedSha256 -or $ExpectedLibgccSha256 -ne $syntheticLibgccSha256 -or
         $ExpectedPureFileCount -ne $syntheticPureFileCount -or $ExpectedPureTotalBytes -ne $syntheticPureTotalBytes -or $ExpectedPureManifestSha256 -ne $syntheticPureManifestSha256 -or
@@ -927,6 +942,7 @@ try {
     $gnuplotSet = if ($TestMode -and -not (Test-Path -LiteralPath $gnuplotRoot -PathType Container)) { @{} } else { New-DirectLoaderSet $gnuplotRoot 'Staged Gnuplot application loader root' }
     if ($TestMode -and $InjectGnuplotCaseCollision) {
         if (-not $gnuplotSet.ContainsKey('qt6core.dll')) { throw 'Gnuplot case-collision injection requires the exact Qt6Core fixture candidate.' }
+    if ($TestMode -and $InjectGnuplotAuditFault) { Assert-NoReparseTree $StageRoot 'Staged runtime' }
         $gnuplotSet['qt6core.dll'] += (Join-Path $gnuplotRoot 'Qt6Core.dll')
     }
 
@@ -941,9 +957,12 @@ try {
             'NonPe' { [IO.File]::WriteAllText((Join-Path $StageRoot 'pure\tools\gnuplot\bin\bad.dll'), 'not a PE', [Text.Encoding]::ASCII) }
             'ReparseRoot' { $realRoot = $gnuplotRoot + '-real'; [IO.Directory]::Move($gnuplotRoot, $realRoot); cmd.exe /c ('mklink /J "{0}" "{1}"' -f $gnuplotRoot, $realRoot) | Out-Null }
             'ReparseFile' { $source = Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::LocalApplicationData)) 'Microsoft\WindowsApps\pwsh.exe'; New-Item -ItemType HardLink -Path (Join-Path $gnuplotRoot 'reparse-file.dll') -Target $source | Out-Null }
+            'ReparsePlatformDirectory' { $platforms = Join-Path $gnuplotRoot 'platforms'; $realPlatforms = $platforms + '-real'; [IO.Directory]::Move($platforms, $realPlatforms); cmd.exe /c ('mklink /J "{0}" "{1}"' -f $platforms, $realPlatforms) | Out-Null }
+            'ReparsePlatformFile' { $source = Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::LocalApplicationData)) 'Microsoft\WindowsApps\pwsh.exe'; New-Item -ItemType HardLink -Path (Join-Path $gnuplotRoot 'platforms\qminimal.dll') -Target $source -Force | Out-Null }
         }
     }
     if ($TestMode -and $InjectGnuplotAuditFault) { $gnuplotSet = New-DirectLoaderSet $gnuplotRoot 'Staged Gnuplot application loader root' }
+    if ($TestMode -and $InjectGnuplotAuditFault) { Assert-NoReparseTree $StageRoot 'Staged runtime' }
     $peFiles = @(
         foreach ($file in Get-ChildItem -LiteralPath $StageRoot -Recurse -Force -File) {
             $relative = $file.FullName.Substring($StageRoot.Length + 1).Replace('\','/')

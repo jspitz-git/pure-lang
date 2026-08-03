@@ -107,10 +107,20 @@ function New-SupplementImports {
 function Add-GnuplotFixture([hashtable] $Imports) {
     Write-TestPe (Join-Path $pure 'tools\gnuplot\bin\gnuplot_qt.exe') 'gnuplot-qt'
     Write-TestPe (Join-Path $pure 'tools\gnuplot\bin\Qt6Core.dll') 'qt6-core'
+    Write-TestPe (Join-Path $pure 'tools\gnuplot\bin\Qt6Gui.dll') 'qt6-gui'
     $Imports['pure/tools/gnuplot/bin/gnuplot_qt.exe'] = @('Qt6Core.dll','api-ms-win-core-synch-l1-2-0.dll','kernel32.dll')
     $Imports['pure/tools/gnuplot/bin/Qt6Core.dll'] = @()
+    $Imports['pure/tools/gnuplot/bin/Qt6Gui.dll'] = @()
     return $Imports
 }
+function Add-GnuplotPlatformPluginFixture([hashtable] $Imports) {
+    Write-TestPe (Join-Path $pure 'tools\gnuplot\bin\platforms\qminimal.dll') 'qminimal'
+    Write-TestPe (Join-Path $pure 'tools\gnuplot\bin\platforms\qwindows.dll') 'qwindows'
+    $Imports['pure/tools/gnuplot/bin/platforms/qminimal.dll'] = @('Qt6Gui.dll','Qt6Core.dll','kernel32.dll')
+    $Imports['pure/tools/gnuplot/bin/platforms/qwindows.dll'] = @('Qt6Gui.dll','Qt6Core.dll','user32.dll')
+    return $Imports
+}
+
 
 function Remove-GnuplotFixture {
     $root = Join-Path $pure 'tools\gnuplot'
@@ -378,16 +388,76 @@ try {
     Assert-True ($closure -match 'gnuplot_qt\.exe"\tpure-gnuplot-app\tkernel32\.dll\t"synthetic-system32\\kernel32\.dll"') 'Gnuplot ordinary System32 import did not resolve through its explicit synthetic mapping.'
     $gnuplotReport = $gnuplotSuccess.Output | ConvertFrom-Json
     Assert-True (
-        $gnuplotReport.GnuplotLoaderFileCount -eq 2 -and
-        $gnuplotReport.GnuplotLoaderPeFileCount -eq 2 -and
+        $gnuplotReport.GnuplotLoaderFileCount -eq 3 -and
+        $gnuplotReport.GnuplotLoaderPeFileCount -eq 3 -and
         $gnuplotReport.GnuplotLoaderImportEdgeCount -eq 3 -and
         $gnuplotReport.GnuplotLoaderApplicationDirectoryEdgeCount -eq 1 -and
         $gnuplotReport.GnuplotLoaderApiSetEdgeCount -eq 1 -and
         $gnuplotReport.GnuplotLoaderSystem32EdgeCount -eq 1 -and
         $gnuplotReport.GnuplotLoaderUnresolvedEdgeCount -eq 0
-    ) 'Gnuplot loader JSON audit did not report exact 2 / 2 / 3 / 1 / 1 / 1 / 0 fixture cardinalities.'
+    ) 'Gnuplot loader JSON audit did not report exact 3 / 3 / 3 / 1 / 1 / 1 / 0 fixture cardinalities.'
     Remove-GnuplotFixture
     Write-Output 'PASS Test-ReportsExactGnuplotLoaderCardinalitiesAndOrigins'
+
+    $gnuplotPlatformSuccess = Invoke-Stage 'gnuplot-platform-plugin-success' (Add-GnuplotPlatformPluginFixture (Add-GnuplotFixture (New-BaseImports))) @{$gnuplotApi='kernelbase.dll'; 'kernel32.dll'='kernel32.dll'; 'user32.dll'='user32.dll'}
+    Assert-True ($gnuplotPlatformSuccess.ExitCode -eq 0) "Gnuplot platform-plugin fixture failed: $($gnuplotPlatformSuccess.Output)"
+    $gnuplotPlatformClosure = Get-Content -LiteralPath (Join-Path $gnuplotPlatformSuccess.Stage 'stage-import-closure.tsv') -Raw
+    foreach ($plugin in @('qminimal.dll','qwindows.dll')) {
+        foreach ($target in @('Qt6Gui.dll','Qt6Core.dll')) {
+            $pluginSource = '\platforms\' + $plugin + '"' + "`tpure-gnuplot-platform-plugin`t$target`t"
+            $pluginRows = @($gnuplotPlatformClosure -split "`r?`n" | Where-Object { $_.Contains($pluginSource) })
+            Assert-True ($pluginRows.Count -eq 1) "Gnuplot platform plugin $plugin did not record exactly one $target closure row in its approved group."
+            Assert-True ($pluginRows[0].EndsWith(('\pure\tools\gnuplot\bin\' + $target + '"'))) "Gnuplot platform plugin $plugin did not resolve $target in the direct Gnuplot bin root."
+        }
+    }
+    Remove-GnuplotFixture
+    Write-Output 'PASS Test-ResolvesApprovedGnuplotPlatformPluginsOnlyInDirectGnuplotLoaderRoot'
+    $thirdPlatformImports = Add-GnuplotPlatformPluginFixture (Add-GnuplotFixture (New-BaseImports))
+    Write-TestPe (Join-Path $pure 'tools\gnuplot\bin\platforms\qthird.dll') 'qthird'
+    $thirdPlatformImports['pure/tools/gnuplot/bin/platforms/qthird.dll'] = @()
+    Assert-Failure (Invoke-Stage 'gnuplot-unapproved-platform-plugin' $thirdPlatformImports $gnuplotSystemMappings) 'Unapproved Gnuplot platform plugin PE' 'Unapproved Gnuplot platform plugin PE'
+    Remove-GnuplotFixture
+    Write-Output 'PASS Test-RejectsUnapprovedGnuplotPlatformPluginPe'
+    $pluginDirectoryFallbackImports = Add-GnuplotPlatformPluginFixture (Add-GnuplotFixture (New-BaseImports))
+    $pluginDirectoryFallbackImports['pure/tools/gnuplot/bin/platforms/qminimal.dll'] = @('qwindows.dll')
+    Assert-Failure (Invoke-Stage 'gnuplot-platform-plugin-no-plugin-directory-fallback' $pluginDirectoryFallbackImports $gnuplotSystemMappings) 'Missing effective import qwindows\.dll' 'Gnuplot platform-plugin directory fallback'
+    Remove-GnuplotFixture
+    Write-Output 'PASS Test-RejectsGnuplotPlatformPluginDirectoryFallback'
+
+    foreach ($dependency in @('libpure.dll','liboctave-13.dll')) {
+        $pluginCrossDomainImports = Add-GnuplotPlatformPluginFixture (Add-GnuplotFixture (New-BaseImports))
+        $pluginCrossDomainImports['pure/tools/gnuplot/bin/platforms/qminimal.dll'] = @($dependency)
+        Assert-Failure (Invoke-Stage ('gnuplot-platform-plugin-no-' + $dependency + '-fallback') $pluginCrossDomainImports $gnuplotSystemMappings) ('Missing effective import ' + [regex]::Escape($dependency)) "Gnuplot platform-plugin $dependency fallback"
+        Remove-GnuplotFixture
+    }
+    Write-Output 'PASS Test-RejectsGnuplotPlatformPluginCrossDomainFallbacks'
+
+    $pluginPathOnly = Join-Path $testRoot 'platform-plugin-path-only'
+    Write-TestPe (Join-Path $pluginPathOnly 'path-only.dll') 'path-only'
+    $savedPluginPath = $env:PATH
+    try {
+        $env:PATH = $pluginPathOnly + [IO.Path]::PathSeparator + $savedPluginPath
+        $pluginPathImports = Add-GnuplotPlatformPluginFixture (Add-GnuplotFixture (New-BaseImports))
+        $pluginPathImports['pure/tools/gnuplot/bin/platforms/qminimal.dll'] = @('path-only.dll')
+        Assert-Failure (Invoke-Stage 'gnuplot-platform-plugin-no-path-fallback' $pluginPathImports $gnuplotSystemMappings) 'Missing effective import path-only\.dll' 'Gnuplot platform-plugin PATH fallback'
+    }
+    finally { $env:PATH = $savedPluginPath; Remove-GnuplotFixture }
+    Write-Output 'PASS Test-RejectsGnuplotPlatformPluginPathFallback'
+    $nonPePluginImports = Add-GnuplotPlatformPluginFixture (Add-GnuplotFixture (New-BaseImports))
+    [IO.File]::WriteAllText((Join-Path $pure 'tools\gnuplot\bin\platforms\qminimal.dll'), 'not a PE', [Text.Encoding]::ASCII)
+    Assert-Failure (Invoke-Stage 'gnuplot-platform-plugin-non-pe' $nonPePluginImports) 'Staged loadable file does not contain a PE image' 'Non-PE approved Gnuplot platform plugin'
+    Remove-GnuplotFixture
+    Write-Output 'PASS Test-RejectsNonPeApprovedGnuplotPlatformPlugin'
+
+    $reparsePlatformsImports = Add-GnuplotPlatformPluginFixture (Add-GnuplotFixture (New-BaseImports))
+    Assert-Failure (Invoke-Stage 'gnuplot-platform-plugin-reparse-platforms' $reparsePlatformsImports -InjectGnuplotAuditFault ReparsePlatformDirectory) 'reparse point' 'Gnuplot platform-plugin directory reparse point'
+    Remove-GnuplotFixture
+    Write-Output 'PASS Test-RejectsGnuplotPlatformPluginDirectoryReparsePoint'
+
+    $reparsePluginImports = Add-GnuplotPlatformPluginFixture (Add-GnuplotFixture (New-BaseImports))
+    Assert-Failure (Invoke-Stage 'gnuplot-platform-plugin-reparse-file' $reparsePluginImports -InjectGnuplotAuditFault ReparsePlatformFile) 'reparse point' 'Approved Gnuplot platform-plugin file reparse point'
+    Remove-GnuplotFixture
+    Write-Output 'PASS Test-RejectsApprovedGnuplotPlatformPluginReparsePoint'
 
     $gnuplotPostAuditFailures = [ordered]@{
         FileCount = 'Gnuplot loader file count does not match the expected postcondition'
