@@ -42,6 +42,7 @@ param(
     [switch] $InjectGnuplotCaseCollision,
     [ValidateSet('','Sibling','Nested','NonPe','ReparseRoot','ReparseFile','ReparsePlatformDirectory','ReparsePlatformFile','UnapprovedPlatformPlugin','NonPePlatformPlugin')][string] $InjectGnuplotAuditFault = '',
     [ValidateSet('FileCount','PeCount','ImportEdgeCount','ApplicationDirectoryEdgeCount','ApiSetEdgeCount','System32EdgeCount','UnresolvedEdgeCount')][string] $InjectGnuplotPostAuditFault = '',
+    [ValidateSet('FileCount','PeCount','ImportEdgeCount','ApplicationDirectoryEdgeCount','ApiSetEdgeCount','System32EdgeCount','UnresolvedEdgeCount')][string] $InjectGnuplotPlatformPluginPostAuditFault = '',
     [switch] $InjectGnuplotApiSetReleaseFailure,
     [ValidateSet('','OsVersion','CurrentBuild','Ubr','MissingCurrentBuild','MissingUbr','CurrentBuildKind','UbrKind','FileVersion','ProductVersion','Length','Sha256','OutsideSystem32','ReparseSchema','NonRegularSchema')][string] $InjectPlatformIdentityFault = '',
     [switch] $TestMode
@@ -56,6 +57,7 @@ if ($InjectPlatformIdentityFault -and -not $TestMode) { throw 'Platform identity
 if ($InjectGnuplotCaseCollision -and -not $TestMode) { throw 'Gnuplot case-collision injection is TestMode-only and has no production access.' }
 if ($InjectGnuplotAuditFault -and -not $TestMode) { throw 'Gnuplot audit fault injection is TestMode-only and has no production access.' }
 if ($InjectGnuplotPostAuditFault -and -not $TestMode) { throw 'Gnuplot post-audit fault injection is TestMode-only and has no production access.' }
+if ($InjectGnuplotPlatformPluginPostAuditFault -and -not $TestMode) { throw 'Gnuplot platform-plugin post-audit fault injection is TestMode-only and has no production access.' }
 if ($InjectGnuplotApiSetReleaseFailure -and -not $TestMode) { throw 'Gnuplot API-set release injection is TestMode-only and has no production access.' }
 if ($InjectSupplementPostAuditFault -and -not $TestMode) { throw 'Post-audit supplement failure injection is TestMode-only and has no production access.' }
 $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
@@ -103,6 +105,13 @@ $acceptedGnuplotApplicationDirectoryEdgeCount = 249
 $acceptedGnuplotApiSetEdgeCount = 563
 $acceptedGnuplotSystem32EdgeCount = 190
 $acceptedGnuplotUnresolvedEdgeCount = 0
+$acceptedGnuplotPlatformPluginFileCount = 2
+$acceptedGnuplotPlatformPluginPeFileCount = 2
+$acceptedGnuplotPlatformPluginImportEdgeCount = 38
+$acceptedGnuplotPlatformPluginApplicationDirectoryEdgeCount = 6
+$acceptedGnuplotPlatformPluginApiSetEdgeCount = 15
+$acceptedGnuplotPlatformPluginSystem32EdgeCount = 17
+$acceptedGnuplotPlatformPluginUnresolvedEdgeCount = 0
 $acceptedStageFiles = 64309
 $acceptedStageBytes = 3327729829
 $acceptedStageManifestSha256 = 'E142C07EDA4D71184D1892189834818B9DCE7AD44B8F0A6708A51C54FA56476F'
@@ -402,6 +411,34 @@ function Assert-GnuplotLoaderPostconditions(
     if ($ActualSystem32EdgeCount -ne $ExpectedSystem32EdgeCount) { throw 'Gnuplot loader System32 edge count does not match the expected postcondition.' }
     if ($ActualUnresolvedEdgeCount -ne $ExpectedUnresolvedEdgeCount) { throw 'Gnuplot loader unresolved edge count does not match the expected postcondition.' }
     if ($ActualApplicationDirectoryEdgeCount + $ActualApiSetEdgeCount + $ActualSystem32EdgeCount + $ActualUnresolvedEdgeCount -ne $ActualImportEdgeCount) { throw 'Gnuplot loader edge origin counts do not sum to the total import edge count.' }
+}
+
+function Assert-GnuplotPlatformPluginPostconditions(
+    [long] $FileCount,
+    [long] $PeCount,
+    [long] $ImportEdgeCount,
+    [long] $ApplicationDirectoryEdgeCount,
+    [long] $ApiSetEdgeCount,
+    [long] $System32EdgeCount,
+    [long] $UnresolvedEdgeCount,
+    [long] $ExpectedFileCount,
+    [long] $ExpectedPeCount,
+    [long] $ExpectedImportEdgeCount,
+    [long] $ExpectedApplicationDirectoryEdgeCount,
+    [long] $ExpectedApiSetEdgeCount,
+    [long] $ExpectedSystem32EdgeCount,
+    [long] $ExpectedUnresolvedEdgeCount
+) {
+    if ($FileCount -ne $ExpectedFileCount) { throw 'Gnuplot platform plugin file count does not match the expected postcondition.' }
+    if ($PeCount -ne $ExpectedPeCount) { throw 'Gnuplot platform plugin PE file count does not match the expected postcondition.' }
+    if ($ImportEdgeCount -ne $ExpectedImportEdgeCount) { throw 'Gnuplot platform plugin import edge count does not match the expected postcondition.' }
+    if ($ApplicationDirectoryEdgeCount -ne $ExpectedApplicationDirectoryEdgeCount) { throw 'Gnuplot platform plugin application-directory edge count does not match the expected postcondition.' }
+    if ($ApiSetEdgeCount -ne $ExpectedApiSetEdgeCount) { throw 'Gnuplot platform plugin API-set edge count does not match the expected postcondition.' }
+    if ($System32EdgeCount -ne $ExpectedSystem32EdgeCount) { throw 'Gnuplot platform plugin System32 edge count does not match the expected postcondition.' }
+    if ($UnresolvedEdgeCount -ne $ExpectedUnresolvedEdgeCount) { throw 'Gnuplot platform plugin unresolved edge count does not match the expected postcondition.' }
+    if ($ImportEdgeCount -ne ($ApplicationDirectoryEdgeCount + $ApiSetEdgeCount + $System32EdgeCount + $UnresolvedEdgeCount)) {
+        throw 'Gnuplot platform plugin import edge origins do not sum to the total.'
+    }
 }
 
 function Assert-FinalStagePostconditions(
@@ -980,6 +1017,8 @@ try {
     )
     [long]$gnuplotFileCount = $gnuplotSet.Count
     [long]$gnuplotPeFileCount = @($peFiles | Where-Object { $_.Group -ceq 'pure-gnuplot-app' }).Count
+    [long]$gnuplotPlatformPluginFileCount = @($peFiles | Where-Object { Test-GnuplotPlatformPluginRelative $_.Relative }).Count
+    [long]$gnuplotPlatformPluginPeFileCount = @($peFiles | Where-Object { $_.Group -ceq 'pure-gnuplot-platform-plugin' }).Count
     $octPeFiles = @($peFiles | Where-Object { $_.Relative.EndsWith('.oct', [StringComparison]::OrdinalIgnoreCase) })
     foreach ($relative in $supplementRelativeSet.Keys) {
         $matches = @($peFiles | Where-Object { $_.Relative.Equals($relative, [StringComparison]::OrdinalIgnoreCase) })
@@ -1083,6 +1122,11 @@ try {
     [long]$gnuplotApiSetEdgeCount = 0
     [long]$gnuplotSystem32EdgeCount = 0
     [long]$gnuplotUnresolvedEdgeCount = 0
+    [long]$gnuplotPlatformPluginImportEdgeCount = 0
+    [long]$gnuplotPlatformPluginApplicationDirectoryEdgeCount = 0
+    [long]$gnuplotPlatformPluginApiSetEdgeCount = 0
+    [long]$gnuplotPlatformPluginSystem32EdgeCount = 0
+    [long]$gnuplotPlatformPluginUnresolvedEdgeCount = 0
     foreach ($pe in $peFiles) {
         $effective = Get-EffectiveLoaderSet $pe.Group $pureSet $octaveSet $gnuplotSet
         if ($TestMode -and $supplementRelativeSet.ContainsKey($pe.Relative.ToLowerInvariant())) {
@@ -1098,6 +1142,7 @@ try {
         foreach ($dll in $peImports) {
             if ([string]::IsNullOrWhiteSpace($dll) -or $dll -match '[\\/:]') { throw "Unsafe import name in $($pe.File.FullName): $dll" }
             $key = $dll.ToLowerInvariant(); $resolved = ''
+            if ($pe.Group -ceq 'pure-gnuplot-platform-plugin') { $gnuplotPlatformPluginImportEdgeCount++ }
             if ($pe.Group -ceq 'pure-gnuplot-app') {
                 $gnuplotImportEdgeCount++
                 if ($effective.ContainsKey($key)) { $gnuplotApplicationDirectoryEdgeCount++ }
@@ -1105,14 +1150,22 @@ try {
                 else { $gnuplotSystem32EdgeCount++ }
             }
             if ($effective.ContainsKey($key)) {
-                if ($effective[$key].Count -ne 1) { throw "Ambiguous effective staged import $dll needed by $($pe.File.FullName)" }
+                if ($effective[$key].Count -ne 1) {
+                    if ($pe.Group -ceq 'pure-gnuplot-platform-plugin') { $gnuplotPlatformPluginUnresolvedEdgeCount++ }
+                    throw "Ambiguous effective staged import $dll needed by $($pe.File.FullName)"
+                }
                 $resolved = $effective[$key][0]
+                if ($pe.Group -ceq 'pure-gnuplot-platform-plugin') { $gnuplotPlatformPluginApplicationDirectoryEdgeCount++ }
             }
             elseif ($key.StartsWith('api-ms-win-') -or $key.StartsWith('ext-ms-win-')) {
-                if ($key -notmatch '^(api|ext)-ms-win-[a-z0-9][a-z0-9-]*-l[0-9]+-[0-9]+-[0-9]+\.dll$') { throw "API-set lookalike has invalid contract syntax: $dll" }
+                if ($key -notmatch '^(api|ext)-ms-win-[a-z0-9][a-z0-9-]*-l[0-9]+-[0-9]+-[0-9]+\.dll$') {
+                    if ($pe.Group -ceq 'pure-gnuplot-platform-plugin') { $gnuplotPlatformPluginUnresolvedEdgeCount++ }
+                    throw "API-set lookalike has invalid contract syntax: $dll"
+                }
                 if ($TestMode) {
                     if (-not $syntheticSystemMappings.ContainsKey($key)) {
                         if ($pe.Group -ceq 'pure-gnuplot-app') { $gnuplotUnresolvedEdgeCount++ }
+                        if ($pe.Group -ceq 'pure-gnuplot-platform-plugin') { $gnuplotPlatformPluginUnresolvedEdgeCount++ }
                         throw "API-set contract has no authoritative synthetic mapping: $dll"
                     }
                     $resolved = 'synthetic-system32\' + $syntheticSystemMappings[$key]
@@ -1131,17 +1184,22 @@ try {
                                 $_.Exception.Message.Contains(' escapes its explicit provenance root:') -or
                                 $_.Exception.Message.Contains(' is missing:')))
                         if ($pe.Group -ceq 'pure-gnuplot-app' -and $isUnresolvedApiSetEdge) { $gnuplotUnresolvedEdgeCount++ }
+                        if ($isUnresolvedApiSetEdge) {
+                            if ($pe.Group -ceq 'pure-gnuplot-platform-plugin') { $gnuplotPlatformPluginUnresolvedEdgeCount++ }
+                        }
                         throw
                     }
                     $hostHash = Get-Sha256File $resolved
                 }
                 if ($apiMappings.ContainsKey($key) -and $apiMappings[$key].Path -ne $resolved) { throw "API-set contract mapped inconsistently: $dll" }
                 $apiMappings[$key] = [pscustomobject]@{ Path=$resolved; Sha256=$hostHash }
+                if ($pe.Group -ceq 'pure-gnuplot-platform-plugin') { $gnuplotPlatformPluginApiSetEdgeCount++ }
             }
             else {
                 if ($TestMode) {
                     if (-not $syntheticSystemMappings.ContainsKey($key)) {
                         if ($pe.Group -ceq 'pure-gnuplot-app') { $gnuplotUnresolvedEdgeCount++ }
+                        if ($pe.Group -ceq 'pure-gnuplot-platform-plugin') { $gnuplotPlatformPluginUnresolvedEdgeCount++ }
                         throw "Missing effective import $dll needed by $($pe.File.FullName)"
                     }
                     $resolved = 'synthetic-system32\' + $syntheticSystemMappings[$key]
@@ -1150,11 +1208,13 @@ try {
                     $system = Join-Path $system32 $dll
                     if (-not (Test-Path -LiteralPath $system -PathType Leaf)) {
                         if ($pe.Group -ceq 'pure-gnuplot-app') { $gnuplotUnresolvedEdgeCount++ }
+                        if ($pe.Group -ceq 'pure-gnuplot-platform-plugin') { $gnuplotPlatformPluginUnresolvedEdgeCount++ }
                         throw "Missing effective import $dll needed by $($pe.File.FullName)"
                     }
                     Assert-NoReparsePath $system "System import $dll"
                     $resolved = [IO.Path]::GetFullPath($system)
                 }
+                if ($pe.Group -ceq 'pure-gnuplot-platform-plugin') { $gnuplotPlatformPluginSystem32EdgeCount++ }
             }
             if ($pe.Relative.Equals('pure/lib/gdk-pixbuf-2.0/2.10.0/loaders/pixbufloader_svg.dll', [StringComparison]::OrdinalIgnoreCase) -and $key -eq 'librsvg-2-2.dll') {
                 $expectedRsvg = Join-Path $StageRoot 'pure\bin\librsvg-2-2.dll'
@@ -1190,6 +1250,42 @@ try {
         }
     }
     Assert-GnuplotLoaderPostconditions $observedGnuplotFileCount $observedGnuplotPeFileCount $observedGnuplotImportEdgeCount $observedGnuplotApplicationDirectoryEdgeCount $observedGnuplotApiSetEdgeCount $observedGnuplotSystem32EdgeCount $observedGnuplotUnresolvedEdgeCount $expectedGnuplotFileCount $expectedGnuplotPeFileCount $expectedGnuplotImportEdgeCount $expectedGnuplotApplicationDirectoryEdgeCount $expectedGnuplotApiSetEdgeCount $expectedGnuplotSystem32EdgeCount $expectedGnuplotUnresolvedEdgeCount
+    [long]$expectedGnuplotPlatformPluginFileCount = if ($TestMode) { $gnuplotPlatformPluginFileCount } else { $acceptedGnuplotPlatformPluginFileCount }
+    [long]$expectedGnuplotPlatformPluginPeFileCount = if ($TestMode) { $gnuplotPlatformPluginPeFileCount } else { $acceptedGnuplotPlatformPluginPeFileCount }
+    [long]$expectedGnuplotPlatformPluginImportEdgeCount = if ($TestMode) { $gnuplotPlatformPluginImportEdgeCount } else { $acceptedGnuplotPlatformPluginImportEdgeCount }
+    [long]$expectedGnuplotPlatformPluginApplicationDirectoryEdgeCount = if ($TestMode) { $gnuplotPlatformPluginApplicationDirectoryEdgeCount } else { $acceptedGnuplotPlatformPluginApplicationDirectoryEdgeCount }
+    [long]$expectedGnuplotPlatformPluginApiSetEdgeCount = if ($TestMode) { $gnuplotPlatformPluginApiSetEdgeCount } else { $acceptedGnuplotPlatformPluginApiSetEdgeCount }
+    [long]$expectedGnuplotPlatformPluginSystem32EdgeCount = if ($TestMode) { $gnuplotPlatformPluginSystem32EdgeCount } else { $acceptedGnuplotPlatformPluginSystem32EdgeCount }
+    [long]$expectedGnuplotPlatformPluginUnresolvedEdgeCount = if ($TestMode) { $gnuplotPlatformPluginUnresolvedEdgeCount } else { $acceptedGnuplotPlatformPluginUnresolvedEdgeCount }
+    [long]$observedGnuplotPlatformPluginFileCount = $gnuplotPlatformPluginFileCount
+    [long]$observedGnuplotPlatformPluginPeFileCount = $gnuplotPlatformPluginPeFileCount
+    [long]$observedGnuplotPlatformPluginImportEdgeCount = $gnuplotPlatformPluginImportEdgeCount
+    [long]$observedGnuplotPlatformPluginApplicationDirectoryEdgeCount = $gnuplotPlatformPluginApplicationDirectoryEdgeCount
+    [long]$observedGnuplotPlatformPluginApiSetEdgeCount = $gnuplotPlatformPluginApiSetEdgeCount
+    [long]$observedGnuplotPlatformPluginSystem32EdgeCount = $gnuplotPlatformPluginSystem32EdgeCount
+    [long]$observedGnuplotPlatformPluginUnresolvedEdgeCount = $gnuplotPlatformPluginUnresolvedEdgeCount
+    if ($TestMode) {
+        switch ($InjectGnuplotPlatformPluginPostAuditFault) {
+            'FileCount' { $observedGnuplotPlatformPluginFileCount++ }
+            'PeCount' { $observedGnuplotPlatformPluginPeFileCount++ }
+            'ImportEdgeCount' { $observedGnuplotPlatformPluginImportEdgeCount++ }
+            'ApplicationDirectoryEdgeCount' { $observedGnuplotPlatformPluginApplicationDirectoryEdgeCount++ }
+            'ApiSetEdgeCount' { $observedGnuplotPlatformPluginApiSetEdgeCount++ }
+            'System32EdgeCount' { $observedGnuplotPlatformPluginSystem32EdgeCount++ }
+            'UnresolvedEdgeCount' { $observedGnuplotPlatformPluginUnresolvedEdgeCount++ }
+        }
+    }
+    Assert-GnuplotPlatformPluginPostconditions $observedGnuplotPlatformPluginFileCount $observedGnuplotPlatformPluginPeFileCount $observedGnuplotPlatformPluginImportEdgeCount $observedGnuplotPlatformPluginApplicationDirectoryEdgeCount $observedGnuplotPlatformPluginApiSetEdgeCount $observedGnuplotPlatformPluginSystem32EdgeCount $observedGnuplotPlatformPluginUnresolvedEdgeCount $expectedGnuplotPlatformPluginFileCount $expectedGnuplotPlatformPluginPeFileCount $expectedGnuplotPlatformPluginImportEdgeCount $expectedGnuplotPlatformPluginApplicationDirectoryEdgeCount $expectedGnuplotPlatformPluginApiSetEdgeCount $expectedGnuplotPlatformPluginSystem32EdgeCount $expectedGnuplotPlatformPluginUnresolvedEdgeCount
+    if (-not $TestMode) {
+        if (
+            ($gnuplotPeFileCount + $gnuplotPlatformPluginPeFileCount) -ne 65 -or
+            ($gnuplotImportEdgeCount + $gnuplotPlatformPluginImportEdgeCount) -ne 1040 -or
+            ($gnuplotApplicationDirectoryEdgeCount + $gnuplotPlatformPluginApplicationDirectoryEdgeCount) -ne 255 -or
+            ($gnuplotApiSetEdgeCount + $gnuplotPlatformPluginApiSetEdgeCount) -ne 578 -or
+            ($gnuplotSystem32EdgeCount + $gnuplotPlatformPluginSystem32EdgeCount) -ne 207 -or
+            ($gnuplotUnresolvedEdgeCount + $gnuplotPlatformPluginUnresolvedEdgeCount) -ne 0
+        ) { throw 'Combined Gnuplot loader diagnostics do not match the expected postconditions.' }
+    }
 
     $svgLoaderPeCount = @($peFiles | Where-Object { $_.Relative.Equals('pure/lib/gdk-pixbuf-2.0/2.10.0/loaders/pixbufloader_svg.dll', [StringComparison]::OrdinalIgnoreCase) }).Count
     if ((-not $TestMode -and $svgLoaderPeCount -ne 1) -or ($svgLoaderPeCount -gt 0 -and $svgLoaderRsvgEdgeCount -ne 1)) { throw 'The exact pixbufloader_svg.dll to librsvg-2-2.dll stage edge was not observed once.' }
@@ -1258,6 +1354,13 @@ try {
         GnuplotLoaderApiSetEdgeCount=$gnuplotApiSetEdgeCount
         GnuplotLoaderSystem32EdgeCount=$gnuplotSystem32EdgeCount
         GnuplotLoaderUnresolvedEdgeCount=$gnuplotUnresolvedEdgeCount
+        GnuplotPlatformPluginFileCount=$gnuplotPlatformPluginFileCount
+        GnuplotPlatformPluginPeFileCount=$gnuplotPlatformPluginPeFileCount
+        GnuplotPlatformPluginImportEdgeCount=$gnuplotPlatformPluginImportEdgeCount
+        GnuplotPlatformPluginApplicationDirectoryEdgeCount=$gnuplotPlatformPluginApplicationDirectoryEdgeCount
+        GnuplotPlatformPluginApiSetEdgeCount=$gnuplotPlatformPluginApiSetEdgeCount
+        GnuplotPlatformPluginSystem32EdgeCount=$gnuplotPlatformPluginSystem32EdgeCount
+        GnuplotPlatformPluginUnresolvedEdgeCount=$gnuplotPlatformPluginUnresolvedEdgeCount
     } | ConvertTo-Json -Depth 3
 }
 catch {

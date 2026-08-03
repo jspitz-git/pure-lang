@@ -116,8 +116,8 @@ function Add-GnuplotFixture([hashtable] $Imports) {
 function Add-GnuplotPlatformPluginFixture([hashtable] $Imports) {
     Write-TestPe (Join-Path $pure 'tools\gnuplot\bin\platforms\qminimal.dll') 'qminimal'
     Write-TestPe (Join-Path $pure 'tools\gnuplot\bin\platforms\qwindows.dll') 'qwindows'
-    $Imports['pure/tools/gnuplot/bin/platforms/qminimal.dll'] = @('Qt6Gui.dll','Qt6Core.dll','kernel32.dll')
-    $Imports['pure/tools/gnuplot/bin/platforms/qwindows.dll'] = @('Qt6Gui.dll','Qt6Core.dll','user32.dll')
+    $Imports['pure/tools/gnuplot/bin/platforms/qminimal.dll'] = @('Qt6Gui.dll','Qt6Core.dll','api-ms-win-core-synch-l1-2-0.dll','kernel32.dll')
+    $Imports['pure/tools/gnuplot/bin/platforms/qwindows.dll'] = @('Qt6Gui.dll','Qt6Core.dll','api-ms-win-core-synch-l1-2-0.dll','user32.dll')
     return $Imports
 }
 
@@ -163,6 +163,7 @@ function Invoke-Stage {
         [hashtable]$SystemMappings = @{},
         [string]$InjectGnuplotAuditFault = '',
         [string]$InjectGnuplotPostAuditFault = '',
+        [string]$InjectGnuplotPlatformPluginPostAuditFault = '',
         [switch]$NoTestMode,
         [switch]$InjectGnuplotCaseCollision,
         [switch]$InjectGnuplotApiSetReleaseFailure,
@@ -232,6 +233,7 @@ function Invoke-Stage {
     if ($InjectGnuplotCaseCollision) { $args += '-InjectGnuplotCaseCollision' }
     if ($InjectGnuplotAuditFault) { $args += @('-InjectGnuplotAuditFault',$InjectGnuplotAuditFault) }
     if ($InjectGnuplotPostAuditFault) { $args += @('-InjectGnuplotPostAuditFault',$InjectGnuplotPostAuditFault) }
+    if ($InjectGnuplotPlatformPluginPostAuditFault) { $args += @('-InjectGnuplotPlatformPluginPostAuditFault',$InjectGnuplotPlatformPluginPostAuditFault) }
     if ($InjectGnuplotApiSetReleaseFailure) { $args += '-InjectGnuplotApiSetReleaseFailure' }
     if ($InjectPlatformIdentityFault) { $args += @('-InjectPlatformIdentityFault',$InjectPlatformIdentityFault) }
     if ($InjectSupplementDestinationCollision) { $args += '-InjectSupplementDestinationCollision' }
@@ -303,6 +305,19 @@ try {
     )) {
         Assert-True ([regex]::IsMatch($productionSource, ('(?m)^' + [regex]::Escape($assignment) + '$'))) "Production Gnuplot loader contract omits exact literal assignment: $assignment"
     }
+    foreach ($assignment in @(
+        '$acceptedGnuplotPlatformPluginFileCount = 2',
+        '$acceptedGnuplotPlatformPluginPeFileCount = 2',
+        '$acceptedGnuplotPlatformPluginImportEdgeCount = 38',
+        '$acceptedGnuplotPlatformPluginApplicationDirectoryEdgeCount = 6',
+        '$acceptedGnuplotPlatformPluginApiSetEdgeCount = 15',
+        '$acceptedGnuplotPlatformPluginSystem32EdgeCount = 17',
+        '$acceptedGnuplotPlatformPluginUnresolvedEdgeCount = 0'
+    )) {
+        Assert-True ([regex]::IsMatch($productionSource, ('(?m)^' + [regex]::Escape($assignment) + '$'))) "Production Gnuplot platform-plugin contract omits exact literal assignment: $assignment"
+    }
+    $gnuplotPlatformPluginPostAuditValidateSet = [regex]::Match($productionSource, "(?m)^\s*\[ValidateSet\('FileCount','PeCount','ImportEdgeCount','ApplicationDirectoryEdgeCount','ApiSetEdgeCount','System32EdgeCount','UnresolvedEdgeCount'\)\]\[string\] \`$InjectGnuplotPlatformPluginPostAuditFault = '',\s*$")
+    Assert-True $gnuplotPlatformPluginPostAuditValidateSet.Success 'Production Gnuplot platform-plugin post-audit fault switch does not expose exactly the seven approved values.'
     $gnuplotPostAuditValidateSet = [regex]::Match($productionSource, "(?m)^\s*\[ValidateSet\('FileCount','PeCount','ImportEdgeCount','ApplicationDirectoryEdgeCount','ApiSetEdgeCount','System32EdgeCount','UnresolvedEdgeCount'\)\]\[string\] \`$InjectGnuplotPostAuditFault = '',\s*$")
     Assert-True $gnuplotPostAuditValidateSet.Success 'Production Gnuplot post-audit fault switch does not expose exactly the seven approved values.'
     $gnuplotApiSetCatch = [regex]::Match($productionSource, '(?s)\$resolved = Resolve-ApiSetContract \$dll \$system32\s*}\s*catch \{(?<Body>.*?)\s*throw\s*}')
@@ -314,6 +329,7 @@ try {
         $gnuplotApiSetCatch.Groups['Body'].Value -match "(?s)if \(\`$pe\.Group -ceq 'pure-gnuplot-app' -and \`$isUnresolvedApiSetEdge\) \{ \`$gnuplotUnresolvedEdgeCount\+\+ \}" -and
         $gnuplotApiSetCatch.Groups['Body'].Value -notmatch 'mapping path could not be read|mapping could not be freed') 'Production Gnuplot API-set accounting must count only missing or cross-domain resolution failures as unresolved edges.'
     Write-Output 'PASS Test-HardBindsProductionGnuplotLoaderContract'
+    Write-Output 'PASS Test-HardBindsProductionGnuplotPlatformPluginContract'
 
     [IO.Directory]::CreateDirectory($parent) | Out-Null
     [IO.Directory]::CreateDirectory($permanentRoot) | Out-Null
@@ -399,7 +415,7 @@ try {
     Remove-GnuplotFixture
     Write-Output 'PASS Test-ReportsExactGnuplotLoaderCardinalitiesAndOrigins'
 
-    $gnuplotPlatformSuccess = Invoke-Stage 'gnuplot-platform-plugin-success' (Add-GnuplotPlatformPluginFixture (Add-GnuplotFixture (New-BaseImports))) @{$gnuplotApi='kernelbase.dll'; 'kernel32.dll'='kernel32.dll'; 'user32.dll'='user32.dll'}
+    $gnuplotPlatformSuccess = Invoke-Stage 'gnuplot-platform-plugin-success' (Add-GnuplotFixture (New-BaseImports)) @{$gnuplotApi='kernelbase.dll'; 'kernel32.dll'='kernel32.dll'; 'user32.dll'='user32.dll'}
     Assert-True ($gnuplotPlatformSuccess.ExitCode -eq 0) "Gnuplot platform-plugin fixture failed: $($gnuplotPlatformSuccess.Output)"
     $gnuplotPlatformClosure = Get-Content -LiteralPath (Join-Path $gnuplotPlatformSuccess.Stage 'stage-import-closure.tsv') -Raw
     foreach ($plugin in @('qminimal.dll','qwindows.dll')) {
@@ -410,6 +426,17 @@ try {
             Assert-True ($pluginRows[0].EndsWith(('\pure\tools\gnuplot\bin\' + $target + '"'))) "Gnuplot platform plugin $plugin did not resolve $target in the direct Gnuplot bin root."
         }
     }
+    $gnuplotPlatformReport = $gnuplotPlatformSuccess.Output | ConvertFrom-Json
+    Assert-True (
+        $gnuplotPlatformReport.GnuplotPlatformPluginFileCount -eq 2 -and
+        $gnuplotPlatformReport.GnuplotPlatformPluginPeFileCount -eq 2 -and
+        $gnuplotPlatformReport.GnuplotPlatformPluginImportEdgeCount -eq 8 -and
+        $gnuplotPlatformReport.GnuplotPlatformPluginApplicationDirectoryEdgeCount -eq 4 -and
+        $gnuplotPlatformReport.GnuplotPlatformPluginApiSetEdgeCount -eq 2 -and
+        $gnuplotPlatformReport.GnuplotPlatformPluginSystem32EdgeCount -eq 2 -and
+        $gnuplotPlatformReport.GnuplotPlatformPluginUnresolvedEdgeCount -eq 0
+    ) 'Gnuplot platform-plugin JSON audit did not report exact 2 / 2 / 8 / 4 / 2 / 2 / 0 fixture cardinalities.'
+    Write-Output 'PASS Test-ReportsExactGnuplotPlatformPluginCardinalitiesAndOrigins'
     Remove-GnuplotFixture
     Write-Output 'PASS Test-ResolvesApprovedGnuplotPlatformPluginsOnlyInDirectGnuplotLoaderRoot'
     $changedCanonicalGnuplotImports = Add-GnuplotFixture (New-BaseImports)
@@ -418,18 +445,18 @@ try {
     Assert-Failure (Invoke-Stage 'gnuplot-canonical-inventory-mutation' $changedCanonicalGnuplotImports $gnuplotSystemMappings) 'TestMode input expectations must equal the exact versioned synthetic fixture' 'Changed canonical Gnuplot fixture inventory'
     Remove-GnuplotFixture
     Write-Output 'PASS Test-RejectsChangedCanonicalGnuplotFixtureInventory'
-    $thirdPlatformImports = Add-GnuplotPlatformPluginFixture (Add-GnuplotFixture (New-BaseImports))
+    $thirdPlatformImports = Add-GnuplotFixture (New-BaseImports)
     Assert-Failure (Invoke-Stage 'gnuplot-unapproved-platform-plugin' $thirdPlatformImports $gnuplotSystemMappings -InjectGnuplotAuditFault UnapprovedPlatformPlugin) 'Unapproved Gnuplot platform plugin PE' 'Unapproved Gnuplot platform plugin PE'
     Remove-GnuplotFixture
     Write-Output 'PASS Test-RejectsUnapprovedGnuplotPlatformPluginPe'
-    $pluginDirectoryFallbackImports = Add-GnuplotPlatformPluginFixture (Add-GnuplotFixture (New-BaseImports))
+    $pluginDirectoryFallbackImports = Add-GnuplotFixture (New-BaseImports)
     $pluginDirectoryFallbackImports['pure/tools/gnuplot/bin/platforms/qminimal.dll'] = @('qwindows.dll')
     Assert-Failure (Invoke-Stage 'gnuplot-platform-plugin-no-plugin-directory-fallback' $pluginDirectoryFallbackImports $gnuplotSystemMappings) 'Missing effective import qwindows\.dll' 'Gnuplot platform-plugin directory fallback'
     Remove-GnuplotFixture
     Write-Output 'PASS Test-RejectsGnuplotPlatformPluginDirectoryFallback'
 
     foreach ($dependency in @('libpure.dll','liboctave-13.dll')) {
-        $pluginCrossDomainImports = Add-GnuplotPlatformPluginFixture (Add-GnuplotFixture (New-BaseImports))
+        $pluginCrossDomainImports = Add-GnuplotFixture (New-BaseImports)
         $pluginCrossDomainImports['pure/tools/gnuplot/bin/platforms/qminimal.dll'] = @($dependency)
         Assert-Failure (Invoke-Stage ('gnuplot-platform-plugin-no-' + $dependency + '-fallback') $pluginCrossDomainImports $gnuplotSystemMappings) ('Missing effective import ' + [regex]::Escape($dependency)) "Gnuplot platform-plugin $dependency fallback"
         Remove-GnuplotFixture
@@ -441,23 +468,23 @@ try {
     $savedPluginPath = $env:PATH
     try {
         $env:PATH = $pluginPathOnly + [IO.Path]::PathSeparator + $savedPluginPath
-        $pluginPathImports = Add-GnuplotPlatformPluginFixture (Add-GnuplotFixture (New-BaseImports))
+        $pluginPathImports = Add-GnuplotFixture (New-BaseImports)
         $pluginPathImports['pure/tools/gnuplot/bin/platforms/qminimal.dll'] = @('path-only.dll')
         Assert-Failure (Invoke-Stage 'gnuplot-platform-plugin-no-path-fallback' $pluginPathImports $gnuplotSystemMappings) 'Missing effective import path-only\.dll' 'Gnuplot platform-plugin PATH fallback'
     }
     finally { $env:PATH = $savedPluginPath; Remove-GnuplotFixture }
     Write-Output 'PASS Test-RejectsGnuplotPlatformPluginPathFallback'
-    $nonPePluginImports = Add-GnuplotPlatformPluginFixture (Add-GnuplotFixture (New-BaseImports))
+    $nonPePluginImports = Add-GnuplotFixture (New-BaseImports)
     Assert-Failure (Invoke-Stage 'gnuplot-platform-plugin-non-pe' $nonPePluginImports -InjectGnuplotAuditFault NonPePlatformPlugin) 'Staged loadable file does not contain a PE image' 'Non-PE approved Gnuplot platform plugin'
     Remove-GnuplotFixture
     Write-Output 'PASS Test-RejectsNonPeApprovedGnuplotPlatformPlugin'
 
-    $reparsePlatformsImports = Add-GnuplotPlatformPluginFixture (Add-GnuplotFixture (New-BaseImports))
+    $reparsePlatformsImports = Add-GnuplotFixture (New-BaseImports)
     Assert-Failure (Invoke-Stage 'gnuplot-platform-plugin-reparse-platforms' $reparsePlatformsImports -InjectGnuplotAuditFault ReparsePlatformDirectory) 'reparse point' 'Gnuplot platform-plugin directory reparse point'
     Remove-GnuplotFixture
     Write-Output 'PASS Test-RejectsGnuplotPlatformPluginDirectoryReparsePoint'
 
-    $reparsePluginImports = Add-GnuplotPlatformPluginFixture (Add-GnuplotFixture (New-BaseImports))
+    $reparsePluginImports = Add-GnuplotFixture (New-BaseImports)
     Assert-Failure (Invoke-Stage 'gnuplot-platform-plugin-reparse-file' $reparsePluginImports -InjectGnuplotAuditFault ReparsePlatformFile) 'reparse point' 'Approved Gnuplot platform-plugin file reparse point'
     Remove-GnuplotFixture
     Write-Output 'PASS Test-RejectsApprovedGnuplotPlatformPluginReparsePoint'
@@ -477,6 +504,65 @@ try {
         Remove-GnuplotFixture
     }
     Write-Output 'PASS Test-RejectsEveryGnuplotPostAuditCardinalityFault'
+    $gnuplotPlatformPluginPostAuditFailures = [ordered]@{
+        FileCount = 'Gnuplot platform plugin file count does not match the expected postcondition'
+        PeCount = 'Gnuplot platform plugin PE file count does not match the expected postcondition'
+        ImportEdgeCount = 'Gnuplot platform plugin import edge count does not match the expected postcondition'
+        ApplicationDirectoryEdgeCount = 'Gnuplot platform plugin application-directory edge count does not match the expected postcondition'
+        ApiSetEdgeCount = 'Gnuplot platform plugin API-set edge count does not match the expected postcondition'
+        System32EdgeCount = 'Gnuplot platform plugin System32 edge count does not match the expected postcondition'
+        UnresolvedEdgeCount = 'Gnuplot platform plugin unresolved edge count does not match the expected postcondition'
+    }
+    foreach ($fault in $gnuplotPlatformPluginPostAuditFailures.Keys) {
+        $faultImports = Add-GnuplotFixture (New-BaseImports)
+        Assert-Failure (Invoke-Stage ("gnuplot-platform-plugin-post-audit-$fault") $faultImports $gnuplotSystemMappings -InjectGnuplotPlatformPluginPostAuditFault $fault) $gnuplotPlatformPluginPostAuditFailures[$fault] "Gnuplot platform plugin $fault postcondition fault"
+        Remove-GnuplotFixture
+    }
+    Write-Output 'PASS Test-RejectsEveryGnuplotPlatformPluginPostAuditCardinalityFault'
+    $unknownPluginApiImports = Add-GnuplotFixture (New-BaseImports)
+    $unknownPluginApiImports['pure/tools/gnuplot/bin/platforms/qminimal.dll'] = @('api-ms-win-core-unapproved-l1-1-0.dll')
+    Assert-Failure (Invoke-Stage 'gnuplot-platform-plugin-unknown-api-set' $unknownPluginApiImports $gnuplotSystemMappings) 'API-set contract.*authoritative.*mapping|authoritative.*API-set' 'Unknown Gnuplot platform-plugin API-set mapping'
+    Remove-GnuplotFixture
+    $invalidPluginApiImports = Add-GnuplotFixture (New-BaseImports)
+    $invalidPluginApiImports['pure/tools/gnuplot/bin/platforms/qminimal.dll'] = @('api-ms-win-invalid.dll')
+    Assert-Failure (Invoke-Stage 'gnuplot-platform-plugin-invalid-api-set' $invalidPluginApiImports $gnuplotSystemMappings) 'API-set lookalike has invalid contract syntax' 'Invalid Gnuplot platform-plugin API-set mapping'
+    Remove-GnuplotFixture
+    $missingPluginSystemImports = Add-GnuplotFixture (New-BaseImports)
+    $missingPluginSystemImports['pure/tools/gnuplot/bin/platforms/qminimal.dll'] = @('missing-system.dll')
+    Assert-Failure (Invoke-Stage 'gnuplot-platform-plugin-missing-system32' $missingPluginSystemImports $gnuplotSystemMappings) 'Missing effective import missing-system\.dll' 'Missing Gnuplot platform-plugin System32 mapping'
+    Remove-GnuplotFixture
+    $missingPluginRootImports = Add-GnuplotFixture (New-BaseImports)
+    $missingPluginRootImports['pure/tools/gnuplot/bin/platforms/qminimal.dll'] = @('missing-root.dll')
+    Assert-Failure (Invoke-Stage 'gnuplot-platform-plugin-missing-root' $missingPluginRootImports $gnuplotSystemMappings) 'Missing effective import missing-root\.dll' 'Missing Gnuplot platform-plugin root import'
+    Remove-GnuplotFixture
+    $ambiguousPluginRootImports = Add-GnuplotFixture (New-BaseImports)
+    $ambiguousPluginRootImports['pure/tools/gnuplot/bin/gnuplot_qt.exe'] = @($gnuplotApi,'kernel32.dll')
+    Assert-Failure (Invoke-Stage 'gnuplot-platform-plugin-ambiguous-root' $ambiguousPluginRootImports $gnuplotSystemMappings -InjectGnuplotCaseCollision) 'Ambiguous effective staged import Qt6Core\.dll|ambiguous case-insensitive filename' 'Ambiguous Gnuplot platform-plugin root import'
+    Remove-GnuplotFixture
+    $pluginUnresolvedPreThrowPatterns = @(
+        '(?s)if \(\$effective\[\$key\]\.Count -ne 1\) \{\s*if \(\$pe\.Group -ceq ''pure-gnuplot-platform-plugin''\) \{ \$gnuplotPlatformPluginUnresolvedEdgeCount\+\+ \}\s*throw "Ambiguous effective staged import',
+        '(?s)if \(\$key -notmatch .*?\) \{\s*if \(\$pe\.Group -ceq ''pure-gnuplot-platform-plugin''\) \{ \$gnuplotPlatformPluginUnresolvedEdgeCount\+\+ \}\s*throw "API-set lookalike has invalid contract syntax',
+        '(?s)if \(-not \$syntheticSystemMappings\.ContainsKey\(\$key\)\) \{\s*if \(\$pe\.Group -ceq ''pure-gnuplot-app''\) \{ \$gnuplotUnresolvedEdgeCount\+\+ \}\s*if \(\$pe\.Group -ceq ''pure-gnuplot-platform-plugin''\) \{ \$gnuplotPlatformPluginUnresolvedEdgeCount\+\+ \}\s*throw "API-set contract has no authoritative synthetic mapping',
+        '(?s)if \(\$isUnresolvedApiSetEdge\) \{\s*if \(\$pe\.Group -ceq ''pure-gnuplot-platform-plugin''\) \{ \$gnuplotPlatformPluginUnresolvedEdgeCount\+\+ \}\s*\}\s*throw',
+        '(?s)if \(-not \$syntheticSystemMappings\.ContainsKey\(\$key\)\) \{\s*if \(\$pe\.Group -ceq ''pure-gnuplot-app''\) \{ \$gnuplotUnresolvedEdgeCount\+\+ \}\s*if \(\$pe\.Group -ceq ''pure-gnuplot-platform-plugin''\) \{ \$gnuplotPlatformPluginUnresolvedEdgeCount\+\+ \}\s*throw "Missing effective import',
+        '(?s)if \(-not \(Test-Path -LiteralPath \$system -PathType Leaf\)\) \{\s*if \(\$pe\.Group -ceq ''pure-gnuplot-app''\) \{ \$gnuplotUnresolvedEdgeCount\+\+ \}\s*if \(\$pe\.Group -ceq ''pure-gnuplot-platform-plugin''\) \{ \$gnuplotPlatformPluginUnresolvedEdgeCount\+\+ \}\s*throw "Missing effective import'
+    )
+    foreach ($pattern in $pluginUnresolvedPreThrowPatterns) {
+        Assert-True ([regex]::IsMatch($productionSource, $pattern)) "Production does not increment Gnuplot platform-plugin unresolved evidence immediately before the matching failure branch: $pattern"
+    }
+    $combinedGnuplotDiagnosticExpressions = @(
+        '($gnuplotPeFileCount + $gnuplotPlatformPluginPeFileCount) -ne 65',
+        '($gnuplotImportEdgeCount + $gnuplotPlatformPluginImportEdgeCount) -ne 1040',
+        '($gnuplotApplicationDirectoryEdgeCount + $gnuplotPlatformPluginApplicationDirectoryEdgeCount) -ne 255',
+        '($gnuplotApiSetEdgeCount + $gnuplotPlatformPluginApiSetEdgeCount) -ne 578',
+        '($gnuplotSystem32EdgeCount + $gnuplotPlatformPluginSystem32EdgeCount) -ne 207',
+        '($gnuplotUnresolvedEdgeCount + $gnuplotPlatformPluginUnresolvedEdgeCount) -ne 0'
+    )
+    foreach ($expression in $combinedGnuplotDiagnosticExpressions) {
+        Assert-True $productionSource.Contains($expression) "Production omits exact combined Gnuplot diagnostic expression: $expression"
+    }
+    Write-Output 'PASS Test-RecordsEveryFailedGnuplotPlatformPluginImportAsUnresolved'
+    Write-Output 'PASS Test-HardBindsCombinedGnuplotDiagnosticSums'
 
     $unknownGnuplotApiImports = Add-GnuplotFixture (New-BaseImports)
     $unknownGnuplotApiImports['pure/tools/gnuplot/bin/gnuplot_qt.exe'] = @('api-ms-win-core-unapproved-l1-1-0.dll')
@@ -526,6 +612,7 @@ try {
 
     $productionGnuplotInjection = Invoke-Stage 'production-gnuplot-injection' (New-BaseImports) @{} -NoTestMode -OmitSyntheticTools -InjectGnuplotCaseCollision
     $productionGnuplotPostAuditInjection = Invoke-Stage 'production-gnuplot-post-audit-injection' (New-BaseImports) @{} -InjectGnuplotPostAuditFault FileCount -NoTestMode -OmitSyntheticTools
+    $productionGnuplotPlatformPluginPostAuditInjection = Invoke-Stage 'production-gnuplot-platform-plugin-post-audit-injection' (New-BaseImports) @{} -InjectGnuplotPlatformPluginPostAuditFault FileCount -NoTestMode -OmitSyntheticTools
     $productionGnuplotReleaseInjection = Invoke-Stage 'production-gnuplot-release-injection' (New-BaseImports) @{} -InjectGnuplotApiSetReleaseFailure -NoTestMode -OmitSyntheticTools
     $siblingImports = Add-GnuplotFixture (New-BaseImports)
     $siblingImports['pure/tools/gnuplot/bin/gnuplot_qt.exe'] = @('sibling-only.dll')
@@ -556,6 +643,7 @@ try {
 
     Assert-Failure $productionGnuplotInjection 'Gnuplot case-collision injection is TestMode-only' 'Production Gnuplot case-collision injection'
     Assert-Failure $productionGnuplotPostAuditInjection 'Gnuplot post-audit fault injection is TestMode-only' 'Production Gnuplot post-audit fault injection'
+    Assert-Failure $productionGnuplotPlatformPluginPostAuditInjection 'Gnuplot platform-plugin post-audit fault injection is TestMode-only' 'Production Gnuplot platform-plugin post-audit fault injection'
     Assert-Failure $productionGnuplotReleaseInjection 'Gnuplot API-set release injection is TestMode-only' 'Production Gnuplot API-set release injection'
     Write-Output 'PASS Test-RejectsProductionGnuplotTestInjections'
 
