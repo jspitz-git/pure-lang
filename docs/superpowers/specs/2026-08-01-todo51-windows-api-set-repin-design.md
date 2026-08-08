@@ -1,5 +1,8 @@
 # TODO-51 Windows API-set Baseline Repin Design
 
+> **Rejected on 2026-08-08.** Historical record only. Do not implement or
+> resume this work without a new approved TODO.
+
 ## Context
 
 The reviewed Gnuplot-aware Task 3 preflight for production attempt v12 ran

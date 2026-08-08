@@ -1,5 +1,8 @@
 # TODO-51 Gnuplot Application Loader Domain Design
 
+> **Rejected on 2026-08-08.** Historical record only. Do not implement or
+> resume this work without a new approved TODO.
+
 ## Context
 
 The sole production Task 3 stage v11 was created at

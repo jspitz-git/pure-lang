@@ -1,5 +1,8 @@
 # Windows pure-octave Design
 
+> **Rejected on 2026-08-08.** Historical record only. Do not implement or
+> resume this work without a new approved TODO.
+
 Date: 2026-07-29
 Status: Approved
 TODO: `pure/todo/TODO-43-windows-pure-octave.md`

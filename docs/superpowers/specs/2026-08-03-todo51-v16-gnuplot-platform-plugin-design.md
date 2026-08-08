@@ -1,5 +1,8 @@
 # TODO-51 v16 Gnuplot Qt Platform Plugin Design
 
+> **Rejected on 2026-08-08.** Historical record only. Do not implement or
+> resume this work without a new approved TODO.
+
 ## Goal
 
 Create one new immutable Task 3 production-stage version that audits the two

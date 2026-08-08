@@ -1,6 +1,6 @@
 # TODO-43 - Windows pure-octave Package
 
-Status: Blocked
+Status: Rejected on 2026-08-08
 Branch: todo/43-windows-pure-octave
 
 ## Purpose
@@ -201,3 +201,8 @@ Windows Octave distribution.
     changing production code. TODO-51 records the complete no-go evidence and
     the dependent acceptance criteria. Tasks 1-3 and all other Task 4 evidence
     remain complete.
+- 2026-08-08: Rejected by product decision.
+  - The Windows `pure-octave` implementation and its strict-write-confinement
+    follow-up were removed from the repository.
+  - Historical investigation evidence remains in Git and in the rejected
+    design and plan documents; resumption requires a new approved TODO.

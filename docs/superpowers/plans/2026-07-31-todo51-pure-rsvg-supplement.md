@@ -1,5 +1,8 @@
 # TODO-51 Pure SVG Runtime Supplement Implementation Plan
 
+> **Rejected on 2026-08-08.** Historical record only. Do not implement or
+> resume this work without a new approved TODO.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Add the exact three-DLL clang64 SVG runtime closure to the disposable Pure stage without mutating the accepted Pure or permanent Octave roots, then produce a fully audited production stage.

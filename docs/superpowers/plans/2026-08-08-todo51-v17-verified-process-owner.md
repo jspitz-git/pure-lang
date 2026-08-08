@@ -1,5 +1,8 @@
 # TODO-51 v17 Verified Process Owner Implementation Plan
 
+> **Rejected on 2026-08-08.** Historical record only. Do not implement or
+> resume this work without a new approved TODO.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Replace the untested inline production launcher with one behaviorally verified, hash-pinned process owner, then use it for a single immutable v17 preflight/assembler/post-audit attempt.

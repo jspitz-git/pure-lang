@@ -1,5 +1,8 @@
 # TODO-51 v17 Verified Process Owner Design
 
+> **Rejected on 2026-08-08.** Historical record only. Do not implement or
+> resume this work without a new approved TODO.
+
 ## Context
 
 The sole v16 preflight child was started successfully, but its inline process

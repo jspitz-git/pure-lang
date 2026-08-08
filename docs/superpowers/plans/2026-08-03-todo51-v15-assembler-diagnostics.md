@@ -1,5 +1,8 @@
 # TODO-51 v15 Assembler Diagnostics Implementation Plan
 
+> **Rejected on 2026-08-08.** Historical record only. Do not implement or
+> resume this work without a new approved TODO.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Add independently testable top-level assembler error evidence, then perform one fail-closed v15 production staging attempt outside the restricted sandbox.

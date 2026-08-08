@@ -1,5 +1,8 @@
 # TODO-51 v15 Assembler Diagnostics Design
 
+> **Rejected on 2026-08-08.** Historical record only. Do not implement or
+> resume this work without a new approved TODO.
+
 ## Context
 
 The accepted v14 preflight ran outside the restricted sandbox and proved every

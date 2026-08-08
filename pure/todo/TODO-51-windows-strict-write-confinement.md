@@ -1,6 +1,6 @@
 # TODO-51 - Windows Strict Write Confinement
 
-Status: Open
+Status: Rejected on 2026-08-08
 Branch: todo/51-windows-strict-write-confinement
 
 ## Purpose
@@ -138,3 +138,8 @@ ownership gates.
     `UNIQUE_ONLY OK=1 ERROR=0`, and
     `ARAP_AND_UNIQUE OK=0 ERROR=87`. All stage/helper fixtures were removed and
     the repository remained clean.
+- 2026-08-08: Rejected by product decision.
+  - The Windows `pure-octave` implementation and its strict-write-confinement
+    follow-up were removed from the repository.
+  - Historical investigation evidence remains in Git and in the rejected
+    design and plan documents; resumption requires a new approved TODO.

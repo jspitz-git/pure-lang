@@ -1,5 +1,8 @@
 # TODO-51 Pure SVG Runtime Supplement Design
 
+> **Rejected on 2026-08-08.** Historical record only. Do not implement or
+> resume this work without a new approved TODO.
+
 ## Context
 
 The hardened Task 3 staging audit reached the complete Pure runtime closure in
