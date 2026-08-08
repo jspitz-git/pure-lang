@@ -83,9 +83,8 @@ git status --short
 ```
 
 Expected: the baseline comparison exits `0`. Git status shows the intended
-tracked deletions and legacy-file restorations, the already committed design,
-and this untracked implementation plan; it shows no unrelated working-tree
-path.
+tracked deletions and legacy-file restorations. The design and implementation
+plan remain committed, and no unrelated working-tree path is present.
 
 - [ ] **Step 5: Stage and review only the restored source tree**
 
