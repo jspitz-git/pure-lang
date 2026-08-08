@@ -16,6 +16,9 @@
 - Do not rewrite Git history, reset the branch, or modify unrelated package code.
 - Preserve TODO-43 and TODO-51 history; set both to `Status: Rejected on 2026-08-08`.
 - Preserve related specs and plans as historical records with a prominent rejection notice.
+- Preserve the baseline's seven `blank-at-eol` findings in `embed.cc` and one
+  `blank-at-eof` finding in `embed.h`; use a scoped Git whitespace check that
+  disables only those two classes for the exact `pure-octave/` restoration.
 - Stage explicit paths only and verify every cached diff before committing.
 
 ---
@@ -92,13 +95,15 @@ Run:
 
 ```powershell
 git add -- pure-octave
-git diff --cached --check
+git -c core.whitespace=-blank-at-eol,-blank-at-eof diff --cached --check -- pure-octave
 git diff --cached --name-status
 git diff --cached --stat
 ```
 
 Expected: the cached diff contains only `pure-octave/**`, with added Windows
-files deleted and `embed.cc`, `embed.h`, and `octave.pure` restored.
+files deleted and `embed.cc`, `embed.h`, and `octave.pure` restored. The scoped
+whitespace check exits `0`; the exception covers only the baseline's seven
+`blank-at-eol` and one `blank-at-eof` findings.
 
 - [ ] **Step 6: Commit the source removal**
 
@@ -320,13 +325,15 @@ Run:
 
 ```powershell
 git diff --check HEAD^
+git -c core.whitespace=-blank-at-eol,-blank-at-eof diff --check 7a2be4d075df671a3c334bc8ec898cabb9a498f3 HEAD -- pure-octave
 git status --short
 git log -4 --oneline
 ```
 
-Expected: no whitespace errors; no unstaged or staged changes; the latest
-commits are the rejected disposition and source removal, preceded by the plan
-and design commits.
+Expected: no new documentation whitespace errors; the scoped source check
+passes while preserving the eight baseline findings; no unstaged or staged
+changes; the latest commits include the rejected disposition, source removal,
+and the documented baseline-whitespace decision.
 
 - [ ] **Step 5: Review requirements line by line**
 

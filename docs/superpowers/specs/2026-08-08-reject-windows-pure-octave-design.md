@@ -65,7 +65,11 @@ TODOs were rejected.
 
 - `git diff --exit-code d90bcea60d7a5820172635c5bc2003c6a2bd078b -- pure-octave`
   must report no difference.
-- `git diff --check` must pass.
+- The restored baseline's seven `blank-at-eol` findings in `embed.cc` and one
+  `blank-at-eof` finding in `embed.h` must remain byte-for-byte unchanged.
+  `git -c core.whitespace=-blank-at-eol,-blank-at-eof diff --check` must pass
+  for the `pure-octave/` restoration; ordinary `git diff --check` remains
+  mandatory for every newly authored Markdown disposition change.
 - Both TODO files must contain `Status: Rejected on 2026-08-08` and an explicit
   rejection entry.
 - Every related spec and plan must carry the historical/rejected notice.
@@ -81,3 +85,11 @@ The change is accepted when the repository contains only the pre-TODO-43
 `pure-octave` implementation, TODO-43 and TODO-51 are visibly rejected, the
 historical documents cannot be mistaken for active plans, and all scoped
 verification gates pass.
+
+## Approved Baseline Whitespace Exception
+
+On 2026-08-08 the product owner chose exact baseline restoration over cleaning
+eight pre-existing whitespace findings. This exception applies only to the
+seven trailing-space lines already present in baseline `pure-octave/embed.cc`
+and the baseline blank line at EOF in `pure-octave/embed.h`. It does not permit
+new whitespace errors in any other path.
