@@ -2331,3 +2331,65 @@ it was proven empty. Restored identities remain exactly:
 Every runtime/evidence/stage/marker/diagnostic path remained absent. No v17
 production owner or child was invoked; the owner harness used only disposable
 fixtures. Production launch counts remain exactly `0 / 0 / 0`.
+
+### Task 4 fix round 2: independently distinguishable post-review gate
+
+The committed 122,808-byte report with SHA-256
+`EB1D22691EC1B62F36D87280A803F7F06EDB1FC0F1C34FDDD709F7AAF7D29E1C`
+is the immutable prefix of this append. The distinct elevated runner was the
+BOM-less regular, non-reparse file
+`C:\pure-lang\.superpowers\sdd\2026-08-08-todo51-v17-verified-process-owner\task-4-fix2-owner-runner.ps1`,
+2,492 bytes / SHA-256
+`31EA2D2851A9D9A40B05D16684F9CAA3DB44E037B9B8E142453315259B4AF315`.
+It parsed with zero errors. Before the child launch it wrote the exact start
+record; only after child exit did it write the end and exit records. Its five
+exact, git-ignored, BOM-less regular/non-reparse evidence files are:
+
+| Exact path | Bytes | SHA-256 | Exact content or sentinel |
+|---|---:|---|---|
+| `C:\pure-lang\.superpowers\sdd\2026-08-08-todo51-v17-verified-process-owner\task-4-fix2-owner.start-utc.txt` | 43 | `C7E354C2199851C08928985DCF82D90B8543950ACA12C7DC5A1C54464695968A` | `StartUtc=2026-08-08T19:21:27.8042342+00:00` |
+| `C:\pure-lang\.superpowers\sdd\2026-08-08-todo51-v17-verified-process-owner\task-4-fix2-owner.end-utc.txt` | 41 | `DEDB2CE47D9CFEC03A4E0B9DDD6263A0FE46A8848814BE48AAB73BFD1A289341` | `EndUtc=2026-08-08T19:22:02.5101727+00:00` |
+| `C:\pure-lang\.superpowers\sdd\2026-08-08-todo51-v17-verified-process-owner\task-4-fix2-owner.exit.txt` | 11 | `209C018B3AE2834D7CCE8114BA00EF0A127B7AFA463DEBFDDAC8560D5EFE01B8` | `ExitCode=0` |
+| `C:\pure-lang\.superpowers\sdd\2026-08-08-todo51-v17-verified-process-owner\task-4-fix2-owner.stdout.log` | 180 | `17E83A4FF25CFDBFF169CE4F6DEA7758C4404D913E2EBDE173AD627DCF5605C2` | five exact PASS lines below |
+| `C:\pure-lang\.superpowers\sdd\2026-08-08-todo51-v17-verified-process-owner\task-4-fix2-owner.stderr.log` | 0 | `E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855` | empty |
+
+```text
+PASS owner contract validation tests
+PASS owner phase domain tests
+PASS owner adversarial safety tests
+PASS owner interruption classification tests
+PASS owner lifecycle tests
+```
+
+All six external checkpoint artifacts were held and all six production
+artifact paths plus `C:\tmp\todo51-task3\stage-runtime-v17` were absent for
+that entire elevated run. They remained held and absent when the distinct
+BOM-less regular, non-reparse repository runner
+`C:\pure-lang\.superpowers\sdd\2026-08-08-todo51-v17-verified-process-owner\task-4-fix2-repository-runner.ps1`,
+3,026 bytes / SHA-256
+`1213547D76EC6ED10DD8903291947AA0BF4562D6019CD5D75C4EFDCA614A4751`,
+parsed with zero errors and ran supplement followed by staging. Its five exact,
+git-ignored, BOM-less regular/non-reparse evidence files are:
+
+| Exact path | Bytes | SHA-256 | Exact content or sentinel |
+|---|---:|---|---|
+| `C:\pure-lang\.superpowers\sdd\2026-08-08-todo51-v17-verified-process-owner\task-4-fix2-repository.start-utc.txt` | 43 | `49012AF7BC4942F2D498F1BC77AFCFE47DEF624E8F0B0811EAFA63308AD4C547` | `StartUtc=2026-08-08T19:22:58.8366050+00:00` |
+| `C:\pure-lang\.superpowers\sdd\2026-08-08-todo51-v17-verified-process-owner\task-4-fix2-repository.end-utc.txt` | 41 | `5BE11DEEB104E0D8A8DCD06AE2272692C2025E9501FB40FE2CEA692EBF74D1C8` | `EndUtc=2026-08-08T19:26:13.7742341+00:00` |
+| `C:\pure-lang\.superpowers\sdd\2026-08-08-todo51-v17-verified-process-owner\task-4-fix2-repository.exit.txt` | 11 | `209C018B3AE2834D7CCE8114BA00EF0A127B7AFA463DEBFDDAC8560D5EFE01B8` | `ExitCode=0` |
+| `C:\pure-lang\.superpowers\sdd\2026-08-08-todo51-v17-verified-process-owner\task-4-fix2-repository.stdout.log` | 3,860 | `A2AABE4840468A13F8C4C1F470EEB93EB0533E999259D0F917B196B32BFC6164` | 79 PASS lines; aggregate sentinels below each occur once |
+| `C:\pure-lang\.superpowers\sdd\2026-08-08-todo51-v17-verified-process-owner\task-4-fix2-repository.stderr.log` | 0 | `E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855` | empty |
+
+```text
+PASS all supplement preparer tests
+PASS all task3 staging tests
+```
+
+The preserved records prove strict ordering without filesystem-time inference:
+owner end `2026-08-08T19:22:02.5101727+00:00` is earlier than repository start
+`2026-08-08T19:22:58.8366050+00:00`, which is earlier than repository end
+`2026-08-08T19:26:13.7742341+00:00`. Only after both intervals completed with
+exit 0 and empty stderr were all six held artifacts restored. Their byte counts
+and SHA-256 identities remain the six exact values in the preceding table;
+the hold root is absent. All 15 contract evidence paths and the v17
+stage/child-marker/diagnostic paths remain absent, no matching production
+process exists, and production launch counts remain exactly `0 / 0 / 0`.
