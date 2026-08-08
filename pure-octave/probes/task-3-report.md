@@ -1809,3 +1809,372 @@ the full diagnostic harness, static binding gate, supplement harness, and
 staging harness all passed freshly. The refreshed harness and JSON hashes above
 bind that correction. Read-only fix-round review found no Critical, Important,
 or Minor issue and assessed the gate ready to commit.
+
+## v16 sole production attempt: BLOCKED by PID-evidence owner failure
+
+Task 4 began from exact clean HEAD
+`7bb1338f8c7b2243f08d29d7b9932932339fff38` on
+`todo/51-windows-strict-write-confinement`. Before helper creation, all 16
+literal v16 helper/stage/PID/log/marker/error/post-audit paths were absent, ten
+immutable roots were regular and reparse-free, v12/v13 stage roots were absent,
+and preserved partial v14/v15 were checked only with `Test-Path=True`.
+Root-level v11-v15 helper/evidence files and the v15 diagnostic fixture retained
+their recorded SHA-256 identities.
+
+The reviewed v15 audit helpers were copied and changed only for v16-owned
+paths/hashes plus Task 2's seven Gnuplot platform-plugin fields and exact
+`2 / 2 / 38 / 6 / 15 / 17 / 0` pins. Final static identities were:
+
+- wrapper: 3,343 bytes / `4CD4946325A56700EFB00B7EB0E7580775E07F7DA34256D212D42B8CB4436311`;
+- preflight: 25,525 bytes / `4DF6908340D5AC7A40EAD452C2BE7F1121360898121FE425E380FCE98C35B134`;
+- post-audit: 23,358 bytes / `C120D8399B053EAA7C2B905783B48D60ABAD6A954DFE14F99160B16C5DC8CB15`;
+- Task 2 assembler: 99,557 bytes / `9DCA19AC3227D3CACC8F614759DD03CF8194EDAD0C524E371F0F5A0F1F9A6E59`;
+- Task 2 staging harness: 64,191 bytes / `C3C9D44A270A04DABDC25FDD0FEF47EE43DF68C13A886BFA98F35767801867EB`.
+
+All eight wrapper/helper/diagnostic/assembler/harness files parsed with zero
+PowerShell errors. The wrapper decoded to 16/16 unique recognized parameters
+with zero forbidden caller surfaces. Compact parameter-array JSON was 1,431
+bytes / `E2351D8379B0A73F84A305C087B4C8A9D7AC7D2A6E8E3DA502DF90E6A1BC485C`;
+compact full decoded wrapper JSON was 1,525 bytes /
+`16BB59A9D1CF662EE26BE8DD546C962191D95DDF920FBAB8E2CD2715BCEF9938`.
+The v15/v16 wrapper normalized diff was empty, the current serviced Windows
+platform identity was exact, all 14 v16 runtime paths were absent, and Git was
+clean at the required HEAD. Pinned PowerShell was exact 7.6.4
+(file version 7.6.4.500), SHA-256
+`DB6DD81183FE57D22E03B911EC9A30A2FD7C40542E97743615355A6FB44F458F`.
+
+Immediately before the sole preflight `Process.Start()`, the explicit
+`require_escalated` owner rechecked all v16 runtime paths absent, exact
+wrapper/preflight/post-audit/assembler/harness/PowerShell hashes, clean HEAD,
+protected v14/v15 presence by `Test-Path` only, and a create/read/remove/absence
+`HOST_WRITE_SMOKE_PASS` probe. It launched pinned PowerShell 7.6.4 with
+`-NoProfile -NonInteractive -File
+C:\tmp\todo51-task3\stage_v16_preflight_audit.ps1`, hidden, no shell, and
+redirected anonymous stdout/stderr pipes.
+
+`Process.Start()` returned true exactly once. The owner then failed before it
+could record the returned child PID:
+
+```text
+WriteError at $pid=$process.Id
+Cannot overwrite variable PID because it is read-only or constant.
+```
+
+PowerShell variable names are case-insensitive, so `$pid` collided with the
+read-only automatic `$PID`. There was no retry. PID-only monitoring found two
+persistent candidates, 812 and 2796. Both were alive from the first observation
+at `2026-08-04T00:20:46.6689104Z`; PID 812 exited naturally at
+`2026-08-04T01:00:25.7558595Z` while PID 2796 remained alive, identifying PID
+812 as the preflight child by the state delta. The observable elapsed lower
+bound is 39 minutes 39.0869491 seconds; exact StartUtc was held only in the
+failed owner and was not emitted. While the child was alive, only those PID
+existence states were inspected. No process command line, redirect evidence,
+or stage path was opened.
+
+After PID 812 exited, all 13 external v16 preflight/assembler/post-audit
+PID/stdout/stderr/marker/error paths were absent. In particular, preflight PID,
+stdout, stderr, and marker evidence were never created; `Process.Start()` used
+anonymous pipes and the owner never reached its post-exit file writes. Thus
+there is no valid preflight PASS JSON, exit marker, stderr, or evidence hash to
+accept. All v16 helper/repository hashes remained exact after failure.
+
+This sole v16 production attempt is therefore **BLOCKED**. Launch counts are
+preflight one, assembler zero, and post-audit zero. The v16 stage path was not
+inspected after launch, and no staged binary was inspected or executed. There
+was no preflight retry, assembler launch, post-audit, supplement/staging success
+harness, parser/diff success gate, cleanup, staging, commit, or success review.
+This report append is intentionally left uncommitted under the fail-closed
+contract.
+
+## v17 reviewed process-owner and immutable helper checkpoint
+
+Task 4 began at exact Task 3 HEAD
+`84616246add57dfaf83053f627ea646324b10ddc` on
+`todo/51-windows-strict-write-confinement`. The sole worktree modification was
+this preserved report and the index was empty. Before this append the report
+was exactly 99,362 bytes, SHA-256
+`DBF5C52A8324ABBE6D7A9AF7CFB80066BA0BF05C552880DB5AC3FFF385303195`.
+Those 99,362 bytes are the immutable prefix of this checkpoint.
+
+The initial gate matched 45 recorded v15/v16 helper, diagnostic-fixture, and
+runtime-evidence byte/hash pins. Protected partial stages were checked only by
+literal `Test-Path`: v14 `True`, v15 `True`, and v16 `False`. They were never
+enumerated or read. All 24 intended v17 helper, contract, stage, owner-evidence,
+child-marker, and assembler-diagnostic paths were absent. There were zero
+`process-owner-tests-*` roots, zero `todo51-task3-escape-*` roots, zero matching
+test children, and zero v17 production processes.
+
+### Reviewed owner RED/GREEN history
+
+The closed process owner was developed and reviewed through these commits:
+
+- `3539030e00a5378600069af719eb53c0c9d99d21`, `Validate strict process owner contracts`: 453 insertions in the exact owner and harness. RED had no compliant owner/closed schema; GREEN rejected unknown, missing, incorrectly typed, noncanonical, hash-mismatched, duplicate, pre-existing, reparse, hard-link, and escaping contracts before child launch.
+- `addd227dc2930d8277aa7006c92229a2d4c0519a`, `Capture strict process owner evidence`: 542 insertions and 13 deletions. Lifecycle RED had no PID, stream, exit, or error evidence; GREEN proved the observed child PID, success and exit-23 propagation, concurrent 1 MiB stdout/stderr draining, atomic evidence, post-exit rehashing, and owner failure code 125 without child termination.
+- `84616246add57dfaf83053f627ea646324b10ddc`, `Harden verified process owner gate`: 356 insertions and 7 deletions in the harness. RED rejected missing unscoped and scoped reserved-variable AST protection; GREEN rejected `$pid` and `$script:pid` mutations while accepting the real owner. The final harness also covered junctions, file symbolic links, hard links, canonical and sibling-prefix escapes, stale/duplicate evidence, interruption classification, cleanup confinement, and owner-only parameterless `Kill()`.
+
+Task 4 static contract preparation then found a load-bearing phase-domain RED:
+the reviewed owner accepted only `Phase = Preflight`, so truthful `Assembler`
+and `PostAudit` contracts would have failed validation. Contract creation,
+report mutation, and production launch stopped with counts `0 / 0 / 0`; no
+three-`Preflight` workaround was created. GREEN commit
+`0ceb91607c8cb91c0d3bf723226bf2dec973b503`,
+`Accept strict process owner phases`, added an ordinal closed set containing
+exactly `Preflight`, `Assembler`, and `PostAudit`, propagated exact phase values
+through owner-exit and owner-error evidence tests, and added exact rejection
+coverage for unsupported, empty, wrong-case, and non-string phases. Its diff is
+91 insertions and 24 deletions across the exact owner and harness. Scoped
+re-review found the phase-domain finding addressed, no new Critical or
+Important finding, and assessed the fix Ready.
+
+Final repository identities at HEAD
+`0ceb91607c8cb91c0d3bf723226bf2dec973b503` are:
+
+| Reviewed repository file | Bytes | SHA-256 |
+|---|---:|---|
+| process owner | 20,664 | `F7AA04BC52E2013E96F0899ADA34B17877859A4F9D18420FBA6D5DC06616A281` |
+| owner harness | 45,047 | `7998CC544241F0CA1C7AFEF6F8A7AEC0B7D806771211584BD4ED7A934C9E7BFF` |
+
+Both parsed with zero errors. The owner exposes only `-ContractPath`, has the
+exact 16-field schema and exact three-value phase domain, and contains zero
+`Invoke-Expression`, `Start-Process`, `Stop-Process`, `cmd.exe`, `Kill`, or
+cancellation invocations. The harness retains one `Kill()` invocation; its
+receiver is exactly `$OwnerProcess` and it has zero arguments. Both the
+unscoped and scoped reserved-variable memory mutations occur exactly once.
+
+### Exact elevated owner gate
+
+The implementer did not open UAC. The controller ran the exact symlink-inclusive
+owner harness once with an Administrator token after the phase fix and while
+all seven production-v17 stage/helper/contract paths were absent. Controller
+exit was 0. Captured stdout is 180 bytes / SHA-256
+`17E83A4FF25CFDBFF169CE4F6DEA7758C4404D913E2EBDE173AD627DCF5605C2`:
+
+```text
+PASS owner contract validation tests
+PASS owner phase domain tests
+PASS owner adversarial safety tests
+PASS owner interruption classification tests
+PASS owner lifecycle tests
+```
+
+Captured stderr is 0 bytes / SHA-256
+`E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855`.
+No production helper, contract, runtime evidence, stage, child marker, or
+assembler diagnostic was created by the owner tests.
+
+### Immutable v17 helpers and static bindings
+
+The final helpers were regenerated from the exact v16 sources after the phase
+fix, so no provisional stale owner or harness pin survived. The obsolete three
+hash-held helper copies were removed only after these final paths were written
+and verified; they remain reproducible from the exact v16 sources and guarded
+substitutions.
+
+| External v17 helper | Bytes | SHA-256 |
+|---|---:|---|
+| wrapper | 3,349 | `29137E754BF0F2546646DE3062FA277B8C07B25C1289320B2CB5638C99B29B74` |
+| preflight | 26,160 | `BE1BD6EDF814282A96BAE67C104F46CFFCBC54DBCFD6D58F19F2404F6F8D1BF1` |
+| post-audit | 23,942 | `7DA98F05EA7E04B12F54EC77049B83BCCCA36E1659ABE910C82DF915AA2C65AA` |
+
+All three are BOM-less UTF-8 and parse with zero errors. The wrapper differs
+from v16 only in the exact v17 stage root,
+`stage-runtime-v17.assembler.child.exit.txt`, and
+`stage-runtime-v17.assembler.error.json`; normalizing those three owned
+literals makes the semantic diff empty. Non-executing AST decoding found
+exactly 16 unique assembler parameters, all recognized by the reviewed
+assembler, with zero TestMode/synthetic/injection/hook/inventory/postcondition/
+diagnostic/error-evidence/command/script-block surface. Compact sorted
+parameter JSON is 1,431 bytes / SHA-256
+`633A9B3CB63408948D078607607DCD17DAA17F2DFF64544E4F0C2D71E2704E41`.
+The helper ASTs contain zero forbidden shell/process command surface.
+
+Preflight and post-audit both bind the exact final owner and owner-harness
+hashes. They retain stage pins 64,312 files / 3,334,971,045 bytes / manifest
+`115AC1F8843FFC60A4FFD103DCB7CD9C3099CAE14F2B3B674EF5D6230DF22DE0`,
+direct Gnuplot `65 / 63 / 1002 / 249 / 563 / 190 / 0`, and platform-plugin
+`2 / 2 / 38 / 6 / 15 / 17 / 0`.
+
+### Strict production contracts
+
+The three contracts are BOM-less strict UTF-8, each decodes as exactly one
+`PSCustomObject` with exactly 16 unique closed-schema fields, and each has an
+empty JSON string-array `Arguments`. The empty assembler argument array is the
+reviewed wrapper's normal production interface; no shell command string exists.
+All bind exact owner, pinned PowerShell 7.6.4, `C:\pure-lang`, and
+`C:\tmp\todo51-task3`, plus their exact helper and hash.
+
+| Phase / external contract | Bytes | SHA-256 |
+|---|---:|---|
+| Preflight / `stage-runtime-v17.preflight.owner-contract.json` | 1,042 | `B265511694D28F010FDFCDED256F1515C2FB27B70233C70DA0D22CB7E0B3821C` |
+| Assembler / `stage-runtime-v17.assembler.owner-contract.json` | 1,034 | `8806FEE700BB53EDBA6CA996B1E78A500D612DAD8852A0A4FCD6FC1521E327C6` |
+| PostAudit / `stage-runtime-v17.postaudit.owner-contract.json` | 1,036 | `1CDF913C4911B4DDFDE8E1B37F3535E734254E300450D3D1BB3843FF974B6921` |
+
+The phase values are exactly `Preflight`, `Assembler`, and `PostAudit`.
+Fifteen PID/stdout/stderr/owner-exit/owner-error paths are globally distinct,
+strict descendants of the fixed evidence root, and absent. The independent
+assembler child marker and seven-field diagnostic paths are also absent.
+
+### Fresh complete verification gate
+
+Pinned executable:
+`C:\Program Files\WindowsApps\Microsoft.PowerShell_7.6.4.0_x64__8wekyb3d8bbwe\pwsh.exe`,
+SHA-256
+`DB6DD81183FE57D22E03B911EC9A30A2FD7C40542E97743615355A6FB44F458F`.
+After contract creation, the two repository harnesses ran freshly and exited 0
+in 158.3 seconds. Together with the exact elevated owner output above, the full
+three-harness gate is:
+
+```text
+PASS owner contract validation tests
+PASS owner phase domain tests
+PASS owner adversarial safety tests
+PASS owner interruption classification tests
+PASS owner lifecycle tests
+PASS Test-RejectsProductionPinMutation
+PASS Test-RejectsInexactSupplementSet
+PASS Test-RejectsSupplementHashMismatch
+PASS Test-RejectsUnresolvedSupplementImport
+PASS Test-RejectsFabricatedApiSetImport
+PASS Test-RejectsApiSetReleaseFailure
+PASS Test-RejectsTruncatedApiSetPath
+PASS Test-RejectsReparseSnapshotParent
+PASS Test-RejectsExistingSnapshotOnApply
+PASS Test-GoldenFileAssertionRejectsMutation
+PASS Test-GoldenClosureAssertionRejectsOmission
+PASS Test-PlansExactImmutableContract
+PASS Test-RollsBackInjectedCopyFailure
+PASS Test-AppliesTransactionallyAndPlansIdempotently
+PASS Test-RejectsContaminatedExistingSnapshot
+PASS all supplement preparer tests
+PASS Test-HardBindsProductionAuditCardinalityTo1536PePlusOnePlaceholderAnd219Oct
+PASS Test-HardBindsWindowsPlatformIdentityContract
+PASS Test-SnapshotsSingleSyntheticPlatformIdentityBeforeFaultInjection
+PASS Test-HardBindsProductionGnuplotLoaderContract
+PASS Test-HardBindsProductionGnuplotPlatformPluginContract
+PASS Test-ReportsExactSyntheticWindowsPlatformIdentity
+PASS Test-RejectsEverySyntheticWindowsPlatformIdentityFault
+PASS Test-RejectsProductionPlatformIdentityInjection
+PASS Test-ReportsExactGnuplotLoaderCardinalitiesAndOrigins
+PASS Test-ReportsExactGnuplotPlatformPluginCardinalitiesAndOrigins
+PASS Test-ResolvesApprovedGnuplotPlatformPluginsOnlyInDirectGnuplotLoaderRoot
+PASS Test-RejectsChangedCanonicalGnuplotFixtureInventory
+PASS Test-RejectsUnapprovedGnuplotPlatformPluginPe
+PASS Test-RejectsGnuplotPlatformPluginDirectoryFallback
+PASS Test-RejectsGnuplotPlatformPluginCrossDomainFallbacks
+PASS Test-RejectsGnuplotPlatformPluginPathFallback
+PASS Test-RejectsNonPeApprovedGnuplotPlatformPlugin
+PASS Test-RejectsGnuplotPlatformPluginDirectoryReparsePoint
+PASS Test-RejectsApprovedGnuplotPlatformPluginReparsePoint
+PASS Test-RejectsEveryGnuplotPostAuditCardinalityFault
+PASS Test-RejectsEveryGnuplotPlatformPluginPostAuditCardinalityFault
+PASS Test-RecordsEveryFailedGnuplotPlatformPluginImportAsUnresolved
+PASS Test-HardBindsCombinedGnuplotDiagnosticSums
+PASS Test-RejectsUnknownGnuplotApiSetMapping
+PASS Test-RejectsMissingGnuplotSystem32Mapping
+PASS Test-RejectsGnuplotApiSetReleaseFailure
+PASS Test-RejectsGnuplotPureFallback
+PASS Test-RejectsGnuplotOctaveFallback
+PASS Test-RejectsGnuplotPathFallback
+PASS Test-RejectsGnuplotCaseCollision
+PASS Test-RejectsGnuplotSiblingFallback
+PASS Test-RejectsGnuplotNestedFallback
+PASS Test-RejectsGnuplotNonPeFile
+PASS Test-RejectsGnuplotLoaderRootReparsePoint
+PASS Test-RejectsGnuplotLoaderFileReparsePoint
+PASS Test-RejectsProductionGnuplotTestInjections
+PASS Test-AcceptsAndRecordsPinnedInertQtDocumentationPlaceholder
+PASS Test-RejectsCallerControlledPinnedPlaceholderApproval
+PASS Test-RejectsNonzeroOrWrongHashPinnedPlaceholder
+PASS Test-RejectsAllOtherNonPeLoadableExtensionsAndSameNameElsewhere
+PASS Test-RejectsUnsafeTestModeFixture
+PASS Test-RejectsUnsafeLoaderOverride
+PASS Test-RejectsCallerControlledProductionEvidence
+PASS Test-BindsExactProductionEvidencePath
+PASS Test-BindsExactInputInventory
+PASS Test-RejectsMissingImport
+PASS Test-RejectsBridgeUnionCollision
+PASS Test-RecordsAuthoritativeApiSetMapping
+PASS Test-RejectsUnknownApiSetLookalike
+PASS Test-AuditsLoadablePeOutsideBin
+PASS Test-RejectsBridgeModuleOutsideBridgeRoot
+PASS Test-RejectsSameLengthSameMtimeContentChange
+PASS Test-RejectsExistingStage
+PASS Test-RejectsPermanentOctaveRoot
+PASS Test-AcceptsExactPinnedPureRsvgSupplement
+PASS Test-RejectsMissingOrExtraSupplementFile
+PASS Test-RejectsChangedSupplementHashOrMachine
+PASS Test-RejectsSupplementReparseAndSourceSubstitution
+PASS Test-RejectsSupplementDestinationCollision
+PASS Test-RejectsFourthTransitiveDependency
+PASS Test-HardBindsSupplementStagePostconditions
+PASS Test-RejectsReparseParent
+PASS all task3 staging tests
+```
+
+After the gate all six helper/contract byte counts and hashes remained exact.
+There were zero disposable owner-test roots, zero sibling-escape roots, zero
+matching test or production processes, and zero runtime evidence paths. The
+v17 stage, child marker, and assembler diagnostic remained absent. No v17
+preflight, assembler, or post-audit child was launched; launch counts are
+exactly `0 / 0 / 0`. No in-progress or protected stage was inspected and no
+staged binary was executed.
+
+### Review sequencing correction and final contract creation
+
+The first Task 4 evidence/spec review found no Critical, Important, or Minor
+issue and returned `Ready`. It independently verified the immutable 99,362-byte
+prefix, exact report suffix, all helper and contract hashes, parser and wrapper
+diff gates, truthful phases, closed schemas, absent evidence, elevated log, and
+report-only repository scope.
+
+The first quality/security review returned `Not Ready` with one Important
+chronology finding and no Critical or Minor finding: although the exact
+post-phase-fix elevated owner run predated contract creation, the report's fresh
+supplement and staging run occurred after contract creation and therefore did
+not establish the brief's complete pre-contract gate.
+
+The finding was resolved fail-closed. All three never-launched contracts were
+first rehashed at their recorded identities, then only those exact files were
+removed. All three contract paths and every runtime evidence/stage/marker/error
+path were confirmed absent; launch counts remained `0 / 0 / 0`. At unchanged
+HEAD `0ceb91607c8cb91c0d3bf723226bf2dec973b503`, pinned PowerShell 7.6.4 then
+ran the complete supplement and staging harnesses while the contracts were
+absent. The command exited 0 in 195 seconds. Its complete output was exactly
+the repository-harness portion reproduced in the `Fresh complete verification
+gate` block above, including every named PASS line and both aggregate sentinels:
+
+```text
+PASS all supplement preparer tests
+PASS all task3 staging tests
+```
+
+Together with the already captured exact elevated owner run at the same HEAD,
+owner/harness hashes, and absent contract paths, this establishes all three
+required harnesses before the final contract creation.
+
+Only after that passing gate, the three contracts were deterministically
+recreated from the same ordered 16-field objects. Strict BOM-less UTF-8 parsing
+again found one object, 16 unique fields, exact phase, and zero arguments in
+each contract. Their byte/hash identities are unchanged:
+
+- Preflight: 1,042 / `B265511694D28F010FDFCDED256F1515C2FB27B70233C70DA0D22CB7E0B3821C`;
+- Assembler: 1,034 / `8806FEE700BB53EDBA6CA996B1E78A500D612DAD8852A0A4FCD6FC1521E327C6`;
+- PostAudit: 1,036 / `1CDF913C4911B4DDFDE8E1B37F3535E734254E300450D3D1BB3843FF974B6921`.
+
+No production owner, helper, or child was invoked during correction. Runtime
+paths remained absent and launch counts remain exactly `0 / 0 / 0`.
+
+The scoped evidence/spec re-review of the corrected chronology reports zero
+Critical, Important, or Minor findings and verdict `Ready`. The scoped
+quality/security re-review reports the sequencing finding addressed, zero
+Critical, Important, or Minor findings, and verdict `Ready`. Both independently
+rechecked the immutable prefix, report-only scope, external identities, strict
+phase contracts, absent runtime paths, and launch counts `0 / 0 / 0`.
+
+### Final post-review gate
+
+After both clean re-review verdicts, the exact elevated owner stdout/stderr
+hashes and all five sentinels were revalidated. Pinned PowerShell then reran the
+complete supplement and staging harnesses; the command exited 0 in 191.4
+seconds with the same full named PASS output reproduced above and both aggregate
+sentinels. No production child launched and counts remained `0 / 0 / 0`.
