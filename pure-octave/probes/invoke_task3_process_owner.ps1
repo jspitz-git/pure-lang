@@ -83,6 +83,99 @@ function Get-Sha256File([string] $Path) {
     return (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash
 }
 
+function Get-Sha256Bytes([byte[]] $Bytes) {
+    return [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($Bytes))
+}
+
+function Write-AtomicUtf8([string] $Path, [string] $Text) {
+    $directoryPath = [IO.Path]::GetDirectoryName($Path)
+    $temporaryName = '.' + [IO.Path]::GetFileName($Path) + '.' + [guid]::NewGuid().ToString('N') + '.tmp'
+    $temporaryPath = Join-Path $directoryPath $temporaryName
+    $temporaryCreated = $false
+    $renamed = $false
+    $atomicStream = $null
+    try {
+        $bytes = $utf8NoBom.GetBytes($Text)
+        $atomicStream = [IO.File]::Open($temporaryPath, 'CreateNew', 'Write', 'None')
+        $temporaryCreated = $true
+        $atomicStream.Write($bytes, 0, $bytes.Length)
+        $atomicStream.Flush($true)
+        $atomicStream.Dispose()
+        $atomicStream = $null
+        [IO.File]::Move($temporaryPath, $Path, $false)
+        $renamed = $true
+    }
+    finally {
+        if ($null -ne $atomicStream) {
+            $atomicStream.Dispose()
+        }
+        if ($temporaryCreated -and -not $renamed -and (Test-Path -LiteralPath $temporaryPath)) {
+            [IO.File]::Delete($temporaryPath)
+        }
+    }
+}
+
+function Close-CaptureStreamBestEffort([IO.FileStream] $CaptureStream) {
+    if ($null -eq $CaptureStream) { return }
+    try { $CaptureStream.Flush($true) } catch { }
+    try { $CaptureStream.Dispose() } catch { }
+}
+
+function Wait-NaturalExitAndCaptureTasks(
+    [Diagnostics.Process] $ChildProcess,
+    [IO.Stream] $StdoutSource,
+    [IO.Stream] $StderrSource,
+    [Threading.Tasks.Task] $StdoutCopy,
+    [Threading.Tasks.Task] $StderrCopy
+) {
+    $stdoutCompletion = $StdoutCopy
+    $stderrCompletion = $StderrCopy
+    if ($null -eq $stdoutCompletion -and $null -ne $StdoutSource) {
+        $stdoutCompletion = $StdoutSource.CopyToAsync([IO.Stream]::Null)
+    }
+    if ($null -eq $stderrCompletion -and $null -ne $StderrSource) {
+        $stderrCompletion = $StderrSource.CopyToAsync([IO.Stream]::Null)
+    }
+
+    $copyFailure = $null
+    do {
+        if ($null -ne $StdoutCopy -and
+            [object]::ReferenceEquals($stdoutCompletion, $StdoutCopy) -and
+            $StdoutCopy.IsFaulted) {
+            if ($null -eq $copyFailure) { $copyFailure = $StdoutCopy.Exception.GetBaseException() }
+            $stdoutCompletion = $StdoutSource.CopyToAsync([IO.Stream]::Null)
+        }
+        if ($null -ne $StderrCopy -and
+            [object]::ReferenceEquals($stderrCompletion, $StderrCopy) -and
+            $StderrCopy.IsFaulted) {
+            if ($null -eq $copyFailure) { $copyFailure = $StderrCopy.Exception.GetBaseException() }
+            $stderrCompletion = $StderrSource.CopyToAsync([IO.Stream]::Null)
+        }
+        $childHasExited = $ChildProcess.WaitForExit(50)
+    } while (-not $childHasExited)
+
+    if ($null -ne $StdoutCopy -and
+        [object]::ReferenceEquals($stdoutCompletion, $StdoutCopy) -and
+        $StdoutCopy.IsFaulted) {
+        if ($null -eq $copyFailure) { $copyFailure = $StdoutCopy.Exception.GetBaseException() }
+        $stdoutCompletion = $StdoutSource.CopyToAsync([IO.Stream]::Null)
+    }
+    if ($null -ne $StderrCopy -and
+        [object]::ReferenceEquals($stderrCompletion, $StderrCopy) -and
+        $StderrCopy.IsFaulted) {
+        if ($null -eq $copyFailure) { $copyFailure = $StderrCopy.Exception.GetBaseException() }
+        $stderrCompletion = $StderrSource.CopyToAsync([IO.Stream]::Null)
+    }
+
+    $completionTasks = [Collections.Generic.List[Threading.Tasks.Task]]::new()
+    if ($null -ne $stdoutCompletion) { $completionTasks.Add($stdoutCompletion) }
+    if ($null -ne $stderrCompletion) { $completionTasks.Add($stderrCompletion) }
+    if ($completionTasks.Count -gt 0) {
+        [Threading.Tasks.Task]::WaitAll($completionTasks.ToArray())
+    }
+    if ($null -ne $copyFailure) { throw $copyFailure }
+}
+
 function Test-EqualOrDescendant([string] $Path, [string] $Root) {
     if ([string]::Equals($Path, $Root, [StringComparison]::OrdinalIgnoreCase)) {
         return $true
@@ -210,28 +303,169 @@ function Read-StrictContract([string] $Path) {
         }
     }
 
+    $script:trustedOwnerErrorPath = $contract.OwnerErrorPath
+    $script:trustedPhase = $contract.Phase
+    $script:initialContractSha256 = Get-Sha256Bytes -Bytes $bytes
+    $script:ownerErrorTrusted = $true
+
     $canonicalOwnerPath = Get-CanonicalPath -Path $PSCommandPath
     if (-not [string]::Equals($canonicalOwnerPath, $contract.OwnerPath, [StringComparison]::OrdinalIgnoreCase)) {
         throw 'OwnerPath does not name this exact owner script.'
     }
-    if (-not [string]::Equals((Get-Sha256File -Path $canonicalOwnerPath), $contract.OwnerSha256, [StringComparison]::Ordinal)) {
+    $actualOwnerSha256 = Get-Sha256File -Path $canonicalOwnerPath
+    if (-not [string]::Equals($actualOwnerSha256, $contract.OwnerSha256, [StringComparison]::Ordinal)) {
         throw 'Owner SHA-256 does not match.'
     }
-    if (-not [string]::Equals((Get-Sha256File -Path $pinnedPowerShellPath), $pinnedPowerShellSha256, [StringComparison]::Ordinal)) {
+    $actualPowerShellSha256 = Get-Sha256File -Path $pinnedPowerShellPath
+    if (-not [string]::Equals($actualPowerShellSha256, $pinnedPowerShellSha256, [StringComparison]::Ordinal)) {
         throw 'Pinned PowerShell SHA-256 does not match.'
     }
-    if (-not [string]::Equals((Get-Sha256File -Path $contract.ChildScriptPath), $contract.ChildScriptSha256, [StringComparison]::Ordinal)) {
+    $actualChildScriptSha256 = Get-Sha256File -Path $contract.ChildScriptPath
+    if (-not [string]::Equals($actualChildScriptSha256, $contract.ChildScriptSha256, [StringComparison]::Ordinal)) {
         throw 'Child script SHA-256 does not match.'
     }
+
+    $script:validatedContractPath = $canonicalContractPath
+    $script:validatedOwnerSha256 = $actualOwnerSha256
+    $script:validatedContractSha256 = $initialContractSha256
+    $script:validatedPowerShellSha256 = $actualPowerShellSha256
+    $script:validatedChildScriptSha256 = $actualChildScriptSha256
 
     return $contract
 }
 
+$state = 'Validating'
+$ownerErrorTrusted = $false
+$contract = $null
+$childProcess = $null
+$childStarted = $false
+$childPid = $null
+$stdoutCopy = $null
+$stderrCopy = $null
+$stdoutSource = $null
+$stderrSource = $null
+$stdoutStream = $null
+$stderrStream = $null
+$trustedOwnerErrorPath = $null
+$trustedPhase = $null
+$initialContractSha256 = $null
+$ownerProcessExitCode = 125
+
 try {
     $contract = Read-StrictContract -Path $ContractPath
-    [void]$contract
+    $initialOwnerSha256 = $validatedOwnerSha256
+    $initialPowerShellSha256 = $validatedPowerShellSha256
+    $initialChildScriptSha256 = $validatedChildScriptSha256
+
+    $state = 'EvidenceReady'
+    $stdoutStream = [IO.File]::Open($contract.StdoutPath, 'CreateNew', 'Write', 'Read')
+    $stderrStream = [IO.File]::Open($contract.StderrPath, 'CreateNew', 'Write', 'Read')
+    $startInfo = [Diagnostics.ProcessStartInfo]::new()
+    $startInfo.FileName = $contract.PowerShellPath
+    $startInfo.WorkingDirectory = $contract.WorkingDirectory
+    $startInfo.UseShellExecute = $false
+    $startInfo.CreateNoWindow = $true
+    $startInfo.RedirectStandardOutput = $true
+    $startInfo.RedirectStandardError = $true
+    [void] $startInfo.ArgumentList.Add('-NoProfile')
+    [void] $startInfo.ArgumentList.Add('-NonInteractive')
+    [void] $startInfo.ArgumentList.Add('-File')
+    [void] $startInfo.ArgumentList.Add($contract.ChildScriptPath)
+    foreach ($argument in [string[]] $contract.Arguments) {
+        [void] $startInfo.ArgumentList.Add($argument)
+    }
+    $childProcess = [Diagnostics.Process]::new()
+    $childProcess.StartInfo = $startInfo
+    if (-not $childProcess.Start()) { throw 'Process.Start returned false.' }
+    $childStarted = $true
+    $state = 'Started'
+    $stdoutSource = $childProcess.StandardOutput.BaseStream
+    $stderrSource = $childProcess.StandardError.BaseStream
+    $stdoutCopy = $stdoutSource.CopyToAsync($stdoutStream)
+    $stderrCopy = $stderrSource.CopyToAsync($stderrStream)
+    $childPid = $childProcess.Id
+    Write-AtomicUtf8 -Path $contract.PidPath -Text ([string]$childPid + "`n")
+    $state = 'Draining'
+    Wait-NaturalExitAndCaptureTasks -ChildProcess $childProcess `
+        -StdoutSource $stdoutSource -StderrSource $stderrSource `
+        -StdoutCopy $stdoutCopy -StderrCopy $stderrCopy
+    $childExitCode = $childProcess.ExitCode
+
+    $finalOwnerSha256 = Get-Sha256File -Path $contract.OwnerPath
+    $finalContractSha256 = Get-Sha256File -Path $validatedContractPath
+    $finalPowerShellSha256 = Get-Sha256File -Path $contract.PowerShellPath
+    $finalChildScriptSha256 = Get-Sha256File -Path $contract.ChildScriptPath
+    if (-not [string]::Equals($finalOwnerSha256, $initialOwnerSha256, [StringComparison]::Ordinal) -or
+        -not [string]::Equals($finalContractSha256, $initialContractSha256, [StringComparison]::Ordinal) -or
+        -not [string]::Equals($finalPowerShellSha256, $initialPowerShellSha256, [StringComparison]::Ordinal) -or
+        -not [string]::Equals($finalChildScriptSha256, $initialChildScriptSha256, [StringComparison]::Ordinal)) {
+        throw 'Validated owner, contract, PowerShell executable, or child script changed during execution.'
+    }
+
+    $stdoutStream.Flush($true)
+    $stderrStream.Flush($true)
+    $stdoutStream.Dispose()
+    $stdoutStream = $null
+    $stderrStream.Dispose()
+    $stderrStream = $null
+    $childProcess.Dispose()
+    $childProcess = $null
+    $state = 'Completed'
+    $ownerExit = [ordered]@{
+        SchemaVersion = 1
+        Phase = $contract.Phase
+        State = $state
+        ChildPid = $childPid
+        ChildExitCode = $childExitCode
+        OwnerSha256 = $initialOwnerSha256
+        ContractSha256 = $initialContractSha256
+    }
+    Write-AtomicUtf8 -Path $contract.OwnerExitPath -Text (($ownerExit | ConvertTo-Json -Compress) + "`n")
+    $ownerProcessExitCode = $childExitCode
 }
 catch {
-    [Console]::Error.WriteLine($_.Exception.Message)
-    exit 125
+    $failureException = $_.Exception
+    if ($childStarted -and $null -ne $childProcess) {
+        try {
+            Wait-NaturalExitAndCaptureTasks -ChildProcess $childProcess `
+                -StdoutSource $stdoutSource -StderrSource $stderrSource `
+                -StdoutCopy $stdoutCopy -StderrCopy $stderrCopy
+        } catch { }
+    }
+    Close-CaptureStreamBestEffort -CaptureStream $stdoutStream
+    Close-CaptureStreamBestEffort -CaptureStream $stderrStream
+    $stdoutStream = $null
+    $stderrStream = $null
+
+    if ($ownerErrorTrusted) {
+        $ownerError = [ordered]@{
+            SchemaVersion = 1
+            Phase = $trustedPhase
+            State = $state
+            ExceptionType = $failureException.GetType().FullName
+            Message = $failureException.Message
+            ChildPid = $childPid
+            ContractSha256 = $initialContractSha256
+        }
+        try {
+            Write-AtomicUtf8 -Path $trustedOwnerErrorPath -Text (($ownerError | ConvertTo-Json -Compress) + "`n")
+        }
+        catch {
+            [Console]::Error.WriteLine($failureException.Message)
+            [Console]::Error.WriteLine("Could not write owner-error evidence: $($_.Exception.Message)")
+        }
+    }
+    else {
+        [Console]::Error.WriteLine($failureException.Message)
+    }
+    $ownerProcessExitCode = 125
 }
+finally {
+    Close-CaptureStreamBestEffort -CaptureStream $stdoutStream
+    Close-CaptureStreamBestEffort -CaptureStream $stderrStream
+    if ($null -ne $childProcess) {
+        try { $childProcess.Dispose() } catch { }
+    }
+}
+
+exit $ownerProcessExitCode
