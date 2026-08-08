@@ -2178,3 +2178,156 @@ hashes and all five sentinels were revalidated. Pinned PowerShell then reran the
 complete supplement and staging harnesses; the command exited 0 in 191.4
 seconds with the same full named PASS output reproduced above and both aggregate
 sentinels. No production child launched and counts remained `0 / 0 / 0`.
+
+## Task 4 fix round 1: fresh post-review three-harness gate
+
+Independent review of commit
+`079d6946e9a17e1e88328a254ab119ce343260be` found one Important issue and no
+Critical or Minor issue: the report's final post-review gate revalidated an
+older owner log instead of executing a fresh post-review exact owner harness.
+The committed report was therefore frozen as this correction's immutable
+prefix: 115,425 bytes / SHA-256
+`98C078E2F6F41B373632807150C661ABDD051A5445C0D0AD7BB17545A1F58584`.
+
+Before the correction run, all six external helpers/contracts matched their
+recorded hashes and were moved byte-for-byte into exact task-owned hold root
+`C:\tmp\todo51-task3\v17-postreview-owner-hold`. This made all seven paths in
+the exact owner harness's production-v17 absence set absent. The v17 runtime,
+all owner evidence, child marker, and assembler diagnostic paths were absent;
+the repository was clean at the exact commit above and launch counts were
+`0 / 0 / 0`.
+
+The implementer created but did not launch this distinct bounded elevated
+runner:
+
+- `task-4-postreview-elevated-runner.ps1`: 1,825 bytes / SHA-256
+  `FFD723CBFF8C9572E3CD9E3852FA74BCE13EC20E634508B8A47D71A29AC1FC76`;
+- parser errors: zero;
+- distinct stdout/stderr paths were absent before launch.
+
+The controller launched that runner once with an Administrator token and
+reported `ELEVATED_EXIT=0`. Its new stdout is 180 bytes / SHA-256
+`17E83A4FF25CFDBFF169CE4F6DEA7758C4404D913E2EBDE173AD627DCF5605C2`;
+its new stderr is 0 bytes / SHA-256
+`E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855`.
+The complete stdout is:
+
+```text
+PASS owner contract validation tests
+PASS owner phase domain tests
+PASS owner adversarial safety tests
+PASS owner interruption classification tests
+PASS owner lifecycle tests
+```
+
+With all six artifacts still held and all seven production paths still absent,
+the same correction gate ran the supplement and staging harnesses sequentially
+through `task-4-postreview-repository-runner.ps1`: 2,358 bytes / SHA-256
+`D3B37FB34EFFF15AD7AA83C8789FFEDF1BE363C2DD1025AD5401AF9C2AE1703A`.
+The runner exited 0 in 172 seconds. Its stderr is 0 bytes / empty SHA-256. Its
+complete 79-line stdout is 3,860 bytes / SHA-256
+`A2AABE4840468A13F8C4C1F470EEB93EB0533E999259D0F917B196B32BFC6164`:
+
+```text
+PASS Test-RejectsProductionPinMutation
+PASS Test-RejectsInexactSupplementSet
+PASS Test-RejectsSupplementHashMismatch
+PASS Test-RejectsUnresolvedSupplementImport
+PASS Test-RejectsFabricatedApiSetImport
+PASS Test-RejectsApiSetReleaseFailure
+PASS Test-RejectsTruncatedApiSetPath
+PASS Test-RejectsReparseSnapshotParent
+PASS Test-RejectsExistingSnapshotOnApply
+PASS Test-GoldenFileAssertionRejectsMutation
+PASS Test-GoldenClosureAssertionRejectsOmission
+PASS Test-PlansExactImmutableContract
+PASS Test-RollsBackInjectedCopyFailure
+PASS Test-AppliesTransactionallyAndPlansIdempotently
+PASS Test-RejectsContaminatedExistingSnapshot
+PASS all supplement preparer tests
+PASS Test-HardBindsProductionAuditCardinalityTo1536PePlusOnePlaceholderAnd219Oct
+PASS Test-HardBindsWindowsPlatformIdentityContract
+PASS Test-SnapshotsSingleSyntheticPlatformIdentityBeforeFaultInjection
+PASS Test-HardBindsProductionGnuplotLoaderContract
+PASS Test-HardBindsProductionGnuplotPlatformPluginContract
+PASS Test-ReportsExactSyntheticWindowsPlatformIdentity
+PASS Test-RejectsEverySyntheticWindowsPlatformIdentityFault
+PASS Test-RejectsProductionPlatformIdentityInjection
+PASS Test-ReportsExactGnuplotLoaderCardinalitiesAndOrigins
+PASS Test-ReportsExactGnuplotPlatformPluginCardinalitiesAndOrigins
+PASS Test-ResolvesApprovedGnuplotPlatformPluginsOnlyInDirectGnuplotLoaderRoot
+PASS Test-RejectsChangedCanonicalGnuplotFixtureInventory
+PASS Test-RejectsUnapprovedGnuplotPlatformPluginPe
+PASS Test-RejectsGnuplotPlatformPluginDirectoryFallback
+PASS Test-RejectsGnuplotPlatformPluginCrossDomainFallbacks
+PASS Test-RejectsGnuplotPlatformPluginPathFallback
+PASS Test-RejectsNonPeApprovedGnuplotPlatformPlugin
+PASS Test-RejectsGnuplotPlatformPluginDirectoryReparsePoint
+PASS Test-RejectsApprovedGnuplotPlatformPluginReparsePoint
+PASS Test-RejectsEveryGnuplotPostAuditCardinalityFault
+PASS Test-RejectsEveryGnuplotPlatformPluginPostAuditCardinalityFault
+PASS Test-RecordsEveryFailedGnuplotPlatformPluginImportAsUnresolved
+PASS Test-HardBindsCombinedGnuplotDiagnosticSums
+PASS Test-RejectsUnknownGnuplotApiSetMapping
+PASS Test-RejectsMissingGnuplotSystem32Mapping
+PASS Test-RejectsGnuplotApiSetReleaseFailure
+PASS Test-RejectsGnuplotPureFallback
+PASS Test-RejectsGnuplotOctaveFallback
+PASS Test-RejectsGnuplotPathFallback
+PASS Test-RejectsGnuplotCaseCollision
+PASS Test-RejectsGnuplotSiblingFallback
+PASS Test-RejectsGnuplotNestedFallback
+PASS Test-RejectsGnuplotNonPeFile
+PASS Test-RejectsGnuplotLoaderRootReparsePoint
+PASS Test-RejectsGnuplotLoaderFileReparsePoint
+PASS Test-RejectsProductionGnuplotTestInjections
+PASS Test-AcceptsAndRecordsPinnedInertQtDocumentationPlaceholder
+PASS Test-RejectsCallerControlledPinnedPlaceholderApproval
+PASS Test-RejectsNonzeroOrWrongHashPinnedPlaceholder
+PASS Test-RejectsAllOtherNonPeLoadableExtensionsAndSameNameElsewhere
+PASS Test-RejectsUnsafeTestModeFixture
+PASS Test-RejectsUnsafeLoaderOverride
+PASS Test-RejectsCallerControlledProductionEvidence
+PASS Test-BindsExactProductionEvidencePath
+PASS Test-BindsExactInputInventory
+PASS Test-RejectsMissingImport
+PASS Test-RejectsBridgeUnionCollision
+PASS Test-RecordsAuthoritativeApiSetMapping
+PASS Test-RejectsUnknownApiSetLookalike
+PASS Test-AuditsLoadablePeOutsideBin
+PASS Test-RejectsBridgeModuleOutsideBridgeRoot
+PASS Test-RejectsSameLengthSameMtimeContentChange
+PASS Test-RejectsExistingStage
+PASS Test-RejectsPermanentOctaveRoot
+PASS Test-AcceptsExactPinnedPureRsvgSupplement
+PASS Test-RejectsMissingOrExtraSupplementFile
+PASS Test-RejectsChangedSupplementHashOrMachine
+PASS Test-RejectsSupplementReparseAndSourceSubstitution
+PASS Test-RejectsSupplementDestinationCollision
+PASS Test-RejectsFourthTransitiveDependency
+PASS Test-HardBindsSupplementStagePostconditions
+PASS Test-RejectsReparseParent
+PASS all task3 staging tests
+```
+
+The repository stdout contains exactly one `PASS all supplement preparer tests`
+and one final `PASS all task3 staging tests`. At runner exit there were zero
+production paths, zero disposable owner-test roots, and zero sibling-escape
+roots.
+
+Only after all three fresh post-review harnesses passed were the six held
+artifacts restored to their exact final paths. The hold root was removed after
+it was proven empty. Restored identities remain exactly:
+
+| External artifact | Bytes | SHA-256 |
+|---|---:|---|
+| wrapper | 3,349 | `29137E754BF0F2546646DE3062FA277B8C07B25C1289320B2CB5638C99B29B74` |
+| preflight | 26,160 | `BE1BD6EDF814282A96BAE67C104F46CFFCBC54DBCFD6D58F19F2404F6F8D1BF1` |
+| post-audit | 23,942 | `7DA98F05EA7E04B12F54EC77049B83BCCCA36E1659ABE910C82DF915AA2C65AA` |
+| Preflight contract | 1,042 | `B265511694D28F010FDFCDED256F1515C2FB27B70233C70DA0D22CB7E0B3821C` |
+| Assembler contract | 1,034 | `8806FEE700BB53EDBA6CA996B1E78A500D612DAD8852A0A4FCD6FC1521E327C6` |
+| PostAudit contract | 1,036 | `1CDF913C4911B4DDFDE8E1B37F3535E734254E300450D3D1BB3843FF974B6921` |
+
+Every runtime/evidence/stage/marker/diagnostic path remained absent. No v17
+production owner or child was invoked; the owner harness used only disposable
+fixtures. Production launch counts remain exactly `0 / 0 / 0`.
