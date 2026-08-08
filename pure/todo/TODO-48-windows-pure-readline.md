@@ -1,25 +1,26 @@
 # TODO-48 - Windows pure-readline Package
 
-Status: Open
+Status: Rejected on 2026-08-09
 Branch: todo/48-windows-pure-readline
 
-## Purpose
+## Decision
 
-Determine whether the separate `pure-readline` package adds supported functionality
-beyond the interpreter's existing Windows readline integration.
+Do not build, stage, or install the separate `pure-readline` package in the
+Windows distribution. The Windows interpreter already requires and links GNU
+readline for its interactive input, editing, history, completion, EOF, and
+interruption behavior. The package adds only a script-facing wrapper with a
+separate history and would share mutable process-global readline state with the
+interpreter.
 
-## Scope
-
-- Build the package against the same readline and terminal libraries as the core.
-- Compare its API and behavior with built-in interpreter facilities.
-- Package it only if it provides distinct, tested value.
+This is a Windows packaging decision only. The portable `pure-readline/`
+sources remain unchanged for other platforms and batch-compiled applications.
 
 ## Task List
 
-1. [ ] Build the module and audit duplicate runtime dependencies.
-2. [ ] Compare its exported behavior with the core runtime.
-3. [ ] Add input, history, completion, and interruption smoke tests.
-4. [ ] Decide whether to include or retire it from the Windows distribution.
+1. [x] Audit the module and duplicate runtime dependency risk.
+2. [x] Compare its exported behavior with the core runtime.
+3. [x] Audit bounded coverage for input, history, completion, EOF, and interruption.
+4. [x] Reject it from the Windows distribution.
 
 ## Guardrails
 
@@ -38,3 +39,19 @@ beyond the interpreter's existing Windows readline integration.
 ## Progress Log
 
 - 2026-07-25: Created as a compatibility Windows package investigation.
+- 2026-08-09: Rejected the separate package for Windows.
+  - `pure/cmake/PureDependencies.cmake` requires GNU readline and
+    `pure/cmake/PureTargets.cmake` links `PkgConfig::READLINE` into `pure.exe`.
+  - `pure/pure.cc` already supplies readline input/editing, interpreter and
+    debugger history, symbol/keyword/command completion, EOF propagation, and
+    Windows console interruption handling.
+  - `pure-readline` exports only script-callable wrappers for line input and
+    history. It disables custom completion and swaps the same library's
+    process-global history state, so it does not provide a second Windows
+    terminal implementation.
+  - No active Windows staging or installer manifest selects the package;
+    TODO-49 remains responsible for admitting only independently approved
+    packages. The core-owned readline DLL remains the sole permitted copy.
+  - Static audits and the existing bounded non-Linux release workflow establish
+    the rejection without an unbounded interactive test. The portable
+    `pure-readline/` tree was left unchanged.
