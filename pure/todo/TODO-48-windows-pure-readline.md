@@ -19,22 +19,68 @@ sources remain unchanged for other platforms and batch-compiled applications.
 
 1. [x] Audit the module and duplicate runtime dependency risk.
 2. [x] Compare its exported behavior with the core runtime.
-3. [x] Audit bounded coverage for input, history, completion, EOF, and interruption.
+3. [x] Audit static core code paths for input, history, completion, EOF, and interruption.
 4. [x] Reject it from the Windows distribution.
 
 ## Guardrails
 
 - Do not bundle duplicate or conflicting readline/terminal DLLs.
-- Interactive tests must have bounded automated substitutes where possible.
+- Runtime and interactive checks are optional supplements, not acceptance
+  requirements for this static packaging decision.
 
 ## Validation Plan
 
-- Exercise line input, editing, history, completion, EOF, and interruption.
-- Run in both Windows Terminal and a plain console where available.
+- Completed static acceptance: audit the core CMake linkage and interpreter
+  code paths; audit wrapper exports and process-global state; search active
+  Windows package selectors; confirm a clean diff and unchanged portable tree.
+- Windows Terminal, plain-console, and other runtime readline behavior checks
+  may supplement this evidence but are not required for the rejection.
 
-## Open Questions
+## Validation
 
-- Whether this package is redundant in the modern Windows runtime.
+- Core dependency/linkage audit (exit 0):
+
+  ```powershell
+  rg -n -S "pkg_check_modules\(READLINE REQUIRED|PkgConfig::READLINE|HAVE_LIBREADLINE|USE_READLINE" pure/cmake pure/config.h.cmake pure/pure.cc
+  rg -n -S "readline\(prompt\)|add_history|read_history|write_history|rl_attempted_completion_function|pure_completion|SIGINT|SetConsoleCtrlHandler" pure/pure.cc
+  ```
+
+  Found required `READLINE`, `PkgConfig::READLINE` linkage,
+  `HAVE_LIBREADLINE`/`USE_READLINE`, and interpreter input, history,
+  completion, and interruption paths.
+
+- Wrapper/global-state audit (exit 0):
+
+  ```powershell
+  rg -n -S 'using "lib:readline"|wrap_readline|wrap_add_history|wrap_clear_history|wrap_read_history|wrap_write_history' pure-readline/readline.pure pure-readline/readline.c
+  rg -n -S 'history_get_history_state|history_set_history_state|rl_attempted_completion_function = NULL|readline\(prompt\)' pure-readline/readline.c
+  ```
+
+  Found five script-facing wrappers, saved/restored process-global history,
+  disabled custom completion, and no separate terminal implementation.
+
+- Active Windows selector search (exit 0):
+
+  ```powershell
+  rg -n --hidden -S "pure-readline|readline\.dll|libreadline" .github pure/cmake pure/test pure/todo/TODO-19-portable-windows-runtime.md pure/todo/TODO-49-windows-distribution-installer.md
+  ```
+
+  Found only core configuration and a Linux release dependency; no active
+  Windows build, staging, test, or installer selector for `pure-readline`.
+
+- Repository checks (exit 0):
+
+  ```powershell
+  git diff --check HEAD^ HEAD
+  git status --short
+  git diff HEAD^ -- pure-readline
+  git ls-files -s pure-readline
+  ```
+
+  Diff checks were silent, status was clean, and the portable-tree diff was
+  empty with its tracked-file inventory matching the captured baseline. These
+  static checks do not exercise runtime readline behavior; such tests are
+  optional supplements.
 
 ## Progress Log
 
@@ -52,6 +98,7 @@ sources remain unchanged for other platforms and batch-compiled applications.
   - No active Windows staging or installer manifest selects the package;
     TODO-49 remains responsible for admitting only independently approved
     packages. The core-owned readline DLL remains the sole permitted copy.
-  - Static audits and the existing bounded non-Linux release workflow establish
-    the rejection without an unbounded interactive test. The portable
-    `pure-readline/` tree was left unchanged.
+  - Static CMake/core, wrapper/global-state, selector, and portable-tree audits
+    establish the rejection. Runtime and manual readline behavior tests are
+    optional supplements; the portable `pure-readline/` tree was left
+    unchanged.

@@ -31,8 +31,8 @@ risk.
 - Mark `pure/todo/TODO-48-windows-pure-readline.md` as rejected on 2026-08-09.
 - Replace the open investigation with an explicit decision that Windows
   packaging must not build, stage, or install `pure-readline`.
-- Record static and bounded automated evidence for the core readline linkage
-  and behavior already covered by the Windows runtime.
+- Record the static CMake and interpreter code-path evidence that is sufficient
+  to reject the separate Windows package.
 - Add or extend a packaging-manifest check only if an active Windows manifest
   can currently admit the module or a second readline/terminal DLL.
 
@@ -51,9 +51,8 @@ risk.
 
 1. Capture the core CMake linkage and interpreter code paths that demonstrate
    the Windows runtime's readline integration.
-2. Inventory any existing automated coverage for input, history, completion,
-   EOF, and interruption; add only bounded tests needed to substantiate the
-   rejection decision.
+2. Audit the interpreter source paths for input, history, completion, EOF, and
+   interruption behavior, and audit the wrapper's process-global state use.
 3. Check active Windows staging and installer inputs for `pure-readline`, its
    module DLL, or a duplicate readline/terminal DLL. Add a focused negative
    assertion if the packaging machinery has an applicable manifest boundary.
@@ -66,31 +65,36 @@ risk.
   runtime in the Windows distribution.
 - Fail packaging validation if `pure-readline` or an additional readline or
   terminal DLL is staged as a separate package payload.
-- Keep console-dependent checks bounded and preserve a static or redirected-I/O
-  substitute for environments without an interactive console.
+- Treat runtime and console-dependent checks as optional supplements; they are
+  not required to substantiate this static packaging rejection.
 - Stage only files directly related to TODO-48 and review the complete diff
   before committing.
 
 ## Verification
 
-- Configure/build evidence shows that the Windows interpreter resolves the
-  same GNU readline dependency selected by the core CMake configuration.
-- Bounded tests or existing runtime tests substantiate line input, history,
-  completion, EOF, and interruption behavior without requiring manual input.
+- Static CMake and interpreter source audits show that the Windows interpreter
+  requires and links GNU readline and contains the input, history, completion,
+  EOF, and interruption paths. This evidence is sufficient to reject the
+  separate Windows package.
+- A static wrapper audit shows that `pure-readline` provides only script-facing
+  readline/history wrappers and swaps process-global history state.
 - A repository search finds no active Windows package or installer selection
   for `pure-readline` after the disposition.
 - Any applicable staging-manifest test rejects the module and duplicate
-  readline/terminal DLL payloads.
+  readline/terminal DLL payloads; no test is required when no active manifest
+  boundary exists.
 - The portable `pure-readline/` source tree remains unchanged.
-- `git diff --check` and all focused tests pass.
+- `git diff --check` and the focused static audits pass.
 
 Manual checks in Windows Terminal and a plain console may supplement the
-automated evidence, but they are not required to close TODO-48 when the bounded
-tests and code-path audit establish the same behavior.
+static evidence, but runtime or manual readline behavior tests are not required
+to close TODO-48.
 
 ## Acceptance
 
-The change is accepted when TODO-48 is visibly rejected, the decision cites the
-core Windows readline integration, the Windows distribution cannot select the
-separate package or introduce conflicting readline/terminal DLLs, and the
-portable package sources remain intact.
+The change is accepted when TODO-48 is visibly rejected, the static CMake/core
+code-path and wrapper/global-state audits document the rationale, no active
+Windows selector can select the separate package or introduce conflicting
+readline/terminal DLLs, and the portable package sources remain intact. Runtime
+or manual readline behavior tests are optional supplements, not acceptance
+requirements.
