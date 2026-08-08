@@ -14,6 +14,7 @@
 .sw?
 .*.sw?
 .DS_Store
+.worktrees/
 
 # various generated files
 pure/aclocal.m4
