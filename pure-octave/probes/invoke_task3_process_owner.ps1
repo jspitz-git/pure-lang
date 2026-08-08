@@ -10,6 +10,10 @@ $allowedFields = [string[]]@(
     'WorkingDirectory','EvidenceRoot','PidPath','StdoutPath','StderrPath',
     'OwnerExitPath','OwnerErrorPath'
 )
+$allowedPhases = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+foreach ($allowedPhase in [string[]]@('Preflight', 'Assembler', 'PostAudit')) {
+    [void]$allowedPhases.Add($allowedPhase)
+}
 $taskRoot = 'C:\tmp\todo51-task3'
 $requiredWorkingDirectory = 'C:\pure-lang'
 $pinnedPowerShellPath = 'C:\Program Files\WindowsApps\Microsoft.PowerShell_7.6.4.0_x64__8wekyb3d8bbwe\pwsh.exe'
@@ -233,8 +237,8 @@ function Read-StrictContract([string] $Path) {
     if ($contract.SchemaVersion -isnot [long] -or $contract.SchemaVersion -ne 1) {
         throw 'SchemaVersion must be the integer 1.'
     }
-    if ($contract.Phase -isnot [string] -or $contract.Phase -ne 'Preflight') {
-        throw 'Phase must be Preflight.'
+    if ($contract.Phase -isnot [string] -or -not $allowedPhases.Contains($contract.Phase)) {
+        throw 'Phase must be Preflight, Assembler, or PostAudit.'
     }
     foreach ($fieldName in [string[]]@(
         'OwnerPath', 'OwnerSha256', 'PowerShellPath', 'PowerShellSha256',

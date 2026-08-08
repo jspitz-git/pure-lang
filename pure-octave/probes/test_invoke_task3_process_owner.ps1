@@ -1,5 +1,5 @@
 [CmdletBinding()]
-param()
+param([switch] $PhaseContractOnly)
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
@@ -233,7 +233,8 @@ function Assert-ExactProperties([PSCustomObject] $Object, [string[]] $ExpectedNa
 
 function New-LifecycleContract(
     [string] $CaseName,
-    [string] $LifecycleChildPath
+    [string] $LifecycleChildPath,
+    [string] $Phase = 'Preflight'
 ) {
     $caseRoot = Join-Path $testRoot $CaseName
     $caseEvidenceRoot = Join-Path $caseRoot 'evidence'
@@ -242,6 +243,7 @@ function New-LifecycleContract(
     Write-Contract -Path $contractPath -Overrides @{
         ChildScriptPath = $LifecycleChildPath
         ChildScriptSha256 = (Get-FileHash -LiteralPath $LifecycleChildPath -Algorithm SHA256).Hash
+        Phase = $Phase
         EvidenceRoot = $caseEvidenceRoot
         PidPath = Join-Path $caseEvidenceRoot 'child.pid.txt'
         StdoutPath = Join-Path $caseEvidenceRoot 'child.stdout.log'
@@ -357,7 +359,11 @@ function Get-ExternalOwnerClassification(
     return 'BLOCKED'
 }
 
-function Read-OwnerExit([PSCustomObject] $Contract, [string] $ExpectedContractSha256) {
+function Read-OwnerExit(
+    [PSCustomObject] $Contract,
+    [string] $ExpectedContractSha256,
+    [string] $ExpectedPhase = 'Preflight'
+) {
     if (-not (Test-Path -LiteralPath $Contract.OwnerExitPath -PathType Leaf)) {
         throw "Owner exit evidence is missing: $($Contract.OwnerExitPath)"
     }
@@ -370,7 +376,8 @@ function Read-OwnerExit([PSCustomObject] $Contract, [string] $ExpectedContractSh
         'OwnerSha256', 'ContractSha256'
     )) -Description 'owner-exit JSON'
     if ($ownerExit.SchemaVersion -isnot [long] -or $ownerExit.SchemaVersion -ne 1 -or
-        $ownerExit.Phase -isnot [string] -or $ownerExit.Phase -ne 'Preflight' -or
+        $ownerExit.Phase -isnot [string] -or
+        -not [string]::Equals($ownerExit.Phase, $ExpectedPhase, [StringComparison]::Ordinal) -or
         $ownerExit.State -isnot [string] -or $ownerExit.State -ne 'Completed' -or
         $ownerExit.ChildPid -isnot [long] -or
         $ownerExit.ChildExitCode -isnot [long] -or
@@ -390,7 +397,8 @@ function Read-OwnerError(
     [string] $ExpectedContractSha256,
     [string] $ExpectedState,
     [string] $ExpectedMessage,
-    [object] $ExpectedChildPid
+    [object] $ExpectedChildPid,
+    [string] $ExpectedPhase = 'Preflight'
 ) {
     if (Test-Path -LiteralPath $Contract.OwnerExitPath) {
         throw "Unexpected owner exit evidence exists: $($Contract.OwnerExitPath)"
@@ -404,7 +412,8 @@ function Read-OwnerError(
         'ChildPid', 'ContractSha256'
     )) -Description 'owner-error JSON'
     if ($ownerError.SchemaVersion -isnot [long] -or $ownerError.SchemaVersion -ne 1 -or
-        $ownerError.Phase -isnot [string] -or $ownerError.Phase -ne 'Preflight' -or
+        $ownerError.Phase -isnot [string] -or
+        -not [string]::Equals($ownerError.Phase, $ExpectedPhase, [StringComparison]::Ordinal) -or
         $ownerError.State -isnot [string] -or $ownerError.State -ne $ExpectedState -or
         $ownerError.ExceptionType -isnot [string] -or
         $ownerError.Message -isnot [string] -or
@@ -454,6 +463,22 @@ function Invoke-SuccessLifecycleTest {
     }
 }
 
+function Invoke-SupportedPhaseLifecycleTest([string] $Phase) {
+    $contractPath = New-LifecycleContract -CaseName ("phase-" + $Phase) `
+        -LifecycleChildPath $successChildPath -Phase $Phase
+    $contractSha256 = (Get-FileHash -LiteralPath $contractPath -Algorithm SHA256).Hash
+    $contract = Get-Content -LiteralPath $contractPath -Raw | ConvertFrom-Json -NoEnumerate
+    $result = Invoke-OwnerWithTimeout -ContractPath $contractPath
+    if ($result.ExitCode -ne 0) {
+        throw "$Phase owner exited $($result.ExitCode): $($result.Stderr)"
+    }
+    $ownerExit = Read-OwnerExit -Contract $contract `
+        -ExpectedContractSha256 $contractSha256 -ExpectedPhase $Phase
+    if ($ownerExit.ChildExitCode -ne 0) {
+        throw "$Phase owner-exit child exit code is incorrect."
+    }
+}
+
 function Invoke-FailureLifecycleTest {
     $contractPath = New-LifecycleContract -CaseName 'failure' -LifecycleChildPath $failureChildPath
     $contractSha256 = (Get-FileHash -LiteralPath $contractPath -Algorithm SHA256).Hash
@@ -492,7 +517,8 @@ function Invoke-VolumeLifecycleTest {
 }
 
 function Invoke-MutationLifecycleTest {
-    $contractPath = New-LifecycleContract -CaseName 'mutation' -LifecycleChildPath $mutationChildPath
+    $contractPath = New-LifecycleContract -CaseName 'mutation' `
+        -LifecycleChildPath $mutationChildPath -Phase 'Assembler'
     $contractSha256 = (Get-FileHash -LiteralPath $contractPath -Algorithm SHA256).Hash
     $contract = Get-Content -LiteralPath $contractPath -Raw | ConvertFrom-Json -NoEnumerate
     $result = Invoke-OwnerWithTimeout -ContractPath $contractPath
@@ -510,7 +536,7 @@ function Invoke-MutationLifecycleTest {
     [void](Read-OwnerError -Contract $contract -ExpectedContractSha256 $contractSha256 `
         -ExpectedState 'Draining' `
         -ExpectedMessage 'Validated owner, contract, PowerShell executable, or child script changed during execution.' `
-        -ExpectedChildPid $mutationChildPid)
+        -ExpectedChildPid $mutationChildPid -ExpectedPhase 'Assembler')
     $temporaryFiles = @(Get-ChildItem -LiteralPath $contract.EvidenceRoot -Force -Filter '*.tmp')
     if ($temporaryFiles.Count -ne 0) { throw 'Mutation owner left an atomic-write temporary file.' }
 }
@@ -614,6 +640,9 @@ function Write-CaseContract([string] $Path, [string] $CaseName) {
         'String schema version' { Write-Contract -Path $Path -Overrides @{ SchemaVersion = '1' } }
         'Fractional schema version' { Write-Contract -Path $Path -Overrides @{ SchemaVersion = 1.5 } }
         'Unsupported phase' { Write-Contract -Path $Path -Overrides @{ Phase = 'Postflight' } }
+        'Empty phase' { Write-Contract -Path $Path -Overrides @{ Phase = '' } }
+        'Wrong-case phase' { Write-Contract -Path $Path -Overrides @{ Phase = 'assembler' } }
+        'Non-string phase' { Write-Contract -Path $Path -Overrides @{ Phase = 7 } }
         'Non-string owner hash' { Write-Contract -Path $Path -Overrides @{ OwnerSha256 = 7 } }
         'Arguments not array' { Write-Contract -Path $Path -Overrides @{ Arguments = 'argument' } }
         'Arguments non-string element' { Write-Contract -Path $Path -Overrides @{ Arguments = [object[]]@('argument', 7) } }
@@ -694,7 +723,8 @@ function Invoke-ContractCase([string] $CaseName) {
         }
     }
     $beforeIds = @(Get-MatchingChildProcessIds)
-    & $pinnedPwsh -NoProfile -NonInteractive -File $ownerPath -ContractPath $contractPath 2>&1 | Out-Null
+    $ownerOutput = [string[]]@(
+        & $pinnedPwsh -NoProfile -NonInteractive -File $ownerPath -ContractPath $contractPath 2>&1)
     $exitCode = $LASTEXITCODE
     $afterIds = @(Get-MatchingChildProcessIds)
 
@@ -704,6 +734,15 @@ function Invoke-ContractCase([string] $CaseName) {
 
     if ($exitCode -ne 125) {
         throw "$CaseName exited $exitCode instead of validation failure 125."
+    }
+    $phaseRejectionCases = [string[]]@(
+        'Unsupported phase', 'Empty phase', 'Wrong-case phase', 'Non-string phase')
+    if ($CaseName -in $phaseRejectionCases) {
+        $expectedPhaseMessage = 'Phase must be Preflight, Assembler, or PostAudit.'
+        if ($ownerOutput.Length -ne 1 -or
+            -not [string]::Equals($ownerOutput[0], $expectedPhaseMessage, [StringComparison]::Ordinal)) {
+            throw "$CaseName emitted an incorrect rejection message: $($ownerOutput -join ' | ')"
+        }
     }
 
     if (Test-Path -LiteralPath $childMarkerPath) {
@@ -791,21 +830,24 @@ exit 0
     [IO.File]::WriteAllText($interruptionChildPath, $interruptionChildScript, $utf8NoBom)
     [IO.Directory]::CreateDirectory($junctionTargetPath) | Out-Null
     [IO.Directory]::CreateDirectory((Join-Path $junctionTargetPath 'evidence')) | Out-Null
-    New-Item -ItemType Junction -Path $junctionPath -Target $junctionTargetPath -ErrorAction Stop | Out-Null
-    New-Item -ItemType SymbolicLink -Path $symbolicLinkChildPath -Target $childPath -ErrorAction Stop | Out-Null
-    New-Item -ItemType HardLink -Path $hardLinkChildPath -Target $hardLinkSourcePath -ErrorAction Stop | Out-Null
+    if (-not $PhaseContractOnly) {
+        New-Item -ItemType Junction -Path $junctionPath -Target $junctionTargetPath -ErrorAction Stop | Out-Null
+        New-Item -ItemType SymbolicLink -Path $symbolicLinkChildPath -Target $childPath -ErrorAction Stop | Out-Null
+        New-Item -ItemType HardLink -Path $hardLinkChildPath -Target $hardLinkSourcePath -ErrorAction Stop | Out-Null
+    }
 
     if (-not (Test-Path -LiteralPath $ownerPath -PathType Leaf)) {
         throw "Owner script is missing: $ownerPath"
     }
 
-    foreach ($caseName in [string[]]@(
+    $contractCases = [Collections.Generic.List[string]]::new()
+    if (-not $PhaseContractOnly) {
+        foreach ($caseName in [string[]]@(
         'Unknown field',
         'Missing field',
         'Schema version',
         'String schema version',
         'Fractional schema version',
-        'Unsupported phase',
         'Non-string owner hash',
         'Arguments not array',
         'Arguments non-string element',
@@ -823,20 +865,41 @@ exit 0
         'Incorrect PowerShell hash',
         'Incorrect child hash',
         'Existing stdout file'
-    )) {
+        )) {
+            $contractCases.Add($caseName)
+        }
+    }
+    foreach ($caseName in $contractCases) {
         Invoke-ContractCase -CaseName $caseName
     }
 
-    Write-Output 'PASS owner contract validation tests'
     Invoke-SuccessLifecycleTest
-    Invoke-FailureLifecycleTest
-    Invoke-VolumeLifecycleTest
+    Invoke-SupportedPhaseLifecycleTest -Phase 'Assembler'
+    Invoke-SupportedPhaseLifecycleTest -Phase 'PostAudit'
     Invoke-MutationLifecycleTest
-    Write-Output 'PASS owner adversarial safety tests'
-    Invoke-InterruptionLifecycleTest
-    Write-Output 'PASS owner interruption classification tests'
+    foreach ($caseName in [string[]]@(
+        'Unsupported phase',
+        'Empty phase',
+        'Wrong-case phase',
+        'Non-string phase'
+    )) {
+        Invoke-ContractCase -CaseName $caseName
+    }
+    if (-not $PhaseContractOnly) {
+        Write-Output 'PASS owner contract validation tests'
+    }
+    Write-Output 'PASS owner phase domain tests'
+    if (-not $PhaseContractOnly) {
+        Invoke-FailureLifecycleTest
+        Invoke-VolumeLifecycleTest
+        Write-Output 'PASS owner adversarial safety tests'
+        Invoke-InterruptionLifecycleTest
+        Write-Output 'PASS owner interruption classification tests'
+    }
     Assert-ProductionV17PathsAbsent
-    Write-Output 'PASS owner lifecycle tests'
+    if (-not $PhaseContractOnly) {
+        Write-Output 'PASS owner lifecycle tests'
+    }
 }
 finally {
     $cleanupFailure = $null
