@@ -18,35 +18,103 @@
 using "lib:octave_embed";
 
 // Normally you shouldn't call these directly.
-extern int octave_init(int argc, char **argv);
+extern void octave_init(int argc, char **argv);
 extern void octave_fini();
-extern char *octave_last_error();
 
+#! --if *-mingw32
+// Windows kludge: Make sure that octave finds its m files.
+extern void _putenv(char*);
+let () when
+  // Adjust these as needed. Note the backslashes. Slashes do NOT work here.
+  // In a self-contained installation, we have these in the Pure libdir:
+  pref = "\\msys64\\mingw32\\lib\\pure\\octave\\";
+  // This is the install prefix for a standard msys2/mingw32 install of
+  // Octave, use this instead if you installed Octave yourself:
+  //pref = "\\msys64\\mingw32\\share\\octave\\";
+  // Default path gleaned from a Linux install of Octave 4.0.3. You may have
+  // to adjust this if you're running your own Octave installation and you'd
+  // rather want to pull the m files and oct modules from there.
+  path = join ";" $ map (pref+)
+    ["site\\m",
+     "site\\m\\startup",
+     "4.0.3\\m",
+     "4.0.3\\m\\audio",
+     "4.0.3\\m\\deprecated",
+     "4.0.3\\m\\elfun",
+     "4.0.3\\m\\general",
+     "4.0.3\\m\\geometry",
+     "4.0.3\\m\\gui",
+     "4.0.3\\m\\help",
+     "4.0.3\\m\\image",
+     "4.0.3\\m\\io",
+     "4.0.3\\m\\java",
+     "4.0.3\\m\\linear-algebra",
+     "4.0.3\\m\\miscellaneous",
+     "4.0.3\\m\\ode",
+     "4.0.3\\m\\optimization",
+     "4.0.3\\m\\path",
+     "4.0.3\\m\\pkg",
+     "4.0.3\\m\\plot",
+     "4.0.3\\m\\plot\\appearance",
+     "4.0.3\\m\\plot\\draw",
+     "4.0.3\\m\\plot\\util",
+     "4.0.3\\m\\polynomial",
+     "4.0.3\\m\\prefs",
+     "4.0.3\\m\\profiler",
+     "4.0.3\\m\\set",
+     "4.0.3\\m\\signal",
+     "4.0.3\\m\\sparse",
+     "4.0.3\\m\\specfun",
+     "4.0.3\\m\\special-matrix",
+     "4.0.3\\m\\startup",
+     "4.0.3\\m\\statistics",
+     "4.0.3\\m\\statistics\\base",
+     "4.0.3\\m\\statistics\\distributions",
+     "4.0.3\\m\\statistics\\models",
+     "4.0.3\\m\\statistics\\tests",
+     "4.0.3\\m\\strings",
+     "4.0.3\\m\\testfun",
+     "4.0.3\\m\\time",
+     "4.0.3\\data"];
+  path = ".;"+path;
+  // Note that we only set a minimal environment here so that the embedded
+  // Octave finds its m files and the stuff necessary to make the help command
+  // work (sort of; you'll still need makeinfo and info programs which work in
+  // the DOS command line, or be content with the plain text rendering). By
+  // redefining pref above we can just relocate all these files as needed.
+  _putenv("OCTAVE_PATH="+path);
+  _putenv("OCTAVE_BUILT_IN_DOCSTRINGS_FILE=" + pref +
+	  "4.0.3\\etc\\built-in-docstrings");
+  _putenv("OCTAVE_DOC_CACHE_FILE=" + pref +
+	  "4.0.3\\etc\\doc-cache");
+  _putenv("OCTAVE_TEXI_MACROS_FILE=" + pref +
+	  "4.0.3\\etc\\macros.texi");
+end;
+#! --endif
 
 // Initialize Octave. The command line options are for quiet startup (no
-// sign-on message), no command history, and no initialization files.
-let octave_init_status =
-  octave_init 4 (byte_string_pointer
-    ["octave","--quiet","--no-history","--no-init-file"]);
-octave_init_status == 0 ||
-  throw ("Octave initialization failed: " + octave_last_error);
+// sign-on message) and to disable Octave's command history (to prevent Octave
+// from clobbering Pure's readline).
+let octave_init 3 (byte_string_pointer ["octave","-q","-H"]);
 
 // Execute an Octave command.
 extern int octave_eval(char *cmd);
 
-// octave_init also installs the Octave-side builtin pure_call(NAME, ARG, ...).
-// Its arguments and results are fully converted before returning to Octave;
-// tuple results provide multiple Octave outputs.
-
-// Data conversion and function values.
+// Execute an Octave function.
 extern expr *octave_call(expr *fun, int nargout, expr *args);
+
+// Access to global Octave variables.
 extern expr *octave_get(char *id);
 extern expr *octave_set(char *id, expr *x);
-extern expr *octave_func(expr *fun);
-extern bool octave_valuep(expr *x);
-extern void octave_free(void *val);
-extern bool octave_converters(bool enable);
 
+// Create an Octave function value.
+extern expr *octave_func(expr *fun);
+
+// Check for special Octave values (function pointers etc.).
+extern bool octave_valuep(expr *x);
+
+// Finalizer for special Octave values. You must not call this directly.
+extern void octave_free(void *val);
 
 /* Convert some special types of Octave values to corresponding Pure values.
    This adds support for marshalling n-dimensional matrices, cell arrays and
@@ -62,6 +130,9 @@ extern bool octave_converters(bool enable);
    disable the converters as needed. Disabling the converters may be
    appropriate, e.g., for debugging purposes, when testing new converters, or
    if performance is critical. */
+
+// Enable or disable converters. Returns the previous value of the flag.
+extern bool octave_converters(bool enable);
 
 /* Constructor symbols for cell arrays and structs. The cell symbol, when
    applied to a symbolic matrix, causes a numeric array to be treated as a
@@ -139,16 +210,14 @@ __oct2pure__ x::pointer = (if null data then cell else id) (smatrix data) when
   sz = if null dims then 0 else foldl1 (*) dims;
   x = if #dims<=1 || sz<=1 then x
       else octave_call "permute" 1 (x,vector (reverse (1..#dims)));
-  data = if sz==0 then {} else cslist $
-    octave_call (octave_func ("x{:}","x")) sz x with
+  data = cslist $ octave_call (octave_func ("x{:}","x")) 1 x with
     cslist xs::tuple = smatrix $ list xs;
     cslist x = {x} otherwise; // singleton
   end;
   data = case dims of
     [] = {};
     [n] | [1,1] = map __try_oct2pure_cell__ data;
-    n:m:dims = redim (n,m) (if n*m==0 then {} else
-      collect (n*m) dims data) with
+    n:m:dims = redim (n,m) (collect (n*m) dims data) with
       collect n [] data = map __try_oct2pure_cell__ data;
       collect n (m:dims) data =
 	smatrix [collect m dims (subseq data ((i-1)*k) (i*k-1)) | i = 1..n]

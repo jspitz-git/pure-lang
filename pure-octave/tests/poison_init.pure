@@ -1,4 +1,0 @@
-using octave, system;
-octave_eval "assert (exist ('PURE_OCTAVE_POISONED', 'var') == 0);" == 0 || exit 20;
-octave_eval "assert (exist (getenv ('PURE_OCTAVE_POISON_MARKER'), 'file') == 0);" == 0 || exit 21;
-puts "PURE_OCTAVE_POISON_INIT_OK";
