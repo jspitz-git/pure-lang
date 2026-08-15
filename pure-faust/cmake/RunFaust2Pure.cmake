@@ -16,6 +16,10 @@ endforeach()
 
 cmake_path(ABSOLUTE_PATH INPUT_PATH NORMALIZE OUTPUT_VARIABLE input_path)
 cmake_path(ABSOLUTE_PATH OUTPUT_PATH NORMALIZE OUTPUT_VARIABLE output_path)
+cmake_path(ABSOLUTE_PATH PURE_ARCHITECTURE NORMALIZE
+  OUTPUT_VARIABLE pure_architecture)
+cmake_path(GET pure_architecture PARENT_PATH pure_architecture_directory)
+cmake_path(GET pure_architecture FILENAME pure_architecture_name)
 if(input_path STREQUAL output_path)
   message(FATAL_ERROR "InputPath and OutputPath must not name the same file")
 endif()
@@ -36,8 +40,14 @@ endwhile()
 file(MAKE_DIRECTORY "${work_directory}")
 
 function(run_stage stage)
+  set(working_directory_arguments)
+  if(stage STREQUAL "faust")
+    list(APPEND working_directory_arguments
+      WORKING_DIRECTORY "${pure_architecture_directory}")
+  endif()
   execute_process(
     COMMAND ${ARGN}
+    ${working_directory_arguments}
     RESULT_VARIABLE stage_result
     OUTPUT_VARIABLE stage_output
     ERROR_VARIABLE stage_error
@@ -55,7 +65,7 @@ set(reference_bc "${work_directory}/reference.bc")
 set(new_output "${output_path}.new")
 
 run_stage(faust
-  "${FAUST_EXECUTABLE}" -lang c -a "${PURE_ARCHITECTURE}" "${input_path}"
+  "${FAUST_EXECUTABLE}" -lang c -a "${pure_architecture_name}" "${input_path}"
   -o "${reference_c}")
 run_stage(clang
   "${CLANG_EXECUTABLE}" -emit-llvm -O3 -c "${reference_c}" -o "${reference_bc}")

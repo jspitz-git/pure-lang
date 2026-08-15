@@ -106,10 +106,12 @@ class FakeTool {
     if (tool == "faust") {
       Require(args.Length == 7, 11);
       Require(args[0] == "-lang" && args[1] == "c" && args[2] == "-a", 12);
-      RequirePath(args[3], Environment.GetEnvironmentVariable("FAKE_EXPECTED_PURE"), 13);
-      RequirePath(args[4], Environment.GetEnvironmentVariable("FAKE_EXPECTED_INPUT"), 14);
-      Require(args[5] == "-o", 15);
-      RequireName(args[6], "reference.c", 16);
+      Require(args[3] == "pure.c", 13);
+      RequirePath(Directory.GetCurrentDirectory(),
+        Environment.GetEnvironmentVariable("FAKE_EXPECTED_ARCHITECTURE_DIRECTORY"), 14);
+      RequirePath(args[4], Environment.GetEnvironmentVariable("FAKE_EXPECTED_INPUT"), 15);
+      Require(args[5] == "-o", 16);
+      RequireName(args[6], "reference.c", 17);
       File.WriteAllText(args[6], "fake C source\n");
       Log("faust-ok");
       return;
@@ -169,7 +171,8 @@ file(WRITE "${spaced_pure}" "architecture")
 cmake_path(GET CMAKE_COMMAND PARENT_PATH cmake_directory)
 set(ENV{PATH} "${cmake_directory};$ENV{PATH}")
 set(ENV{FAKE_EXPECTED_INPUT} "${spaced_input}")
-set(ENV{FAKE_EXPECTED_PURE} "${spaced_pure}")
+cmake_path(GET spaced_pure PARENT_PATH spaced_pure_directory)
+set(ENV{FAKE_EXPECTED_ARCHITECTURE_DIRECTORY} "${spaced_pure_directory}")
 set(ENV{FAKE_LOG} "${fake_log}")
 set(ENV{FAKE_VERIFY_FAIL} "1")
 file(WRITE "${spaced_output}" "sentinel output\n")
