@@ -337,7 +337,7 @@ Run the workflow job for both component configurations. Record the workflow run 
 
 - [ ] **Step 5: Close and commit**
 
-Set `Status: Closed on 2026-08-15` only after every checklist item and clean-runner gate passes, then run `git diff --check` and review `git diff --stat windows-bundle...HEAD` for TODO-44-only scope.
+Set `Status: Closed on 2026-08-16` only after every checklist item and clean-runner gate passes, then run `git diff --check` and review `git diff --stat windows-bundle...HEAD` for TODO-44-only scope.
 
 ```powershell
 git add .github/workflows/non-linux-release-validation.yml pure-faust/WINDOWS.md pure/todo/TODO-44-windows-pure-faust.md
