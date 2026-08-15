@@ -13,6 +13,12 @@ foreach(destination_var IN ITEMS
   endif()
 endforeach()
 
+if(NOT EXISTS "${PURE_FAUST_CORE_FIXTURE}")
+  message(FATAL_ERROR
+    "PURE_FAUST_CORE_FIXTURE must name an existing compatible Faust bitcode fixture: "
+    "${PURE_FAUST_CORE_FIXTURE}")
+endif()
+
 install(FILES faust2.pure
   DESTINATION "${PURE_FAUST_LIBRARY_INSTALL_DIR}"
   COMPONENT Runtime)
@@ -21,6 +27,10 @@ install(FILES
   COPYING.LESSER
   WINDOWS.md
   DESTINATION "${PURE_FAUST_DOCUMENTATION_INSTALL_DIR}"
+  COMPONENT Runtime)
+install(FILES "${PURE_FAUST_CORE_FIXTURE}"
+  DESTINATION "${PURE_FAUST_DOCUMENTATION_INSTALL_DIR}/tests"
+  RENAME reference.bc
   COMPONENT Runtime)
 
 # Task 4 adds the optional payload to this intentionally empty component.

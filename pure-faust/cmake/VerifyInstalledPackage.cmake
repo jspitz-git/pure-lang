@@ -31,7 +31,8 @@ set(expected_relative_files
   "lib/pure/faust2.pure"
   "share/doc/pure-faust/COPYING"
   "share/doc/pure-faust/COPYING.LESSER"
-  "share/doc/pure-faust/WINDOWS.md")
+  "share/doc/pure-faust/WINDOWS.md"
+  "share/doc/pure-faust/tests/reference.bc")
 foreach(relative_file IN LISTS expected_relative_files)
   if(NOT EXISTS "${stage}/${relative_file}")
     message(FATAL_ERROR

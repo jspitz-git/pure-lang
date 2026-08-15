@@ -1,0 +1,16 @@
+using faust2;
+
+check actual expected = () if actual === expected;
+check actual expected = throw ("unexpected result",actual,expected);
+
+let dsp = faust_init "reference.bc" 48000;
+let inputs,outputs,_ = faust_info dsp;
+check inputs 2;
+check outputs 1;
+
+let input = dmatrix {1.0,-0.5,0.25,0.0;2.0,1.0,-0.25,4.0};
+let output = dmatrix (1,4);
+check (faust_compute dsp input output) (dmatrix {3.0,0.5,0.0,4.0});
+
+faust_exit dsp;
+puts "pure-faust runtime smoke: PASS";
