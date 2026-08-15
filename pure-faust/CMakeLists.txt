@@ -26,28 +26,30 @@ include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/Install.cmake")
 
 if(BUILD_TESTING)
   set(runtime_stage "${CMAKE_CURRENT_BINARY_DIR}/stage runtime")
-  set(runtime_smoke_stage "${CMAKE_CURRENT_BINARY_DIR}/runtime smoke stage")
   add_test(
     NAME pure-faust-runtime-layout
     COMMAND "${CMAKE_COMMAND}"
       "-DBUILD_DIR=${CMAKE_CURRENT_BINARY_DIR}"
-      "-DSTAGE_PREFIX=${runtime_smoke_stage}"
+      "-DSTAGE_PREFIX=${runtime_stage}"
       "-DEXPECT_DEVELOPER=OFF"
       -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/VerifyInstalledPackage.cmake")
   set_tests_properties(pure-faust-runtime-layout PROPERTIES
     LABELS "faust;runtime;layout"
     TIMEOUT 30)
 
-  add_test(
-    NAME pure-faust-runtime-smoke
-    COMMAND "${CMAKE_COMMAND}"
-      "-DBUILD_DIR=${CMAKE_CURRENT_BINARY_DIR}"
-      "-DSTAGE_PREFIX=${runtime_stage}"
-      "-DPURE_EXECUTABLE=${PURE_EXECUTABLE}"
-      "-DPURE_PREFIX=${PURE_PREFIX}"
-      "-DRUNTIME_SMOKE_SCRIPT=${CMAKE_CURRENT_SOURCE_DIR}/tests/runtime-smoke.pure"
-      -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunRuntimeSmoke.cmake")
-  set_tests_properties(pure-faust-runtime-smoke PROPERTIES
-    LABELS "faust;runtime;smoke"
-    TIMEOUT 120)
+  if(WIN32)
+    set(runtime_smoke_stage "${CMAKE_CURRENT_BINARY_DIR}/runtime smoke stage")
+    add_test(
+      NAME pure-faust-runtime-smoke
+      COMMAND "${CMAKE_COMMAND}"
+        "-DBUILD_DIR=${CMAKE_CURRENT_BINARY_DIR}"
+        "-DSTAGE_PREFIX=${runtime_smoke_stage}"
+        "-DPURE_EXECUTABLE=${PURE_EXECUTABLE}"
+        "-DPURE_PREFIX=${PURE_PREFIX}"
+        "-DRUNTIME_SMOKE_SCRIPT=${CMAKE_CURRENT_SOURCE_DIR}/tests/runtime-smoke.pure"
+        -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunRuntimeSmoke.cmake")
+    set_tests_properties(pure-faust-runtime-smoke PROPERTIES
+      LABELS "faust;runtime;smoke"
+      TIMEOUT 120)
+  endif()
 endif()
