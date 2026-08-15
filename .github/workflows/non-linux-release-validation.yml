@@ -1,4 +1,4 @@
-name: macOS release validation
+name: Non-Linux release validation
 
 on:
   workflow_dispatch:
@@ -8,16 +8,18 @@ on:
       - "todo/**"
     paths:
       - "pure/**"
+      - "pure-faust/**"
       - ".github/workflows/non-linux-release-validation.yml"
   pull_request:
     branches:
       - master
     paths:
       - "pure/**"
+      - "pure-faust/**"
       - ".github/workflows/non-linux-release-validation.yml"
 
 concurrency:
-  group: macos-validation-${{ github.workflow }}-${{ github.ref }}
+  group: non-linux-validation-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 permissions:
@@ -28,6 +30,189 @@ defaults:
     working-directory: pure
 
 jobs:
+  windows-pure-faust:
+    name: Windows pure-faust (${{ matrix.selection }})
+    runs-on: windows-2025
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - selection: Runtime
+            ctest-label: runtime
+            expect-developer: "OFF"
+            artifact-name: windows-pure-faust-runtime
+          - selection: Runtime+FaustDeveloper
+            ctest-label: faust
+            expect-developer: "ON"
+            artifact-name: windows-pure-faust-full
+    defaults:
+      run:
+        shell: pwsh
+        working-directory: source with spaces
+    env:
+      CMAKE_EXE: C:/msys64/clang64/bin/cmake.exe
+      CTEST_EXE: C:/msys64/clang64/bin/ctest.exe
+      CLANG_EXE: C:/msys64/clang64/bin/clang.exe
+      OPT_EXE: C:/msys64/clang64/bin/opt.exe
+      PKG_CONFIG_EXE: C:/msys64/clang64/bin/pkgconf.exe
+      FAUST_URL: https://github.com/grame-cncm/faust/releases/download/2.85.9/Faust-2.85.9-win64.exe
+      FAUST_SHA256: d0994eb444ab4b1e75e3ed7c31897da24013db0672e2c6be8f2ab09b73d16977
+
+    steps:
+      - name: Check out source in a path containing spaces
+        uses: actions/checkout@v4
+        with:
+          path: source with spaces
+
+      - name: Install the CLANG64 build prerequisites
+        run: |
+          $ErrorActionPreference = 'Stop'
+          & C:/msys64/usr/bin/bash.exe -lc @'
+          set -euxo pipefail
+          pacman --noconfirm -Sy --needed \
+            bison flex diffutils \
+            mingw-w64-clang-x86_64-clang \
+            mingw-w64-clang-x86_64-llvm \
+            mingw-w64-clang-x86_64-cmake \
+            mingw-w64-clang-x86_64-ninja \
+            mingw-w64-clang-x86_64-pkgconf \
+            mingw-w64-clang-x86_64-gmp \
+            mingw-w64-clang-x86_64-mpfr \
+            mingw-w64-clang-x86_64-readline \
+            mingw-w64-clang-x86_64-pcre \
+            mingw-w64-clang-x86_64-libiconv
+          '@
+          if ($LASTEXITCODE -ne 0) { throw "MSYS2 package setup failed" }
+
+      - name: Fetch and verify the official Faust 2.85.9 payload
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $asset = Join-Path $env:RUNNER_TEMP 'Faust-2.85.9-win64.exe'
+          $faustRoot = Join-Path $env:RUNNER_TEMP 'Faust 2.85.9 extracted'
+          Invoke-WebRequest -Uri $env:FAUST_URL -OutFile $asset
+          $actual = (Get-FileHash -LiteralPath $asset -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actual -ne $env:FAUST_SHA256) {
+            throw "Faust asset SHA-256 mismatch: $actual"
+          }
+          New-Item -ItemType Directory -Path $faustRoot -Force | Out-Null
+          & 7z.exe x $asset "-o$faustRoot" -y
+          if ($LASTEXITCODE -ne 0) { throw "Faust data-only extraction failed" }
+          & (Join-Path $faustRoot 'bin/faust.exe') --version
+          if ($LASTEXITCODE -ne 0) { throw "Extracted Faust version probe failed" }
+          "FAUST_ROOT=$($faustRoot.Replace('\', '/'))" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Assert the Windows install rules exclude the legacy bridge
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $installRules = Get-Content -LiteralPath 'pure-faust/cmake/Install.cmake' -Raw
+          foreach ($forbidden in @('faust.cc', 'faust.pure', 'pure.cpp', 'faust.dll')) {
+            if ($installRules -match [regex]::Escape($forbidden)) {
+              throw "Windows install rule selects forbidden legacy input: $forbidden"
+            }
+          }
+
+      - name: Build and install the Windows Pure runtime
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $repo = (Get-Location).Path
+          $pureBuild = Join-Path $repo 'build/windows pure release'
+          $purePrefix = Join-Path $repo 'build/windows pure prefix'
+          $faust = Join-Path $env:FAUST_ROOT 'bin/faust.exe'
+          & $env:CMAKE_EXE -S pure -B $pureBuild -G Ninja `
+            -DCMAKE_BUILD_TYPE=Release `
+            -DCMAKE_C_COMPILER=C:/msys64/clang64/bin/clang.exe `
+            -DCMAKE_CXX_COMPILER=C:/msys64/clang64/bin/clang++.exe `
+            -DLLVM_DIR=C:/msys64/clang64/lib/cmake/llvm `
+            "-DCMAKE_INSTALL_PREFIX=$purePrefix" `
+            "-DPURE_FAUST_EXECUTABLE=$faust" `
+            -DPURE_STRICT_TOOLCHAIN=ON
+          if ($LASTEXITCODE -ne 0) { throw "Pure configure failed" }
+          & $env:CMAKE_EXE --build $pureBuild --parallel 1
+          if ($LASTEXITCODE -ne 0) { throw "Pure build failed" }
+          & $env:CMAKE_EXE --install $pureBuild
+          if ($LASTEXITCODE -ne 0) { throw "Pure install failed" }
+          "PURE_BUILD=$($pureBuild.Replace('\', '/'))" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "PURE_PREFIX=$($purePrefix.Replace('\', '/'))" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Configure and build pure-faust
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $repo = (Get-Location).Path
+          $build = Join-Path $repo "build/pure-faust ${{ matrix.selection }}"
+          $fixture = Join-Path $env:PURE_BUILD 'test/faust/reference.bc'
+          $arguments = @(
+            '-S', 'pure-faust', '-B', $build, '-G', 'Ninja',
+            "-DCMAKE_PREFIX_PATH=$env:PURE_PREFIX",
+            "-DPKG_CONFIG_EXECUTABLE=$env:PKG_CONFIG_EXE",
+            "-DPURE_FAUST_CORE_FIXTURE=$fixture"
+          )
+          if ('${{ matrix.expect-developer }}' -eq 'ON') {
+            $arguments += @(
+              "-DPURE_FAUST_FAUST_ROOT=$env:FAUST_ROOT",
+              "-DPURE_FAUST_CLANG=$env:CLANG_EXE",
+              "-DPURE_FAUST_OPT=$env:OPT_EXE"
+            )
+          }
+          $env:PKG_CONFIG_PATH = "$env:PURE_PREFIX/lib/pkgconfig"
+          & $env:CMAKE_EXE @arguments
+          if ($LASTEXITCODE -ne 0) { throw "pure-faust configure failed" }
+          & $env:CMAKE_EXE --build $build
+          if ($LASTEXITCODE -ne 0) { throw "pure-faust build failed" }
+          "PURE_FAUST_BUILD=$($build.Replace('\', '/'))" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Stage ${{ matrix.selection }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $stage = Join-Path (Get-Location).Path "build/staged ${{ matrix.selection }}"
+          & $env:CMAKE_EXE --install $env:PURE_FAUST_BUILD --prefix $stage --component Runtime
+          if ($LASTEXITCODE -ne 0) { throw "Runtime staging failed" }
+          if ('${{ matrix.expect-developer }}' -eq 'ON') {
+            & $env:CMAKE_EXE --install $env:PURE_FAUST_BUILD --prefix $stage --component FaustDeveloper
+            if ($LASTEXITCODE -ne 0) { throw "FaustDeveloper staging failed" }
+          }
+          $installed = Get-ChildItem -LiteralPath $stage -File -Recurse
+          foreach ($forbidden in @('faust.cc', 'faust.pure', 'pure.cpp', 'faust.dll', 'msys-2.0.dll')) {
+            if ($installed.Name -contains $forbidden) {
+              throw "Staged selection contains forbidden file: $forbidden"
+            }
+          }
+          if ('${{ matrix.expect-developer }}' -eq 'OFF') {
+            foreach ($developerTool in @('faust.exe', 'clang.exe', 'opt.exe')) {
+              if ($installed.Name -contains $developerTool) {
+                throw "Runtime selection contains developer tool: $developerTool"
+              }
+            }
+          }
+          "PURE_FAUST_STAGE=$($stage.Replace('\', '/'))" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Run ${{ matrix.ctest-label }} CTests with sanitized PATH
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $env:Path = "$env:PURE_FAUST_STAGE/bin;$env:SystemRoot/System32/WindowsPowerShell/v1.0;$env:SystemRoot/System32;$env:SystemRoot"
+          Remove-Item Env:PURELIB -ErrorAction SilentlyContinue
+          $env:PURE_FAUST_CMAKE = $env:CMAKE_EXE
+          & $env:CTEST_EXE --test-dir $env:PURE_FAUST_BUILD `
+            -L '${{ matrix.ctest-label }}' --output-on-failure
+          if ($LASTEXITCODE -ne 0) { throw "pure-faust CTest failed" }
+
+      - name: Archive the staged selection and record its hash
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $artifactDirectory = Join-Path (Get-Location).Path 'build/pure-faust-artifacts'
+          $archive = Join-Path $artifactDirectory '${{ matrix.artifact-name }}.zip'
+          New-Item -ItemType Directory -Path $artifactDirectory -Force | Out-Null
+          Compress-Archive -Path "$env:PURE_FAUST_STAGE/*" -DestinationPath $archive -Force
+          $hash = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+          "${{ matrix.selection }} archive SHA-256: ``$hash``" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
+
+      - name: Upload the staged selection
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact-name }}
+          path: source with spaces/build/pure-faust-artifacts/${{ matrix.artifact-name }}.zip
+          if-no-files-found: error
+
   macos-15-arm64:
     name: macOS 15 arm64
     runs-on: macos-15
