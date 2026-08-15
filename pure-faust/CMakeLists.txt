@@ -79,6 +79,7 @@ if(BUILD_TESTING)
         NAME pure-faust-developer-allowlist-failures
         COMMAND "${CMAKE_COMMAND}"
           "-DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
+          "-DAUTHORITATIVE_MANIFEST=${PURE_FAUST_AUTHORITATIVE_MANIFEST}"
           "-DSTAGE_PREFIX=${developer_stage}"
           -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/developer-allowlist-failures.cmake")
       set_tests_properties(pure-faust-developer-smoke PROPERTIES

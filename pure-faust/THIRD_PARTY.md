@@ -78,10 +78,12 @@ requires nor ships the MSYS2 runtime or package-manager state.
 | `libiconv-2.dll` | `libiconv` 1.19-1 | `libiconv-COPYING.txt` |
 
 `CompilerClosure.cmake` records and validates every compiler binary and header.
-The installed `FaustDeveloper-ALLOWLIST.sha256` records every installed
-relative path and file hash and is validated against the staged tree. Shells,
-package-manager databases, link-only libraries, and `msys-2.0.dll` are
-forbidden.
+At configure time, the reviewed CMake closure lists and their validated source
+hashes generate the authoritative `FaustDeveloperExpected.sha256`. Its
+immutable installed copy is `FaustDeveloper-ALLOWLIST.sha256`. Verification
+first requires the installed copy to match the configure-time authority, then
+checks every staged path and hash. Shells, package-manager databases,
+link-only libraries, and `msys-2.0.dll` are forbidden.
 
 ## Fixed FaustDeveloper files
 

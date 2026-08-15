@@ -44,6 +44,39 @@ install(FILES "${PURE_FAUST_CORE_FIXTURE}"
   COMPONENT Runtime)
 
 if(PURE_FAUST_DEVELOPER_AVAILABLE)
+  set(PURE_FAUST_AUTHORITATIVE_MANIFEST
+    "${CMAKE_CURRENT_BINARY_DIR}/FaustDeveloperExpected.sha256")
+  file(WRITE "${PURE_FAUST_AUTHORITATIVE_MANIFEST}"
+    "# SHA-256  relative-path\n# SELF  ${PURE_FAUST_DEVELOPER_ALLOWLIST_RELATIVE}\n")
+  foreach(relative IN LISTS PURE_FAUST_DEVELOPER_RELATIVE_FILES)
+    if(relative STREQUAL "bin/faust.exe")
+      set(source "${PURE_FAUST_VALIDATED_FAUST}")
+    elseif(relative MATCHES "^bin/")
+      string(REGEX REPLACE "^bin/" "" filename "${relative}")
+      set(source "${PURE_FAUST_COMPILER_BIN}/${filename}")
+    elseif(relative MATCHES "^(include/|lib/clang/)")
+      set(source "${PURE_FAUST_COMPILER_PREFIX}/${relative}")
+    elseif(relative STREQUAL "share/pure-faust/pure.c")
+      set(source "${PURE_FAUST_VALIDATED_PURE_C}")
+    elseif(relative MATCHES "^share/doc/pure-faust/licenses/")
+      string(REGEX REPLACE "^share/doc/pure-faust/licenses/" "" filename
+        "${relative}")
+      set(source "${CMAKE_CURRENT_SOURCE_DIR}/licenses/${filename}")
+    elseif(relative STREQUAL "share/doc/pure-faust/THIRD_PARTY.md")
+      set(source "${CMAKE_CURRENT_SOURCE_DIR}/THIRD_PARTY.md")
+    elseif(relative STREQUAL "tools/faust2pure.ps1")
+      set(source "${CMAKE_CURRENT_SOURCE_DIR}/tools/faust2pure.ps1")
+    elseif(relative MATCHES "^cmake/")
+      string(REGEX REPLACE "^cmake/" "" filename "${relative}")
+      set(source "${CMAKE_CURRENT_SOURCE_DIR}/cmake/${filename}")
+    else()
+      message(FATAL_ERROR "No authoritative source mapping for ${relative}")
+    endif()
+    file(SHA256 "${source}" sha256)
+    string(TOLOWER "${sha256}" sha256)
+    file(APPEND "${PURE_FAUST_AUTHORITATIVE_MANIFEST}"
+      "${sha256}  ${relative}\n")
+  endforeach()
   install(PROGRAMS
     "${PURE_FAUST_VALIDATED_FAUST}"
     DESTINATION bin
@@ -95,16 +128,11 @@ if(PURE_FAUST_DEVELOPER_AVAILABLE)
     DESTINATION "${PURE_FAUST_DOCUMENTATION_INSTALL_DIR}/licenses"
     COMPONENT FaustDeveloper
     EXCLUDE_FROM_ALL)
-  string(CONCAT allowlist_install_code
-    "set(files [==[${PURE_FAUST_DEVELOPER_RELATIVE_FILES}]==])\n"
-    "set(output \"\${CMAKE_INSTALL_PREFIX}/${PURE_FAUST_DEVELOPER_ALLOWLIST_RELATIVE}\")\n"
-    "file(WRITE \"\${output}\" \"# SHA-256  relative-path\\n# SELF  ${PURE_FAUST_DEVELOPER_ALLOWLIST_RELATIVE}\\n\")\n"
-    "foreach(relative IN LISTS files)\n"
-    "  file(SHA256 \"\${CMAKE_INSTALL_PREFIX}/\${relative}\" sha256)\n"
-    "  string(TOLOWER \"\${sha256}\" sha256)\n"
-    "  file(APPEND \"\${output}\" \"\${sha256}  \${relative}\\n\")\n"
-    "endforeach()\n")
-  install(CODE "${allowlist_install_code}"
+  cmake_path(GET PURE_FAUST_DEVELOPER_ALLOWLIST_RELATIVE PARENT_PATH
+    allowlist_destination)
+  install(FILES "${PURE_FAUST_AUTHORITATIVE_MANIFEST}"
+    DESTINATION "${allowlist_destination}"
+    RENAME "FaustDeveloper-ALLOWLIST.sha256"
     COMPONENT FaustDeveloper EXCLUDE_FROM_ALL)
 else()
   install(CODE "" COMPONENT FaustDeveloper EXCLUDE_FROM_ALL)

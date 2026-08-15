@@ -27,4 +27,17 @@ foreach(mutation IN LISTS mutations)
       "stdout:\n${output}\nstderr:\n${error}")
   endif()
 endforeach()
+file(REMOVE_RECURSE "${TEST_ROOT}")
+file(MAKE_DIRECTORY "${TEST_ROOT}")
+file(WRITE "${TEST_ROOT}/mutated.pure" "path = C:/repo/source;\n")
+execute_process(
+  COMMAND "${CMAKE_COMMAND}"
+    "-DSTAGE=${TEST_ROOT}"
+    -P "${SOURCE_DIR}/tests/run-content-audit.cmake"
+  RESULT_VARIABLE pure_result
+  ERROR_VARIABLE pure_error
+  ENCODING UTF-8)
+if(pure_result EQUAL 0 OR NOT pure_error MATCHES "mutated.pure")
+  message(FATAL_ERROR ".pure absolute-path mutation was not rejected")
+endif()
 message(STATUS "Source/build/Faust/compiler path mutations were rejected")
