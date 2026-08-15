@@ -52,9 +52,22 @@ toolchain.
     spaces, verifies bitcode before atomic publication, and rebuilds the same
     deterministic two-input/one-output fixture consumed by the runtime smoke.
   - On the development Windows host, the sanitized `Runtime` label passed 3/3
-    CTests in 13.82 seconds and the sanitized `faust` label passed 8/8 CTests
-    in 26.82 seconds. The complete unfiltered suite also passed 8/8 in 26.59
+    CTests in 13.68 seconds and the sanitized `faust` label passed 8/8 CTests
+    in 26.55 seconds. The complete unfiltered suite also passed 8/8 in 26.59
     seconds.
+    Exact labeled commands:
+
+    ```powershell
+    $env:Path = 'C:/tmp/pure faust runtime/bin;C:/Windows/System32/WindowsPowerShell/v1.0;C:/Windows/System32;C:/Windows'
+    Remove-Item Env:PURELIB -ErrorAction SilentlyContinue
+    $env:PURE_FAUST_CMAKE = 'C:/msys64/clang64/bin/cmake.exe'
+    C:/msys64/clang64/bin/ctest.exe --test-dir build/pure-faust -L runtime --output-on-failure
+
+    $env:Path = 'C:/tmp/pure faust full/bin;C:/Windows/System32/WindowsPowerShell/v1.0;C:/Windows/System32;C:/Windows'
+    C:/msys64/clang64/bin/ctest.exe --test-dir build/pure-faust -L faust --output-on-failure
+    C:/msys64/clang64/bin/ctest.exe --test-dir build/pure-faust --output-on-failure
+    ```
+
   - Fresh stages in paths containing spaces passed the installed-package
     verifier: runtime-only contained 5 files with sorted inventory SHA-256
     `917f73e596348654eb98c918045b52c92bdfe9ab35dadd8ec292dd04563de386`;
@@ -62,6 +75,24 @@ toolchain.
     `03c48fc651a0ff7979c52765e269500ea007ed6f7928e743ba769e321ef8d2d0`.
     The authoritative developer allowlist SHA-256 was
     `ff283ce1b7b1d97fc6a35bda10c1657f804490fc5a2a4fbe53304c51a971bbdc`.
+    Exact staging and verifier commands (`$cmake` was
+    `C:/msys64/clang64/bin/cmake.exe`, `$purePrefix` was
+    `C:/pure-lang/pure/build/windows-clang64-prefix`, and `$pure` was
+    `$purePrefix/bin/pure.exe`):
+
+    ```powershell
+    & $cmake --install build/pure-faust --prefix 'C:/tmp/pure faust runtime' --component Runtime
+    & $cmake --install build/pure-faust --prefix 'C:/tmp/pure faust full' --component Runtime
+    & $cmake --install build/pure-faust --prefix 'C:/tmp/pure faust full' --component FaustDeveloper
+
+    & $cmake '-DBUILD_DIR=C:/pure-lang/.worktrees/todo-44-windows-pure-faust/build/pure-faust' '-DSTAGE_PREFIX=C:/tmp/pure faust runtime' -DEXPECT_DEVELOPER=OFF -P pure-faust/cmake/VerifyInstalledPackage.cmake
+
+    & $cmake '-DBUILD_DIR=C:/pure-lang/.worktrees/todo-44-windows-pure-faust/build/pure-faust' '-DSOURCE_DIR=C:/pure-lang/.worktrees/todo-44-windows-pure-faust/pure-faust' "-DPURE_EXECUTABLE=$pure" "-DPURE_PREFIX=$purePrefix" '-DRUNTIME_SMOKE_SCRIPT=C:/pure-lang/.worktrees/todo-44-windows-pure-faust/pure-faust/tests/runtime-smoke.pure' '-DSTAGE_PREFIX=C:/tmp/pure faust full' -DEXPECT_DEVELOPER=ON -P pure-faust/cmake/VerifyInstalledPackage.cmake
+    ```
+
+    Both verifier invocations printed `Verified installed pure-faust runtime`;
+    the full verifier regenerated, verified, and ran the fixture using only the
+    staged developer payload plus the staged Pure runtime.
   - Bounded caveat: the new clean-runner matrix has not been dispatched, so
     there is no workflow URL or uploaded archive SHA-256 yet. TODO-44 remains
     open until both `Runtime` and `Runtime+FaustDeveloper` jobs pass on a clean
