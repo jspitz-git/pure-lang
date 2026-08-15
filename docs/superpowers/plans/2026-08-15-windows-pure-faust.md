@@ -45,6 +45,7 @@
 - Create: `pure-faust/CMakeLists.txt`
 - Create: `pure-faust/cmake/Install.cmake`
 - Create: `pure-faust/cmake/VerifyInstalledPackage.cmake`
+- Create: `pure-faust/WINDOWS.md`
 - Test: CTest `pure-faust-runtime-layout`
 
 **Interfaces:**
@@ -68,7 +69,7 @@ Expected: configure or test fails because the CMake package/install rules do not
 
 - [ ] **Step 3: Implement the minimal script-only package**
 
-In `CMakeLists.txt`, require CMake 3.25, locate Pure only inside its reported prefix, enable CTest, and include `cmake/Install.cmake`. In `Install.cmake`, use explicit `install(FILES ...)` calls with `COMPONENT Runtime`; never use a source-tree glob. In the verifier, normalize the stage path, enumerate the exact expected files, recursively scan only that normalized stage, and reject the forbidden basenames case-insensitively.
+In `CMakeLists.txt`, require CMake 3.25, locate Pure only inside its reported prefix, enable CTest, and include `cmake/Install.cmake`. In `Install.cmake`, use explicit `install(FILES ...)` calls with `COMPONENT Runtime`; never use a source-tree glob. In the verifier, normalize the stage path, enumerate the exact expected files, recursively scan only that normalized stage, and reject the forbidden basenames case-insensitively. Create a minimal `WINDOWS.md` which documents that the Windows runtime installs only `faust2.pure`, delegates DSP loading to Pure core, and excludes the legacy bridge and developer tools; Task 5 expands this file with complete usage and validation instructions.
 
 - [ ] **Step 4: Run the focused test and inspect the manifest**
 
@@ -85,7 +86,7 @@ Expected: PASS; the stage contains `faust2.pure` and documentation but none of t
 - [ ] **Step 5: Commit the runtime boundary**
 
 ```powershell
-git add pure-faust/CMakeLists.txt pure-faust/cmake/Install.cmake pure-faust/cmake/VerifyInstalledPackage.cmake
+git add pure-faust/CMakeLists.txt pure-faust/cmake/Install.cmake pure-faust/cmake/VerifyInstalledPackage.cmake pure-faust/WINDOWS.md
 git commit -m "Package the Windows faust2 runtime"
 ```
 
@@ -274,7 +275,7 @@ git commit -m "Package the optional Faust developer tools"
 ### Task 5: Document, automate, and close TODO-44
 
 **Files:**
-- Create: `pure-faust/WINDOWS.md`
+- Modify: `pure-faust/WINDOWS.md`
 - Modify: `.github/workflows/non-linux-release-validation.yml`
 - Modify: `pure/todo/TODO-44-windows-pure-faust.md`
 
