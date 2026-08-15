@@ -38,6 +38,19 @@ if(BUILD_TESTING)
     TIMEOUT 30)
 
   if(WIN32)
+    find_program(PURE_FAUST_POWERSHELL_EXECUTABLE NAMES powershell.exe pwsh.exe REQUIRED)
+    add_test(
+      NAME pure-faust-helper-failures
+      COMMAND "${CMAKE_COMMAND}"
+        "-DPOWERSHELL_EXECUTABLE=${PURE_FAUST_POWERSHELL_EXECUTABLE}"
+        "-DHELPER_SOURCE=${CMAKE_CURRENT_SOURCE_DIR}/tools/faust2pure.ps1"
+        "-DDRIVER_SOURCE=${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunFaust2Pure.cmake"
+        "-DTEST_ROOT=${CMAKE_CURRENT_BINARY_DIR}/helper failures"
+        -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/helper-failures.cmake")
+    set_tests_properties(pure-faust-helper-failures PROPERTIES
+      LABELS "faust;developer;helper"
+      TIMEOUT 30)
+
     set(runtime_smoke_stage "${CMAKE_CURRENT_BINARY_DIR}/runtime smoke stage")
     add_test(
       NAME pure-faust-runtime-smoke
