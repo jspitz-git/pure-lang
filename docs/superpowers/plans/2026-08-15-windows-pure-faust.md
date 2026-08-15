@@ -131,7 +131,7 @@ Expected: FAIL because the staged fixture and driver are absent.
 
 - [ ] **Step 3: Add fixture staging and the sanitized driver**
 
-Require `PURE_FAUST_CORE_FIXTURE` to exist and install it as `gain.bc` in the runtime test payload. `RunRuntimeSmoke.cmake` must set `PATH` to `<stage>/bin;C:/Windows/System32;C:/Windows`, clear `PURELIB`, create a fresh working directory whose name contains spaces, and run:
+Require `PURE_FAUST_CORE_FIXTURE` to exist and install it as `reference.bc` in the runtime test payload. `RunRuntimeSmoke.cmake` must set `PATH` to `<stage>/bin;C:/Windows/System32;C:/Windows`, clear `PURELIB`, create a fresh working directory whose name contains spaces, and run:
 
 ```text
 <stage>/bin/pure.exe --norc -I <stage>/lib/pure -L <fixture-dir> -x <runtime-smoke.pure>
