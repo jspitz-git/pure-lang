@@ -3,6 +3,16 @@ set(PURE_FAUST_LIBRARY_INSTALL_DIR "lib/pure" CACHE STRING
 set(PURE_FAUST_DOCUMENTATION_INSTALL_DIR "share/doc/pure-faust" CACHE STRING
   "Relative install directory for pure-faust documentation")
 
+include("${CMAKE_CURRENT_LIST_DIR}/FaustToolchain.cmake")
+
+set(PURE_FAUST_DEVELOPER_AVAILABLE OFF)
+if(NOT "${PURE_FAUST_FAUST_ROOT}" STREQUAL "" OR
+    NOT "${PURE_FAUST_CLANG}" STREQUAL "" OR
+    NOT "${PURE_FAUST_OPT}" STREQUAL "")
+  pure_faust_validate_toolchain()
+  set(PURE_FAUST_DEVELOPER_AVAILABLE ON)
+endif()
+
 foreach(destination_var IN ITEMS
     PURE_FAUST_LIBRARY_INSTALL_DIR PURE_FAUST_DOCUMENTATION_INSTALL_DIR)
   set(destination "${${destination_var}}")
@@ -33,5 +43,52 @@ install(FILES "${PURE_FAUST_CORE_FIXTURE}"
   RENAME reference.bc
   COMPONENT Runtime)
 
-# Task 4 adds the optional payload to this intentionally empty component.
-install(CODE "" COMPONENT FaustDeveloper EXCLUDE_FROM_ALL)
+if(PURE_FAUST_DEVELOPER_AVAILABLE)
+  install(PROGRAMS
+    "${PURE_FAUST_VALIDATED_FAUST}"
+    DESTINATION bin
+    COMPONENT FaustDeveloper
+    EXCLUDE_FROM_ALL)
+  install(PROGRAMS "${PURE_FAUST_CLANG}" "${PURE_FAUST_OPT}"
+    DESTINATION bin COMPONENT FaustDeveloper EXCLUDE_FROM_ALL)
+  foreach(dll IN LISTS PURE_FAUST_COMPILER_DLL_NAMES)
+    install(FILES "${PURE_FAUST_COMPILER_BIN}/${dll}"
+      DESTINATION bin COMPONENT FaustDeveloper EXCLUDE_FROM_ALL)
+  endforeach()
+  foreach(relative IN LISTS PURE_FAUST_COMPILER_RELATIVE_FILES)
+    if(NOT relative MATCHES "^bin/")
+      cmake_path(GET relative PARENT_PATH destination)
+      install(FILES "${PURE_FAUST_COMPILER_PREFIX}/${relative}"
+        DESTINATION "${destination}"
+        COMPONENT FaustDeveloper EXCLUDE_FROM_ALL)
+    endif()
+  endforeach()
+  install(FILES "${PURE_FAUST_VALIDATED_PURE_C}"
+    DESTINATION share/pure-faust
+    COMPONENT FaustDeveloper
+    EXCLUDE_FROM_ALL)
+  install(PROGRAMS "${CMAKE_CURRENT_SOURCE_DIR}/tools/faust2pure.ps1"
+    DESTINATION tools
+    COMPONENT FaustDeveloper
+    EXCLUDE_FROM_ALL)
+  install(FILES
+    "${CMAKE_CURRENT_SOURCE_DIR}/cmake/CompilerClosure.cmake"
+    "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunFaust2Pure.cmake"
+    DESTINATION cmake
+    COMPONENT FaustDeveloper
+    EXCLUDE_FROM_ALL)
+  install(FILES
+    "${CMAKE_CURRENT_SOURCE_DIR}/THIRD_PARTY.md"
+    DESTINATION "${PURE_FAUST_DOCUMENTATION_INSTALL_DIR}"
+    COMPONENT FaustDeveloper
+    EXCLUDE_FROM_ALL)
+  install(FILES
+    "${CMAKE_CURRENT_SOURCE_DIR}/licenses/Faust-COPYING.txt"
+    "${CMAKE_CURRENT_SOURCE_DIR}/licenses/LLVM-Apache-2.0-WITH-LLVM-exception.txt"
+    "${CMAKE_CURRENT_SOURCE_DIR}/licenses/MinGW-w64-COPYING.txt"
+    DESTINATION "${PURE_FAUST_DOCUMENTATION_INSTALL_DIR}/licenses"
+    COMPONENT FaustDeveloper
+    EXCLUDE_FROM_ALL)
+else()
+  install(CODE "" COMPONENT FaustDeveloper EXCLUDE_FROM_ALL)
+endif()

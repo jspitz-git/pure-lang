@@ -51,6 +51,28 @@ if(BUILD_TESTING)
       LABELS "faust;developer;helper"
       TIMEOUT 30)
 
+    if(PURE_FAUST_DEVELOPER_AVAILABLE)
+      file(GENERATE
+        OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/FaustDeveloperInventory.cmake"
+        CONTENT "set(PURE_FAUST_DEVELOPER_RELATIVE_FILES [==[${PURE_FAUST_DEVELOPER_RELATIVE_FILES}]==])\n")
+      set(developer_stage "${CMAKE_CURRENT_BINARY_DIR}/developer stage")
+      add_test(
+        NAME pure-faust-developer-smoke
+        COMMAND "${CMAKE_COMMAND}"
+          "-DBUILD_DIR=${CMAKE_CURRENT_BINARY_DIR}"
+          "-DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
+          "-DSTAGE_PREFIX=${developer_stage}"
+          "-DEXPECT_DEVELOPER=ON"
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/VerifyInstalledPackage.cmake")
+      set_tests_properties(pure-faust-developer-smoke PROPERTIES
+        LABELS "faust;developer;layout;smoke"
+        TIMEOUT 120)
+      set_property(TEST pure-faust-developer-smoke PROPERTY
+        ENVIRONMENT_MODIFICATION
+          "Path=set:${developer_stage}/bin\;C:/Windows/System32/WindowsPowerShell/v1.0\;C:/Windows/System32\;C:/Windows"
+          "PURE_FAUST_CMAKE=set:${CMAKE_COMMAND}")
+    endif()
+
     set(runtime_smoke_stage "${CMAKE_CURRENT_BINARY_DIR}/runtime smoke stage")
     add_test(
       NAME pure-faust-runtime-smoke

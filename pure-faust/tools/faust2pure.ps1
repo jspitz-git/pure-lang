@@ -55,8 +55,12 @@ try {
   }
   $temporaryOutputPath = "$outputAbsolutePath.new"
 
-  $cmake = Get-Command cmake.exe, cmake -ErrorAction Stop |
-    Select-Object -First 1 -ExpandProperty Source
+  if ([string]::IsNullOrWhiteSpace($env:PURE_FAUST_CMAKE)) {
+    $cmake = Get-Command cmake.exe, cmake -ErrorAction Stop |
+      Select-Object -First 1 -ExpandProperty Source
+  } else {
+    $cmake = (Get-Item -LiteralPath $env:PURE_FAUST_CMAKE -ErrorAction Stop).FullName
+  }
   $cmakeArguments = @(
     "-DINPUT_PATH=$inputAbsolutePath"
     "-DOUTPUT_PATH=$outputAbsolutePath"
