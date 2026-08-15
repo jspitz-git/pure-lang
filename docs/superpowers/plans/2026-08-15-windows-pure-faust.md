@@ -15,12 +15,14 @@
 - Preserve the portable legacy sources and non-Windows behavior.
 - Pin the developer compiler to Faust 2.85.9 and compile generated C with the distribution's Clang 22.
 - Before packaging Faust 2.85.9, verify that generated symbols, sample-format metadata, target metadata, channel counts, and deterministic output satisfy the TODO-11 ABI contract.
-- Keep Faust, `pure.c`, Clang, and LLVM command-line tools out of the default runtime component.
+- Keep Faust, `pure.c`, Clang, LLVM command-line tools, compiler DLLs, resource headers, and the MinGW header sysroot out of the default runtime component.
 - Do not require MSYS2, a host `PATH`, or a global `PURELIB` at package runtime.
 - Use distribution-relative discovery and support paths containing spaces.
 - Publish generated bitcode atomically; failure must preserve an existing destination.
 - Record the upstream URL, SHA-256, installed-file inventory, provenance, and licenses for every developer payload.
 - If the official Faust 2.85.9 Windows artifact cannot be acceptably redistributed, stop for a packaging decision instead of changing versions.
+- `FaustDeveloper` must include a relocatable, explicitly manifested Clang/LLVM 22 compile-only closure: `clang.exe`, `opt.exe`, their transitive DLLs, `lib/clang/22/include`, and only the MinGW header roots reported by `clang -E -x c -v NUL`; reject `msys-2.0.dll`, shells, package-manager state, link-only libraries, and undeclared files.
+- Record source package/version, SHA-256 inventory, and license mapping separately for Faust, LLVM/Clang, compiler DLL dependencies, and MinGW headers.
 
 ---
 
@@ -219,6 +221,9 @@ git commit -m "Add the Windows Faust bitcode helper"
 **Files:**
 - Create: `pure-faust/cmake/FaustToolchain.cmake`
 - Create: `pure-faust/licenses/Faust-COPYING.txt`
+- Create: `pure-faust/licenses/LLVM-Apache-2.0-WITH-LLVM-exception.txt`
+- Create: `pure-faust/licenses/MinGW-w64-COPYING.txt`
+- Create: `pure-faust/cmake/CompilerClosure.cmake`
 - Create: `pure-faust/THIRD_PARTY.md`
 - Modify: `pure-faust/cmake/Install.cmake`
 - Modify: `pure-faust/cmake/VerifyInstalledPackage.cmake`
@@ -226,7 +231,7 @@ git commit -m "Add the Windows Faust bitcode helper"
 
 **Interfaces:**
 - Consumes: official asset `Faust-2.85.9-win64.exe` from `https://github.com/grame-cncm/faust/releases/download/2.85.9/Faust-2.85.9-win64.exe` (109,591,809 bytes, SHA-256 `d0994eb444ab4b1e75e3ed7c31897da24013db0672e2c6be8f2ab09b73d16977`) or the matching installed root `C:/Program Files/Faust`, supplied as `PURE_FAUST_FAUST_ROOT`; Clang/opt 22 paths supplied explicitly by the parent distribution build.
-- Produces: `FaustDeveloper` payload, a provenance record containing the locally computed SHA-256 and exact installed-file allowlist, and CTest `pure-faust-developer-smoke`.
+- Produces: `FaustDeveloper` payload, provenance records containing SHA-256 inventories and exact allowlists for Faust and the relocatable Clang/LLVM 22 compile-only closure, and CTest `pure-faust-developer-smoke`.
 
 - [ ] **Step 1: Capture artifact identity and inventory before packaging**
 
@@ -242,7 +247,15 @@ payload.
 
 - [ ] **Step 2: Write failing developer-layout assertions**
 
-With `EXPECT_DEVELOPER=ON`, require the allowlisted `faust.exe`, `pure.c`, helper, Faust license, and provenance document; require `faust --version` to report `2.85.9`; require `clang --version` and `opt --version` to report major version 22. Fail on every installed file not present in the explicit allowlist.
+With `EXPECT_DEVELOPER=ON`, require the allowlisted `faust.exe`, `pure.c`,
+helper, Faust license, Clang/LLVM license, MinGW-w64 license, and provenance
+document; require `faust --version` to report `2.85.9`; require `clang
+--version` and `opt --version` to report major version 22. Capture Clang's C
+include search list with `clang -E -x c -v NUL`; construct
+`CompilerClosure.cmake` from the executable/DLL dependency closure,
+`lib/clang/22/include`, and only those reported MinGW header roots. Fail on
+every installed file not present in the explicit allowlists and explicitly
+reject `msys-2.0.dll`.
 
 - [ ] **Step 3: Run the developer test to verify it fails**
 
@@ -261,15 +274,17 @@ Clang 22, verify it with opt 22, and run the Task 2 runtime smoke. Inspect the
 generated module for the TODO-11 required symbol family, double sample-format
 metadata, and compatible target metadata. Only after those checks pass, put the
 verified URL, byte size, SHA-256, release tag, license mapping, and relative
-allowlist in `FaustToolchain.cmake` and `THIRD_PARTY.md`. Install only
-allowlisted Faust files plus `pure.c` and `faust2pure.ps1` under `COMPONENT
-FaustDeveloper`. Reference distribution-owned Clang/opt paths; do not copy
-undeclared LLVM or MSYS2 trees.
+allowlist in `FaustToolchain.cmake` and `THIRD_PARTY.md`. Record the supplying
+MSYS2 package names/versions only as build provenance; the installed product
+must not depend on MSYS2. Install only allowlisted Faust files, `pure.c`,
+`faust2pure.ps1`, and the files listed by `CompilerClosure.cmake` under
+`COMPONENT FaustDeveloper`. Do not copy shells, package-manager state,
+`msys-2.0.dll`, link-only libraries, or any broader undeclared LLVM/MSYS2 tree.
 
 - [ ] **Step 5: Rebuild the fixture and run it**
 
-Configure with the temporary Faust root and explicit LLVM 22 tools, install
-both components to `C:/tmp/pure faust full`, invoke installed
+Configure with the Faust root and explicit LLVM 22 tools, install both
+components to `C:/tmp/pure faust full`, clear host compiler paths from `PATH`, invoke installed
 `faust2pure.ps1` on `reference.dsp`, verify the emitted `reference.bc`, then
 execute `runtime-smoke.pure` against that new file.
 

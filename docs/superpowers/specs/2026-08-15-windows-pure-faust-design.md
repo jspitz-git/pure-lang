@@ -43,10 +43,13 @@ bitcode produced elsewhere.
 ### Optional developer component
 
 The optional component contains the supported Faust 2.85.9 compiler, `pure.c`,
-and the distribution's Clang 22 and bitcode-verification tools needed by the
-documented workflow. A Windows-native helper replaces the Unix-oriented
-`faust2pure` script. It discovers every shipped input relative to its own
-installation and does not depend on fixed build-machine paths or MSYS2.
+and a relocatable Clang/LLVM 22 compiler closure needed by the documented
+workflow. That closure includes the compiler/verifier executables and DLLs,
+Clang's versioned resource headers, and the minimum declared MinGW header
+sysroot required to compile Faust-generated C to bitcode. A Windows-native
+helper replaces the Unix-oriented `faust2pure` script. It discovers every
+shipped input relative to its own installation and does not depend on fixed
+build-machine paths or an installed MSYS2 environment.
 
 The helper performs these steps:
 
@@ -101,6 +104,12 @@ validation rejects:
 - `msys-2.0.dll` or another undeclared MSYS2 payload;
 - undeclared compilers or LLVM tools; and
 - absolute build, source, or host-tool paths embedded in the staged package.
+
+The developer manifest lists every Clang/LLVM/sysroot file and its source
+package. Staging rejects `msys-2.0.dll`, shell utilities, package-manager state,
+linker/runtime libraries not needed for compile-only bitcode generation, and
+any file outside the reviewed compiler closure. LLVM, Clang, MinGW headers, and
+runtime DLLs carry separate provenance and license mappings.
 
 The component definition is owned by TODO-44. The final installer UI and
 cross-package component integration remain owned by TODO-49.
