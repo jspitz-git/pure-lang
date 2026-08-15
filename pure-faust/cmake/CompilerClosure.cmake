@@ -20,15 +20,45 @@ set(PURE_FAUST_COMPILER_BINARY_SHA256
   "libxml2-16.dll=c6c34a810d86c19c034a1bc96c4c500bde8fb789ded69b434e67eee773605852"
   "libiconv-2.dll=c9f9b9addeac620eeccb6a23fc5a423fa1244e18431c00e1219db00d479ea332")
 
+set(PURE_FAUST_COMPILER_BINARY_PROVENANCE
+  "clang.exe|mingw-w64-clang-x86_64-clang|22.1.8-2|LLVM-Apache-2.0-WITH-LLVM-exception.txt"
+  "libclang-cpp.dll|mingw-w64-clang-x86_64-clang-libs|22.1.8-2|LLVM-Apache-2.0-WITH-LLVM-exception.txt"
+  "opt.exe|mingw-w64-clang-x86_64-llvm|22.1.8-2|LLVM-Apache-2.0-WITH-LLVM-exception.txt"
+  "libLLVM-22.dll|mingw-w64-clang-x86_64-llvm-libs|22.1.8-2|LLVM-Apache-2.0-WITH-LLVM-exception.txt"
+  "libc++.dll|mingw-w64-clang-x86_64-libc++|22.1.8-1|libcxx-LICENSE.txt"
+  "libffi-8.dll|mingw-w64-clang-x86_64-libffi|3.7.1-1|libffi-LICENSE.txt"
+  "zlib1.dll|mingw-w64-clang-x86_64-zlib|1.3.2-2|zlib-LICENSE.txt"
+  "libzstd.dll|mingw-w64-clang-x86_64-zstd|1.5.7-2|zstd-LICENSE.txt"
+  "libxml2-16.dll|mingw-w64-clang-x86_64-libxml2|2.15.3-1|libxml2-COPYING.txt"
+  "libiconv-2.dll|mingw-w64-clang-x86_64-libiconv|1.19-1|libiconv-COPYING.txt")
+
 set(PURE_FAUST_COMPILER_HEADER_ROOTS
   "lib/clang/22/include"
   "include")
-set(PURE_FAUST_MINGW_HEADER_PACKAGES
-  "mingw-w64-clang-x86_64-headers-14.0.0.r220.gd999af622-1"
-  "mingw-w64-clang-x86_64-crt-14.0.0.r220.gd999af622-1")
+set(PURE_FAUST_COMPILER_HEADER_FILES
+  "include/_mingw.h"
+  "include/_mingw_mac.h"
+  "include/_mingw_secapi.h"
+  "include/corecrt.h"
+  "include/corecrt_wstdlib.h"
+  "include/crtdefs.h"
+  "include/limits.h"
+  "include/malloc.h"
+  "include/math.h"
+  "include/sec_api/stdlib_s.h"
+  "include/stddef.h"
+  "include/stdint.h"
+  "include/stdlib.h"
+  "include/vadefs.h"
+  "lib/clang/22/include/__stddef_wchar_t.h"
+  "lib/clang/22/include/__stddef_wint_t.h"
+  "lib/clang/22/include/limits.h"
+  "lib/clang/22/include/mm_malloc.h"
+  "lib/clang/22/include/stddef.h"
+  "lib/clang/22/include/stdint.h"
+  "lib/clang/22/include/vadefs.h")
 set(PURE_FAUST_COMPILER_HEADER_INVENTORY_SHA256
-  "lib/clang/22/include=3e14c739b60d15a7c0f255734b13859e142d990a8e2fc8cf12eb74196e87cff3"
-  "include=6beada17367e62412d6244d98721a4fc015ae4c0db4d897dd17487e7489b44cd")
+  "dependency-closure=77d394f8dc5adac673526a7f863ddebb64e39785b18507836ba505678f8cc9ca")
 
 function(pure_faust_configure_compiler_closure)
   cmake_path(GET PURE_FAUST_CLANG PARENT_PATH compiler_bin)
@@ -58,6 +88,41 @@ function(pure_faust_configure_compiler_closure)
     endif()
   endforeach()
 
+  set(dependency_probe "${CMAKE_CURRENT_BINARY_DIR}/faust-header-probe.c")
+  file(WRITE "${dependency_probe}"
+    "#include <stdlib.h>\n#include <math.h>\n#include <stdint.h>\n")
+  execute_process(
+    COMMAND "${PURE_FAUST_CLANG}" -M -MT reference "${dependency_probe}"
+    RESULT_VARIABLE dependency_result
+    OUTPUT_VARIABLE dependency_output
+    ERROR_VARIABLE dependency_error
+    ENCODING UTF-8)
+  if(NOT dependency_result EQUAL 0)
+    message(FATAL_ERROR
+      "Clang dependency probe failed (${dependency_result})\n"
+      "${dependency_output}\n${dependency_error}")
+  endif()
+  string(REPLACE "\\" "/" dependency_output "${dependency_output}")
+  string(REGEX REPLACE "[ \t\r\n]+" ";" dependency_tokens
+    "${dependency_output}")
+  set(reported_header_files)
+  foreach(path IN LISTS dependency_tokens)
+    string(FIND "${path}" "${compiler_prefix}/" prefix_match)
+    if(prefix_match EQUAL 0)
+      string(REPLACE "${compiler_prefix}/" "" relative "${path}")
+      list(APPEND reported_header_files "${relative}")
+    endif()
+  endforeach()
+  list(REMOVE_DUPLICATES reported_header_files)
+  list(SORT reported_header_files)
+  list(SORT PURE_FAUST_COMPILER_HEADER_FILES)
+  if(NOT reported_header_files STREQUAL PURE_FAUST_COMPILER_HEADER_FILES)
+    message(FATAL_ERROR
+      "Dependency-derived header closure changed\n"
+      "expected: ${PURE_FAUST_COMPILER_HEADER_FILES}\n"
+      "reported: ${reported_header_files}")
+  endif()
+
   set(source_files "${PURE_FAUST_CLANG}" "${PURE_FAUST_OPT}")
   set(relative_files "bin/clang.exe" "bin/opt.exe")
   foreach(dll IN LISTS PURE_FAUST_COMPILER_DLL_NAMES)
@@ -80,59 +145,49 @@ function(pure_faust_configure_compiler_closure)
     endif()
   endforeach()
 
-  foreach(root IN LISTS PURE_FAUST_COMPILER_HEADER_ROOTS)
-    if(NOT IS_DIRECTORY "${compiler_prefix}/${root}")
-      message(FATAL_ERROR "Missing compiler header root: ${compiler_prefix}/${root}")
-    endif()
-    if(root STREQUAL "include")
-      set(root_files)
-      cmake_path(GET compiler_prefix PARENT_PATH msys_root)
-      foreach(package IN LISTS PURE_FAUST_MINGW_HEADER_PACKAGES)
-        set(package_manifest "${msys_root}/var/lib/pacman/local/${package}/files")
-        if(NOT EXISTS "${package_manifest}")
-          message(FATAL_ERROR
-            "Missing MinGW build-provenance manifest: ${package_manifest}")
-        endif()
-        file(STRINGS "${package_manifest}" package_files
-          REGEX "^clang64/include/.+[^/]$")
-        foreach(package_file IN LISTS package_files)
-          string(REGEX REPLACE "^clang64/" "" relative "${package_file}")
-          list(APPEND root_files "${relative}")
+  set(expected_binary_names clang.exe opt.exe ${PURE_FAUST_COMPILER_DLL_NAMES})
+  foreach(name IN LISTS expected_binary_names)
+    set(mapping_count 0)
+    foreach(mapping IN LISTS PURE_FAUST_COMPILER_BINARY_PROVENANCE)
+      string(REPLACE "|" ";" fields "${mapping}")
+      list(GET fields 0 mapped_name)
+      if(mapped_name STREQUAL name)
+        math(EXPR mapping_count "${mapping_count} + 1")
+        list(GET fields 3 license_name)
+        set(license_found OFF)
+        foreach(license_entry IN LISTS PURE_FAUST_LICENSE_SHA256)
+          if(license_entry MATCHES "/${license_name}=")
+            set(license_found ON)
+          endif()
         endforeach()
-      endforeach()
-      list(REMOVE_DUPLICATES root_files)
-      list(SORT root_files)
-    else()
-      file(GLOB_RECURSE root_files RELATIVE "${compiler_prefix}"
-        LIST_DIRECTORIES false CONFIGURE_DEPENDS
-        "${compiler_prefix}/${root}/*")
-    endif()
-    if(NOT root_files)
-      message(FATAL_ERROR "Compiler header root is empty: ${compiler_prefix}/${root}")
-    endif()
-    foreach(relative IN LISTS root_files)
-      file(SHA256 "${compiler_prefix}/${relative}" header_sha256)
-      string(TOLOWER "${header_sha256}" header_sha256)
-      string(APPEND inventory "${header_sha256}  ${relative}\n")
-      list(APPEND source_files "${compiler_prefix}/${relative}")
-      list(APPEND relative_files "${relative}")
-    endforeach()
-    string(SHA256 inventory_sha256 "${inventory}")
-    set(expected_inventory_sha256 "")
-    foreach(entry IN LISTS PURE_FAUST_COMPILER_HEADER_INVENTORY_SHA256)
-      string(REPLACE "=" ";" fields "${entry}")
-      list(GET fields 0 entry_root)
-      if(entry_root STREQUAL root)
-        list(GET fields 1 expected_inventory_sha256)
+        if(NOT license_found)
+          message(FATAL_ERROR
+            "Compiler mapping lacks pinned license ${license_name}: ${name}")
+        endif()
       endif()
     endforeach()
-    if(NOT inventory_sha256 STREQUAL expected_inventory_sha256)
+    if(NOT mapping_count EQUAL 1)
       message(FATAL_ERROR
-        "Unexpected compiler header inventory SHA-256 for ${root}: "
-        "${inventory_sha256}")
+        "Expected one package/license mapping for ${name}, got ${mapping_count}")
     endif()
-    unset(inventory)
   endforeach()
+
+  list(SORT PURE_FAUST_COMPILER_HEADER_FILES)
+  foreach(relative IN LISTS PURE_FAUST_COMPILER_HEADER_FILES)
+    file(SHA256 "${compiler_prefix}/${relative}" header_sha256)
+    string(TOLOWER "${header_sha256}" header_sha256)
+    string(APPEND inventory "${header_sha256}  ${relative}\n")
+    list(APPEND source_files "${compiler_prefix}/${relative}")
+    list(APPEND relative_files "${relative}")
+  endforeach()
+  string(SHA256 inventory_sha256 "${inventory}")
+  string(REPLACE "dependency-closure=" "" expected_inventory_sha256
+    "${PURE_FAUST_COMPILER_HEADER_INVENTORY_SHA256}")
+  if(NOT inventory_sha256 STREQUAL expected_inventory_sha256)
+    message(FATAL_ERROR
+      "Unexpected dependency-derived header inventory SHA-256: "
+      "${inventory_sha256}")
+  endif()
 
   foreach(source IN LISTS source_files)
     if(NOT EXISTS "${source}" OR IS_DIRECTORY "${source}")

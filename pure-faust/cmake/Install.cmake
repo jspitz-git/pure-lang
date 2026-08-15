@@ -86,9 +86,26 @@ if(PURE_FAUST_DEVELOPER_AVAILABLE)
     "${CMAKE_CURRENT_SOURCE_DIR}/licenses/Faust-COPYING.txt"
     "${CMAKE_CURRENT_SOURCE_DIR}/licenses/LLVM-Apache-2.0-WITH-LLVM-exception.txt"
     "${CMAKE_CURRENT_SOURCE_DIR}/licenses/MinGW-w64-COPYING.txt"
+    "${CMAKE_CURRENT_SOURCE_DIR}/licenses/libcxx-LICENSE.txt"
+    "${CMAKE_CURRENT_SOURCE_DIR}/licenses/libffi-LICENSE.txt"
+    "${CMAKE_CURRENT_SOURCE_DIR}/licenses/libiconv-COPYING.txt"
+    "${CMAKE_CURRENT_SOURCE_DIR}/licenses/libxml2-COPYING.txt"
+    "${CMAKE_CURRENT_SOURCE_DIR}/licenses/zlib-LICENSE.txt"
+    "${CMAKE_CURRENT_SOURCE_DIR}/licenses/zstd-LICENSE.txt"
     DESTINATION "${PURE_FAUST_DOCUMENTATION_INSTALL_DIR}/licenses"
     COMPONENT FaustDeveloper
     EXCLUDE_FROM_ALL)
+  string(CONCAT allowlist_install_code
+    "set(files [==[${PURE_FAUST_DEVELOPER_RELATIVE_FILES}]==])\n"
+    "set(output \"\${CMAKE_INSTALL_PREFIX}/${PURE_FAUST_DEVELOPER_ALLOWLIST_RELATIVE}\")\n"
+    "file(WRITE \"\${output}\" \"# SHA-256  relative-path\\n# SELF  ${PURE_FAUST_DEVELOPER_ALLOWLIST_RELATIVE}\\n\")\n"
+    "foreach(relative IN LISTS files)\n"
+    "  file(SHA256 \"\${CMAKE_INSTALL_PREFIX}/\${relative}\" sha256)\n"
+    "  string(TOLOWER \"\${sha256}\" sha256)\n"
+    "  file(APPEND \"\${output}\" \"\${sha256}  \${relative}\\n\")\n"
+    "endforeach()\n")
+  install(CODE "${allowlist_install_code}"
+    COMPONENT FaustDeveloper EXCLUDE_FROM_ALL)
 else()
   install(CODE "" COMPONENT FaustDeveloper EXCLUDE_FROM_ALL)
 endif()

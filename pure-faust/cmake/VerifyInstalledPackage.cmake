@@ -5,6 +5,7 @@ foreach(required IN ITEMS STAGE_PREFIX EXPECT_DEVELOPER)
 endforeach()
 
 include("${CMAKE_CURRENT_LIST_DIR}/FaustToolchain.cmake")
+include("${CMAKE_CURRENT_LIST_DIR}/AuditStagedContent.cmake")
 
 if(NOT EXPECT_DEVELOPER STREQUAL "ON" AND NOT EXPECT_DEVELOPER STREQUAL "OFF")
   message(FATAL_ERROR "EXPECT_DEVELOPER must be ON or OFF")
@@ -55,16 +56,45 @@ set(expected_relative_files
   "share/doc/pure-faust/WINDOWS.md"
   "share/doc/pure-faust/tests/reference.bc")
 if(EXPECT_DEVELOPER STREQUAL "ON")
-  if(DEFINED INVENTORY_FILE AND NOT "${INVENTORY_FILE}" STREQUAL "")
-    set(developer_inventory "${INVENTORY_FILE}")
-  else()
-    set(developer_inventory "${build_dir}/FaustDeveloperInventory.cmake")
+  set(developer_allowlist
+    "${stage}/${PURE_FAUST_DEVELOPER_ALLOWLIST_RELATIVE}")
+  if(NOT EXISTS "${developer_allowlist}")
+    message(FATAL_ERROR "Missing installed FaustDeveloper allowlist")
   endif()
-  if(NOT EXISTS "${developer_inventory}")
-    message(FATAL_ERROR "Missing configured FaustDeveloper inventory")
+  file(STRINGS "${developer_allowlist}" allowlist_lines)
+  set(saw_allowlist_self OFF)
+  foreach(line IN LISTS allowlist_lines)
+    if(line STREQUAL "# SELF  ${PURE_FAUST_DEVELOPER_ALLOWLIST_RELATIVE}")
+      set(saw_allowlist_self ON)
+      continue()
+    endif()
+    if(line MATCHES "^#")
+      continue()
+    endif()
+    string(SUBSTRING "${line}" 0 64 expected_sha256)
+    string(SUBSTRING "${line}" 66 -1 relative_file)
+    string(LENGTH "${expected_sha256}" sha_length)
+    if(NOT sha_length EQUAL 64 OR NOT expected_sha256 MATCHES "^[0-9a-f]+$")
+      message(FATAL_ERROR "Malformed developer allowlist line: ${line}")
+    endif()
+    cmake_path(IS_ABSOLUTE relative_file is_absolute)
+    string(REPLACE "/" ";" path_segments "${relative_file}")
+    if(is_absolute OR ".." IN_LIST path_segments)
+      message(FATAL_ERROR "Unsafe developer allowlist path: ${relative_file}")
+    endif()
+    file(SHA256 "${stage}/${relative_file}" actual_sha256)
+    string(TOLOWER "${actual_sha256}" actual_sha256)
+    if(NOT actual_sha256 STREQUAL expected_sha256)
+      message(FATAL_ERROR
+        "Developer allowlist hash mismatch for ${relative_file}")
+    endif()
+    list(APPEND expected_relative_files "${relative_file}")
+  endforeach()
+  if(NOT saw_allowlist_self)
+    message(FATAL_ERROR "Installed developer allowlist omits its own path")
   endif()
-  include("${developer_inventory}")
-  list(APPEND expected_relative_files ${PURE_FAUST_DEVELOPER_RELATIVE_FILES})
+  list(APPEND expected_relative_files
+    "${PURE_FAUST_DEVELOPER_ALLOWLIST_RELATIVE}")
 endif()
 foreach(relative_file IN LISTS expected_relative_files)
   if(NOT EXISTS "${stage}/${relative_file}")
@@ -113,6 +143,18 @@ if(NOT installed_relative_files STREQUAL expected_relative_files)
 endif()
 
 if(EXPECT_DEVELOPER STREQUAL "ON")
+  foreach(entry IN LISTS PURE_FAUST_LICENSE_SHA256)
+    string(REPLACE "=" ";" fields "${entry}")
+    list(GET fields 0 relative_license)
+    list(GET fields 1 expected_license_sha256)
+    file(SHA256 "${stage}/${relative_license}" actual_license_sha256)
+    string(TOLOWER "${actual_license_sha256}" actual_license_sha256)
+    if(NOT actual_license_sha256 STREQUAL expected_license_sha256)
+      message(FATAL_ERROR
+        "Installed license hash mismatch for ${relative_license}: "
+        "${actual_license_sha256}")
+    endif()
+  endforeach()
   foreach(tool IN ITEMS faust clang opt)
     execute_process(
       COMMAND "${stage}/bin/${tool}.exe" --version
@@ -162,8 +204,9 @@ if(EXPECT_DEVELOPER STREQUAL "ON")
       "stdout:\n${helper_output}\nstderr:\n${helper_error}")
   endif()
   execute_process(
-    COMMAND "${stage}/bin/opt.exe" -passes=verify -disable-output
-      "${helper_work}/reference.bc"
+    COMMAND "${stage}/bin/opt.exe" -passes=verify -S -
+      -o "${helper_work}/reference.ll"
+    INPUT_FILE "${helper_work}/reference.bc"
     RESULT_VARIABLE verify_result
     OUTPUT_VARIABLE verify_output
     ERROR_VARIABLE verify_error
@@ -172,6 +215,35 @@ if(EXPECT_DEVELOPER STREQUAL "ON")
     message(FATAL_ERROR
       "Installed helper bitcode verification failed (${verify_result})\n"
       "stdout:\n${verify_output}\nstderr:\n${verify_error}")
+  endif()
+  set(PURE_FAUST_AUDIT_FORBIDDEN_PATHS
+    "${SOURCE_DIR}" "${build_dir}")
+  pure_faust_audit_staged_content(
+    "${stage}" "${helper_work}/reference.ll")
+  foreach(required_runtime IN ITEMS
+      PURE_EXECUTABLE PURE_PREFIX RUNTIME_SMOKE_SCRIPT)
+    if(NOT DEFINED ${required_runtime} OR "${${required_runtime}}" STREQUAL "")
+      message(FATAL_ERROR "${required_runtime} is required for developer smoke")
+    endif()
+  endforeach()
+  execute_process(
+    COMMAND "${CMAKE_COMMAND}"
+      "-DBUILD_DIR=${build_dir}"
+      "-DSTAGE_PREFIX=${build_dir}/developer generated runtime stage with spaces"
+      "-DPURE_EXECUTABLE=${PURE_EXECUTABLE}"
+      "-DPURE_PREFIX=${PURE_PREFIX}"
+      "-DFIXTURE_BASE=${helper_work}/reference"
+      "-DRUNTIME_SMOKE_SCRIPT=${RUNTIME_SMOKE_SCRIPT}"
+      -P "${CMAKE_CURRENT_LIST_DIR}/RunRuntimeSmoke.cmake"
+    RESULT_VARIABLE runtime_result
+    OUTPUT_VARIABLE runtime_output
+    ERROR_VARIABLE runtime_error
+    ENCODING UTF-8)
+  if(NOT runtime_result EQUAL 0 OR NOT "${runtime_error}" STREQUAL "" OR
+      NOT runtime_output MATCHES "Pure runtime smoke passed")
+    message(FATAL_ERROR
+      "Installed helper runtime smoke failed (${runtime_result})\n"
+      "stdout:\n${runtime_output}\nstderr:\n${runtime_error}")
   endif()
 endif()
 

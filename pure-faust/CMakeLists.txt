@@ -52,25 +52,50 @@ if(BUILD_TESTING)
       TIMEOUT 30)
 
     if(PURE_FAUST_DEVELOPER_AVAILABLE)
-      file(GENERATE
-        OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/FaustDeveloperInventory.cmake"
-        CONTENT "set(PURE_FAUST_DEVELOPER_RELATIVE_FILES [==[${PURE_FAUST_DEVELOPER_RELATIVE_FILES}]==])\n")
       set(developer_stage "${CMAKE_CURRENT_BINARY_DIR}/developer stage")
       add_test(
         NAME pure-faust-developer-smoke
         COMMAND "${CMAKE_COMMAND}"
           "-DBUILD_DIR=${CMAKE_CURRENT_BINARY_DIR}"
           "-DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
+          "-DPURE_EXECUTABLE=${PURE_EXECUTABLE}"
+          "-DPURE_PREFIX=${PURE_PREFIX}"
+          "-DRUNTIME_SMOKE_SCRIPT=${CMAKE_CURRENT_SOURCE_DIR}/tests/runtime-smoke.pure"
           "-DSTAGE_PREFIX=${developer_stage}"
           "-DEXPECT_DEVELOPER=ON"
           -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/VerifyInstalledPackage.cmake")
+      add_test(
+        NAME pure-faust-developer-content-audit-failures
+        COMMAND "${CMAKE_COMMAND}"
+          "-DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
+          "-DTEST_ROOT=${CMAKE_CURRENT_BINARY_DIR}/developer audit mutation"
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/developer-content-audit-failures.cmake")
+      add_test(
+        NAME pure-faust-developer-header-closure
+        COMMAND "${CMAKE_COMMAND}"
+          "-DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/compiler-header-closure.cmake")
+      add_test(
+        NAME pure-faust-developer-allowlist-failures
+        COMMAND "${CMAKE_COMMAND}"
+          "-DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
+          "-DSTAGE_PREFIX=${developer_stage}"
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/developer-allowlist-failures.cmake")
       set_tests_properties(pure-faust-developer-smoke PROPERTIES
         LABELS "faust;developer;layout;smoke"
-        TIMEOUT 120)
+        TIMEOUT 180)
       set_property(TEST pure-faust-developer-smoke PROPERTY
         ENVIRONMENT_MODIFICATION
           "Path=set:${developer_stage}/bin\;C:/Windows/System32/WindowsPowerShell/v1.0\;C:/Windows/System32\;C:/Windows"
           "PURE_FAUST_CMAKE=set:${CMAKE_COMMAND}")
+      set_tests_properties(pure-faust-developer-content-audit-failures
+        PROPERTIES LABELS "faust;developer;failure;audit" TIMEOUT 30)
+      set_tests_properties(pure-faust-developer-header-closure
+        PROPERTIES LABELS "faust;developer;headers" TIMEOUT 30)
+      set_tests_properties(pure-faust-developer-allowlist-failures PROPERTIES
+        DEPENDS pure-faust-developer-smoke
+        LABELS "faust;developer;failure;allowlist"
+        TIMEOUT 30)
     endif()
 
     set(runtime_smoke_stage "${CMAKE_CURRENT_BINARY_DIR}/runtime smoke stage")

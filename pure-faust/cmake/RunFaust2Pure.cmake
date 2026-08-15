@@ -44,6 +44,9 @@ function(run_stage stage)
   if(stage STREQUAL "faust")
     list(APPEND working_directory_arguments
       WORKING_DIRECTORY "${pure_architecture_directory}")
+  elseif(stage STREQUAL "clang")
+    list(APPEND working_directory_arguments
+      WORKING_DIRECTORY "${work_directory}")
   endif()
   execute_process(
     COMMAND ${ARGN}
@@ -68,7 +71,9 @@ run_stage(faust
   "${FAUST_EXECUTABLE}" -lang c -a "${pure_architecture_name}" "${input_path}"
   -o "${reference_c}")
 run_stage(clang
-  "${CLANG_EXECUTABLE}" -emit-llvm -O3 -c "${reference_c}" -o "${reference_bc}")
+  "${CLANG_EXECUTABLE}" -emit-llvm -O3 -g0
+  -fdebug-compilation-dir=.
+  -c reference.c -o reference.bc)
 run_stage(verify
   "${OPT_EXECUTABLE}" "-passes=verify" -disable-output "${reference_bc}")
 file(REMOVE "${new_output}")

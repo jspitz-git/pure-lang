@@ -1,0 +1,5 @@
+if(NOT DEFINED STAGE OR "${STAGE}" STREQUAL "")
+  message(FATAL_ERROR "STAGE is required")
+endif()
+include("${CMAKE_CURRENT_LIST_DIR}/../cmake/AuditStagedContent.cmake")
+pure_faust_audit_staged_content("${STAGE}")

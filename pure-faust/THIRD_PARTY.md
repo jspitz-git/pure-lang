@@ -12,6 +12,12 @@ selected.
 - URL: <https://github.com/grame-cncm/faust/releases/download/2.85.9/Faust-2.85.9-win64.exe>
 - Size: `109591809` bytes
 - SHA-256: `d0994eb444ab4b1e75e3ed7c31897da24013db0672e2c6be8f2ab09b73d16977`
+- Local verification: the official asset was downloaded as inert evidence,
+  measured at exactly `109591809` bytes, and produced that SHA-256. It was not
+  executed and is not committed. Data-only 7-Zip extraction identified the
+  archive as NSIS and produced 4,265 files. Extracted `bin/faust.exe` and
+  `share/faust/pure.c` match the installed inputs byte-for-byte at the hashes
+  below, directly tying the selected payload to the official asset.
 - Installed `bin/faust.exe` SHA-256:
   `66327ceb3ed7170859a010767488028f333247ed80f9d4b38a08113073644a2a`
 - Installed CRLF `share/faust/pure.c` SHA-256:
@@ -46,15 +52,12 @@ requires nor ships the MSYS2 runtime or package-manager state.
 - Transitive non-system DLLs: `libLLVM-22.dll`, `libclang-cpp.dll`,
   `libc++.dll`, `libffi-8.dll`, `zlib1.dll`, `libzstd.dll`,
   `libxml2-16.dll`, and `libiconv-2.dll`
-- Clang resource headers: `lib/clang/22/include`, 300 files, 15,554,443
-  bytes; sorted SHA-256 inventory
-  `3e14c739b60d15a7c0f255734b13859e142d990a8e2fc8cf12eb74196e87cff3`
-- MinGW include root reported by `clang -E -x c -v NUL`: `include`. Only
-  the 2,056 files (95,930,515 bytes) owned by the pinned MinGW-w64 `headers`
-  and `crt` package manifests are selected; 10,801 unrelated-package headers sharing that
-  physical root are excluded. The sorted inventory SHA-256 is recorded in
-  `CompilerClosure.cmake` as
-  `6beada17367e62412d6244d98721a4fc015ae4c0db4d897dd17487e7489b44cd`.
+- Header closure: the fixed `pure.c` architecture and Faust-generated C use
+  `stdlib.h`, `math.h`, and `stdint.h`. `clang -M` recursively reports exactly
+  21 headers for that union. `CompilerClosure.cmake` records every relative
+  path and validates the dependency output plus sorted SHA-256 inventory
+  `77d394f8dc5adac673526a7f863ddebb64e39785b18507836ba505678f8cc9ca`.
+  No SDK, DDK, DirectX, or unrelated-package header is selected.
 - LLVM/Clang license: Apache-2.0 WITH LLVM-exception, installed as
   `licenses/LLVM-Apache-2.0-WITH-LLVM-exception.txt`, SHA-256
   `8d85c1057d742e597985c7d4e6320b015a9139385cff4cbae06ffc0ebe89afee`
@@ -63,10 +66,22 @@ requires nor ships the MSYS2 runtime or package-manager state.
   `COPYING`, project, runtime, and DDK notices; SHA-256
   `841dcac31b495c708d68622d0ace296acf9f9783375220ad02f6d61a59ca9ae5`
 
-`CompilerClosure.cmake` records and validates the SHA-256 of every executable
-and DLL and the sorted per-file inventories of both header roots. It is the
-authoritative exact allowlist. Shells, package-manager databases, link-only
-libraries, and `msys-2.0.dll` are forbidden.
+| Redistributed file | Supplying package/version | Installed license evidence |
+| --- | --- | --- |
+| `clang.exe`, `libclang-cpp.dll` | `clang`, `clang-libs` 22.1.8-2 | `LLVM-Apache-2.0-WITH-LLVM-exception.txt` |
+| `opt.exe`, `libLLVM-22.dll` | `llvm`, `llvm-libs` 22.1.8-2 | `LLVM-Apache-2.0-WITH-LLVM-exception.txt` |
+| `libc++.dll` | `libc++` 22.1.8-1 | `libcxx-LICENSE.txt` |
+| `libffi-8.dll` | `libffi` 3.7.1-1 | `libffi-LICENSE.txt` |
+| `zlib1.dll` | `zlib` 1.3.2-2 | `zlib-LICENSE.txt` |
+| `libzstd.dll` | `zstd` 1.5.7-2 | `zstd-LICENSE.txt` |
+| `libxml2-16.dll` | `libxml2` 2.15.3-1 | `libxml2-COPYING.txt` |
+| `libiconv-2.dll` | `libiconv` 1.19-1 | `libiconv-COPYING.txt` |
+
+`CompilerClosure.cmake` records and validates every compiler binary and header.
+The installed `FaustDeveloper-ALLOWLIST.sha256` records every installed
+relative path and file hash and is validated against the staged tree. Shells,
+package-manager databases, link-only libraries, and `msys-2.0.dll` are
+forbidden.
 
 ## Fixed FaustDeveloper files
 
@@ -74,9 +89,16 @@ libraries, and `msys-2.0.dll` are forbidden.
 - `cmake/CompilerClosure.cmake`
 - `cmake/RunFaust2Pure.cmake`
 - `share/doc/pure-faust/THIRD_PARTY.md`
+- `share/doc/pure-faust/FaustDeveloper-ALLOWLIST.sha256`
 - `share/doc/pure-faust/licenses/Faust-COPYING.txt`
 - `share/doc/pure-faust/licenses/LLVM-Apache-2.0-WITH-LLVM-exception.txt`
 - `share/doc/pure-faust/licenses/MinGW-w64-COPYING.txt`
+- `share/doc/pure-faust/licenses/libcxx-LICENSE.txt`
+- `share/doc/pure-faust/licenses/libffi-LICENSE.txt`
+- `share/doc/pure-faust/licenses/libiconv-COPYING.txt`
+- `share/doc/pure-faust/licenses/libxml2-COPYING.txt`
+- `share/doc/pure-faust/licenses/zlib-LICENSE.txt`
+- `share/doc/pure-faust/licenses/zstd-LICENSE.txt`
 - `share/pure-faust/pure.c`
 - `tools/faust2pure.ps1`
 

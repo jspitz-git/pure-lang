@@ -117,12 +117,14 @@ class FakeTool {
       return;
     }
     if (tool == "clang") {
-      Require(args.Length == 6, 21);
-      Require(args[0] == "-emit-llvm" && args[1] == "-O3" && args[2] == "-c", 22);
-      RequireName(args[3], "reference.c", 23);
-      Require(args[4] == "-o", 24);
-      RequireName(args[5], "reference.bc", 25);
-      File.WriteAllText(args[5], "fake bitcode\n");
+      Require(args.Length == 8, 21);
+      Require(args[0] == "-emit-llvm" && args[1] == "-O3" &&
+        args[2] == "-g0" && args[3] == "-fdebug-compilation-dir=." &&
+        args[4] == "-c", 22);
+      RequireName(args[5], "reference.c", 23);
+      Require(args[6] == "-o", 24);
+      RequireName(args[7], "reference.bc", 25);
+      File.WriteAllText(args[7], "fake bitcode\n");
       Log("clang-ok");
       return;
     }
