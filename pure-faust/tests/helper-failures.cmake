@@ -90,6 +90,11 @@ class FakeTool {
       StringComparison.OrdinalIgnoreCase), code);
   }
 
+  static void RequirePath(string actual, string expected, int code) {
+    Require(String.Equals(Path.GetFullPath(actual), Path.GetFullPath(expected),
+      StringComparison.OrdinalIgnoreCase), code);
+  }
+
   static void Log(string marker) {
     File.AppendAllText(Environment.GetEnvironmentVariable("FAKE_LOG"),
       marker + Environment.NewLine);
@@ -101,8 +106,8 @@ class FakeTool {
     if (tool == "faust") {
       Require(args.Length == 7, 11);
       Require(args[0] == "-lang" && args[1] == "c" && args[2] == "-a", 12);
-      Require(args[3] == Environment.GetEnvironmentVariable("FAKE_EXPECTED_PURE"), 13);
-      Require(args[4] == Environment.GetEnvironmentVariable("FAKE_EXPECTED_INPUT"), 14);
+      RequirePath(args[3], Environment.GetEnvironmentVariable("FAKE_EXPECTED_PURE"), 13);
+      RequirePath(args[4], Environment.GetEnvironmentVariable("FAKE_EXPECTED_INPUT"), 14);
       Require(args[5] == "-o", 15);
       RequireName(args[6], "reference.c", 16);
       File.WriteAllText(args[6], "fake C source\n");
@@ -147,64 +152,45 @@ require_result("${fake_build_result}" 0 "fake tool build")
 foreach(tool IN ITEMS faust clang opt)
   file(COPY_FILE "${fake_executable}" "${fake_root}/${tool}.exe")
 endforeach()
-set(fake_faust "${fake_root}/faust.exe")
-set(fake_clang "${fake_root}/clang.exe")
-set(fake_opt "${fake_root}/opt.exe")
 
-set(spaced_root "${TEST_ROOT}/paths with spaces")
+set(fake_distribution "${TEST_ROOT}/fake distribution with spaces")
+create_layout("${fake_distribution}")
+foreach(tool IN ITEMS faust clang opt)
+  file(COPY_FILE "${fake_executable}" "${fake_distribution}/bin/${tool}.exe")
+endforeach()
+set(spaced_root "${fake_distribution}/work with spaces")
 file(MAKE_DIRECTORY "${spaced_root}")
 set(spaced_input "${spaced_root}/input with spaces.dsp")
-set(spaced_pure "${spaced_root}/pure architecture.c")
+set(spaced_pure "${fake_distribution}/share/pure-faust/pure.c")
 set(spaced_output "${spaced_root}/output with spaces.bc")
 set(fake_log "${spaced_root}/fake log.txt")
 file(WRITE "${spaced_input}" "process = _;")
 file(WRITE "${spaced_pure}" "architecture")
+cmake_path(GET CMAKE_COMMAND PARENT_PATH cmake_directory)
+set(ENV{PATH} "${cmake_directory};$ENV{PATH}")
 set(ENV{FAKE_EXPECTED_INPUT} "${spaced_input}")
 set(ENV{FAKE_EXPECTED_PURE} "${spaced_pure}")
 set(ENV{FAKE_LOG} "${fake_log}")
 set(ENV{FAKE_VERIFY_FAIL} "1")
 file(WRITE "${spaced_output}" "sentinel output\n")
 file(READ "${spaced_output}" sentinel_before HEX)
-execute_process(
-  COMMAND "${CMAKE_COMMAND}"
-    "-DINPUT_PATH=${spaced_input}"
-    "-DOUTPUT_PATH=${spaced_output}"
-    "-DFAUST_EXECUTABLE=${fake_faust}"
-    "-DPURE_ARCHITECTURE=${spaced_pure}"
-    "-DCLANG_EXECUTABLE=${fake_clang}"
-    "-DOPT_EXECUTABLE=${fake_opt}"
-    -P "${DRIVER_SOURCE}"
-  RESULT_VARIABLE driver_result
-  OUTPUT_VARIABLE driver_output
-  ERROR_VARIABLE driver_error
-  ENCODING UTF-8)
-if(driver_result EQUAL 0)
+run_helper("${fake_distribution}" "${spaced_input}" "${spaced_output}"
+  helper_result helper_transcript)
+if(helper_result EQUAL 0)
   message(FATAL_ERROR "Fake verifier failure unexpectedly succeeded")
 endif()
-require_contains("${driver_output}\n${driver_error}" "verify" "verifier stage")
+require_contains("${helper_transcript}" "verify" "verifier stage")
 file(READ "${spaced_output}" sentinel_after HEX)
 if(NOT sentinel_after STREQUAL sentinel_before)
   message(FATAL_ERROR "Verifier failure changed the destination")
 endif()
 
 set(ENV{FAKE_VERIFY_FAIL} "0")
-execute_process(
-  COMMAND "${CMAKE_COMMAND}"
-    "-DINPUT_PATH=${spaced_input}"
-    "-DOUTPUT_PATH=${spaced_output}"
-    "-DFAUST_EXECUTABLE=${fake_faust}"
-    "-DPURE_ARCHITECTURE=${spaced_pure}"
-    "-DCLANG_EXECUTABLE=${fake_clang}"
-    "-DOPT_EXECUTABLE=${fake_opt}"
-    -P "${DRIVER_SOURCE}"
-  RESULT_VARIABLE driver_result
-  OUTPUT_VARIABLE driver_output
-  ERROR_VARIABLE driver_error
-  ENCODING UTF-8)
-if(NOT driver_result EQUAL 0)
+run_helper("${fake_distribution}" "${spaced_input}" "${spaced_output}"
+  helper_result helper_transcript)
+if(NOT helper_result EQUAL 0)
   message(FATAL_ERROR
-    "quoted fake tools failed (${driver_result})\n"
-    "stdout:\n${driver_output}\nstderr:\n${driver_error}")
+    "quoted fake tools failed (${helper_result})\n${helper_transcript}")
 endif()
 file(READ "${spaced_output}" output_contents)
 if(NOT output_contents STREQUAL "fake bitcode\n")
