@@ -2,24 +2,25 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Package `faust2.pure` as the Windows `pure-faust` runtime and provide a separate, reproducible Faust 2.70.3 developer toolchain that generates Clang 22 bitcode without MSYS2.
+**Goal:** Package `faust2.pure` as the Windows `pure-faust` runtime and provide a separate, reproducible Faust 2.85.9 developer toolchain that generates Clang 22 bitcode without MSYS2.
 
 **Architecture:** The runtime package is script-only and delegates loading, ABI checks, DSP execution, and cleanup to the Pure core completed by TODO-11. CMake components keep the runtime payload separate from the Faust compiler, `pure.c`, and a Windows-native `faust2pure.ps1` helper; staged-layout tests exercise each component with a sanitized environment.
 
-**Tech Stack:** CMake 3.25+, CTest, Pure, PowerShell 5.1+, Faust 2.70.3, Clang/LLVM 22, GitHub Actions Windows runners.
+**Tech Stack:** CMake 3.25+, CTest, Pure, PowerShell 5.1+, Faust 2.85.9, Clang/LLVM 22, GitHub Actions Windows runners.
 
 ## Global Constraints
 
 - Execute on an integration base containing `windows-bundle` commit `38210b213` or a descendant; before Task 1, `git merge-base --is-ancestor 38210b213 HEAD` must succeed. The current planning branch does not yet satisfy this, so do not implement until its two documentation commits are transferred to an approved descendant of that integration base.
 - Install `faust2.pure`; do not build or install `faust.cc`, `faust.pure`, `pure.cpp`, or `faust.dll` on Windows.
 - Preserve the portable legacy sources and non-Windows behavior.
-- Pin the developer compiler to Faust 2.70.3 and compile generated C with the distribution's Clang 22.
+- Pin the developer compiler to Faust 2.85.9 and compile generated C with the distribution's Clang 22.
+- Before packaging Faust 2.85.9, verify that generated symbols, sample-format metadata, target metadata, channel counts, and deterministic output satisfy the TODO-11 ABI contract.
 - Keep Faust, `pure.c`, Clang, and LLVM command-line tools out of the default runtime component.
 - Do not require MSYS2, a host `PATH`, or a global `PURELIB` at package runtime.
 - Use distribution-relative discovery and support paths containing spaces.
 - Publish generated bitcode atomically; failure must preserve an existing destination.
 - Record the upstream URL, SHA-256, installed-file inventory, provenance, and licenses for every developer payload.
-- If the official Faust 2.70.3 Windows artifact cannot be acceptably redistributed, stop for a packaging decision instead of changing versions.
+- If the official Faust 2.85.9 Windows artifact cannot be acceptably redistributed, stop for a packaging decision instead of changing versions.
 
 ---
 
@@ -213,7 +214,7 @@ git add pure-faust/tools/faust2pure.ps1 pure-faust/cmake/RunFaust2Pure.cmake pur
 git commit -m "Add the Windows Faust bitcode helper"
 ```
 
-### Task 4: Define and validate the optional Faust 2.70.3 component
+### Task 4: Define and validate the optional Faust 2.85.9 component
 
 **Files:**
 - Create: `pure-faust/cmake/FaustToolchain.cmake`
@@ -224,23 +225,24 @@ git commit -m "Add the Windows Faust bitcode helper"
 - Modify: `pure-faust/CMakeLists.txt`
 
 **Interfaces:**
-- Consumes: extracted official asset `Faust-2.70.3-win64.exe` from `https://github.com/grame-cncm/faust/releases/download/2.70.3/Faust-2.70.3-win64.exe`, supplied as `PURE_FAUST_FAUST_ROOT`; Clang/opt 22 paths supplied explicitly by the parent distribution build.
+- Consumes: official asset `Faust-2.85.9-win64.exe` from `https://github.com/grame-cncm/faust/releases/download/2.85.9/Faust-2.85.9-win64.exe` (109,591,809 bytes, SHA-256 `d0994eb444ab4b1e75e3ed7c31897da24013db0672e2c6be8f2ab09b73d16977`) or the matching installed root `C:/Program Files/Faust`, supplied as `PURE_FAUST_FAUST_ROOT`; Clang/opt 22 paths supplied explicitly by the parent distribution build.
 - Produces: `FaustDeveloper` payload, a provenance record containing the locally computed SHA-256 and exact installed-file allowlist, and CTest `pure-faust-developer-smoke`.
 
 - [ ] **Step 1: Capture artifact identity and inventory before packaging**
 
-Download the official 106,920,705-byte asset to a temporary directory and
-compute `Get-FileHash -Algorithm SHA256`. Install it into an empty temporary
-prefix with `Start-Process -Wait -PassThru -ArgumentList '/S',
-'/D=<absolute-temp-prefix>'`; require exit code 0 and refuse a nonempty prefix.
-Run the installed `faust.exe -version`, save a sorted relative-file inventory,
-and compare its license files against the upstream 2.70.3 source release. Do
-not commit the installer or installed payload, and remove only the verified
-temporary prefix after the inventory is recorded.
+Verify that the official release metadata reports the exact asset URL, size,
+and SHA-256 above. Run `C:/Program Files/Faust/bin/faust.exe --version` and
+require `FAUST Version 2.85.9`; save a sorted relative-file inventory of that
+installed root. Download the official `faust-2.85.9.tar.gz` source asset
+(79,259,467 bytes, SHA-256
+`0cd00968f81357b78df64c25aad12ec94bd4b75bd489ca0449fe7f7b1ad0efe1`),
+extract it without executing code, and compare its license and `pure.c` against
+the installed payload. Do not commit either downloaded archive or the installed
+payload.
 
 - [ ] **Step 2: Write failing developer-layout assertions**
 
-With `EXPECT_DEVELOPER=ON`, require the allowlisted `faust.exe`, `pure.c`, helper, Faust license, and provenance document; require `faust -version` to report `2.70.3`; require `clang --version` and `opt --version` to report major version 22. Fail on every extracted file not present in the explicit allowlist.
+With `EXPECT_DEVELOPER=ON`, require the allowlisted `faust.exe`, `pure.c`, helper, Faust license, and provenance document; require `faust --version` to report `2.85.9`; require `clang --version` and `opt --version` to report major version 22. Fail on every installed file not present in the explicit allowlist.
 
 - [ ] **Step 3: Run the developer test to verify it fails**
 
@@ -254,7 +256,15 @@ Expected: FAIL because the developer component is not installed yet.
 
 - [ ] **Step 4: Install the explicit developer payload and provenance**
 
-Put the verified URL, byte size, computed SHA-256, release tag, license mapping, and relative allowlist in `FaustToolchain.cmake` and `THIRD_PARTY.md`. Install only allowlisted Faust files plus `pure.c` and `faust2pure.ps1` under `COMPONENT FaustDeveloper`. Reference distribution-owned Clang/opt paths; do not copy undeclared LLVM or MSYS2 trees.
+Before installing, generate `reference.c` with Faust 2.85.9, compile it with
+Clang 22, verify it with opt 22, and run the Task 2 runtime smoke. Inspect the
+generated module for the TODO-11 required symbol family, double sample-format
+metadata, and compatible target metadata. Only after those checks pass, put the
+verified URL, byte size, SHA-256, release tag, license mapping, and relative
+allowlist in `FaustToolchain.cmake` and `THIRD_PARTY.md`. Install only
+allowlisted Faust files plus `pure.c` and `faust2pure.ps1` under `COMPONENT
+FaustDeveloper`. Reference distribution-owned Clang/opt paths; do not copy
+undeclared LLVM or MSYS2 trees.
 
 - [ ] **Step 5: Rebuild the fixture and run it**
 
@@ -304,7 +314,7 @@ Expected: all tests pass; runtime-only has no developer/legacy payload; full sta
 
 - [ ] **Step 3: Write Windows usage and resolved decisions**
 
-Document runtime-only loading, optional component installation, exact `faust2pure.ps1` syntax, the Faust 2.70.3/Clang 22 compatibility promise, spaces-in-path support, and the absence of MSYS2. Rewrite TODO-44 task 2 to say the legacy bridge is deliberately excluded, resolve the compiler question as optional, and append exact validation counts and caveats.
+Document runtime-only loading, optional component installation, exact `faust2pure.ps1` syntax, the Faust 2.85.9/Clang 22 compatibility promise, spaces-in-path support, and the absence of MSYS2. Rewrite TODO-44 task 2 to say the legacy bridge is deliberately excluded, resolve the compiler question as optional, and append exact validation counts and caveats.
 
 - [ ] **Step 4: Verify on a clean Windows runner**
 

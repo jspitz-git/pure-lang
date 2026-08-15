@@ -20,9 +20,10 @@ developer component.
   implemented in the Pure core. Do not add a second loader or DSP runtime.
 - Preserve the portable legacy sources and their behavior for non-Windows
   platforms.
-- Use the supported fixture pipeline established by TODO-11: Faust generates C
-  with the `pure.c` architecture, and the distribution's Clang 22 compiles that
-  C to LLVM bitcode.
+- Use Faust 2.85.9 to generate C with its bundled `pure.c` architecture, and
+  use the distribution's Clang 22 to compile that C to LLVM bitcode. Before
+  packaging, prove that this newer frontend still satisfies the module ABI and
+  deterministic fixture behavior established by TODO-11.
 
 ## Components
 
@@ -41,7 +42,7 @@ bitcode produced elsewhere.
 
 ### Optional developer component
 
-The optional component contains the supported Faust 2.70.3 compiler, `pure.c`,
+The optional component contains the supported Faust 2.85.9 compiler, `pure.c`,
 and the distribution's Clang 22 and bitcode-verification tools needed by the
 documented workflow. A Windows-native helper replaces the Unix-oriented
 `faust2pure` script. It discovers every shipped input relative to its own
@@ -54,10 +55,10 @@ The helper performs these steps:
 3. Verify the bitcode with the matching LLVM toolchain.
 4. Publish the requested output atomically only after all steps succeed.
 
-The Faust 2.70.3 redistributable payload is selected from a reproducible
+The Faust 2.85.9 redistributable payload is selected from a reproducible
 upstream Windows artifact during implementation. Its version, checksum, source
 URL, license, and installed files become explicit package metadata rather than
-an implicit host dependency. If an acceptable 2.70.3 artifact cannot be
+an implicit host dependency. If an acceptable 2.85.9 artifact cannot be
 redistributed, implementation stops for a packaging decision instead of
 silently substituting another Faust version.
 
@@ -114,11 +115,14 @@ Focused validation covers:
    cleaning it up.
 3. Regenerating and verifying the fixture with only the optional developer
    component installed, then repeating the runtime test.
-4. Running both configurations from an installation path containing spaces and
+4. Comparing Faust 2.85.9 generated symbols, sample-format metadata, target
+   metadata, channel counts, and deterministic output with the TODO-11 ABI
+   contract; a mismatch blocks packaging rather than weakening the contract.
+5. Running both configurations from an installation path containing spaces and
    with a sanitized `PATH`.
-5. Confirming that the runtime-only configuration neither invokes nor requires
+6. Confirming that the runtime-only configuration neither invokes nor requires
    Faust, Clang, LLVM utilities, or MSYS2.
-6. Auditing the staged manifest for the forbidden files and paths listed above.
+7. Auditing the staged manifest for the forbidden files and paths listed above.
 
 The runtime-only and runtime-plus-developer checks run on a clean Windows VM.
 Repository-level focused tests run after each implementation milestone, and
