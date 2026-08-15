@@ -26,7 +26,7 @@ set(PURE_FAUST_LICENSE_SHA256
   "share/doc/pure-faust/licenses/LLVM-Apache-2.0-WITH-LLVM-exception.txt=8d85c1057d742e597985c7d4e6320b015a9139385cff4cbae06ffc0ebe89afee"
   "share/doc/pure-faust/licenses/MinGW-w64-COPYING.txt=841dcac31b495c708d68622d0ace296acf9f9783375220ad02f6d61a59ca9ae5"
   "share/doc/pure-faust/licenses/libcxx-LICENSE.txt=bc043a21d9fcaff86c2b6e2c17f9f3ec3b253537ad49b4b71cda4a67e1e27025"
-  "share/doc/pure-faust/licenses/libffi-LICENSE.txt=c451b4b558958bbbcf74f97cae4a1c6d2ac76a48c537f5420a289620f51b15f3"
+  "share/doc/pure-faust/licenses/libffi-LICENSE.txt=17b64dc60f3b6897a60f971e288b973f655c2edcdf08b25f3c3dd5549857881c"
   "share/doc/pure-faust/licenses/libiconv-COPYING.txt=9955bb96027f1abc8a070b4a1f088cb780bd965f782fab0c9e665abedf9812b8"
   "share/doc/pure-faust/licenses/libxml2-COPYING.txt=d5d3024e2c892c8517828d9fc438b21b54374c0f4b40a2a7a659569d72d3f162"
   "share/doc/pure-faust/licenses/zlib-LICENSE.txt=fade4e988b53fa7f9f30c9981fa0fbae4dcb12175cd2904fa3049581ec6494b2"
