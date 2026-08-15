@@ -1,9 +1,11 @@
-using faust2;
+using faust2, system;
 
 check actual expected = () if actual === expected;
-check actual expected = throw ("unexpected result",actual,expected);
+check actual expected = exit 1;
 
-let dsp = faust_init "reference.bc" 48000;
+if argc==2 then () else exit 2;
+let fixture_base = argv!1;
+let dsp = faust_init fixture_base 48000;
 let inputs,outputs,_ = faust_info dsp;
 check inputs 2;
 check outputs 1;

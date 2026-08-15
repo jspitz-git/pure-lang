@@ -59,10 +59,29 @@ if(BUILD_TESTING)
         "-DSTAGE_PREFIX=${runtime_smoke_stage}"
         "-DPURE_EXECUTABLE=${PURE_EXECUTABLE}"
         "-DPURE_PREFIX=${PURE_PREFIX}"
+        "-DFIXTURE_BASE=${runtime_smoke_stage}/share/doc/pure-faust/tests/reference"
         "-DRUNTIME_SMOKE_SCRIPT=${CMAKE_CURRENT_SOURCE_DIR}/tests/runtime-smoke.pure"
         -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunRuntimeSmoke.cmake")
     set_tests_properties(pure-faust-runtime-smoke PROPERTIES
       LABELS "faust;runtime;smoke"
+      TIMEOUT 120)
+
+    add_test(
+      NAME pure-faust-runtime-smoke-failures
+      COMMAND "${CMAKE_COMMAND}"
+        "-DBUILD_DIR=${CMAKE_CURRENT_BINARY_DIR}"
+        "-DSTAGE_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/missing fixture stage"
+        "-DPURE_EXECUTABLE=${PURE_EXECUTABLE}"
+        "-DPURE_PREFIX=${PURE_PREFIX}"
+        "-DMISSING_FIXTURE_BASE=${CMAKE_CURRENT_BINARY_DIR}/missing fixture stage/share/doc/pure-faust/tests/missing"
+        "-DRUNTIME_SMOKE_SCRIPT=${CMAKE_CURRENT_SOURCE_DIR}/tests/runtime-smoke.pure"
+        "-DFALSE_PASS_STAGE_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/false pass stage"
+        "-DFALSE_PASS_FIXTURE_BASE=${CMAKE_CURRENT_BINARY_DIR}/false pass stage/share/doc/pure-faust/tests/reference"
+        "-DFALSE_PASS_SCRIPT=${CMAKE_CURRENT_SOURCE_DIR}/tests/runtime-smoke-false-pass.pure"
+        "-DDRIVER_SOURCE=${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunRuntimeSmoke.cmake"
+        -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/runtime-smoke-failures.cmake")
+    set_tests_properties(pure-faust-runtime-smoke-failures PROPERTIES
+      LABELS "faust;runtime;smoke;failure"
       TIMEOUT 120)
   endif()
 endif()

@@ -1,5 +1,6 @@
 foreach(required IN ITEMS
-    BUILD_DIR STAGE_PREFIX PURE_EXECUTABLE PURE_PREFIX RUNTIME_SMOKE_SCRIPT)
+    BUILD_DIR STAGE_PREFIX PURE_EXECUTABLE PURE_PREFIX FIXTURE_BASE
+    RUNTIME_SMOKE_SCRIPT)
   if(NOT DEFINED ${required} OR "${${required}}" STREQUAL "")
     message(FATAL_ERROR "${required} is required")
   endif()
@@ -14,6 +15,7 @@ endforeach()
 cmake_path(ABSOLUTE_PATH BUILD_DIR NORMALIZE OUTPUT_VARIABLE build_dir)
 cmake_path(ABSOLUTE_PATH STAGE_PREFIX NORMALIZE OUTPUT_VARIABLE stage)
 cmake_path(ABSOLUTE_PATH PURE_PREFIX NORMALIZE OUTPUT_VARIABLE pure_prefix)
+cmake_path(ABSOLUTE_PATH FIXTURE_BASE NORMALIZE OUTPUT_VARIABLE fixture_base)
 
 set(package_stage "${build_dir}/runtime package stage")
 execute_process(
@@ -48,7 +50,18 @@ if(NOT install_result EQUAL 0)
     "stdout:\n${install_output}\nstderr:\n${install_error}")
 endif()
 
-set(fixture_dir "${stage}/share/doc/pure-faust/tests")
+if(NOT EXISTS "${fixture_base}.bc")
+  message(FATAL_ERROR "Missing runtime smoke fixture: ${fixture_base}.bc")
+endif()
+
+cmake_path(GET PURE_EXECUTABLE FILENAME pure_executable_name)
+set(staged_pure_executable "${stage}/bin/${pure_executable_name}")
+if(NOT EXISTS "${staged_pure_executable}")
+  message(FATAL_ERROR
+    "Missing staged Pure executable: ${staged_pure_executable}")
+endif()
+
+cmake_path(GET fixture_base PARENT_PATH fixture_dir)
 set(work_dir "${build_dir}/runtime smoke work")
 file(REMOVE_RECURSE "${work_dir}")
 file(MAKE_DIRECTORY "${work_dir}")
@@ -56,10 +69,10 @@ file(MAKE_DIRECTORY "${work_dir}")
 set(ENV{PATH} "${stage}/bin;C:/Windows/System32;C:/Windows")
 unset(ENV{PURELIB})
 execute_process(
-  COMMAND "${stage}/bin/pure.exe" --norc
+  COMMAND "${staged_pure_executable}" --norc
     -I "${stage}/lib/pure"
     -L "${fixture_dir}"
-    -x "${RUNTIME_SMOKE_SCRIPT}"
+    -x "${RUNTIME_SMOKE_SCRIPT}" "${fixture_base}"
   WORKING_DIRECTORY "${work_dir}"
   TIMEOUT 90
   RESULT_VARIABLE smoke_result
@@ -70,7 +83,8 @@ file(REMOVE_RECURSE "${work_dir}")
 
 set(smoke_transcript "${smoke_output}\n${smoke_error}")
 string(FIND "${smoke_transcript}" "pure-faust runtime smoke: PASS" pass_marker)
-if(NOT smoke_result EQUAL 0 OR pass_marker EQUAL -1)
+if(NOT smoke_result EQUAL 0 OR NOT "${smoke_error}" STREQUAL "" OR
+    pass_marker EQUAL -1)
   message(FATAL_ERROR
     "Pure runtime smoke failed (${smoke_result})\n"
     "stdout:\n${smoke_output}\nstderr:\n${smoke_error}")
