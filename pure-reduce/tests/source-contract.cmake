@@ -95,18 +95,42 @@ if(NOT actual STREQUAL expected)
   message(FATAL_ERROR "unexpected verified commit: ${actual}")
 endif()
 if(NOT tree_sha256 MATCHES "^[0-9a-f]{64}$")
-  message(FATAL_ERROR "invalid source tree SHA-256: ${tree_sha256}")
+  # CMake's bundled regex engine on the supported CLANG64 installation treats
+  # `{64}` literally. Retain the contract expression above and make the same
+  # assertion portably as a hexadecimal match plus an explicit length check.
+  string(LENGTH "${tree_sha256}" tree_sha256_length)
+  if(NOT tree_sha256 MATCHES "^[0-9a-f]+$" OR NOT tree_sha256_length EQUAL 64)
+    message(FATAL_ERROR "invalid source tree SHA-256: ${tree_sha256}")
+  endif()
 endif()
 
 set(_dirty_checkout "${_fixture_root}/dirty-checkout")
+file(TO_NATIVE_PATH "${PURE_REDUCE_SOURCE_DIR}" _dirty_source_root)
+file(TO_NATIVE_PATH "${_dirty_checkout}" _dirty_checkout_root)
 execute_process(
-  COMMAND git clone --local --no-hardlinks "${PURE_REDUCE_SOURCE_DIR}" "${_dirty_checkout}"
+  COMMAND git clone --local --no-hardlinks "${_dirty_source_root}" "${_dirty_checkout_root}"
   RESULT_VARIABLE _dirty_clone_result
   OUTPUT_VARIABLE _dirty_clone_output
   ERROR_VARIABLE _dirty_clone_error)
+set(_dirty_checkout_is_linked_worktree FALSE)
 if(NOT _dirty_clone_result EQUAL 0)
-  message(FATAL_ERROR
-    "could not create dirty REDUCE source fixture:\n${_dirty_clone_output}${_dirty_clone_error}")
+  # Some Windows hosts prohibit Git for Windows from spawning its local clone
+  # helper. A linked checkout has the same tracked working-tree semantics and
+  # keeps the source-contract mutation test runnable without network access.
+  message(STATUS "local Git clone unavailable; using a linked checkout for the dirty fixture")
+  execute_process(
+    COMMAND git -C "${_dirty_source_root}" worktree add --detach
+      "${_dirty_checkout_root}" HEAD
+    RESULT_VARIABLE _dirty_worktree_result
+    OUTPUT_VARIABLE _dirty_worktree_output
+    ERROR_VARIABLE _dirty_worktree_error)
+  if(NOT _dirty_worktree_result EQUAL 0)
+    message(FATAL_ERROR
+      "could not create dirty REDUCE source fixture:\n"
+      "clone:\n${_dirty_clone_output}${_dirty_clone_error}\n"
+      "linked checkout:\n${_dirty_worktree_output}${_dirty_worktree_error}")
+  endif()
+  set(_dirty_checkout_is_linked_worktree TRUE)
 endif()
 execute_process(
   COMMAND git -C "${_dirty_checkout}" ls-files
@@ -125,5 +149,16 @@ file(APPEND "${_dirty_checkout}/${_tracked_file}"
 pure_reduce_expect_verification_failure(
   "dirty tree" "${_dirty_checkout}" "REDUCE source tree is dirty")
 
+if(_dirty_checkout_is_linked_worktree)
+  execute_process(
+    COMMAND git -C "${_dirty_source_root}" worktree remove --force
+      "${_dirty_checkout_root}"
+    RESULT_VARIABLE _dirty_remove_result
+    ERROR_VARIABLE _dirty_remove_error)
+  if(NOT _dirty_remove_result EQUAL 0)
+    message(FATAL_ERROR
+      "could not remove dirty REDUCE source fixture:\n${_dirty_remove_error}")
+  endif()
+endif()
 file(REMOVE_RECURSE "${_fixture_root}")
 message(STATUS "pure-reduce source contract passed")
