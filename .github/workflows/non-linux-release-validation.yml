@@ -224,7 +224,6 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $env:Path = "$env:PURE_FAUST_STAGE/bin;$env:SystemRoot/System32/WindowsPowerShell/v1.0;$env:SystemRoot/System32;$env:SystemRoot"
           Remove-Item Env:PURELIB -ErrorAction SilentlyContinue
-          $env:PURE_FAUST_CMAKE = $env:CMAKE_EXE
           & $env:CTEST_EXE --test-dir $env:PURE_FAUST_BUILD `
             -L '${{ matrix.ctest-label }}' --output-on-failure
           if ($LASTEXITCODE -ne 0) { throw "pure-faust CTest failed" }

@@ -60,7 +60,6 @@ toolchain.
     ```powershell
     $env:Path = 'C:/tmp/pure faust runtime/bin;C:/Windows/System32/WindowsPowerShell/v1.0;C:/Windows/System32;C:/Windows'
     Remove-Item Env:PURELIB -ErrorAction SilentlyContinue
-    $env:PURE_FAUST_CMAKE = 'C:/msys64/clang64/bin/cmake.exe'
     C:/msys64/clang64/bin/ctest.exe --test-dir build/pure-faust -L runtime --output-on-failure
 
     $env:Path = 'C:/tmp/pure faust full/bin;C:/Windows/System32/WindowsPowerShell/v1.0;C:/Windows/System32;C:/Windows'

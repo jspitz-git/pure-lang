@@ -87,8 +87,7 @@ if(BUILD_TESTING)
         TIMEOUT 180)
       set_property(TEST pure-faust-developer-smoke PROPERTY
         ENVIRONMENT_MODIFICATION
-          "Path=set:${developer_stage}/bin\;C:/Windows/System32/WindowsPowerShell/v1.0\;C:/Windows/System32\;C:/Windows"
-          "PURE_FAUST_CMAKE=set:${CMAKE_COMMAND}")
+          "Path=set:${developer_stage}/bin\;C:/Windows/System32/WindowsPowerShell/v1.0\;C:/Windows/System32\;C:/Windows")
       set_tests_properties(pure-faust-developer-content-audit-failures
         PROPERTIES LABELS "faust;developer;failure;audit" TIMEOUT 30)
       set_tests_properties(pure-faust-developer-header-closure
