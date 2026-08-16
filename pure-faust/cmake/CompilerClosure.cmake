@@ -58,7 +58,7 @@ set(PURE_FAUST_COMPILER_HEADER_FILES
   "lib/clang/22/include/stdint.h"
   "lib/clang/22/include/vadefs.h")
 set(PURE_FAUST_COMPILER_HEADER_INVENTORY_SHA256
-  "dependency-closure=77d394f8dc5adac673526a7f863ddebb64e39785b18507836ba505678f8cc9ca")
+  "dependency-closure=0f2324af27c38fad4899d52edfdf402398d07c9815c786df3487362f4c8a21a9")
 
 function(pure_faust_configure_compiler_closure)
   cmake_path(GET PURE_FAUST_CLANG PARENT_PATH compiler_bin)

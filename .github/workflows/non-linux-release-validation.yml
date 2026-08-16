@@ -104,6 +104,20 @@ jobs:
             if ($LASTEXITCODE -ne 0) { throw "$tool version probe failed" }
           }
 
+          $expectedPackages = @(
+            'mingw-w64-clang-x86_64-headers 14.0.0.r262.g5ea8e9fac-1'
+            'mingw-w64-clang-x86_64-crt 14.0.0.r262.g5ea8e9fac-1'
+            'mingw-w64-clang-x86_64-libffi 3.8.0-1'
+          )
+          foreach ($expectedPackage in $expectedPackages) {
+            $package = $expectedPackage.Split(' ')[0]
+            $actualPackage = (& C:/msys64/usr/bin/pacman.exe -Q $package).Trim()
+            if ($LASTEXITCODE -ne 0) { throw "$package query failed" }
+            if ($actualPackage -ne $expectedPackage) {
+              throw "$package resolved to '$actualPackage' instead of '$expectedPackage'"
+            }
+          }
+
       - name: Fetch and verify the official Faust 2.85.9 payload
         run: |
           $ErrorActionPreference = 'Stop'
