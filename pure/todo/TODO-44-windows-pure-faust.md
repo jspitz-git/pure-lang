@@ -92,17 +92,19 @@ toolchain.
     Both verifier invocations printed `Verified installed pure-faust runtime`;
     the full verifier regenerated, verified, and ran the fixture using only the
     staged developer payload plus the staged Pure runtime.
-  - Clean Windows validation passed on commit
-    `f9dc6159e5c0b0fe0df4d020e6c02c1fab8cfa42` in
-    [GitHub Actions run 31916415503](https://github.com/jspitz-git/pure-lang/actions/runs/31916415503).
-    The `Runtime` job passed 3/3 CTests in 16.92 seconds and completed in 4:24;
+  - Clean Windows validation passed on the final implementation commit
+    `ae71a5b1399eecabdbf086e5e751473a28d85eb3` in
+    [GitHub Actions run 31917331064](https://github.com/jspitz-git/pure-lang/actions/runs/31917331064).
+    The `Runtime` job passed 3/3 CTests with a sanitized `PATH` and completed
+    in 3:22;
     its inner `windows-pure-faust-runtime.zip` SHA-256 is
-    `c5afe43dec39b303965bd95606234f37878f368710b0928141b904685a7d4779`,
+    `8e32fe9e1ac2a6a740e9adb00ce8ce50895d45cb15fdbb14086ac8d5809517e8`,
     and the uploaded GitHub artifact digest is
-    `sha256:094370499a353c8655e152dee30352b9a4347aa5a47185e330482ea76ea584d8`.
-    The `Runtime+FaustDeveloper` job passed 8/8 CTests in 36.47 seconds and
-    completed in 4:47; its inner `windows-pure-faust-full.zip` SHA-256 is
-    `78a083ca048c03170f28f8434694ad82565a4411ec0c8f23fabc9fcd756a3f90`,
+    `sha256:acb39a9037b3c8ca85a47cd177453c22eab29e04e39d637cae1800c6c690a7bc`.
+    The `Runtime+FaustDeveloper` job passed 8/8 CTests with a sanitized `PATH`
+    and completed in 4:33; its inner `windows-pure-faust-full.zip` SHA-256 is
+    `f466c50ba5976e59e14cab24d77c9c316494032958e83912d0482fac9849557a`,
     and the uploaded GitHub artifact digest is
-    `sha256:b35317e087e07267ca21dd3d6fb697b633ba5c4bb6db20c098b0edd92801802c`.
-    Both jobs used paths containing spaces and a sanitized runtime `PATH`.
+    `sha256:698c70fb61f33c5cd455928367ab58ec06dc62548d1cb3b87832bb4ea16a9ab0`.
+    Both jobs checked out into paths containing spaces. The same run's macOS
+    release-validation job also passed and completed in 8:36.
