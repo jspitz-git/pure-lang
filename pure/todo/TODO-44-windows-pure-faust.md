@@ -97,9 +97,13 @@ toolchain.
     `f9dc6159e5c0b0fe0df4d020e6c02c1fab8cfa42` in
     [GitHub Actions run 31916415503](https://github.com/jspitz-git/pure-lang/actions/runs/31916415503).
     The `Runtime` job passed 3/3 CTests in 16.92 seconds and completed in 4:24;
-    its uploaded `windows-pure-faust-runtime.zip` SHA-256 is
-    `c5afe43dec39b303965bd95606234f37878f368710b0928141b904685a7d4779`.
+    its inner `windows-pure-faust-runtime.zip` SHA-256 is
+    `c5afe43dec39b303965bd95606234f37878f368710b0928141b904685a7d4779`,
+    and the uploaded GitHub artifact digest is
+    `sha256:094370499a353c8655e152dee30352b9a4347aa5a47185e330482ea76ea584d8`.
     The `Runtime+FaustDeveloper` job passed 8/8 CTests in 36.47 seconds and
-    completed in 4:47; its uploaded `windows-pure-faust-full.zip` SHA-256 is
-    `78a083ca048c03170f28f8434694ad82565a4411ec0c8f23fabc9fcd756a3f90`.
+    completed in 4:47; its inner `windows-pure-faust-full.zip` SHA-256 is
+    `78a083ca048c03170f28f8434694ad82565a4411ec0c8f23fabc9fcd756a3f90`,
+    and the uploaded GitHub artifact digest is
+    `sha256:b35317e087e07267ca21dd3d6fb697b633ba5c4bb6db20c098b0edd92801802c`.
     Both jobs used paths containing spaces and a sanitized runtime `PATH`.

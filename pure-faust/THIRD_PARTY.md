@@ -45,9 +45,9 @@ requires nor ships the MSYS2 runtime or package-manager state.
 
 - Supplying packages: `mingw-w64-clang-x86_64-clang 22.1.8-2`,
   `clang-libs 22.1.8-2`, `llvm 22.1.8-2`, `llvm-libs 22.1.8-2`,
-  `libffi 3.7.1-1`, `libiconv 1.19-1`, `libxml2 2.15.3-1`,
+  `libffi 3.8.0-1`, `libiconv 1.19-1`, `libxml2 2.15.3-1`,
   `zlib 1.3.2-2`, `zstd 1.5.7-2`, and MinGW-w64 `headers`/`crt`
-  `14.0.0.r220.gd999af622-1`
+  `14.0.0.r262.g5ea8e9fac-1`
 - Executables: `clang.exe`, `opt.exe`
 - Transitive non-system DLLs: `libLLVM-22.dll`, `libclang-cpp.dll`,
   `libc++.dll`, `libffi-8.dll`, `zlib1.dll`, `libzstd.dll`,
@@ -56,7 +56,7 @@ requires nor ships the MSYS2 runtime or package-manager state.
   `stdlib.h`, `math.h`, and `stdint.h`. `clang -M` recursively reports exactly
   21 headers for that union. `CompilerClosure.cmake` records every relative
   path and validates the dependency output plus sorted SHA-256 inventory
-  `77d394f8dc5adac673526a7f863ddebb64e39785b18507836ba505678f8cc9ca`.
+  `0f2324af27c38fad4899d52edfdf402398d07c9815c786df3487362f4c8a21a9`.
   No SDK, DDK, DirectX, or unrelated-package header is selected.
 - LLVM/Clang license: Apache-2.0 WITH LLVM-exception, installed as
   `licenses/LLVM-Apache-2.0-WITH-LLVM-exception.txt`, SHA-256
@@ -71,7 +71,7 @@ requires nor ships the MSYS2 runtime or package-manager state.
 | `clang.exe`, `libclang-cpp.dll` | `clang`, `clang-libs` 22.1.8-2 | `LLVM-Apache-2.0-WITH-LLVM-exception.txt` |
 | `opt.exe`, `libLLVM-22.dll` | `llvm`, `llvm-libs` 22.1.8-2 | `LLVM-Apache-2.0-WITH-LLVM-exception.txt` |
 | `libc++.dll` | `libc++` 22.1.8-1 | `libcxx-LICENSE.txt` |
-| `libffi-8.dll` | `libffi` 3.7.1-1 | `libffi-LICENSE.txt` |
+| `libffi-8.dll` | `libffi` 3.8.0-1 | `libffi-LICENSE.txt` |
 | `zlib1.dll` | `zlib` 1.3.2-2 | `zlib-LICENSE.txt` |
 | `libzstd.dll` | `zstd` 1.5.7-2 | `zstd-LICENSE.txt` |
 | `libxml2-16.dll` | `libxml2` 2.15.3-1 | `libxml2-COPYING.txt` |
