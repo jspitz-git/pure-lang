@@ -106,7 +106,6 @@ if(PURE_FAUST_DEVELOPER_AVAILABLE)
     EXCLUDE_FROM_ALL)
   install(FILES
     "${CMAKE_CURRENT_SOURCE_DIR}/cmake/CompilerClosure.cmake"
-    "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunFaust2Pure.cmake"
     DESTINATION cmake
     COMPONENT FaustDeveloper
     EXCLUDE_FROM_ALL)

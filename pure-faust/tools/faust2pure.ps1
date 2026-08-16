@@ -9,6 +9,27 @@ param(
 $temporaryOutputPath = $null
 $workDirectory = $null
 
+Add-Type -TypeDefinition @'
+using System;
+using System.ComponentModel;
+using System.Runtime.InteropServices;
+
+public static class PureFaustFile {
+  [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+  private static extern bool MoveFileEx(
+    string existingName, string newName, int flags);
+
+  public static void Replace(string source, string destination) {
+    const int MOVEFILE_REPLACE_EXISTING = 0x1;
+    const int MOVEFILE_WRITE_THROUGH = 0x8;
+    if (!MoveFileEx(source, destination,
+        MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+      throw new Win32Exception(Marshal.GetLastWin32Error());
+    }
+  }
+}
+'@
+
 function Invoke-FaustStage {
   param(
     [Parameter(Mandatory = $true)] [string]$Stage,
@@ -100,11 +121,10 @@ try {
   Invoke-FaustStage -Stage verify -Executable $optExecutable -Arguments @(
     '-passes=verify', '-disable-output', $referenceBc)
 
-  Copy-Item -LiteralPath $referenceBc -Destination $temporaryOutputPath `
-    -ErrorAction Stop
   try {
-    Move-Item -LiteralPath $temporaryOutputPath -Destination $outputAbsolutePath `
-      -Force -ErrorAction Stop
+    Copy-Item -LiteralPath $referenceBc -Destination $temporaryOutputPath `
+      -ErrorAction Stop
+    [PureFaustFile]::Replace($temporaryOutputPath, $outputAbsolutePath)
   } catch {
     throw "publish stage failed: $($_.Exception.Message)"
   }

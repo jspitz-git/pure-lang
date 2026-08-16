@@ -1,5 +1,5 @@
 foreach(required IN ITEMS
-    POWERSHELL_EXECUTABLE HELPER_SOURCE DRIVER_SOURCE TEST_ROOT)
+    POWERSHELL_EXECUTABLE HELPER_SOURCE TEST_ROOT)
   if(NOT DEFINED ${required} OR "${${required}}" STREQUAL "")
     message(FATAL_ERROR "${required} is required")
   endif()
@@ -32,10 +32,9 @@ function(run_helper layout input output result_var transcript_var)
 endfunction()
 
 function(create_layout layout)
-  file(MAKE_DIRECTORY "${layout}/tools" "${layout}/cmake" "${layout}/bin"
+  file(MAKE_DIRECTORY "${layout}/tools" "${layout}/bin"
     "${layout}/share/pure-faust")
   file(COPY_FILE "${HELPER_SOURCE}" "${layout}/tools/faust2pure.ps1")
-  file(COPY_FILE "${DRIVER_SOURCE}" "${layout}/cmake/RunFaust2Pure.cmake")
 endfunction()
 
 file(REMOVE_RECURSE "${TEST_ROOT}")
@@ -191,6 +190,32 @@ if(NOT sentinel_after STREQUAL sentinel_before)
 endif()
 
 set(ENV{FAKE_VERIFY_FAIL} "0")
+set(readonly_script "${spaced_root}/set-readonly.ps1")
+file(WRITE "${readonly_script}" [=[param([string]$Path, [string]$Value)
+(Get-Item -LiteralPath $Path -ErrorAction Stop).IsReadOnly =
+  [bool]::Parse($Value)
+]=])
+execute_process(
+  COMMAND "${POWERSHELL_EXECUTABLE}" -NoProfile -ExecutionPolicy Bypass
+    -File "${readonly_script}" -Path "${spaced_output}" -Value true
+  RESULT_VARIABLE readonly_result)
+require_result("${readonly_result}" 0 "mark destination read-only")
+run_helper("${fake_distribution}" "${spaced_input}" "${spaced_output}"
+  helper_result helper_transcript)
+if(helper_result EQUAL 0)
+  message(FATAL_ERROR "Read-only destination unexpectedly succeeded")
+endif()
+require_contains("${helper_transcript}" "publish stage" "publish failure")
+file(READ "${spaced_output}" sentinel_after HEX)
+if(NOT sentinel_after STREQUAL sentinel_before)
+  message(FATAL_ERROR "Publish failure changed the destination")
+endif()
+execute_process(
+  COMMAND "${POWERSHELL_EXECUTABLE}" -NoProfile -ExecutionPolicy Bypass
+    -File "${readonly_script}" -Path "${spaced_output}" -Value false
+  RESULT_VARIABLE writable_result)
+require_result("${writable_result}" 0 "make destination writable")
+
 run_helper("${fake_distribution}" "${spaced_input}" "${spaced_output}"
   helper_result helper_transcript)
 if(NOT helper_result EQUAL 0)

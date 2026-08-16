@@ -44,7 +44,6 @@ if(BUILD_TESTING)
       COMMAND "${CMAKE_COMMAND}"
         "-DPOWERSHELL_EXECUTABLE=${PURE_FAUST_POWERSHELL_EXECUTABLE}"
         "-DHELPER_SOURCE=${CMAKE_CURRENT_SOURCE_DIR}/tools/faust2pure.ps1"
-        "-DDRIVER_SOURCE=${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunFaust2Pure.cmake"
         "-DTEST_ROOT=${CMAKE_CURRENT_BINARY_DIR}/helper failures"
         -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/helper-failures.cmake")
     set_tests_properties(pure-faust-helper-failures PROPERTIES

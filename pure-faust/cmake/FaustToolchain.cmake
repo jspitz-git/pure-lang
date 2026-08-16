@@ -36,7 +36,6 @@ set(PURE_FAUST_DEVELOPER_ALLOWLIST_RELATIVE
 set(PURE_FAUST_DEVELOPER_RELATIVE_FILES
   "bin/faust.exe"
   "cmake/CompilerClosure.cmake"
-  "cmake/RunFaust2Pure.cmake"
   "share/doc/pure-faust/THIRD_PARTY.md"
   "share/doc/pure-faust/licenses/Faust-COPYING.txt"
   "share/doc/pure-faust/licenses/LLVM-Apache-2.0-WITH-LLVM-exception.txt"
