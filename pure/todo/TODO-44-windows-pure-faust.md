@@ -67,8 +67,9 @@ toolchain.
     C:/msys64/clang64/bin/ctest.exe --test-dir build/pure-faust --output-on-failure
     ```
 
-  - Fresh stages in paths containing spaces passed the installed-package
-    verifier: runtime-only contained 5 files with sorted inventory SHA-256
+  - Before the final helper-publication cleanup in `ae71a5b1`, fresh stages in
+    paths containing spaces passed the installed-package verifier:
+    runtime-only contained 5 files with sorted inventory SHA-256
     `917f73e596348654eb98c918045b52c92bdfe9ab35dadd8ec292dd04563de386`;
     runtime plus developer contained 52 files with sorted inventory SHA-256
     `03c48fc651a0ff7979c52765e269500ea007ed6f7928e743ba769e321ef8d2d0`.
@@ -89,9 +90,12 @@ toolchain.
     & $cmake '-DBUILD_DIR=C:/pure-lang/.worktrees/todo-44-windows-pure-faust/build/pure-faust' '-DSOURCE_DIR=C:/pure-lang/.worktrees/todo-44-windows-pure-faust/pure-faust' "-DPURE_EXECUTABLE=$pure" "-DPURE_PREFIX=$purePrefix" '-DRUNTIME_SMOKE_SCRIPT=C:/pure-lang/.worktrees/todo-44-windows-pure-faust/pure-faust/tests/runtime-smoke.pure' '-DSTAGE_PREFIX=C:/tmp/pure faust full' -DEXPECT_DEVELOPER=ON -P pure-faust/cmake/VerifyInstalledPackage.cmake
     ```
 
-    Both verifier invocations printed `Verified installed pure-faust runtime`;
-    the full verifier regenerated, verified, and ran the fixture using only the
-    staged developer payload plus the staged Pure runtime.
+    Both historical verifier invocations printed
+    `Verified installed pure-faust runtime`; the full verifier regenerated,
+    verified, and ran the fixture using only the staged developer payload plus
+    the staged Pure runtime. The final `ae71a5b1` cleanup removed the installed
+    CMake driver, so these inventory counts and hashes are retained only as
+    pre-cleanup evidence; the final packaged ZIP hashes are recorded below.
   - Clean Windows validation passed on the final implementation commit
     `ae71a5b1399eecabdbf086e5e751473a28d85eb3` in
     [GitHub Actions run 31917331064](https://github.com/jspitz-git/pure-lang/actions/runs/31917331064).

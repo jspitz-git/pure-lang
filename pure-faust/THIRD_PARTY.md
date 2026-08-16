@@ -89,7 +89,6 @@ link-only libraries, and `msys-2.0.dll` are forbidden.
 
 - `bin/faust.exe`
 - `cmake/CompilerClosure.cmake`
-- `cmake/RunFaust2Pure.cmake`
 - `share/doc/pure-faust/THIRD_PARTY.md`
 - `share/doc/pure-faust/FaustDeveloper-ALLOWLIST.sha256`
 - `share/doc/pure-faust/licenses/Faust-COPYING.txt`
