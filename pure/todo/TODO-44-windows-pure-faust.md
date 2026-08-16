@@ -1,6 +1,6 @@
 # TODO-44 - Windows pure-faust Package
 
-Status: Open
+Status: Closed on 2026-08-16
 Branch: todo/44-windows-pure-faust
 
 ## Purpose
@@ -21,7 +21,7 @@ toolchain.
    generated-code tool requirements.
 3. [x] Add deterministic compile and DSP smoke tests.
 4. [x] Keep the compiler in the optional `FaustDeveloper` component.
-5. [ ] Stage and validate the advertised configuration.
+5. [x] Stage and validate the advertised configuration.
 
 ## Guardrails
 
@@ -93,8 +93,13 @@ toolchain.
     Both verifier invocations printed `Verified installed pure-faust runtime`;
     the full verifier regenerated, verified, and ran the fixture using only the
     staged developer payload plus the staged Pure runtime.
-  - Bounded caveat: the new clean-runner matrix has not been dispatched, so
-    there is no workflow URL or uploaded archive SHA-256 yet. TODO-44 remains
-    open until both `Runtime` and `Runtime+FaustDeveloper` jobs pass on a clean
-    Windows runner. Record the run URL, tested commit, CTest counts and elapsed
-    times, and both uploaded archive SHA-256 values here before closing.
+  - Clean Windows validation passed on commit
+    `f9dc6159e5c0b0fe0df4d020e6c02c1fab8cfa42` in
+    [GitHub Actions run 31916415503](https://github.com/jspitz-git/pure-lang/actions/runs/31916415503).
+    The `Runtime` job passed 3/3 CTests in 16.92 seconds and completed in 4:24;
+    its uploaded `windows-pure-faust-runtime.zip` SHA-256 is
+    `c5afe43dec39b303965bd95606234f37878f368710b0928141b904685a7d4779`.
+    The `Runtime+FaustDeveloper` job passed 8/8 CTests in 36.47 seconds and
+    completed in 4:47; its uploaded `windows-pure-faust-full.zip` SHA-256 is
+    `78a083ca048c03170f28f8434694ad82565a4411ec0c8f23fabc9fcd756a3f90`.
+    Both jobs used paths containing spaces and a sanitized runtime `PATH`.
