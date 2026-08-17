@@ -17,6 +17,24 @@ if(NOT _stamp STREQUAL _expected_stamp OR _stamp MATCHES ";")
     "upstream stamp must be five newline-delimited identity fields")
 endif()
 
+# Applying a private-source patch must not depend on whether the scratch tree
+# happens to live below an unrelated enclosing Git worktree. The production
+# scratch is outside this repository, while upstream-contract fixtures live in
+# the build tree, so exercise the latter placement explicitly.
+set(_enclosing_fixture
+  "${CMAKE_CURRENT_BINARY_DIR}/pure-reduce-enclosing-repository-patch-fixture")
+file(REMOVE_RECURSE "${_enclosing_fixture}")
+_pure_reduce_checkout_pinned_files(
+  "${PURE_REDUCE_SOURCE_DIR}" "${_enclosing_fixture}"
+  csl/cslbase/winsupport.cpp)
+_pure_reduce_apply_private_source_patch(
+  "${_enclosing_fixture}"
+  "${CMAKE_CURRENT_LIST_DIR}/../patches/0001-csl-winsupport-define-nil.patch"
+  "${PURE_REDUCE_SOURCE_TREE_SHA256}"
+  "${_enclosing_fixture}/patches.log"
+  _enclosing_nil_patch_json)
+file(REMOVE_RECURSE "${_enclosing_fixture}")
+
 string(SHA256 _fixture_key "${CMAKE_CURRENT_BINARY_DIR}")
 file(TO_CMAKE_PATH
   "$ENV{TEMP}/pure-reduce-utf8-image-patch-${_fixture_key}" _fixture)

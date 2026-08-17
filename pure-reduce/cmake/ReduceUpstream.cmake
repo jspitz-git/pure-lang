@@ -118,8 +118,16 @@ function(_pure_reduce_apply_private_source_patch
     endif()
     list(APPEND _preimages "${_preimage}")
   endforeach()
+  get_filename_component(_private_parent "${PRIVATE_ROOT}" DIRECTORY)
+  # PRIVATE_ROOT is a materialized scratch tree, not a Git checkout. Prevent
+  # Git from discovering an unrelated enclosing worktree, whose invocation
+  # prefix would make an otherwise successful apply target the wrong path.
+  set(_isolated_git_apply
+    "${CMAKE_COMMAND}" -E env
+    "GIT_CEILING_DIRECTORIES=${_private_parent}"
+    git -C "${PRIVATE_ROOT}" apply)
   execute_process(
-    COMMAND git -C "${PRIVATE_ROOT}" apply --check --unidiff-zero
+    COMMAND ${_isolated_git_apply} --check --unidiff-zero
       --whitespace=nowarn "${PATCH_FILE}"
     RESULT_VARIABLE _check_result
     ERROR_VARIABLE _check_error)
@@ -127,7 +135,7 @@ function(_pure_reduce_apply_private_source_patch
     message(FATAL_ERROR "approved source patch check failed: ${_check_error}")
   endif()
   execute_process(
-    COMMAND git -C "${PRIVATE_ROOT}" apply --unidiff-zero --whitespace=nowarn
+    COMMAND ${_isolated_git_apply} --unidiff-zero --whitespace=nowarn
       "${PATCH_FILE}"
     RESULT_VARIABLE _apply_result
     ERROR_VARIABLE _apply_error)
