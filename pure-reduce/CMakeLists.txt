@@ -113,6 +113,16 @@ endif()
 
 include(CTest)
 if(BUILD_TESTING)
+  if(EXISTS "${PURE_REDUCE_MSYS2_BASH}")
+    add_test(
+      NAME pure-reduce-run-logged-diagnostics
+      COMMAND "${CMAKE_COMMAND}"
+        "-DREDUCE_UPSTREAM_MODULE=${CMAKE_CURRENT_LIST_DIR}/cmake/ReduceUpstream.cmake"
+        "-DBASH_EXECUTABLE=${PURE_REDUCE_MSYS2_BASH}"
+        -P "${CMAKE_CURRENT_LIST_DIR}/tests/run-logged-diagnostics.cmake")
+    set_tests_properties(pure-reduce-run-logged-diagnostics PROPERTIES
+      LABELS "reduce")
+  endif()
   add_test(
     NAME pure-reduce-source-contract
     COMMAND "${CMAKE_COMMAND}"

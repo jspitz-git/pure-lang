@@ -525,8 +525,19 @@ function(_pure_reduce_run_logged LABEL LOG_FILE BASH_EXECUTABLE SCRIPT)
     OUTPUT_FILE "${LOG_FILE}"
     ERROR_FILE "${LOG_FILE}")
   if(NOT _result EQUAL 0)
+    set(_transcript_tail "")
+    if(EXISTS "${LOG_FILE}" AND NOT IS_DIRECTORY "${LOG_FILE}")
+      file(SIZE "${LOG_FILE}" _transcript_size)
+      set(_transcript_offset 0)
+      if(_transcript_size GREATER 65536)
+        math(EXPR _transcript_offset "${_transcript_size} - 65536")
+      endif()
+      file(READ "${LOG_FILE}" _transcript_tail
+        OFFSET ${_transcript_offset} LIMIT 65536)
+    endif()
     message(FATAL_ERROR
-      "${LABEL} failed with exit code ${_result}; transcript: ${LOG_FILE}")
+      "${LABEL} failed with exit code ${_result}; transcript: ${LOG_FILE}\n"
+      "last transcript bytes:\n${_transcript_tail}")
   endif()
 endfunction()
 
@@ -643,7 +654,17 @@ src=$(cygpath -u "$1")
 cd "$src"
 printf -v quoted_src '%q' "$src"
 prefix_map="-ffile-prefix-map=$quoted_src=/usr/src/pure-reduce-upstream -fmacro-prefix-map=$quoted_src=/usr/src/pure-reduce-upstream"
+set +e
 ./configure --without-autogen --with-csl --without-gui --without-redfront CC=clang CXX=clang++ CFLAGS="$prefix_map" CXXFLAGS="$prefix_map"
+configure_result=$?
+set -e
+if [ "$configure_result" -ne 0 ]; then
+  if [ -f config.log ]; then
+    printf '\n--- top-level config.log tail ---\n'
+    tail -n 200 config.log
+  fi
+  exit "$configure_result"
+fi
 ]=])
   _pure_reduce_run_logged(
     "official REDUCE CSL configure" "${_configure_log}"
