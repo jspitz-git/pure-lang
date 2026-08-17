@@ -9,7 +9,7 @@ set(_PURE_REDUCE_UTF8_IMAGE_PATCH_SHA256
 set(_PURE_REDUCE_CONFIGURE_PATHS_PATCH_SHA256
   "ec94278f24718963e68aeac737a168c704c81cc72f48af903c4675770f3518df")
 set(_PURE_REDUCE_BUILD_RECIPE_VERSION
-  "windows-clang-intel-layout-v8")
+  "windows-clang-intel-layout-v9")
 
 function(_pure_reduce_expected_upstream_stamp COMMIT TREE_SHA256 OUT_STAMP)
   string(CONCAT _stamp
@@ -214,6 +214,22 @@ function(_pure_reduce_write_directory_manifest DIRECTORY MANIFEST)
   endforeach()
 endfunction()
 
+function(_pure_reduce_stage_runtime_artifacts PRODUCER RUNTIME_ROOT)
+  file(MAKE_DIRECTORY "${RUNTIME_ROOT}")
+  foreach(_name IN ITEMS reduce.resources reduce.fonts)
+    set(_source "${PRODUCER}/${_name}")
+    set(_destination "${RUNTIME_ROOT}/${_name}")
+    if(NOT IS_DIRECTORY "${_source}")
+      message(FATAL_ERROR
+        "complete CSL runtime data is missing from the image producer: ${_source}")
+    endif()
+    file(REMOVE_RECURSE "${_destination}")
+    file(COPY "${_source}" DESTINATION "${RUNTIME_ROOT}")
+    _pure_reduce_write_directory_manifest(
+      "${_destination}" "${RUNTIME_ROOT}/${_name}.manifest")
+  endforeach()
+endfunction()
+
 function(_pure_reduce_run_source_verification)
   foreach(_required IN ITEMS PURE_REDUCE_SOURCE_DIR
       PURE_REDUCE_VERIFIED_COMMIT PURE_REDUCE_SOURCE_TREE_SHA256)
@@ -239,9 +255,6 @@ function(_pure_reduce_run_runtime_artifact_refresh)
       "PURE_REDUCE_UPSTREAM_BINARY_DIR is required by runtime refresh")
   endif()
   get_filename_component(_root "${PURE_REDUCE_UPSTREAM_BINARY_DIR}" ABSOLUTE)
-  _pure_reduce_select_windows_configuration("${_root}/source" _configuration)
-  _pure_reduce_select_configuration_image("${_configuration}" _image)
-  get_filename_component(_producer "${_image}" DIRECTORY)
   set(_runtime_root "${_root}/artifacts/runtime")
   set(_runtime_complete TRUE)
   foreach(_name IN ITEMS reduce.resources reduce.fonts)
@@ -254,19 +267,10 @@ function(_pure_reduce_run_runtime_artifact_refresh)
     message(STATUS "complete CSL runtime data remains staged")
     return()
   endif()
-  file(MAKE_DIRECTORY "${_runtime_root}")
-  foreach(_name IN ITEMS reduce.resources reduce.fonts)
-    set(_source "${_producer}/${_name}")
-    set(_destination "${_runtime_root}/${_name}")
-    if(NOT IS_DIRECTORY "${_source}")
-      message(FATAL_ERROR
-        "complete CSL runtime data is missing from the image producer: ${_source}")
-    endif()
-    file(REMOVE_RECURSE "${_destination}")
-    file(COPY "${_source}" DESTINATION "${_runtime_root}")
-    _pure_reduce_write_directory_manifest(
-      "${_destination}" "${_runtime_root}/${_name}.manifest")
-  endforeach()
+  _pure_reduce_select_windows_configuration("${_root}/source" _configuration)
+  _pure_reduce_select_configuration_image("${_configuration}" _image)
+  get_filename_component(_producer "${_image}" DIRECTORY)
+  _pure_reduce_stage_runtime_artifacts("${_producer}" "${_runtime_root}")
 endfunction()
 
 function(_pure_reduce_run_upstream_build_ensure)
@@ -791,15 +795,8 @@ cd "$src"
     "${_build_configuration}" _full_image)
   get_filename_component(_full_configuration "${_full_image}" DIRECTORY)
 
-  foreach(_runtime_name IN ITEMS reduce.resources reduce.fonts)
-    if(NOT IS_DIRECTORY "${_full_configuration}/${_runtime_name}")
-      message(FATAL_ERROR
-        "complete CSL runtime data is missing from the image producer: "
-        "${_full_configuration}/${_runtime_name}")
-    endif()
-    file(COPY "${_full_configuration}/${_runtime_name}"
-      DESTINATION "${_runtime_artifacts}")
-  endforeach()
+  _pure_reduce_stage_runtime_artifacts(
+    "${_full_configuration}" "${_runtime_artifacts}")
 
   set(_closure_script [=[
 set -eu

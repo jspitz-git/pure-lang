@@ -136,6 +136,13 @@ if(BUILD_TESTING)
       -P "${CMAKE_CURRENT_LIST_DIR}/tests/configuration-selection.cmake")
   set_tests_properties(pure-reduce-configuration-selection PROPERTIES
     LABELS "reduce")
+  add_test(
+    NAME pure-reduce-runtime-artifact-handoff
+    COMMAND "${CMAKE_COMMAND}"
+      "-DREDUCE_UPSTREAM_MODULE=${CMAKE_CURRENT_LIST_DIR}/cmake/ReduceUpstream.cmake"
+      -P "${CMAKE_CURRENT_LIST_DIR}/tests/runtime-artifact-handoff.cmake")
+  set_tests_properties(pure-reduce-runtime-artifact-handoff PROPERTIES
+    LABELS "reduce")
   if(PURE_REDUCE_SOURCE_DIR)
     add_test(
       NAME pure-reduce-prefix-map-response
