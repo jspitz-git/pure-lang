@@ -20,6 +20,22 @@ std::size_t input_position = 0;
 bool capture_output = false;
 std::string texmacs_buffer;
 
+void release_input_storage() noexcept
+{
+    std::vector<char>().swap(input_buffer);
+    input_position = 0;
+}
+
+void release_output_storage() noexcept
+{
+    std::string().swap(output_buffer);
+}
+
+void release_error_storage() noexcept
+{
+    std::string().swap(bridge_error);
+}
+
 void set_error(const char *message) noexcept
 {
     try
@@ -93,22 +109,21 @@ extern "C" PURE_REDUCE_API int pure_reduce_start(const char *image_utf8)
 {
     try
     {
+        if (bridge_state == PURE_REDUCE_RUNNING)
+        {
+            set_error("REDUCE is already running");
+            return 1;
+        }
         if (image_utf8 == nullptr || image_utf8[0] == '\0')
         {
             bridge_state = PURE_REDUCE_FAILED;
             set_error("image path is required");
             return 1;
         }
-        if (bridge_state == PURE_REDUCE_RUNNING)
-        {
-            set_error("REDUCE is already running");
-            return 1;
-        }
 
-        bridge_error.clear();
-        output_buffer.clear();
-        input_buffer.clear();
-        input_position = 0;
+        release_error_storage();
+        release_output_storage();
+        release_input_storage();
         capture_output = false;
         const char *arguments[] = {"pure-reduce", "-i", image_utf8};
         CSL_LISP::cslstart(3, arguments, bridge_writer);
@@ -135,38 +150,55 @@ extern "C" PURE_REDUCE_API int pure_reduce_finish(void)
     {
         if (bridge_state != PURE_REDUCE_RUNNING) return 0;
 
-        const int result = CSL_LISP::cslfinish(bridge_writer);
-        input_buffer.clear();
-        input_position = 0;
+        const int callback_result =
+            CSL_LISP::PROC_set_callbacks(nullptr, nullptr);
         capture_output = false;
-        if (result == 0)
+        release_input_storage();
+        const int result = CSL_LISP::cslfinish(bridge_writer);
+        release_output_storage();
+        if (result == 0 && callback_result == 0)
         {
-            bridge_error.clear();
+            release_error_storage();
             bridge_state = PURE_REDUCE_FINISHED;
         }
         else
         {
-            bridge_state = PURE_REDUCE_FAILED;
+            bridge_state = result == 0 ? PURE_REDUCE_FINISHED
+                                       : PURE_REDUCE_FAILED;
+            release_error_storage();
             try
             {
-                bridge_error = "CSL finish failed with code " +
-                               std::to_string(result);
+                if (result != 0)
+                    bridge_error = "CSL finish failed with code " +
+                                   std::to_string(result);
+                else
+                    bridge_error = "CSL callback cleanup failed with code " +
+                                   std::to_string(callback_result);
             }
             catch (...)
             {
-                set_error("CSL finish failed");
+                set_error(result != 0 ? "CSL finish failed"
+                                      : "CSL callback cleanup failed");
             }
         }
-        return result;
+        return result != 0 ? result : callback_result;
     }
     catch (const std::exception &error)
     {
+        capture_output = false;
+        release_input_storage();
+        release_output_storage();
+        release_error_storage();
         bridge_state = PURE_REDUCE_FAILED;
         set_exception_error("could not finish REDUCE", error);
         return 1;
     }
     catch (...)
     {
+        capture_output = false;
+        release_input_storage();
+        release_output_storage();
+        release_error_storage();
         bridge_state = PURE_REDUCE_FAILED;
         set_error("could not finish REDUCE");
         return 1;

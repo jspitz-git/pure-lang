@@ -63,7 +63,8 @@ if(PURE_REDUCE_SOURCE_DIR)
     CXX_STANDARD_REQUIRED YES
     CXX_EXTENSIONS NO)
   target_include_directories(pure-reduce-bridge-contract PRIVATE
-    "${CMAKE_CURRENT_LIST_DIR}/bridge")
+    "${CMAKE_CURRENT_LIST_DIR}/bridge"
+    "${_pure_reduce_cslbase}")
   target_compile_definitions(pure-reduce-bridge-contract PRIVATE
     PURE_REDUCE_STATIC)
   add_dependencies(pure-reduce-bridge-contract pure-reduce-upstream)
@@ -86,6 +87,18 @@ if(BUILD_TESTING)
       NAME pure-reduce-bridge-contract
       COMMAND pure-reduce-bridge-contract)
     set_tests_properties(pure-reduce-bridge-contract PROPERTIES
+      LABELS "reduce")
+    add_test(
+      NAME pure-reduce-bridge-contract-live-redundant
+      COMMAND pure-reduce-bridge-contract
+        --live-redundant "${PURE_REDUCE_CSL_IMAGE}")
+    set_tests_properties(pure-reduce-bridge-contract-live-redundant PROPERTIES
+      LABELS "reduce")
+    add_test(
+      NAME pure-reduce-bridge-contract-live-cleanup
+      COMMAND pure-reduce-bridge-contract
+        --live-cleanup "${PURE_REDUCE_CSL_IMAGE}")
+    set_tests_properties(pure-reduce-bridge-contract-live-cleanup PROPERTIES
       LABELS "reduce")
     add_test(
       NAME pure-reduce-upstream-build
