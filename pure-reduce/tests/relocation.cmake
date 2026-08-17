@@ -211,40 +211,93 @@ if(NOT _leak_combined MATCHES
     "prefix leak failed for the wrong reason\n${_leak_combined}")
 endif()
 
-# Re-authorize a UTF-16LE original-prefix leak in an installed binary. Hash
-# and inventory validation must succeed before the byte-level policy rejects it.
-set(_binary_leak_build "${_binary_leak_root}/build")
-set(_binary_leak_stage "${_binary_leak_root}/stage")
+# Re-authorize mixed-case narrow and UTF-16LE prefix leaks in installed
+# binaries. Hash and inventory validation must succeed before the byte-level
+# policy rejects either Windows-equivalent spelling.
 set(_binary_leak_relative "lib/pure/reduce.fonts/cmex7.ttf")
 file(REMOVE_RECURSE "${_binary_leak_root}")
-file(MAKE_DIRECTORY "${_binary_leak_build}" "${_binary_leak_stage}")
-file(COPY "${_relocated_stage}/" DESTINATION "${_binary_leak_stage}")
-set(ENV{PURE_REDUCE_BINARY_LEAK_FILE}
-  "${_binary_leak_stage}/${_binary_leak_relative}")
 file(TO_CMAKE_PATH "${SOURCE_PREFIX}" _source_prefix_forward)
 if(NOT _source_prefix_forward MATCHES "^([A-Za-z]):(/.*)$")
   message(FATAL_ERROR
     "binary MSYS-prefix fixture requires a Windows drive path: ${SOURCE_PREFIX}")
 endif()
 string(TOLOWER "${CMAKE_MATCH_1}" _source_drive_lower)
-set(ENV{PURE_REDUCE_BINARY_LEAK_TEXT}
-  "/${_source_drive_lower}${CMAKE_MATCH_2}")
-execute_process(
-  COMMAND "C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe"
-    -NoProfile -NonInteractive -Command
-    "[IO.File]::AppendAllText($env:PURE_REDUCE_BINARY_LEAK_FILE, $env:PURE_REDUCE_BINARY_LEAK_TEXT, [Text.Encoding]::Unicode)"
-  RESULT_VARIABLE _utf16_append_result
-  OUTPUT_VARIABLE _utf16_append_output
-  ERROR_VARIABLE _utf16_append_error
-  ENCODING UTF-8)
-unset(ENV{PURE_REDUCE_BINARY_LEAK_FILE})
-unset(ENV{PURE_REDUCE_BINARY_LEAK_TEXT})
-if(NOT _utf16_append_result EQUAL 0)
+set(_source_drive_tail "${CMAKE_MATCH_2}")
+string(TOLOWER "${_source_drive_tail}" _source_drive_tail_lower)
+string(TOLOWER "${_source_prefix_forward}" _source_prefix_lower)
+set(_mixed_windows_prefix "${_source_prefix_lower}")
+set(_ascii_lower a b c d e f g h i j k l m n o p q r s t u v w x y z)
+set(_ascii_upper A B C D E F G H I J K L M N O P Q R S T U V W X Y Z)
+foreach(_letter_index RANGE 0 25)
+  list(GET _ascii_lower ${_letter_index} _lower_letter)
+  string(FIND "${_mixed_windows_prefix}" "${_lower_letter}" _letter_at)
+  if(_letter_at GREATER 2)
+    list(GET _ascii_upper ${_letter_index} _upper_letter)
+    string(SUBSTRING "${_mixed_windows_prefix}" 0 ${_letter_at} _case_before)
+    math(EXPR _case_after_at "${_letter_at} + 1")
+    string(SUBSTRING "${_mixed_windows_prefix}" ${_case_after_at} -1 _case_after)
+    set(_mixed_windows_prefix
+      "${_case_before}${_upper_letter}${_case_after}")
+    break()
+  endif()
+endforeach()
+if(NOT _mixed_windows_prefix MATCHES "[A-Z]")
   message(FATAL_ERROR
-    "unable to create UTF-16LE binary leak (${_utf16_append_result})\n"
-    "stdout:\n${_utf16_append_output}\n"
-    "stderr:\n${_utf16_append_error}")
+    "binary mixed-case fixture requires an ASCII path letter: ${SOURCE_PREFIX}")
 endif()
+set(_mixed_windows_path "${_mixed_windows_prefix}")
+if(NOT _mixed_windows_path MATCHES "^([A-Za-z]):(/.*)$")
+  message(FATAL_ERROR "mixed Windows prefix lost its drive syntax")
+endif()
+set(_mixed_msys_tail "${CMAKE_MATCH_2}")
+set(_mixed_msys_prefix "/${_source_drive_lower}${_mixed_msys_tail}")
+if(_mixed_windows_prefix STREQUAL _source_prefix_forward OR
+    _mixed_msys_prefix STREQUAL
+      "/${_source_drive_lower}${_source_drive_tail_lower}")
+  message(FATAL_ERROR
+    "binary mixed-case fixtures could not vary SOURCE_PREFIX: ${SOURCE_PREFIX}")
+endif()
+set(_binary_leak_failures)
+foreach(_binary_case IN ITEMS narrow utf16le unicode_utf16le)
+  set(_binary_case_root "${_binary_leak_root}/${_binary_case}")
+  set(_binary_leak_build "${_binary_case_root}/build")
+  set(_binary_leak_stage "${_binary_case_root}/stage")
+  file(MAKE_DIRECTORY "${_binary_leak_build}" "${_binary_leak_stage}")
+  file(COPY "${_relocated_stage}/" DESTINATION "${_binary_leak_stage}")
+  set(ENV{PURE_REDUCE_BINARY_LEAK_FILE}
+    "${_binary_leak_stage}/${_binary_leak_relative}")
+  if(_binary_case STREQUAL "narrow")
+    set(ENV{PURE_REDUCE_BINARY_LEAK_TEXT} "${_mixed_windows_prefix}")
+    set(_binary_case_source_prefix "${SOURCE_PREFIX}")
+    set(_append_script
+      "$p=$env:PURE_REDUCE_BINARY_LEAK_FILE; $n=(Get-Item -LiteralPath $p).Length; $b=([Math]::Floor($n/1048576)+1)*1048576; if(($b-$n)-le 5){$b+=1048576}; $pad=[int]($b-$n-5); $s=[IO.File]::Open($p,[IO.FileMode]::Append,[IO.FileAccess]::Write,[IO.FileShare]::None); try { if($pad -gt 0){$s.Write((New-Object byte[] $pad),0,$pad)}; $v=(New-Object Text.UTF8Encoding($false)).GetBytes($env:PURE_REDUCE_BINARY_LEAK_TEXT); $s.Write($v,0,$v.Length) } finally { $s.Dispose() }")
+  elseif(_binary_case STREQUAL "utf16le")
+    set(ENV{PURE_REDUCE_BINARY_LEAK_TEXT} "${_mixed_msys_prefix}")
+    set(_binary_case_source_prefix "${SOURCE_PREFIX}")
+    set(_append_script
+      "[IO.File]::AppendAllText($env:PURE_REDUCE_BINARY_LEAK_FILE, $env:PURE_REDUCE_BINARY_LEAK_TEXT, [Text.Encoding]::Unicode)")
+  else()
+    set(_binary_case_source_prefix "C:/Tést-Prefix/Alpha")
+    set(ENV{PURE_REDUCE_BINARY_LEAK_TEXT} "c:/tést-pREFIX/aLPHA")
+    set(_append_script
+      "[IO.File]::AppendAllText($env:PURE_REDUCE_BINARY_LEAK_FILE, $env:PURE_REDUCE_BINARY_LEAK_TEXT, [Text.Encoding]::Unicode)")
+  endif()
+  execute_process(
+    COMMAND "C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe"
+      -NoProfile -NonInteractive -Command
+      "${_append_script}"
+    RESULT_VARIABLE _binary_append_result
+    OUTPUT_VARIABLE _binary_append_output
+    ERROR_VARIABLE _binary_append_error
+    ENCODING UTF-8)
+  unset(ENV{PURE_REDUCE_BINARY_LEAK_FILE})
+  unset(ENV{PURE_REDUCE_BINARY_LEAK_TEXT})
+  if(NOT _binary_append_result EQUAL 0)
+    message(FATAL_ERROR
+      "unable to create ${_binary_case} binary leak (${_binary_append_result})\n"
+      "stdout:\n${_binary_append_output}\n"
+      "stderr:\n${_binary_append_error}")
+  endif()
 file(SHA256 "${_binary_leak_stage}/${_binary_leak_relative}"
   _binary_leak_sha)
 file(SIZE "${_binary_leak_stage}/${_binary_leak_relative}"
@@ -319,7 +372,7 @@ execute_process(
     "-DAUTHORITATIVE_MANIFEST=${_binary_leak_build}/PureReduceExpected.sha256"
     "-DPURE_EXECUTABLE=${PURE_EXECUTABLE}"
     "-DLLVM_READOBJ=${LLVM_READOBJ}"
-    "-DSOURCE_PREFIX=${SOURCE_PREFIX}"
+    "-DSOURCE_PREFIX=${_binary_case_source_prefix}"
     "-DORIGINAL_STAGE_PREFIX=${_original_stage}"
     -DVERIFY_ONLY=ON
     -DRUN_RUNTIME_TESTS=OFF
@@ -331,14 +384,18 @@ execute_process(
 set(_binary_leak_combined
   "${_binary_leak_output}\n${_binary_leak_error}")
 if(_binary_leak_result EQUAL 0)
-  message(FATAL_ERROR
-    "verifier accepted a hash-authorized UTF-16LE binary prefix leak")
-endif()
-if(NOT _binary_leak_combined MATCHES
+  list(APPEND _binary_leak_failures
+    "verifier accepted a hash-authorized mixed-case ${_binary_case} binary prefix leak")
+elseif(NOT _binary_leak_combined MATCHES
     "installed binary content leaks a forbidden prefix")
-  message(FATAL_ERROR
-    "binary prefix leak failed for the wrong reason\n"
+  list(APPEND _binary_leak_failures
+    "${_binary_case} binary prefix leak failed for the wrong reason\n"
     "${_binary_leak_combined}")
+endif()
+endforeach()
+if(_binary_leak_failures)
+  list(JOIN _binary_leak_failures "\n---\n" _binary_leak_failure_text)
+  message(FATAL_ERROR "${_binary_leak_failure_text}")
 endif()
 
 # Installation ownership: an overlay may replace only manifest-owned files,
