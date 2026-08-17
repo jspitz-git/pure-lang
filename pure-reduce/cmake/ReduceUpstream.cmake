@@ -7,7 +7,7 @@ set(_PURE_REDUCE_NIL_PATCH_SHA256
 set(_PURE_REDUCE_UTF8_IMAGE_PATCH_SHA256
   "ad89f9581eefaaf4191b65af1b769a18883e865ee2740e4e6f053d1c5615d0e9")
 set(_PURE_REDUCE_BUILD_RECIPE_VERSION
-  "windows-clang-file-prefix-map-v1")
+  "windows-clang-file-prefix-map-v2")
 
 function(_pure_reduce_expected_upstream_stamp COMMIT TREE_SHA256 OUT_STAMP)
   string(CONCAT _stamp
@@ -641,7 +641,8 @@ export WANT_AUTOCONF=2.73
 export enable_symvers=no
 src=$(cygpath -u "$1")
 cd "$src"
-prefix_map="-ffile-prefix-map=$src=/usr/src/pure-reduce-upstream -fmacro-prefix-map=$src=/usr/src/pure-reduce-upstream"
+printf -v quoted_src '%q' "$src"
+prefix_map="-ffile-prefix-map=$quoted_src=/usr/src/pure-reduce-upstream -fmacro-prefix-map=$quoted_src=/usr/src/pure-reduce-upstream"
 ./configure --without-autogen --with-csl --without-gui --without-redfront CC=clang CXX=clang++ CFLAGS="$prefix_map" CXXFLAGS="$prefix_map"
 ]=])
   _pure_reduce_run_logged(
