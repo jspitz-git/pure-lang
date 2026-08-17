@@ -253,7 +253,7 @@ jobs:
           $listFile = Join-Path $artifactDirectory 'archive-files.txt'
           New-Item -ItemType Directory -Path $artifactDirectory -Force | Out-Null
           $files = Get-ChildItem -LiteralPath $env:PURE_REDUCE_STAGE -File -Recurse
-          if ($files.Count -ne 80) { throw "unexpected staged file count: $($files.Count)" }
+          if ($files.Count -ne 81) { throw "unexpected staged file count: $($files.Count)" }
           [string[]]$relativeFiles = $files | ForEach-Object {
             [IO.Path]::GetRelativePath($env:PURE_REDUCE_STAGE, $_.FullName).Replace('\', '/')
           }
