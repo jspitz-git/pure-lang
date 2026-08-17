@@ -62,13 +62,33 @@ Installation
 Get the latest source from
 https://bitbucket.org/purelang/pure-lang/downloads/pure-reduce-@version@.tar.gz.
 
-You'll need both the Reduce library (named reduce.so, reduce.dylib or
-reduce.dll, depending on the system you have) and a Reduce image file
-(reduce.img) to make this module work. A Makefile is included with this
-package so that you can build these yourself from the Reduce sources. (In
-principle, this only needs to be done once for the initial installation of
-this module, but you may want to repeat this procedure every once in a while
-to get the latest Reduce version.)
+Windows
+-------
+
+The supported Windows build uses CMake, the CLANG64 environment, and an exact
+pinned checkout of the official REDUCE repository. See `WINDOWS.md`_ for the source
+identity, prerequisites, configure/build/test/install commands, installed
+layout, relocation contract, diagnostics, removal procedure, and license/source
+offer.
+
+The historical ``reduce-algebra-csl-r2204`` archive under ``reduce-files`` is
+not a Windows input and is not the supported upstream baseline. The Windows
+``PureReduce`` CMake component is optional and excluded from the default
+install. It supplies the in-process Pure module only; it does not install the
+full REDUCE frontend or ``reduce.exe``.
+
+.. _WINDOWS.md: WINDOWS.md
+
+Historical Unix build
+---------------------
+
+The remainder of this section describes the legacy Unix Makefile route. It is
+retained for historical Unix users and does not define the Windows package.
+
+You'll need both the Reduce library (named reduce.so or reduce.dylib,
+depending on the system you have) and a Reduce image file (reduce.img) to make
+this module work. A Makefile is included with this package so that you can
+build these yourself from the Reduce sources.
 
 The full Reduce system is a big package, so we have packaged a stripped-down
 version of the Reduce source which contains all the bits and pieces needed to
@@ -89,19 +109,19 @@ reduce-algebra directory!). You should also run ``make check`` which performs
 a few tests in order to verify that the interface works ok (this can be done
 without installing the package, but needs the Reduce image and library).
 
-For convenience, the Makefile also has a ``make reduce`` target which builds a
-minimal Reduce executable. If you use that option, ``make install`` installs
-this executable along with the library and image files, so that you can then
-run Reduce directly from the command line by just typing ``reduce``. Please
-note that this is a really minimalistic Reduce frontend which is most useful
-for testing purposes. (If you want the full Reduce version then you can find
-binary Reduce packages for various systems at SourceForge_. But note that
+For Unix convenience, the Makefile also has a ``make reduce`` target which
+builds a minimal Reduce executable. If you use that option, ``make install``
+installs this executable along with the library and image files, so that you
+can then run Reduce directly from the command line by just typing ``reduce``.
+Please note that this is a really minimalistic Reduce frontend which is most
+useful for testing purposes. (If you want the full Reduce version then you can
+find binary Reduce packages for various systems at SourceForge_. But note that
 neither the minimalistic nor the full Reduce frontend is required for the
 pure-reduce module in any way.)
 
-It is also possible to build the Reduce library and image directly from the
-latest source in the Reduce svn repository. You can check out the repository
-with the following command:
+Historically, it was also possible to build the Unix Reduce library and image
+directly from the latest source in the Reduce svn repository. The old command
+was:
 
 .. code-block:: console
 

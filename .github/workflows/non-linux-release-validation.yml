@@ -9,6 +9,7 @@ on:
     paths:
       - "pure/**"
       - "pure-faust/**"
+      - "pure-reduce/**"
       - ".github/workflows/non-linux-release-validation.yml"
   pull_request:
     branches:
@@ -16,6 +17,7 @@ on:
     paths:
       - "pure/**"
       - "pure-faust/**"
+      - "pure-reduce/**"
       - ".github/workflows/non-linux-release-validation.yml"
 
 concurrency:
@@ -30,6 +32,248 @@ defaults:
     working-directory: pure
 
 jobs:
+  windows-pure-reduce:
+    name: Windows PureReduce package
+    runs-on: windows-2025
+    timeout-minutes: 120
+    defaults:
+      run:
+        shell: pwsh
+        working-directory: source with spaces
+    env:
+      CMAKE_EXE: C:/msys64/clang64/bin/cmake.exe
+      CTEST_EXE: C:/msys64/clang64/bin/ctest.exe
+      LLVM_READOBJ_EXE: C:/msys64/clang64/bin/llvm-readobj.exe
+      REDUCE_COMMIT: 7efba90661139ae9c73c99fddd55f3fb2fabf69a
+      REDUCE_TREE: 5573613a2f86efea75695fbe65a73317383884c1
+
+    steps:
+      - name: Check out source in a path containing spaces
+        uses: actions/checkout@v4
+        with:
+          path: source with spaces
+
+      - name: Install the CLANG64 and upstream build prerequisites
+        run: |
+          $ErrorActionPreference = 'Stop'
+          & C:/msys64/usr/bin/bash.exe -lc @'
+          set -euxo pipefail
+          pacman --noconfirm -Sy --needed \
+            autoconf-wrapper autoconf2.73 \
+            automake-wrapper automake1.18 libtool make \
+            bison flex diffutils \
+            mingw-w64-clang-x86_64-clang \
+            mingw-w64-clang-x86_64-gcc-compat \
+            mingw-w64-clang-x86_64-llvm \
+            mingw-w64-clang-x86_64-cmake \
+            mingw-w64-clang-x86_64-ninja \
+            mingw-w64-clang-x86_64-pkgconf \
+            mingw-w64-clang-x86_64-gmp \
+            mingw-w64-clang-x86_64-mpfr \
+            mingw-w64-clang-x86_64-readline \
+            mingw-w64-clang-x86_64-pcre \
+            mingw-w64-clang-x86_64-libiconv \
+            mingw-w64-clang-x86_64-zlib \
+            mingw-w64-clang-x86_64-ncurses
+          '@
+          if ($LASTEXITCODE -ne 0) { throw "MSYS2 package setup failed" }
+          'C:/msys64/clang64/bin' | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          'C:/msys64/usr/bin' | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: Verify the selected CLANG64 build tools
+        run: |
+          $ErrorActionPreference = 'Stop'
+          & C:/msys64/usr/bin/bash.exe --noprofile --norc -c @'
+          set -euxo pipefail
+          export MSYSTEM=CLANG64
+          export PATH=/clang64/bin:/usr/bin
+          export WANT_AUTOCONF=2.73
+          autoconf --version | sed -n '1p'
+          automake --version | sed -n '1p'
+          libtool --version | sed -n '1p'
+          make --version | sed -n '1p'
+          clang --version | sed -n '1p'
+          g++ --version | sed -n '1p'
+          '@
+          if ($LASTEXITCODE -ne 0) { throw "CLANG64 tool probe failed" }
+
+      - name: Fetch and verify the exact REDUCE source
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $repo = (Get-Location).Path
+          $source = Join-Path $repo 'build/deps/REDUCE source with spaces'
+          New-Item -ItemType Directory `
+            -Path (Split-Path $source -Parent) -Force | Out-Null
+          git clone --filter=blob:none --no-checkout `
+            https://github.com/reduce-algebra/reduce-algebra.git $source
+          if ($LASTEXITCODE -ne 0) { throw "REDUCE clone failed" }
+          git -C $source config core.autocrlf false
+          git -C $source fetch --depth=1 origin $env:REDUCE_COMMIT
+          if ($LASTEXITCODE -ne 0) { throw "REDUCE exact-commit fetch failed" }
+          git -C $source checkout --detach FETCH_HEAD
+          if ($LASTEXITCODE -ne 0) { throw "REDUCE checkout failed" }
+          $actualCommit = (git -C $source rev-parse HEAD).Trim()
+          $actualTree = (git -C $source rev-parse 'HEAD^{tree}').Trim()
+          $status = git -C $source status --short
+          if ($actualCommit -ne $env:REDUCE_COMMIT) {
+            throw "REDUCE commit mismatch: $actualCommit"
+          }
+          if ($actualTree -ne $env:REDUCE_TREE) {
+            throw "REDUCE tree mismatch: $actualTree"
+          }
+          if ($status) { throw "REDUCE checkout is dirty: $status" }
+          $gitBytes = (Get-ChildItem -LiteralPath (Join-Path $source '.git') `
+            -File -Recurse -Force | Measure-Object Length -Sum).Sum
+          "REDUCE_SOURCE=$($source.Replace('\', '/'))" |
+            Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "REDUCE_FETCH_BYTES=$gitBytes" |
+            Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Build and install the Windows Pure runtime
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $repo = (Get-Location).Path
+          $pureBuild = Join-Path $repo 'build/windows pure release'
+          $purePrefix = Join-Path $repo 'build/windows pure prefix'
+          & $env:CMAKE_EXE -S pure -B $pureBuild -G Ninja `
+            -DCMAKE_BUILD_TYPE=Release `
+            -DCMAKE_C_COMPILER=C:/msys64/clang64/bin/clang.exe `
+            -DCMAKE_CXX_COMPILER=C:/msys64/clang64/bin/clang++.exe `
+            -DLLVM_DIR=C:/msys64/clang64/lib/cmake/llvm `
+            "-DCMAKE_INSTALL_PREFIX=$purePrefix" `
+            -DPURE_STRICT_TOOLCHAIN=ON
+          if ($LASTEXITCODE -ne 0) { throw "Pure configure failed" }
+          & $env:CMAKE_EXE --build $pureBuild --parallel 1
+          if ($LASTEXITCODE -ne 0) { throw "Pure build failed" }
+          & $env:CMAKE_EXE --install $pureBuild
+          if ($LASTEXITCODE -ne 0) { throw "Pure install failed" }
+          "PURE_EXECUTABLE=$($purePrefix.Replace('\', '/'))/bin/pure.exe" |
+            Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Configure and build PureReduce
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $repo = (Get-Location).Path
+          $build = Join-Path $repo 'build/windows PureReduce release'
+          & $env:CMAKE_EXE -S pure-reduce -B $build -G Ninja `
+            -DCMAKE_BUILD_TYPE=Release `
+            -DCMAKE_CXX_COMPILER=C:/msys64/clang64/bin/clang++.exe `
+            "-DPURE_REDUCE_SOURCE_DIR=$env:REDUCE_SOURCE" `
+            -DPURE_REDUCE_MSYS2_BASH=C:/msys64/usr/bin/bash.exe `
+            -DPURE_REDUCE_MAKE=C:/msys64/usr/bin/make.exe `
+            "-DPURE_EXECUTABLE=$env:PURE_EXECUTABLE" `
+            -DBUILD_TESTING=ON
+          if ($LASTEXITCODE -ne 0) { throw "PureReduce configure failed" }
+          & $env:CMAKE_EXE --build $build --parallel 1
+          if ($LASTEXITCODE -ne 0) { throw "PureReduce build failed" }
+          "PURE_REDUCE_BUILD=$($build.Replace('\', '/'))" |
+            Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Run the complete PureReduce test suite
+        run: |
+          $ErrorActionPreference = 'Stop'
+          & $env:CTEST_EXE --test-dir $env:PURE_REDUCE_BUILD `
+            -L reduce --output-on-failure --no-tests=error
+          if ($LASTEXITCODE -ne 0) { throw "PureReduce CTest failed" }
+
+      - name: Install and verify only the PureReduce component
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $repo = (Get-Location).Path
+          $stage = Join-Path $env:PURE_REDUCE_BUILD 'staged PureReduce package'
+          & $env:CMAKE_EXE `
+            "-DBUILD_DIR=$env:PURE_REDUCE_BUILD" `
+            "-DSTAGE_PREFIX=$stage" `
+            "-DAUTHORITATIVE_MANIFEST=$env:PURE_REDUCE_BUILD/PureReduceExpected.sha256" `
+            "-DPURE_EXECUTABLE=$env:PURE_EXECUTABLE" `
+            "-DLLVM_READOBJ=$env:LLVM_READOBJ_EXE" `
+            "-DSOURCE_PREFIX=$repo/pure-reduce" `
+            -P pure-reduce/cmake/VerifyInstalledPackage.cmake
+          if ($LASTEXITCODE -ne 0) {
+            throw "installed PureReduce verification failed"
+          }
+          "PURE_REDUCE_STAGE=$($stage.Replace('\', '/'))" |
+            Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Create the deterministic PureReduce ZIP and record its hash
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $artifactDirectory = Join-Path (Get-Location).Path 'build/pure-reduce-artifacts'
+          $archive = Join-Path $artifactDirectory 'windows-pure-reduce.zip'
+          $listFile = Join-Path $artifactDirectory 'archive-files.txt'
+          New-Item -ItemType Directory -Path $artifactDirectory -Force | Out-Null
+          $files = Get-ChildItem -LiteralPath $env:PURE_REDUCE_STAGE -File -Recurse
+          if ($files.Count -ne 80) { throw "unexpected staged file count: $($files.Count)" }
+          [string[]]$relativeFiles = $files | ForEach-Object {
+            [IO.Path]::GetRelativePath($env:PURE_REDUCE_STAGE, $_.FullName).Replace('\', '/')
+          }
+          [Array]::Sort($relativeFiles, [StringComparer]::Ordinal)
+          $relativeFiles | Out-File -LiteralPath $listFile -Encoding utf8
+          Add-Type -AssemblyName System.IO.Compression
+          $archiveStream = [IO.File]::Open(
+            $archive, [IO.FileMode]::Create, [IO.FileAccess]::Write,
+            [IO.FileShare]::None)
+          $zip = [IO.Compression.ZipArchive]::new(
+            $archiveStream, [IO.Compression.ZipArchiveMode]::Create, $false)
+          try {
+            foreach ($relative in $relativeFiles) {
+              $source = Join-Path $env:PURE_REDUCE_STAGE `
+                $relative.Replace('/', [IO.Path]::DirectorySeparatorChar)
+              $entry = $zip.CreateEntry(
+                $relative, [IO.Compression.CompressionLevel]::Optimal)
+              $entry.LastWriteTime = [DateTimeOffset]'2000-01-01T00:00:00+00:00'
+              $inputStream = [IO.File]::OpenRead($source)
+              $entryStream = $entry.Open()
+              try {
+                $inputStream.CopyTo($entryStream)
+              } finally {
+                $entryStream.Dispose()
+                $inputStream.Dispose()
+              }
+            }
+          } finally {
+            $zip.Dispose()
+            $archiveStream.Dispose()
+          }
+          $hash = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+          $metrics = Get-Content -LiteralPath `
+            "$env:PURE_REDUCE_BUILD/PureReducePackageMetrics.json" -Raw |
+            ConvertFrom-Json
+          $stageBytes = ($files | Measure-Object Length -Sum).Sum
+          $archiveBytes = (Get-Item -LiteralPath $archive).Length
+          Write-Host "windows-pure-reduce.zip SHA-256: $hash"
+          @"
+          ### Windows PureReduce package
+
+          - REDUCE fetch bytes: $env:REDUCE_FETCH_BYTES
+          - canonical source bytes: $($metrics.upstream_source_bytes)
+          - upstream build-tree bytes: $($metrics.upstream_build_tree_bytes)
+          - upstream build elapsed seconds: $($metrics.upstream_build_elapsed_seconds)
+          - upstream workers: 1
+          - selected CSL objects: $($metrics.link_object_count)
+          - installed files: $($files.Count)
+          - installed bytes: $stageBytes
+          - ZIP bytes: $archiveBytes
+          - inner ZIP SHA-256: ``$hash``
+          "@ | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
+
+      - name: Upload the PureReduce package
+        id: upload-pure-reduce
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-pure-reduce
+          path: source with spaces/build/pure-reduce-artifacts/windows-pure-reduce.zip
+          if-no-files-found: error
+
+      - name: Record the CI artifact digest
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $digest = '${{ steps.upload-pure-reduce.outputs.artifact-digest }}'
+          if (-not $digest) { throw "upload-artifact did not report a digest" }
+          Write-Host "windows-pure-reduce artifact digest: $digest"
+          "- upload-artifact digest: ``$digest``" |
+            Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
+
   windows-pure-faust:
     name: Windows pure-faust (${{ matrix.selection }})
     runs-on: windows-2025
