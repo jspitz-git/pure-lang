@@ -334,6 +334,7 @@ set(PURE_REDUCE_UPSTREAM_BINARY_DIR "${_contract_upstream_root}")
 
 foreach(path IN ITEMS
     "${PURE_REDUCE_CSL_IMAGE}"
+    "${PURE_REDUCE_CSL_INCLUDE_DIR}/proc.h"
     ${PURE_REDUCE_CSL_LINK_ARTIFACTS}
     ${PURE_REDUCE_RUNTIME_MANIFESTS}
     ${PURE_REDUCE_RUNTIME_DATA})
@@ -361,6 +362,7 @@ set(_artifact_contract_log
   "${PURE_REDUCE_UPSTREAM_BINARY_DIR}/logs/artifact-contract.log")
   foreach(_artifact IN ITEMS
       "${PURE_REDUCE_CSL_IMAGE}"
+      "${PURE_REDUCE_CSL_INCLUDE_DIR}/proc.h"
       ${PURE_REDUCE_CSL_LINK_ARTIFACTS}
       ${PURE_REDUCE_RUNTIME_MANIFESTS}
       "${PURE_REDUCE_UPSTREAM_METRICS}"

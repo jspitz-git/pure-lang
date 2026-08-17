@@ -109,10 +109,12 @@ set(PURE_REDUCE_MSYS2_BASH "fixture-bash")
 set(PURE_REDUCE_MAKE "fixture-make")
 file(REMOVE_RECURSE "${_recipe_fixture}")
 file(MAKE_DIRECTORY
+  "${_recipe_fixture}/artifacts/include"
   "${_recipe_fixture}/artifacts/link"
   "${_recipe_fixture}/logs")
 foreach(_artifact IN ITEMS
     artifacts/reduce.img
+    artifacts/include/proc.h
     artifacts/link/libreduce-csl.a
     artifacts/link/libcrlibm.a
     artifacts/link/libffi.a

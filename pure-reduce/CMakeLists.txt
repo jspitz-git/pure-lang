@@ -34,8 +34,6 @@ if(PURE_REDUCE_SOURCE_DIR)
     NAMES llvm-readobj
     HINTS "${_pure_reduce_compiler_directory}"
     REQUIRED)
-  set(_pure_reduce_cslbase
-    "${PURE_REDUCE_UPSTREAM_BINARY_DIR}/source/csl/cslbase")
   add_library(pure-reduce-bridge-objects OBJECT
     bridge/reduce_bridge.cpp)
   set_target_properties(pure-reduce-bridge-objects PROPERTIES
@@ -52,7 +50,7 @@ if(PURE_REDUCE_SOURCE_DIR)
     "-fmacro-prefix-map=${CMAKE_CURRENT_BINARY_DIR}=/usr/src/pure-reduce-build")
   target_include_directories(pure-reduce-bridge-objects PRIVATE
     "${CMAKE_CURRENT_LIST_DIR}/bridge"
-    "${_pure_reduce_cslbase}")
+    "${PURE_REDUCE_CSL_INCLUDE_DIR}")
   add_dependencies(pure-reduce-bridge-objects pure-reduce-upstream)
 
   add_library(reduce MODULE
@@ -82,7 +80,7 @@ if(PURE_REDUCE_SOURCE_DIR)
     CXX_EXTENSIONS NO)
   target_include_directories(pure-reduce-bridge-contract PRIVATE
     "${CMAKE_CURRENT_LIST_DIR}/bridge"
-    "${_pure_reduce_cslbase}")
+    "${PURE_REDUCE_CSL_INCLUDE_DIR}")
   target_compile_definitions(pure-reduce-bridge-contract PRIVATE
     PURE_REDUCE_STATIC)
   add_dependencies(pure-reduce-bridge-contract pure-reduce-upstream)

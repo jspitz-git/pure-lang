@@ -9,7 +9,7 @@ set(_PURE_REDUCE_UTF8_IMAGE_PATCH_SHA256
 set(_PURE_REDUCE_CONFIGURE_PATHS_PATCH_SHA256
   "ec94278f24718963e68aeac737a168c704c81cc72f48af903c4675770f3518df")
 set(_PURE_REDUCE_BUILD_RECIPE_VERSION
-  "windows-clang-intel-layout-v9")
+  "windows-clang-intel-layout-v10")
 
 function(_pure_reduce_expected_upstream_stamp COMMIT TREE_SHA256 OUT_STAMP)
   string(CONCAT _stamp
@@ -230,6 +230,16 @@ function(_pure_reduce_stage_runtime_artifacts PRODUCER RUNTIME_ROOT)
   endforeach()
 endfunction()
 
+function(_pure_reduce_stage_public_headers SOURCE_ROOT INCLUDE_ROOT)
+  set(_source "${SOURCE_ROOT}/csl/cslbase/proc.h")
+  if(NOT EXISTS "${_source}" OR IS_DIRECTORY "${_source}")
+    message(FATAL_ERROR
+      "required CSL public header is missing from the verified source: ${_source}")
+  endif()
+  file(MAKE_DIRECTORY "${INCLUDE_ROOT}")
+  file(COPY_FILE "${_source}" "${INCLUDE_ROOT}/proc.h" ONLY_IF_DIFFERENT)
+endfunction()
+
 function(_pure_reduce_run_source_verification)
   foreach(_required IN ITEMS PURE_REDUCE_SOURCE_DIR
       PURE_REDUCE_VERIFIED_COMMIT PURE_REDUCE_SOURCE_TREE_SHA256)
@@ -284,6 +294,7 @@ function(_pure_reduce_run_upstream_build_ensure)
   get_filename_component(_root "${PURE_REDUCE_UPSTREAM_BINARY_DIR}" ABSOLUTE)
   set(_required_artifacts
     "${_root}/artifacts/reduce.img"
+    "${_root}/artifacts/include/proc.h"
     "${_root}/artifacts/link/libreduce-csl.a"
     "${_root}/artifacts/link/libcrlibm.a"
     "${_root}/artifacts/link/libffi.a"
@@ -797,6 +808,8 @@ cd "$src"
 
   _pure_reduce_stage_runtime_artifacts(
     "${_full_configuration}" "${_runtime_artifacts}")
+  _pure_reduce_stage_public_headers(
+    "${_private_source}" "${_artifacts}/include")
 
   set(_closure_script [=[
 set -eu
@@ -997,6 +1010,7 @@ function(pure_reduce_define_upstream_build)
   file(TO_CMAKE_PATH "${_root}" _root)
 
   set(_image "${_root}/artifacts/reduce.img")
+  set(_include_dir "${_root}/artifacts/include")
   set(_link_artifacts
     "${_root}/artifacts/link/libreduce-csl.a"
     "${_root}/artifacts/link/libcrlibm.a"
@@ -1018,6 +1032,7 @@ function(pure_reduce_define_upstream_build)
 
   set(PURE_REDUCE_UPSTREAM_BINARY_DIR "${_root}" PARENT_SCOPE)
   set(PURE_REDUCE_CSL_IMAGE "${_image}" PARENT_SCOPE)
+  set(PURE_REDUCE_CSL_INCLUDE_DIR "${_include_dir}" PARENT_SCOPE)
   # LINK_ARTIFACTS are verified files. LINK_INTERFACE (and its compatibility
   # alias LINK_INPUTS) is the complete ordered sequence for target_link_libraries.
   set(PURE_REDUCE_CSL_LINK_ARTIFACTS "${_link_artifacts}" PARENT_SCOPE)
@@ -1059,7 +1074,8 @@ function(pure_reduce_define_upstream_build)
       "-DPURE_REDUCE_VERIFIED_COMMIT=${PURE_REDUCE_VERIFIED_COMMIT}"
       "-DPURE_REDUCE_SOURCE_TREE_SHA256=${PURE_REDUCE_SOURCE_TREE_SHA256}"
       -P "${CMAKE_CURRENT_FUNCTION_LIST_FILE}"
-    BYPRODUCTS "${_stamp}" "${_image}" ${_link_artifacts} "${_metrics}"
+    BYPRODUCTS "${_stamp}" "${_image}" "${_include_dir}/proc.h"
+      ${_link_artifacts} "${_metrics}"
       "${_root}/logs/artifact-contract-probe.exe"
       "${_root}/logs/artifact-contract.log"
     COMMENT "Ensuring complete pinned REDUCE/CSL artifacts"
