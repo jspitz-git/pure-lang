@@ -265,8 +265,59 @@ if(BUILD_TESTING)
           -P "${CMAKE_CURRENT_LIST_DIR}/tests/install-component.cmake")
       set_tests_properties(pure-reduce-install-component PROPERTIES
         LABELS "reduce;install;windows"
+        RESOURCE_LOCK pure-reduce-install-metadata
         REQUIRED_FILES "$<TARGET_FILE:reduce>"
         TIMEOUT 120)
+      set(_pure_reduce_installed_stage
+        "${CMAKE_CURRENT_BINARY_DIR}/installed PureReduce 日本語 stage")
+      add_test(
+        NAME pure-reduce-installed
+        COMMAND "${CMAKE_COMMAND}"
+          "-DBUILD_DIR=${CMAKE_CURRENT_BINARY_DIR}"
+          "-DSTAGE_PREFIX=${_pure_reduce_installed_stage}"
+          "-DAUTHORITATIVE_MANIFEST=${CMAKE_CURRENT_BINARY_DIR}/PureReduceExpected.sha256"
+          "-DPURE_EXECUTABLE=${PURE_EXECUTABLE}"
+          "-DLLVM_READOBJ=${PURE_REDUCE_LLVM_READOBJ}"
+          "-DSOURCE_PREFIX=${CMAKE_CURRENT_LIST_DIR}"
+          -P "${CMAKE_CURRENT_LIST_DIR}/cmake/VerifyInstalledPackage.cmake")
+      set_tests_properties(pure-reduce-installed PROPERTIES
+        FIXTURES_SETUP pure-reduce-installed-package
+        LABELS "reduce;runtime"
+        RESOURCE_LOCK pure-reduce-install-metadata
+        REQUIRED_FILES "$<TARGET_FILE:reduce>"
+        TIMEOUT 120)
+      add_test(
+        NAME pure-reduce-manifest-failures
+        COMMAND "${CMAKE_COMMAND}"
+          "-DBUILD_DIR=${CMAKE_CURRENT_BINARY_DIR}"
+          "-DSTAGE_PREFIX=${_pure_reduce_installed_stage}"
+          "-DAUTHORITATIVE_MANIFEST=${CMAKE_CURRENT_BINARY_DIR}/PureReduceExpected.sha256"
+          "-DPURE_EXECUTABLE=${PURE_EXECUTABLE}"
+          "-DLLVM_READOBJ=${PURE_REDUCE_LLVM_READOBJ}"
+          "-DSOURCE_PREFIX=${CMAKE_CURRENT_LIST_DIR}"
+          "-DVERIFIER=${CMAKE_CURRENT_LIST_DIR}/cmake/VerifyInstalledPackage.cmake"
+          -P "${CMAKE_CURRENT_LIST_DIR}/tests/manifest-failures.cmake")
+      set_tests_properties(pure-reduce-manifest-failures PROPERTIES
+        FIXTURES_REQUIRED pure-reduce-installed-package
+        LABELS "reduce;runtime"
+        RESOURCE_LOCK pure-reduce-install-metadata
+        TIMEOUT 120)
+      add_test(
+        NAME pure-reduce-relocation
+        COMMAND "${CMAKE_COMMAND}"
+          "-DBUILD_DIR=${CMAKE_CURRENT_BINARY_DIR}"
+          "-DSTAGE_PREFIX=${_pure_reduce_installed_stage}"
+          "-DAUTHORITATIVE_MANIFEST=${CMAKE_CURRENT_BINARY_DIR}/PureReduceExpected.sha256"
+          "-DPURE_EXECUTABLE=${PURE_EXECUTABLE}"
+          "-DLLVM_READOBJ=${PURE_REDUCE_LLVM_READOBJ}"
+          "-DSOURCE_PREFIX=${CMAKE_CURRENT_LIST_DIR}"
+          "-DVERIFIER=${CMAKE_CURRENT_LIST_DIR}/cmake/VerifyInstalledPackage.cmake"
+          -P "${CMAKE_CURRENT_LIST_DIR}/tests/relocation.cmake")
+      set_tests_properties(pure-reduce-relocation PROPERTIES
+        FIXTURES_REQUIRED pure-reduce-installed-package
+        LABELS "reduce;runtime"
+        RESOURCE_LOCK pure-reduce-install-metadata
+        TIMEOUT 180)
     endif()
   endif()
 endif()
