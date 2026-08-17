@@ -1,0 +1,29 @@
+cmake_minimum_required(VERSION 3.25)
+
+if(NOT DEFINED REDUCE_UPSTREAM_MODULE OR
+    "${REDUCE_UPSTREAM_MODULE}" STREQUAL "")
+  message(FATAL_ERROR "REDUCE_UPSTREAM_MODULE is required")
+endif()
+
+include("${REDUCE_UPSTREAM_MODULE}")
+string(SHA256 _root_key "${CMAKE_CURRENT_BINARY_DIR}")
+file(TO_CMAKE_PATH
+  "$ENV{TEMP}/pure reduce configuration selection-${_root_key}" _root)
+file(REMOVE_RECURSE "${_root}")
+
+set(_cygwin "${_root}/cslbuild/x86_64-pc-cygwin-nogui")
+set(_windows "${_root}/cslbuild/x86_64-pc-windows-nogui")
+file(MAKE_DIRECTORY "${_cygwin}/csl" "${_windows}/csl")
+file(WRITE "${_cygwin}/csl/config.h" "#define RAW_CYGWIN 1\n")
+file(WRITE "${_cygwin}/Makefile" "all:\n")
+file(WRITE "${_windows}/csl/config.h" "/* #undef RAW_CYGWIN */\n")
+file(WRITE "${_windows}/Makefile" "all:\n")
+
+_pure_reduce_select_windows_configuration("${_root}" _selected)
+if(NOT _selected STREQUAL _windows)
+  file(REMOVE_RECURSE "${_root}")
+  message(FATAL_ERROR
+    "selected the wrong pinned REDUCE Windows configuration: ${_selected}")
+endif()
+
+file(REMOVE_RECURSE "${_root}")

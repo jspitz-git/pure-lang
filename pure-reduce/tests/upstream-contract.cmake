@@ -151,26 +151,28 @@ set(_configuration_fixture
   "${CMAKE_CURRENT_BINARY_DIR}/pure-reduce-configuration-fixture")
 file(REMOVE_RECURSE "${_configuration_fixture}")
 file(MAKE_DIRECTORY
-  "${_configuration_fixture}/cslbuild/native/csl"
-  "${_configuration_fixture}/cslbuild/windows/csl")
-file(WRITE "${_configuration_fixture}/cslbuild/native/csl/config.h"
-  "#define HOST_CPU \"x86_64\"\n"
-  "#define HOST_OS \"mingw64\"\n"
+  "${_configuration_fixture}/cslbuild/x86_64-pc-cygwin-nogui/csl"
+  "${_configuration_fixture}/cslbuild/x86_64-pc-windows-nogui/csl")
+file(WRITE
+  "${_configuration_fixture}/cslbuild/x86_64-pc-cygwin-nogui/csl/config.h"
   "#define RAW_CYGWIN 1\n")
-file(WRITE "${_configuration_fixture}/cslbuild/windows/csl/config.h"
-  "#define HOST_CPU \"x86_64\"\n"
-  "#define HOST_OS \"mingw32\"\n"
+file(WRITE
+  "${_configuration_fixture}/cslbuild/x86_64-pc-windows-nogui/csl/config.h"
   "/* #undef RAW_CYGWIN */\n")
-file(WRITE "${_configuration_fixture}/cslbuild/windows/Makefile" "all:\n")
+file(WRITE
+  "${_configuration_fixture}/cslbuild/x86_64-pc-windows-nogui/Makefile"
+  "all:\n")
 _pure_reduce_select_windows_configuration(
   "${_configuration_fixture}" _selected_configuration)
 
-file(MAKE_DIRECTORY "${_configuration_fixture}/cslbuild/second/csl")
-file(WRITE "${_configuration_fixture}/cslbuild/second/csl/config.h"
-  "#define HOST_CPU \"x86_64\"\n"
-  "#define HOST_OS \"mingw32\"\n"
+file(MAKE_DIRECTORY
+  "${_configuration_fixture}/cslbuild/x86_64-pc-windows-debug/csl")
+file(WRITE
+  "${_configuration_fixture}/cslbuild/x86_64-pc-windows-debug/csl/config.h"
   "/* #undef RAW_CYGWIN */\n")
-file(WRITE "${_configuration_fixture}/cslbuild/second/Makefile" "all:\n")
+file(WRITE
+  "${_configuration_fixture}/cslbuild/x86_64-pc-windows-debug/Makefile"
+  "all:\n")
 file(TO_CMAKE_PATH "${CMAKE_CURRENT_LIST_DIR}/../cmake/ReduceUpstream.cmake"
   _negative_module)
 file(TO_CMAKE_PATH "${_configuration_fixture}" _negative_configuration)
@@ -216,19 +218,24 @@ if(NOT _startup_object EQUAL -1 OR _embedded_object EQUAL -1)
 endif()
 file(REMOVE_RECURSE
   "${CMAKE_CURRENT_BINARY_DIR}/pure-reduce-current-closure-fixture")
-if(NOT _selected_configuration MATCHES "/cslbuild/windows$")
+if(NOT _selected_configuration MATCHES
+    "/cslbuild/x86_64-pc-windows-nogui$")
   message(FATAL_ERROR
     "selected the wrong complete CSL configuration: ${_selected_configuration}")
 endif()
 
 file(MAKE_DIRECTORY
-  "${_configuration_fixture}/cslbuild/windows/csl"
+  "${_configuration_fixture}/cslbuild/x86_64-pc-windows-nogui/csl"
   "${_configuration_fixture}/cslbuild/bootstrap/csl")
-file(WRITE "${_configuration_fixture}/cslbuild/windows/csl/reduce.img" "target")
+file(WRITE
+  "${_configuration_fixture}/cslbuild/x86_64-pc-windows-nogui/csl/reduce.img"
+  "target")
 file(WRITE "${_configuration_fixture}/cslbuild/bootstrap/csl/reduce.img" "bootstrap")
 _pure_reduce_select_configuration_image(
-  "${_configuration_fixture}/cslbuild/windows" _selected_image)
-if(NOT _selected_image MATCHES "/cslbuild/windows/csl/reduce[.]img$")
+  "${_configuration_fixture}/cslbuild/x86_64-pc-windows-nogui"
+  _selected_image)
+if(NOT _selected_image MATCHES
+    "/cslbuild/x86_64-pc-windows-nogui/csl/reduce[.]img$")
   message(FATAL_ERROR "selected an image from a different CSL configuration")
 endif()
 file(MAKE_DIRECTORY "${_configuration_fixture}/cslbuild/empty/csl")
@@ -292,20 +299,22 @@ set(_runtime_fixture
 set(_contract_upstream_root "${PURE_REDUCE_UPSTREAM_BINARY_DIR}")
 file(REMOVE_RECURSE "${_runtime_fixture}")
 file(MAKE_DIRECTORY
-  "${_runtime_fixture}/source/cslbuild/windows/csl/reduce.resources"
-  "${_runtime_fixture}/source/cslbuild/windows/csl/reduce.fonts")
-file(WRITE "${_runtime_fixture}/source/cslbuild/windows/csl/config.h"
-  "#define HOST_CPU \"x86_64\"\n"
-  "#define HOST_OS \"mingw32\"\n"
+  "${_runtime_fixture}/source/cslbuild/x86_64-pc-windows-nogui/csl/reduce.resources"
+  "${_runtime_fixture}/source/cslbuild/x86_64-pc-windows-nogui/csl/reduce.fonts")
+file(WRITE
+  "${_runtime_fixture}/source/cslbuild/x86_64-pc-windows-nogui/csl/config.h"
   "/* #undef RAW_CYGWIN */\n")
-file(WRITE "${_runtime_fixture}/source/cslbuild/windows/Makefile" "all:\n")
-file(WRITE "${_runtime_fixture}/source/cslbuild/windows/csl/reduce.img"
+file(WRITE
+  "${_runtime_fixture}/source/cslbuild/x86_64-pc-windows-nogui/Makefile"
+  "all:\n")
+file(WRITE
+  "${_runtime_fixture}/source/cslbuild/x86_64-pc-windows-nogui/csl/reduce.img"
   "fixture image")
 file(WRITE
-  "${_runtime_fixture}/source/cslbuild/windows/csl/reduce.resources/data"
+  "${_runtime_fixture}/source/cslbuild/x86_64-pc-windows-nogui/csl/reduce.resources/data"
   "resource")
 file(WRITE
-  "${_runtime_fixture}/source/cslbuild/windows/csl/reduce.fonts/font"
+  "${_runtime_fixture}/source/cslbuild/x86_64-pc-windows-nogui/csl/reduce.fonts/font"
   "font")
 set(PURE_REDUCE_UPSTREAM_BINARY_DIR "${_runtime_fixture}")
 _pure_reduce_run_runtime_artifact_refresh()

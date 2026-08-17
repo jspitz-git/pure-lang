@@ -423,10 +423,9 @@ function(_pure_reduce_select_windows_configuration SOURCE_ROOT OUT_DIRECTORY)
     get_filename_component(_csl_directory "${_header}" DIRECTORY)
     get_filename_component(_configuration_directory
       "${_csl_directory}" DIRECTORY)
-    if(_configuration MATCHES
-        "#define[ \t]+HOST_CPU[ \t]+\"x86_64\"" AND
-       _configuration MATCHES
-        "#define[ \t]+HOST_OS[ \t]+\"mingw(32|64)\"" AND
+    get_filename_component(_configuration_name
+      "${_configuration_directory}" NAME)
+    if(_configuration_name MATCHES "^x86_64-pc-windows($|-)" AND
        NOT _configuration MATCHES
         "#define[ \t]+RAW_CYGWIN[ \t]+1" AND
        EXISTS "${_configuration_directory}/Makefile")

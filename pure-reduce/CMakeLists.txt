@@ -129,6 +129,13 @@ if(BUILD_TESTING)
       "-DPURE_REDUCE_SOURCE_DIR=${PURE_REDUCE_SOURCE_DIR}"
       -P "${CMAKE_CURRENT_LIST_DIR}/tests/source-contract.cmake")
   set_tests_properties(pure-reduce-source-contract PROPERTIES LABELS "reduce")
+  add_test(
+    NAME pure-reduce-configuration-selection
+    COMMAND "${CMAKE_COMMAND}"
+      "-DREDUCE_UPSTREAM_MODULE=${CMAKE_CURRENT_LIST_DIR}/cmake/ReduceUpstream.cmake"
+      -P "${CMAKE_CURRENT_LIST_DIR}/tests/configuration-selection.cmake")
+  set_tests_properties(pure-reduce-configuration-selection PROPERTIES
+    LABELS "reduce")
   if(PURE_REDUCE_SOURCE_DIR)
     add_test(
       NAME pure-reduce-prefix-map-response
