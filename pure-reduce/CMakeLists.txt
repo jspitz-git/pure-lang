@@ -371,7 +371,11 @@ if(BUILD_TESTING)
         FIXTURES_REQUIRED pure-reduce-installed-package
         LABELS "reduce;runtime"
         RESOURCE_LOCK pure-reduce-install-metadata
-        TIMEOUT 180)
+        # This runs one full relocated-package verifier, five adversarial
+        # verifier fixtures, and two component-install ownership rounds.
+        # A clean hosted Windows runner can exceed three minutes even though
+        # the same 81-file package completes in about two minutes locally.
+        TIMEOUT 360)
     endif()
   endif()
 endif()

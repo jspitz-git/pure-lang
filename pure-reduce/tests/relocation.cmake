@@ -51,8 +51,6 @@ if(NOT RELOCATION_CHILD)
       -DRELOCATION_CHILD=ON
       -P "${CMAKE_CURRENT_LIST_FILE}"
     RESULT_VARIABLE _child_result
-    OUTPUT_VARIABLE _child_output
-    ERROR_VARIABLE _child_error
     ENCODING UTF-8)
   file(REMOVE_RECURSE
     "${_relocated_stage}" "${_leak_root}"
@@ -76,12 +74,12 @@ if(NOT RELOCATION_CHILD)
   endif()
   if(NOT _child_result EQUAL 0)
     message(FATAL_ERROR
-      "relocation verification child failed (${_child_result})\n"
-      "stdout:\n${_child_output}\nstderr:\n${_child_error}")
+      "relocation verification child failed (${_child_result}); "
+      "see the streamed child output above")
   endif()
-  message("${_child_output}")
   return()
 endif()
+message(STATUS "relocation phase: relocated package verification")
 file(REMOVE_RECURSE "${_relocated_stage}")
 file(MAKE_DIRECTORY "${_relocated_stage}")
 file(COPY "${_original_stage}/" DESTINATION "${_relocated_stage}")
@@ -110,6 +108,7 @@ endif()
 # Re-authorize a deliberately leaked original prefix all the way through the
 # manifest and installed inventory. Only the content-policy check may reject
 # this fixture.
+message(STATUS "relocation phase: text prefix leak rejection")
 set(_leak_build "${_leak_root}/build")
 set(_leak_stage "${_leak_root}/stage")
 set(_leak_relative
@@ -214,6 +213,7 @@ endif()
 # Re-authorize mixed-case narrow and UTF-16LE prefix leaks in installed
 # binaries. Hash and inventory validation must succeed before the byte-level
 # policy rejects either Windows-equivalent spelling.
+message(STATUS "relocation phase: binary prefix leak rejection")
 set(_binary_leak_relative "lib/pure/reduce.fonts/cmex7.ttf")
 file(REMOVE_RECURSE "${_binary_leak_root}")
 file(TO_CMAKE_PATH "${SOURCE_PREFIX}" _source_prefix_forward)
@@ -259,6 +259,7 @@ if(_mixed_windows_prefix STREQUAL _source_prefix_forward OR
 endif()
 set(_binary_leak_failures)
 foreach(_binary_case IN ITEMS narrow utf16le unicode_utf16le odd_nibble)
+  message(STATUS "relocation binary fixture: ${_binary_case}")
   set(_binary_case_root "${_binary_leak_root}/${_binary_case}")
   set(_binary_leak_build "${_binary_case_root}/build")
   set(_binary_leak_stage "${_binary_case_root}/stage")
@@ -413,6 +414,7 @@ endif()
 
 # Installation ownership: an overlay may replace only manifest-owned files,
 # and manifest-guided removal must preserve unrelated Pure prefix content.
+message(STATUS "relocation phase: overlay and removal ownership")
 file(REMOVE_RECURSE "${_ownership_oracle_root}")
 file(MAKE_DIRECTORY "${_ownership_oracle_root}")
 foreach(_oracle_name IN ITEMS
