@@ -41,7 +41,7 @@ index c7fa563..a198845 100755
 +  doconfig="$SHELL \"$abssrcdir/libraries/crlibm/configure\" -C $filtered \
 @@ -18189 +18189 @@ else
 -  doconfig="$SHELL $abssrcdir/libraries/libffi/configure -C $filtered \
-+  doconfig="$SHELL \"$abssrcdir/libraries/libffi/configure\" -C $filtered \
++  doconfig="$SHELL \"$abssrcdir/libraries/libffi/configure\" -C $filtered --disable-symvers \
 @@ -18239 +18239 @@ setpasscc
 -doconfig="$SHELL $abssrcdir/libraries/libedit-$LIBEDIT_VERSION/configure -C \
 +doconfig="$SHELL \"$abssrcdir/libraries/libedit-$LIBEDIT_VERSION/configure\" -C \
@@ -82,7 +82,7 @@ index 0b457eb..cc0e5d9 100644
 +  doconfig="$SHELL \"$abssrcdir/libraries/crlibm/configure\" -C $filtered \
 @@ -1533 +1533 @@ then
 -  doconfig="$SHELL $abssrcdir/libraries/libffi/configure -C $filtered \
-+  doconfig="$SHELL \"$abssrcdir/libraries/libffi/configure\" -C $filtered \
++  doconfig="$SHELL \"$abssrcdir/libraries/libffi/configure\" -C $filtered --disable-symvers \
 @@ -1557 +1557 @@ setpasscc
 -doconfig="$SHELL $abssrcdir/libraries/libedit-$LIBEDIT_VERSION/configure -C \
 +doconfig="$SHELL \"$abssrcdir/libraries/libedit-$LIBEDIT_VERSION/configure\" -C \

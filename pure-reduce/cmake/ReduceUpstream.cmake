@@ -7,9 +7,9 @@ set(_PURE_REDUCE_NIL_PATCH_SHA256
 set(_PURE_REDUCE_UTF8_IMAGE_PATCH_SHA256
   "ad89f9581eefaaf4191b65af1b769a18883e865ee2740e4e6f053d1c5615d0e9")
 set(_PURE_REDUCE_CONFIGURE_PATHS_PATCH_SHA256
-  "32a737b72bec3000fc2da6e701b80234bb34bf757a236049a5dd7347d555fee6")
+  "ec94278f24718963e68aeac737a168c704c81cc72f48af903c4675770f3518df")
 set(_PURE_REDUCE_BUILD_RECIPE_VERSION
-  "windows-clang-intel-layout-v7")
+  "windows-clang-intel-layout-v8")
 
 function(_pure_reduce_expected_upstream_stamp COMMIT TREE_SHA256 OUT_STAMP)
   string(CONCAT _stamp
@@ -71,8 +71,8 @@ function(_pure_reduce_apply_private_source_patch
       "d99238883db3034cedb6c687beac83e0f6b2b29183b876f09e43b39e2d20437b"
       "3db18b7bad046a04ab722f2729f5fadfe74d17f4f1cfc3effeb876cdf6ff1126")
     set(_expected_postimages
-      "dfcc6bd9907df1b732695eab29f1a445a76245536f724a814b60f45beb001232"
-      "e9e0cb4160a1948f49d352ca7fab162b44960be0469983fde6fc106e36f6a0fe")
+      "f021db49d1807b1679b7b3def369719c09628c61633dfd1a608cbc2b9e2930c9"
+      "d374e776af1c5ce06107b181c4147fe2d251b6b3d0ba544f1eee2f6ebeaaca5f")
   else()
     message(FATAL_ERROR "source patch is not in the approved registry: ${PATCH_FILE}")
   endif()
@@ -748,11 +748,6 @@ export MSYSTEM=CLANG64
 export PATH=/clang64/bin:/usr/bin
 export CONFIG_SITE=/dev/null
 export WANT_AUTOCONF=2.73
-# libffi mistakes lld's GNU-driver compatibility for ELF symbol-versioning
-# support on native MinGW. This documented configure variable is inherited by
-# its nested configure script, while the top-level driver does not forward
-# arbitrary --disable-* options.
-export enable_symvers=no
 src=$(cygpath -u "$1")
 cd "$src"
 prefix_map=@$2
@@ -965,8 +960,8 @@ printf 'autoconf=%s\n' "$(autoconf --version | sed -n '1p')"
     "  \"tool_versions\": \"${_tool_versions_json}\",\n"
     "  \"autogen_arguments\": [\"--with-csl\", \"--without-gui\", \"--without-redfront\"],\n"
     "  \"configure_arguments\": [\"--without-autogen\", \"--with-csl\", \"--without-gui\", \"--without-redfront\", \"--with-windows_layout=new\", \"CC=clang\", \"CXX=clang++\"],\n"
+    "  \"nested_libffi_configure_arguments\": [\"--disable-symvers\"],\n"
     "  \"dependency_profile\": \"text-only CSL/image runtime; upstream GUI, Redfront, FOX, X11, and libedit dependencies excluded\",\n"
-    "  \"configure_environment\": {\"enable_symvers\": \"no\"},\n"
     "  \"restored_top_level_files\": ${_restored_files_json},\n"
     "  \"link_closure\": {\"source_target\": \"reduce.exe\", \"startup_object_replacement\": \"reduce-csl.o -> reduce_web-csl.o\", \"object_count\": ${_current_object_count}, \"archive\": \"${_csl_archive}\", \"selected_static_libraries\": [\"${_crlibm_artifact}\", \"${_ffi_artifact}\"]},\n"
     "  \"elapsed_seconds\": ${_elapsed_seconds},\n"

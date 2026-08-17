@@ -34,7 +34,7 @@ git -C reduce-algebra checkout --detach 7efba90661139ae9c73c99fddd55f3fb2fabf69a
 ```
 
 The private build materializes canonical Git blobs with
-`git -c core.autocrlf=false checkout-index`. It applies only these two
+`git -c core.autocrlf=false checkout-index`. It applies only these three
 checksum-covered patches:
 
 - `0001-csl-winsupport-define-nil.patch`, SHA-256
@@ -42,7 +42,9 @@ checksum-covered patches:
 - `0002-csl-windows-utf8-image-open.patch`, SHA-256
   `ad89f9581eefaaf4191b65af1b769a18883e865ee2740e4e6f053d1c5615d0e9`.
 - `0003-configure-quote-source-paths.patch`, SHA-256
-  `32a737b72bec3000fc2da6e701b80234bb34bf757a236049a5dd7347d555fee6`.
+  `ec94278f24718963e68aeac737a168c704c81cc72f48af903c4675770f3518df`.
+  This also passes libffi's supported `--disable-symvers` option because native
+  Windows lld does not accept the ELF `--version-script` linker option.
 
 The installed metrics JSON contains every patched path and exact preimage and
 postimage SHA-256.

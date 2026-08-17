@@ -11,7 +11,7 @@ string(CONCAT _expected_stamp
   "commit\ntree\n"
   "2d88d6d4a842ccb4574b60b0bd7e3af91896cea76708551a6e54489792e91d08\n"
   "ad89f9581eefaaf4191b65af1b769a18883e865ee2740e4e6f053d1c5615d0e9\n"
-  "32a737b72bec3000fc2da6e701b80234bb34bf757a236049a5dd7347d555fee6\n")
+  "ec94278f24718963e68aeac737a168c704c81cc72f48af903c4675770f3518df\n")
 if(NOT _stamp STREQUAL _expected_stamp OR _stamp MATCHES ";")
   message(FATAL_ERROR
     "upstream stamp must be five newline-delimited identity fields")
@@ -78,6 +78,8 @@ endif()
 file(READ "${_fixture}/csl/cslbase/preserve.cpp" _preserve)
 file(READ "${_fixture}/csl/cslbase/winsupport.cpp" _winsupport_cpp)
 file(READ "${_fixture}/csl/cslbase/winsupport.h" _winsupport_h)
+file(READ "${_fixture}/configure" _configure)
+file(READ "${_fixture}/configure.ac" _configure_ac)
 if(NOT _preserve MATCHES "windowsFopenUtf8" OR
    NOT _preserve MATCHES "windowsFileStatusUtf8" OR
    NOT _winsupport_cpp MATCHES "MultiByteToWideChar\\(CP_UTF8" OR
@@ -87,6 +89,13 @@ if(NOT _preserve MATCHES "windowsFopenUtf8" OR
   message(FATAL_ERROR
     "UTF-8 image patch does not route the Windows image-open boundary")
 endif()
+foreach(_configure_source IN ITEMS _configure _configure_ac)
+  if(NOT "${${_configure_source}}" MATCHES
+      "libraries/libffi/configure[^\n]*--disable-symvers")
+    message(FATAL_ERROR
+      "configure path patch does not disable libffi symbol version scripts in ${_configure_source}")
+  endif()
+endforeach()
 
 file(REMOVE_RECURSE "${_fixture}")
 
