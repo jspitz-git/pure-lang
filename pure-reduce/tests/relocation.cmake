@@ -283,10 +283,11 @@ foreach(_binary_case IN ITEMS narrow utf16le unicode_utf16le odd_nibble)
     set(_append_script
       "[IO.File]::AppendAllText($env:PURE_REDUCE_BINARY_LEAK_FILE, $env:PURE_REDUCE_BINARY_LEAK_TEXT, [Text.Encoding]::Unicode)")
   else()
-    set(_binary_case_source_prefix "c:/")
-    set(ENV{PURE_REDUCE_BINARY_LEAK_TEXT} "")
+    set(_binary_case_source_prefix "C:/Qz9-Odd-Nibble-Probe")
+    set(ENV{PURE_REDUCE_BINARY_LEAK_TEXT}
+      "c:/qz9-odd-nibble-probe")
     set(_append_script
-      "$p=$env:PURE_REDUCE_BINARY_LEAK_FILE; $s=[IO.File]::Open($p,[IO.FileMode]::Append,[IO.FileAccess]::Write,[IO.FileShare]::None); try { $v=[byte[]](0x06,0x33,0xa2,0xf0); $s.Write($v,0,$v.Length) } finally { $s.Dispose() }")
+      "$p=$env:PURE_REDUCE_BINARY_LEAK_FILE; $h=-join ([Text.Encoding]::ASCII.GetBytes($env:PURE_REDUCE_BINARY_LEAK_TEXT) | ForEach-Object {$_.ToString('x2')}); $m='0'+$h+'0'; [byte[]]$v=@(for($i=0;$i -lt $m.Length;$i+=2){[Convert]::ToByte($m.Substring($i,2),16)}); $ambient=[Text.Encoding]::ASCII.GetBytes('C:/'); $s=[IO.File]::Open($p,[IO.FileMode]::Append,[IO.FileAccess]::Write,[IO.FileShare]::None); try { $s.Write($ambient,0,$ambient.Length); $s.Write($v,0,$v.Length) } finally { $s.Dispose() }")
   endif()
   execute_process(
     COMMAND "C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe"
@@ -392,7 +393,7 @@ set(_binary_leak_combined
 if(_binary_case STREQUAL "odd_nibble")
   if(NOT _binary_leak_result EQUAL 0)
     list(APPEND _binary_leak_failures
-      "verifier falsely rejected aligned bytes 06 33 a2 f0 as c:/\n"
+      "verifier falsely rejected an unaligned nibble encoding of the unique prefix\n"
       "${_binary_leak_combined}")
   endif()
 else()
