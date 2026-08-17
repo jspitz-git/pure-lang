@@ -41,6 +41,11 @@ if(NOT _result EQUAL 0)
     "pure-reduce test exited with ${_result}\n"
     "stdout:\n${_output}\nstderr:\n${_error}")
 endif()
+if(NOT _error STREQUAL "")
+  message(FATAL_ERROR
+    "pure-reduce test emitted unexpected stderr\n"
+    "stdout:\n${_output}\nstderr:\n${_error}")
+endif()
 if(NOT _output MATCHES "(^|\r?\n)${EXPECTED_MARKER}(\r?\n|$)")
   message(FATAL_ERROR
     "pure-reduce test did not emit '${EXPECTED_MARKER}'\n"

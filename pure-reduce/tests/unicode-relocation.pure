@@ -1,0 +1,21 @@
+using system, reduce;
+
+check name condition
+  = () if condition;
+  = fprintf stderr "FAIL: %s\n" name $$ exit 1 otherwise;
+
+is_initialization_error (reduce::initialization_error _) = true;
+is_initialization_error _ = false otherwise;
+
+check "relocated bridge starts lazily" (reduce::pure_reduce_state == 0);
+check "non-ASCII filesystem alias is rejected"
+  (catch is_initialization_error
+    (reduce::test_initialization_failure "image-alias" $$ false));
+check "alias validation does not start bridge"
+  (reduce::pure_reduce_state == 0);
+check "relocated bridge evaluates" (simplify (1+1) === 2);
+check "relocated bridge is running" (reduce::pure_reduce_state == 1);
+reduce::finish;
+check "relocated bridge finishes" (reduce::pure_reduce_state == 2);
+
+puts "pure-reduce unicode-relocation passed";

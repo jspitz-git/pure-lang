@@ -644,7 +644,7 @@ public lisp;
 namespace reduce with
 
 public initialization_error evaluation_error finished_error;
-public get_started;
+public get_started test_initialization_failure;
 
 bridge_diagnostic fallback = fallback if null message
   when message = pure_reduce_last_error end;
@@ -714,8 +714,9 @@ extern int puts(char*);
 extern int GetModuleHandleExW(int, void*, void*);
 extern int GetModuleFileNameW(void*, void*, int);
 extern int WideCharToMultiByte(int, int, void*, int, void*, int, void*, void*);
-extern int MultiByteToWideChar(int, int, char*, int, void*, int);
+extern int MultiByteToWideChar(int, int, void*, int, void*, int);
 extern int GetFileAttributesW(void*);
+extern int GetShortPathNameW(void*, void*, int);
 // These are in the runtime; used for lispsym below.
 extern int pure_sym(void *s);
 extern expr *pure_quoted_symbol(int tag);
@@ -723,10 +724,15 @@ end;
 
 using namespace __C;
 
+require_ascii_image_alias image = image
+  if all (\c -> ord c<128) (chars image);
+= throw (initialization_error
+    "CSL requires an ASCII filesystem alias for reduce.img") otherwise;
+
 // Locate reduce.img beside the exact DLL which supplied pure_reduce_start.
 // Wide Win32 APIs keep this independent of the active ANSI code page. The
 // normalized result handed to the bridge is UTF-8.
-bundle_image = image when
+bundle_image = short_image when
   handle_slot = sentry free $ malloc SIZEOF_POINTER;
   ~null handle_slot || throw (initialization_error "out of memory");
   GetModuleHandleExW 6 (addr "pure_reduce_start") handle_slot
@@ -747,23 +753,51 @@ bundle_image = image when
     NULL NULL == utf8_length ||
     (free utf8_module $$
      throw (initialization_error "could not encode reduce.dll path"));
-  module_path = join "/" (split "\\" (cstring utf8_module));
+  module_path = join "/" (split "\\" (string utf8_module));
   path_parts = split "/" module_path;
   #path_parts>1
     || throw (initialization_error "reduce.dll path has no directory");
-  image = join "/" (init path_parts)+"/reduce.img";
-  wide_length = MultiByteToWideChar 65001 8 image (-1) NULL 0;
+  long_image = join "/" (init path_parts)+"/reduce.img";
+  long_image_utf8 = sentry free $ byte_string long_image;
+  ~null long_image_utf8 || throw (initialization_error "out of memory");
+  wide_length = MultiByteToWideChar 65001 8 long_image_utf8 (-1) NULL 0;
   wide_length>1
     || throw (initialization_error "reduce.img path is not valid UTF-8");
   wide_image = sentry free $ malloc (wide_length*2);
   ~null wide_image || throw (initialization_error "out of memory");
-  MultiByteToWideChar 65001 8 image (-1) wide_image wide_length
+  MultiByteToWideChar 65001 8 long_image_utf8 (-1) wide_image wide_length
     == wide_length
     || throw (initialization_error "could not decode reduce.img path");
   attributes = GetFileAttributesW wide_image;
   attributes ~= -1 && (attributes and 16) == 0
     || throw (initialization_error
-      ("reduce.img is not a regular file: "+image));
+      ("reduce.img is not a regular file: "+long_image));
+  // Current CSL opens its initial image through narrow stdio. Resolve the
+  // already-validated adjacent file to a Windows filesystem alias so that a
+  // non-ASCII installation path does not pass through the active ANSI page.
+  short_wide_capacity = GetShortPathNameW wide_image NULL 0;
+  short_wide_capacity>1
+    || throw (initialization_error
+      "could not resolve reduce.img filesystem alias");
+  short_wide = sentry free $ malloc (short_wide_capacity*2);
+  ~null short_wide || throw (initialization_error "out of memory");
+  short_wide_length = GetShortPathNameW wide_image short_wide short_wide_capacity;
+  short_wide_length>0 && short_wide_length<short_wide_capacity
+    || throw (initialization_error
+      "could not resolve reduce.img filesystem alias");
+  short_utf8_length = WideCharToMultiByte 65001 0 short_wide (-1)
+    NULL 0 NULL NULL;
+  short_utf8_length>1
+    || throw (initialization_error
+      "could not encode reduce.img filesystem alias");
+  short_utf8 = malloc short_utf8_length;
+  ~null short_utf8 || throw (initialization_error "out of memory");
+  WideCharToMultiByte 65001 0 short_wide (-1) short_utf8 short_utf8_length
+    NULL NULL == short_utf8_length ||
+    (free short_utf8 $$
+     throw (initialization_error
+       "could not encode reduce.img filesystem alias"));
+  short_image = require_ascii_image_alias (string short_utf8);
 end;
 
 // Initialization and finalization.
@@ -774,7 +808,29 @@ finish = () if pure_reduce_state ~= 1;
     (bridge_diagnostic "could not finish REDUCE"));
 end;
 
-start image::string args::smatrix = res when
+initialization_failure exception = case pure_reduce_finish of
+  0 = throw (initialization_error
+    ("mandatory REDUCE setup failed: "+str exception));
+  result = throw (initialization_error
+    ("mandatory REDUCE setup failed: "+str exception+
+     "; cleanup failed with code "+str result+": "+
+     bridge_diagnostic "no bridge diagnostic"));
+end;
+
+mandatory_setup _ =
+  // Reduce is pretty noisy by default, shut it up. You might want to comment
+  // this line for debugging purposes, or call reduce::verbosity yourself.
+  verbosity 0 $$
+  // We also turn off interactive mode by default, since it may cause trouble
+  // if a program runs unattended, especially when capturing output.
+  switch "int" 0 $$
+  // We need this to get matrices working, so always load this module.
+  load "matrix" $$ ();
+
+forced_setup_failure _ =
+  throw (evaluation_error "forced mandatory setup failure");
+
+start_with_setup image::string args::smatrix setup = setup_result $$ res when
   state = pure_reduce_state;
   state~=2 || throw (finished_error
     "the embedded REDUCE runtime cannot be restarted in this process");
@@ -791,15 +847,19 @@ start image::string args::smatrix = res when
   res = pure_reduce_start myimage;
   res==0 || throw (initialization_error
     (bridge_diagnostic "could not start REDUCE"));
-  // Reduce is pretty noisy by default, shut it up. You might want to comment
-  // this line for debugging purposes, or call reduce::verbosity yourself.
-  verbosity 0;
-  // We also turn off interactive mode by default, since it may cause trouble
-  // if a program runs unattended, especially when capturing output.
-  switch "int" 0;
-  // We need this to get matrices working, so always load this module.
-  load "matrix";
+  setup_result = catch initialization_failure (setup ());
 end if all stringp args;
+
+start image::string args::smatrix =
+  start_with_setup image args mandatory_setup;
+
+// Focused regression seam: exercises the same post-start transaction as the
+// mandatory production setup, but can only force cleanup rather than bypass it.
+test_initialization_failure mode::string = case mode of
+  "setup" = start_with_setup "reduce.img" {} forced_setup_failure;
+  "image-alias" = require_ascii_image_alias "C:/日本語/reduce.img";
+  _ = throw (initialization_error "unknown initialization failure seam");
+end;
 
 // Startup is lazy and terminal: current CSL can be initialized once per
 // process, while finish remains safely idempotent.

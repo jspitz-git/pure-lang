@@ -136,6 +136,34 @@ if(BUILD_TESTING)
         set_tests_properties("pure-reduce-${_test_name}" PROPERTIES
           LABELS "reduce")
       endforeach()
+      add_test(
+        NAME pure-reduce-initialization-failure
+        COMMAND "${CMAKE_COMMAND}"
+          "-DPURE_EXECUTABLE=${PURE_EXECUTABLE}"
+          "-DPURE_LIBRARY_DIR=${_pure_reduce_library_dir}"
+          "-DPURE_SOURCE_DIR=${CMAKE_CURRENT_LIST_DIR}"
+          "-DMODULE_DIR=$<TARGET_FILE_DIR:reduce>"
+          "-DTEST_SCRIPT=${CMAKE_CURRENT_LIST_DIR}/tests/initialization-failure.pure"
+          "-DEXPECTED_MARKER=pure-reduce initialization-failure passed"
+          -P "${CMAKE_CURRENT_LIST_DIR}/cmake/RunPureReduceTest.cmake")
+      set_tests_properties(pure-reduce-initialization-failure PROPERTIES
+        LABELS "reduce")
+      add_test(
+        NAME pure-reduce-unicode-relocation
+        COMMAND "${CMAKE_COMMAND}"
+          "-DCMAKE_COMMAND=${CMAKE_COMMAND}"
+          "-DREDUCE_DLL=$<TARGET_FILE:reduce>"
+          "-DREDUCE_IMAGE=${PURE_REDUCE_CSL_IMAGE}"
+          "-DPURE_EXECUTABLE=${PURE_EXECUTABLE}"
+          "-DPURE_LIBRARY_DIR=${_pure_reduce_library_dir}"
+          "-DPURE_SOURCE_DIR=${CMAKE_CURRENT_LIST_DIR}"
+          "-DTEST_DRIVER=${CMAKE_CURRENT_LIST_DIR}/cmake/RunPureReduceTest.cmake"
+          "-DTEST_SCRIPT=${CMAKE_CURRENT_LIST_DIR}/tests/unicode-relocation.pure"
+          "-DSTAGE_ROOT=${CMAKE_CURRENT_BINARY_DIR}"
+          "-DEXPECTED_MARKER=pure-reduce unicode-relocation passed"
+          -P "${CMAKE_CURRENT_LIST_DIR}/cmake/RunPureReduceUnicodeTest.cmake")
+      set_tests_properties(pure-reduce-unicode-relocation PROPERTIES
+        LABELS "reduce")
     else()
       message(STATUS
         "PURE_EXECUTABLE is not set; pure-reduce functional tests are disabled")

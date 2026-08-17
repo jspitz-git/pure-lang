@@ -26,7 +26,7 @@ let factors = simplify (factorize (x^2-1));
 check "factorization"
   (#factors == 2 && any ([x+1,1]===) factors && any ([x-1,1]===) factors);
 check "expansion"
-  (simplify (simplify ((x+1)*(x-1))-(x^2-1)) === 0);
+  (str (simplify ((x+1)*(x-1))) === "x^2-1");
 check "package load" (reduce::load "algint" == 0);
 
 reduce::capture 1;
@@ -40,8 +40,8 @@ is_evaluation_error (reduce::evaluation_error _) = true;
 is_evaluation_error _ = false otherwise;
 
 let invalid_was_caught = catch is_evaluation_error
-  (lisp ('identity "invalid arity") $$ false);
-check "invalid evaluation is categorized" invalid_was_caught;
+  (reduce::PROC_save 100 $$ false);
+check "procedural error is categorized" invalid_was_caught;
 check "evaluation recovers" (simplify (1+1) === 2);
 
 puts "pure-reduce smoke passed";
