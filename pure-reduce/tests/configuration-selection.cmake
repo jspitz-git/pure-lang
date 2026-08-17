@@ -12,7 +12,7 @@ file(TO_CMAKE_PATH
 file(REMOVE_RECURSE "${_root}")
 
 set(_cygwin "${_root}/cslbuild/x86_64-pc-cygwin-nogui/cyg64")
-set(_windows "${_root}/cslbuild/x86_64-pc-windows-nogui/win64")
+set(_windows "${_root}/cslbuild/intel-pc-windows-nogui/win64")
 set(_legacy_windows "${_root}/cslbuild/x86_64-pc-windows-legacy")
 file(MAKE_DIRECTORY "${_cygwin}/csl" "${_windows}/csl")
 file(WRITE "${_cygwin}/csl/config.h" "#define RAW_CYGWIN 1\n")
@@ -44,7 +44,7 @@ execute_process(
   ENCODING UTF-8)
 if(_incomplete_result EQUAL 0 OR
     NOT "${_incomplete_output}${_incomplete_error}" MATCHES
-      "x86_64-pc-windows-nogui/win64: config.h=yes, Makefile=no")
+      "intel-pc-windows-nogui/win64: config.h=yes, Makefile=no")
   file(REMOVE_RECURSE "${_root}")
   message(FATAL_ERROR
     "incomplete-configuration diagnostic omitted candidate evidence:\n"

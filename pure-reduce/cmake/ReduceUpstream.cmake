@@ -9,7 +9,7 @@ set(_PURE_REDUCE_UTF8_IMAGE_PATCH_SHA256
 set(_PURE_REDUCE_CONFIGURE_PATHS_PATCH_SHA256
   "32a737b72bec3000fc2da6e701b80234bb34bf757a236049a5dd7347d555fee6")
 set(_PURE_REDUCE_BUILD_RECIPE_VERSION
-  "windows-clang-scratch-source-v6")
+  "windows-clang-intel-layout-v7")
 
 function(_pure_reduce_expected_upstream_stamp COMMIT TREE_SHA256 OUT_STAMP)
   string(CONCAT _stamp
@@ -416,7 +416,7 @@ endfunction()
 
 function(_pure_reduce_select_windows_configuration SOURCE_ROOT OUT_DIRECTORY)
   file(GLOB _configuration_headers LIST_DIRECTORIES FALSE
-    "${SOURCE_ROOT}/cslbuild/x86_64-pc-windows*/win64/csl/config.h")
+    "${SOURCE_ROOT}/cslbuild/intel-pc-windows*/win64/csl/config.h")
   list(SORT _configuration_headers)
   set(_candidates)
   foreach(_header IN LISTS _configuration_headers)
@@ -427,7 +427,7 @@ function(_pure_reduce_select_windows_configuration SOURCE_ROOT OUT_DIRECTORY)
     get_filename_component(_configuration_base
       "${_configuration_directory}" DIRECTORY)
     get_filename_component(_configuration_name "${_configuration_base}" NAME)
-    if(_configuration_name MATCHES "^x86_64-pc-windows($|-)" AND
+    if(_configuration_name MATCHES "^intel-pc-windows($|-)" AND
        NOT _configuration MATCHES
         "#define[ \t]+RAW_CYGWIN[ \t]+1" AND
        EXISTS "${_configuration_directory}/Makefile")
@@ -486,7 +486,7 @@ function(_pure_reduce_select_windows_configuration SOURCE_ROOT OUT_DIRECTORY)
         OFFSET ${_configure_offset} LIMIT 65536)
     endif()
     message(FATAL_ERROR
-      "expected exactly one non-Cygwin x86-64 CSL build configuration "
+      "expected exactly one non-Cygwin pinned CSL build configuration "
       "below ${SOURCE_ROOT}/cslbuild; found ${_candidate_count}:\n  "
       "${_candidate_lines}\nobserved configurations:\n  "
       "${_observation_lines}\nconfigure transcript tail:\n${_configure_tail}")
