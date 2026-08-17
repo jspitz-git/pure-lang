@@ -26,9 +26,21 @@ if(_response_file MATCHES "[ \t\r\n]" OR
     "compiler response argument is not one no-space token: "
     "${_response_argument}")
 endif()
+set(_compile_script [=[
+if [ "$#" -ne 4 ]; then
+  printf 'expected 4 arguments, got %s\n' "$#" >&2
+  exit 31
+fi
+compiler=$1
+response=$2
+source=$3
+output=$4
+"$compiler" "@$response" -c "$source/probe.cpp" -o "$output"
+]=])
 execute_process(
-  COMMAND "${CXX_COMPILER}" "${_response_argument}"
-    -c "${_source}/probe.cpp" -o "${_root}/probe.obj"
+  COMMAND "${MSYS2_BASH}" --noprofile --norc -c "${_compile_script}"
+    pure-reduce "${CXX_COMPILER}" "${_response_file}"
+    "${_source}" "${_root}/probe.obj"
   RESULT_VARIABLE _compile_result
   OUTPUT_VARIABLE _compile_output
   ERROR_VARIABLE _compile_error

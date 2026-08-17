@@ -684,7 +684,7 @@ export WANT_AUTOCONF=2.73
 export enable_symvers=no
 src=$(cygpath -u "$1")
 cd "$src"
-prefix_map=$2
+prefix_map=@$2
 set +e
 ./configure --without-autogen --with-csl --without-gui --without-redfront CC=clang CXX=clang++ CFLAGS="$prefix_map" CXXFLAGS="$prefix_map"
 configure_result=$?
@@ -700,7 +700,7 @@ fi
   _pure_reduce_run_logged(
     "official REDUCE CSL configure" "${_configure_log}"
     "${PURE_REDUCE_MSYS2_BASH}" "${_configure_script}"
-    "${_private_source}" "${_prefix_map_argument}")
+    "${_private_source}" "${_prefix_map_response}")
 
   _pure_reduce_select_windows_configuration(
     "${_private_source}" _build_configuration)
