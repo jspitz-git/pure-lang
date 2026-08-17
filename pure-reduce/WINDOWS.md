@@ -21,19 +21,35 @@ spaces. CMake never fetches or updates it:
 
 ```powershell
 $reduceCommit = '7efba90661139ae9c73c99fddd55f3fb2fabf69a'
+$reduceTree = '5573613a2f86efea75695fbe65a73317383884c1'
 $reduceSource = Join-Path (Get-Location).Path 'build/deps/REDUCE source with spaces'
 New-Item -ItemType Directory -Path (Split-Path $reduceSource -Parent) -Force | Out-Null
-git clone --filter=blob:none --no-checkout https://github.com/reduce-algebra/reduce-algebra.git $reduceSource
+git -C (Split-Path $reduceSource -Parent) init (Split-Path $reduceSource -Leaf)
+git -C $reduceSource config remote.origin.url https://github.com/reduce-algebra/reduce-algebra.git
+git -C $reduceSource config remote.origin.tagOpt --no-tags
 git -C $reduceSource config core.autocrlf false
-git -C $reduceSource fetch --depth=1 origin $reduceCommit
+git -C $reduceSource config remote.origin.promisor true
+git -C $reduceSource config remote.origin.partialclonefilter blob:none
+git -C $reduceSource fetch --depth=1 --filter=blob:none --no-tags origin 7efba90661139ae9c73c99fddd55f3fb2fabf69a
 git -C $reduceSource checkout --detach FETCH_HEAD
-git -C $reduceSource rev-parse HEAD
-git -C $reduceSource rev-parse 'HEAD^{tree}'
-git -C $reduceSource status --short
+$actualCommit = (git -C $reduceSource rev-parse HEAD).Trim()
+$actualTree = (git -C $reduceSource rev-parse 'HEAD^{tree}').Trim()
+$status = git -C $reduceSource status --short
+if ($actualCommit -ne $reduceCommit) { throw "REDUCE commit mismatch: $actualCommit" }
+if ($actualTree -ne $reduceTree) { throw "REDUCE tree mismatch: $actualTree" }
+if ($status) { throw "REDUCE checkout is dirty: $status" }
+$fetchRefspec = @(git -C $reduceSource config --get-all remote.origin.fetch)
+if ($LASTEXITCODE -notin @(0, 1) -or $fetchRefspec.Count -ne 0) {
+  throw "REDUCE remote retained a branch fetch refspec: $fetchRefspec"
+}
+$remoteRefs = @(git -C $reduceSource for-each-ref --format='%(refname)' refs/remotes/)
+if ($LASTEXITCODE -ne 0 -or $remoteRefs.Count -ne 0) {
+  throw "REDUCE fetch created remote-tracking refs: $remoteRefs"
+}
 ```
 
-The last three commands must print the commit and tree above and then no
-tracked changes. The CMake source verifier additionally hashes Git's
+The identity and status assertions must complete without error. The CMake
+source verifier additionally hashes Git's
 pathname-sorted tracked-object record stream and rejects a different commit,
 tree identity, non-top-level checkout, or dirty tracked tree. Two checked-in,
 checksum-covered corrections are applied only to a private canonical source
@@ -45,12 +61,27 @@ a Windows input and is not the supported upstream baseline.
 ## Prerequisites
 
 Use a current 64-bit MSYS2 installation at `C:\msys64` and its CLANG64
-environment. The validation job is configured to install these packages:
+environment. MSYS2 is a rolling distribution and supports only full system
+upgrades. Close every other MSYS2 process, run the first full upgrade from
+PowerShell, let that shell exit, then run a second full upgrade in a new
+process:
+
+```powershell
+& C:/msys64/usr/bin/bash.exe -lc 'pacman --noconfirm -Syu'
+if ($LASTEXITCODE -ne 0) { throw 'first MSYS2 full upgrade failed' }
+& C:/msys64/usr/bin/bash.exe -lc 'pacman --noconfirm -Syu'
+if ($LASTEXITCODE -ne 0) { throw 'second MSYS2 full upgrade failed' }
+```
+
+If the second pass installs another core update, close all MSYS2 processes and
+repeat it until `pacman` reports no pending upgrade. Only after the full update
+is complete, install the exact build prerequisites without refreshing the
+package database separately:
 
 ```powershell
 & C:/msys64/usr/bin/bash.exe -lc @'
 set -euxo pipefail
-pacman --noconfirm -Sy --needed \
+pacman --noconfirm -S --needed \
   autoconf-wrapper autoconf2.73 \
   automake-wrapper automake1.18 libtool make \
   bison flex diffutils \
@@ -68,8 +99,14 @@ pacman --noconfirm -Sy --needed \
   mingw-w64-clang-x86_64-zlib \
   mingw-w64-clang-x86_64-ncurses
 '@
-if ($LASTEXITCODE -ne 0) { throw 'MSYS2 package setup failed' }
+if ($LASTEXITCODE -ne 0) { throw 'MSYS2 prerequisite installation failed' }
 ```
+
+The validation workflow uses the officially supported
+`msys2/setup-msys2@v2` equivalent with `msystem: CLANG64`, `update: true`, the
+same exact package list, and an assertion that the reused runner installation
+is `C:/msys64`. Never use `pacman -Sy` to refresh the package database and then
+install only a subset of packages.
 
 `gcc-compat` is required even though the native compiler is Clang: one
 vendored upstream build rule invokes `g++`, and CLANG64 supplies the compatible

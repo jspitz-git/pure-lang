@@ -53,36 +53,44 @@ jobs:
         with:
           path: source with spaces
 
-      - name: Install the CLANG64 and upstream build prerequisites
-        run: |
-          $ErrorActionPreference = 'Stop'
-          & C:/msys64/usr/bin/bash.exe -lc @'
-          set -euxo pipefail
-          pacman --noconfirm -Sy --needed \
-            autoconf-wrapper autoconf2.73 \
-            automake-wrapper automake1.18 libtool make \
-            bison flex diffutils \
-            mingw-w64-clang-x86_64-clang \
-            mingw-w64-clang-x86_64-gcc-compat \
-            mingw-w64-clang-x86_64-llvm \
-            mingw-w64-clang-x86_64-cmake \
-            mingw-w64-clang-x86_64-ninja \
-            mingw-w64-clang-x86_64-pkgconf \
-            mingw-w64-clang-x86_64-gmp \
-            mingw-w64-clang-x86_64-mpfr \
-            mingw-w64-clang-x86_64-readline \
-            mingw-w64-clang-x86_64-pcre \
-            mingw-w64-clang-x86_64-libiconv \
-            mingw-w64-clang-x86_64-zlib \
+      - name: Fully update MSYS2 and install the CLANG64 build prerequisites
+        id: setup-msys2
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: CLANG64
+          update: true
+          release: false
+          install: >-
+            autoconf-wrapper
+            autoconf2.73
+            automake-wrapper
+            automake1.18
+            libtool
+            make
+            bison
+            flex
+            diffutils
+            mingw-w64-clang-x86_64-clang
+            mingw-w64-clang-x86_64-gcc-compat
+            mingw-w64-clang-x86_64-llvm
+            mingw-w64-clang-x86_64-cmake
+            mingw-w64-clang-x86_64-ninja
+            mingw-w64-clang-x86_64-pkgconf
+            mingw-w64-clang-x86_64-gmp
+            mingw-w64-clang-x86_64-mpfr
+            mingw-w64-clang-x86_64-readline
+            mingw-w64-clang-x86_64-pcre
+            mingw-w64-clang-x86_64-libiconv
+            mingw-w64-clang-x86_64-zlib
             mingw-w64-clang-x86_64-ncurses
-          '@
-          if ($LASTEXITCODE -ne 0) { throw "MSYS2 package setup failed" }
-          'C:/msys64/clang64/bin' | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
-          'C:/msys64/usr/bin' | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
       - name: Verify the selected CLANG64 build tools
         run: |
           $ErrorActionPreference = 'Stop'
+          $msys2Root = '${{ steps.setup-msys2.outputs.msys2-location }}'.Replace('\', '/').TrimEnd('/')
+          if ($msys2Root -ine 'C:/msys64') {
+            throw "setup-msys2 selected an unexpected root: $msys2Root"
+          }
           & C:/msys64/usr/bin/bash.exe --noprofile --norc -c @'
           set -euxo pipefail
           export MSYSTEM=CLANG64
@@ -104,11 +112,18 @@ jobs:
           $source = Join-Path $repo 'build/deps/REDUCE source with spaces'
           New-Item -ItemType Directory `
             -Path (Split-Path $source -Parent) -Force | Out-Null
-          git clone --filter=blob:none --no-checkout `
-            https://github.com/reduce-algebra/reduce-algebra.git $source
-          if ($LASTEXITCODE -ne 0) { throw "REDUCE clone failed" }
+          git -C (Split-Path $source -Parent) init (Split-Path $source -Leaf)
+          if ($LASTEXITCODE -ne 0) { throw "REDUCE repository initialization failed" }
+          git -C $source config remote.origin.url `
+            https://github.com/reduce-algebra/reduce-algebra.git
+          if ($LASTEXITCODE -ne 0) { throw "REDUCE remote URL setup failed" }
+          git -C $source config remote.origin.tagOpt --no-tags
+          if ($LASTEXITCODE -ne 0) { throw "REDUCE remote tag policy setup failed" }
           git -C $source config core.autocrlf false
-          git -C $source fetch --depth=1 origin $env:REDUCE_COMMIT
+          git -C $source config remote.origin.promisor true
+          git -C $source config remote.origin.partialclonefilter blob:none
+          git -C $source fetch --depth=1 --filter=blob:none --no-tags origin `
+            7efba90661139ae9c73c99fddd55f3fb2fabf69a
           if ($LASTEXITCODE -ne 0) { throw "REDUCE exact-commit fetch failed" }
           git -C $source checkout --detach FETCH_HEAD
           if ($LASTEXITCODE -ne 0) { throw "REDUCE checkout failed" }
@@ -122,6 +137,19 @@ jobs:
             throw "REDUCE tree mismatch: $actualTree"
           }
           if ($status) { throw "REDUCE checkout is dirty: $status" }
+          $fetchRefspec = @(git -C $source config --get-all remote.origin.fetch)
+          if ($LASTEXITCODE -notin @(0, 1)) {
+            throw "REDUCE fetch-refspec query failed"
+          }
+          if ($fetchRefspec.Count -ne 0) {
+            throw "REDUCE remote retained a branch fetch refspec: $fetchRefspec"
+          }
+          $remoteRefs = @(git -C $source for-each-ref `
+            --format='%(refname)' refs/remotes/)
+          if ($LASTEXITCODE -ne 0) { throw "REDUCE remote-ref query failed" }
+          if ($remoteRefs.Count -ne 0) {
+            throw "REDUCE fetch created remote-tracking refs: $remoteRefs"
+          }
           $gitBytes = (Get-ChildItem -LiteralPath (Join-Path $source '.git') `
             -File -Recurse -Force | Measure-Object Length -Sum).Sum
           "REDUCE_SOURCE=$($source.Replace('\', '/'))" |
