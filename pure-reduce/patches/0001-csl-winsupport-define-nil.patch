@@ -1,0 +1,13 @@
+diff --git a/csl/cslbase/winsupport.cpp b/csl/cslbase/winsupport.cpp
+index b2a9f66..1024ba6 100644
+--- a/csl/cslbase/winsupport.cpp
++++ b/csl/cslbase/winsupport.cpp
+@@ -95,6 +95,8 @@ namespace CSL_LISP
+ using namespace FX;
+ 
+ extern struct NilBlock myNilBlock;
++inline const LispObject nil =
++    reinterpret_cast<LispObject>(&myNilBlock.Inil_symbol) + TAG_SYMBOL;
+ inline LispObject& lisp_true = myNilBlock.Ilisp_true;
+ 
+ void win32_stacklimit(uintptr_t &stacklimit)
