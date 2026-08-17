@@ -258,7 +258,7 @@ if(_mixed_windows_prefix STREQUAL _source_prefix_forward OR
     "binary mixed-case fixtures could not vary SOURCE_PREFIX: ${SOURCE_PREFIX}")
 endif()
 set(_binary_leak_failures)
-foreach(_binary_case IN ITEMS narrow utf16le unicode_utf16le)
+foreach(_binary_case IN ITEMS narrow utf16le unicode_utf16le odd_nibble)
   set(_binary_case_root "${_binary_leak_root}/${_binary_case}")
   set(_binary_leak_build "${_binary_case_root}/build")
   set(_binary_leak_stage "${_binary_case_root}/stage")
@@ -276,11 +276,16 @@ foreach(_binary_case IN ITEMS narrow utf16le unicode_utf16le)
     set(_binary_case_source_prefix "${SOURCE_PREFIX}")
     set(_append_script
       "[IO.File]::AppendAllText($env:PURE_REDUCE_BINARY_LEAK_FILE, $env:PURE_REDUCE_BINARY_LEAK_TEXT, [Text.Encoding]::Unicode)")
-  else()
+  elseif(_binary_case STREQUAL "unicode_utf16le")
     set(_binary_case_source_prefix "C:/Tést-Prefix/Alpha")
     set(ENV{PURE_REDUCE_BINARY_LEAK_TEXT} "c:/tést-pREFIX/aLPHA")
     set(_append_script
       "[IO.File]::AppendAllText($env:PURE_REDUCE_BINARY_LEAK_FILE, $env:PURE_REDUCE_BINARY_LEAK_TEXT, [Text.Encoding]::Unicode)")
+  else()
+    set(_binary_case_source_prefix "c:/")
+    set(ENV{PURE_REDUCE_BINARY_LEAK_TEXT} "")
+    set(_append_script
+      "$p=$env:PURE_REDUCE_BINARY_LEAK_FILE; $s=[IO.File]::Open($p,[IO.FileMode]::Append,[IO.FileAccess]::Write,[IO.FileShare]::None); try { $v=[byte[]](0x06,0x33,0xa2,0xf0); $s.Write($v,0,$v.Length) } finally { $s.Dispose() }")
   endif()
   execute_process(
     COMMAND "C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe"
@@ -383,14 +388,22 @@ execute_process(
   ENCODING UTF-8)
 set(_binary_leak_combined
   "${_binary_leak_output}\n${_binary_leak_error}")
-if(_binary_leak_result EQUAL 0)
-  list(APPEND _binary_leak_failures
-    "verifier accepted a hash-authorized mixed-case ${_binary_case} binary prefix leak")
-elseif(NOT _binary_leak_combined MATCHES
-    "installed binary content leaks a forbidden prefix")
-  list(APPEND _binary_leak_failures
-    "${_binary_case} binary prefix leak failed for the wrong reason\n"
-    "${_binary_leak_combined}")
+if(_binary_case STREQUAL "odd_nibble")
+  if(NOT _binary_leak_result EQUAL 0)
+    list(APPEND _binary_leak_failures
+      "verifier falsely rejected aligned bytes 06 33 a2 f0 as c:/\n"
+      "${_binary_leak_combined}")
+  endif()
+else()
+  if(_binary_leak_result EQUAL 0)
+    list(APPEND _binary_leak_failures
+      "verifier accepted a hash-authorized mixed-case ${_binary_case} binary prefix leak")
+  elseif(NOT _binary_leak_combined MATCHES
+      "installed binary content leaks a forbidden prefix")
+    list(APPEND _binary_leak_failures
+      "${_binary_case} binary prefix leak failed for the wrong reason\n"
+      "${_binary_leak_combined}")
+  endif()
 endif()
 endforeach()
 if(_binary_leak_failures)
