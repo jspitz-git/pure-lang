@@ -7,7 +7,7 @@ set(_PURE_REDUCE_NIL_PATCH_SHA256
 set(_PURE_REDUCE_UTF8_IMAGE_PATCH_SHA256
   "ad89f9581eefaaf4191b65af1b769a18883e865ee2740e4e6f053d1c5615d0e9")
 set(_PURE_REDUCE_BUILD_RECIPE_VERSION
-  "windows-clang-file-prefix-map-v2")
+  "windows-clang-file-prefix-map-v3")
 
 function(_pure_reduce_expected_upstream_stamp COMMIT TREE_SHA256 OUT_STAMP)
   string(CONCAT _stamp
@@ -517,6 +517,35 @@ function(_pure_reduce_json_escape VALUE OUT_VALUE)
   set(${OUT_VALUE} "${_escaped}" PARENT_SCOPE)
 endfunction()
 
+function(_pure_reduce_write_prefix_map_response
+    SOURCE BASH_EXECUTABLE OUT_FILE OUT_ARGUMENT)
+  get_filename_component(_bash "${BASH_EXECUTABLE}" ABSOLUTE)
+  cmake_path(GET _bash PARENT_PATH _bin)
+  cmake_path(GET _bin PARENT_PATH _usr)
+  cmake_path(GET _usr PARENT_PATH _msys_root)
+  cmake_path(GET _bin FILENAME _bin_name)
+  cmake_path(GET _usr FILENAME _usr_name)
+  if(NOT _bin_name STREQUAL "bin" OR NOT _usr_name STREQUAL "usr")
+    message(FATAL_ERROR
+      "MSYS2 bash must be below <root>/usr/bin: ${BASH_EXECUTABLE}")
+  endif()
+  set(_response_dir "${_msys_root}/tmp")
+  if(_response_dir MATCHES "[ \t\r\n]")
+    message(FATAL_ERROR
+      "MSYS2 temporary directory must not contain whitespace: ${_response_dir}")
+  endif()
+  file(MAKE_DIRECTORY "${_response_dir}")
+  file(TO_CMAKE_PATH "${SOURCE}" _source)
+  string(SHA256 _response_key "${_source}")
+  set(_response_file
+    "${_response_dir}/pure-reduce-prefix-map-${_response_key}.rsp")
+  file(WRITE "${_response_file}"
+    "\"-ffile-prefix-map=${_source}=/usr/src/pure-reduce-upstream\"\n"
+    "\"-fmacro-prefix-map=${_source}=/usr/src/pure-reduce-upstream\"\n")
+  set(${OUT_FILE} "${_response_file}" PARENT_SCOPE)
+  set(${OUT_ARGUMENT} "@${_response_file}" PARENT_SCOPE)
+endfunction()
+
 function(_pure_reduce_run_logged LABEL LOG_FILE BASH_EXECUTABLE SCRIPT)
   execute_process(
     COMMAND "${BASH_EXECUTABLE}" --noprofile --norc -c "${SCRIPT}"
@@ -602,6 +631,9 @@ function(_pure_reduce_run_upstream_build)
   file(MAKE_DIRECTORY
     "${_root}" "${_private_source}" "${_link_artifacts}"
     "${_runtime_artifacts}" "${_logs}")
+  _pure_reduce_write_prefix_map_response(
+    "${_private_source}" "${PURE_REDUCE_MSYS2_BASH}"
+    _prefix_map_response _prefix_map_argument)
 
   _pure_reduce_checkout_pinned_files(
     "${PURE_REDUCE_SOURCE_DIR}" "${_private_source}" --all)
@@ -652,8 +684,7 @@ export WANT_AUTOCONF=2.73
 export enable_symvers=no
 src=$(cygpath -u "$1")
 cd "$src"
-printf -v quoted_src '%q' "$src"
-prefix_map="-ffile-prefix-map=$quoted_src=/usr/src/pure-reduce-upstream -fmacro-prefix-map=$quoted_src=/usr/src/pure-reduce-upstream"
+prefix_map=$2
 set +e
 ./configure --without-autogen --with-csl --without-gui --without-redfront CC=clang CXX=clang++ CFLAGS="$prefix_map" CXXFLAGS="$prefix_map"
 configure_result=$?
@@ -669,7 +700,7 @@ fi
   _pure_reduce_run_logged(
     "official REDUCE CSL configure" "${_configure_log}"
     "${PURE_REDUCE_MSYS2_BASH}" "${_configure_script}"
-    "${_private_source}")
+    "${_private_source}" "${_prefix_map_argument}")
 
   _pure_reduce_select_windows_configuration(
     "${_private_source}" _build_configuration)
@@ -876,6 +907,7 @@ printf 'autoconf=%s\n' "$(autoconf --version | sed -n '1p')"
   file(WRITE "${_stamp}" "${_expected_stamp}")
   file(WRITE "${_root}/pure-reduce-upstream.recipe"
     "${_PURE_REDUCE_BUILD_RECIPE_VERSION}\n")
+  file(REMOVE "${_prefix_map_response}")
 endfunction()
 
 function(pure_reduce_define_upstream_build)

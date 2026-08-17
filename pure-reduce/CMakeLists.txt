@@ -131,6 +131,15 @@ if(BUILD_TESTING)
   set_tests_properties(pure-reduce-source-contract PROPERTIES LABELS "reduce")
   if(PURE_REDUCE_SOURCE_DIR)
     add_test(
+      NAME pure-reduce-prefix-map-response
+      COMMAND "${CMAKE_COMMAND}"
+        "-DREDUCE_UPSTREAM_MODULE=${CMAKE_CURRENT_LIST_DIR}/cmake/ReduceUpstream.cmake"
+        "-DMSYS2_BASH=${PURE_REDUCE_MSYS2_BASH}"
+        "-DCXX_COMPILER=${CMAKE_CXX_COMPILER}"
+        -P "${CMAKE_CURRENT_LIST_DIR}/tests/prefix-map-response.cmake")
+    set_tests_properties(pure-reduce-prefix-map-response PROPERTIES
+      LABELS "reduce")
+    add_test(
       NAME pure-reduce-bridge-contract
       COMMAND pure-reduce-bridge-contract)
     set_tests_properties(pure-reduce-bridge-contract PROPERTIES
