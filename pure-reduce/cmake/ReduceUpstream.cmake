@@ -660,8 +660,8 @@ configure_result=$?
 set -e
 if [ "$configure_result" -ne 0 ]; then
   if [ -f config.log ]; then
-    printf '\n--- top-level config.log tail ---\n'
-    tail -n 200 config.log
+    printf '\n--- top-level config.log ---\n'
+    cat config.log
   fi
   exit "$configure_result"
 fi
