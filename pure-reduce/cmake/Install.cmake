@@ -373,7 +373,8 @@ if(PURE_REDUCE_RUN_COMPONENT_INSTALL)
 
   foreach(_patch_name IN ITEMS
       0001-csl-winsupport-define-nil.patch
-      0002-csl-windows-utf8-image-open.patch)
+      0002-csl-windows-utf8-image-open.patch
+      0003-configure-quote-source-paths.patch)
     _pure_reduce_install_record(
       "${PURE_REDUCE_SOURCE_ROOT}/patches/${_patch_name}"
       "${_docs}/patches/${_patch_name}"

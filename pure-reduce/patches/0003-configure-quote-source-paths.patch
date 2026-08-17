@@ -1,0 +1,88 @@
+diff --git a/configure b/configure
+index c7fa563..a198845 100755
+--- a/configure
++++ b/configure
+@@ -5256 +5256 @@ else
+-  build=`eval "$SHELL $abssrcdir/scripts/findhost.sh $host $ac_configure_args"`
++  build=`eval "$SHELL \"$abssrcdir/scripts/findhost.sh\" $host $ac_configure_args"`
+@@ -5264,2 +5264,2 @@ printf "%s\n" "$as_me: Will build in the $build subdirectory" >&6;}
+-filtered=`$abssrcdir/scripts/filter.sh "$ac_configure_args"`
+-nohost=`$abssrcdir/scripts/nohost.sh "$ac_configure_args"`
++filtered=`"$abssrcdir/scripts/filter.sh" "$ac_configure_args"`
++nohost=`"$abssrcdir/scripts/nohost.sh" "$ac_configure_args"`
+@@ -5333 +5333 @@ printf "%s\n" "$as_me: in csl_inplace_cygwin_build wwl=$with_windows_layout" >&6
+-    build=`eval "$SHELL $abssrcdir/scripts/findhost.sh intel-pc-windows $ac_configure_args --with-cygwin"`
++    build=`eval "$SHELL \"$abssrcdir/scripts/findhost.sh\" intel-pc-windows $ac_configure_args --with-cygwin"`
+@@ -5343 +5343 @@ printf "%s\n" "$as_me: target=$target => build=$build/$cygver" >&6;}
+-    build=`eval "$SHELL $abssrcdir/scripts/findhost.sh $target $ac_configure_args --with-cygwin"`
++    build=`eval "$SHELL \"$abssrcdir/scripts/findhost.sh\" $target $ac_configure_args --with-cygwin"`
+@@ -5352 +5352 @@ printf "%s\n" "$as_me: host=$host buildmc=$buildmc pass_host=$pass_host" >&6;}
+-  doconfig="$SHELL $abssrcdir/configure --config-cache $ac_configure_args \
++  doconfig="$SHELL \"$abssrcdir/configure\" --config-cache $ac_configure_args \
+@@ -5375 +5375 @@ printf "%s\n" "$as_me: CSL inplace for native Windows" >&6;}
+-    build=`eval "$SHELL $abssrcdir/scripts/findhost.sh intel-pc-windows $ac_configure_args"`
++    build=`eval "$SHELL \"$abssrcdir/scripts/findhost.sh\" intel-pc-windows $ac_configure_args"`
+@@ -5382 +5382 @@ printf "%s\n" "$as_me: About to configure using $host in $build/$winver" >&6;}
+-    build=`eval "$SHELL $abssrcdir/scripts/findhost.sh $target $ac_configure_args"`
++    build=`eval "$SHELL \"$abssrcdir/scripts/findhost.sh\" $target $ac_configure_args"`
+@@ -5402 +5402 @@ printf "%s\n" "$as_me: cygextra = $cygextra" >&6;}
+-  doconfig="$SHELL $abssrcdir/configure --config-cache $ac_configure_args \
++  doconfig="$SHELL \"$abssrcdir/configure\" --config-cache $ac_configure_args \
+@@ -5563,2 +5563,2 @@ printf "%s\n" "$as_me: doconfig = $doconfig" >&6;}
+-filtered=`$abssrcdir/scripts/filter.sh "$ac_configure_args"`
+-nohost=`$abssrcdir/scripts/nohost.sh "$ac_configure_args"`
++filtered=`"$abssrcdir/scripts/filter.sh" "$ac_configure_args"`
++nohost=`"$abssrcdir/scripts/nohost.sh" "$ac_configure_args"`
+@@ -18004 +18004 @@ printf "%s\n" "$as_me: with_cygwin=$with_cygwin pass_host=$pass_host" >&6;}
+-    doconfig="$SHELL $abssrcdir/csl/$CSLBASE/configure \
++    doconfig="$SHELL \"$abssrcdir/csl/$CSLBASE/configure\" \
+@@ -18161 +18161 @@ printf "%s\n" "$as_me: About to configure crlibm" >&6;}
+-  doconfig="$SHELL $abssrcdir/libraries/crlibm/configure -C $filtered \
++  doconfig="$SHELL \"$abssrcdir/libraries/crlibm/configure\" -C $filtered \
+@@ -18189 +18189 @@ else
+-  doconfig="$SHELL $abssrcdir/libraries/libffi/configure -C $filtered \
++  doconfig="$SHELL \"$abssrcdir/libraries/libffi/configure\" -C $filtered \
+@@ -18239 +18239 @@ setpasscc
+-doconfig="$SHELL $abssrcdir/libraries/libedit-$LIBEDIT_VERSION/configure -C \
++doconfig="$SHELL \"$abssrcdir/libraries/libedit-$LIBEDIT_VERSION/configure\" -C \
+diff --git a/configure.ac b/configure.ac
+index 0b457eb..cc0e5d9 100644
+--- a/configure.ac
++++ b/configure.ac
+@@ -847 +847 @@ else
+-  build=`eval "$SHELL $abssrcdir/scripts/findhost.sh $host $ac_configure_args"`
++  build=`eval "$SHELL \"$abssrcdir/scripts/findhost.sh\" $host $ac_configure_args"`
+@@ -859,2 +859,2 @@ AC_MSG_NOTICE([Will build in the $build subdirectory])
+-filtered=`$abssrcdir/scripts/filter.sh "$ac_configure_args"`
+-nohost=`$abssrcdir/scripts/nohost.sh "$ac_configure_args"`
++filtered=`"$abssrcdir/scripts/filter.sh" "$ac_configure_args"`
++nohost=`"$abssrcdir/scripts/nohost.sh" "$ac_configure_args"`
+@@ -885 +885 @@ csl_inplace_cygwin_build ()
+-  build=`eval "$SHELL $abssrcdir/scripts/findhost.sh $target $ac_configure_args --with-cygwin"`
++  build=`eval "$SHELL \"$abssrcdir/scripts/findhost.sh\" $target $ac_configure_args --with-cygwin"`
+@@ -892 +892 @@ csl_inplace_cygwin_build ()
+-  doconfig="$SHELL $abssrcdir/configure --config-cache $ac_configure_args \
++  doconfig="$SHELL \"$abssrcdir/configure\" --config-cache $ac_configure_args \
+@@ -909 +909 @@ csl_inplace_nativewin_build ()
+-  build=`eval "$SHELL $abssrcdir/scripts/findhost.sh $buildmc $ac_configure_args"`
++  build=`eval "$SHELL \"$abssrcdir/scripts/findhost.sh\" $buildmc $ac_configure_args"`
+@@ -935 +935 @@ csl_inplace_nativewin_build ()
+-  doconfig="$SHELL $abssrcdir/configure --config-cache $ac_configure_args \
++  doconfig="$SHELL \"$abssrcdir/configure\" --config-cache $ac_configure_args \
+@@ -1142,2 +1142,2 @@ ccl_inplace_build ()
+-filtered=`$abssrcdir/scripts/filter.sh "$ac_configure_args"`
+-nohost=`$abssrcdir/scripts/nohost.sh "$ac_configure_args"`
++filtered=`"$abssrcdir/scripts/filter.sh" "$ac_configure_args"`
++nohost=`"$abssrcdir/scripts/nohost.sh" "$ac_configure_args"`
+@@ -1328 +1328 @@ then
+-    doconfig="$SHELL $abssrcdir/csl/$CSLBASE/configure \
++    doconfig="$SHELL \"$abssrcdir/csl/$CSLBASE/configure\" \
+@@ -1472 +1472 @@ else
+-  doconfig="$SHELL $abssrcdir/libraries/crlibm/configure -C $filtered \
++  doconfig="$SHELL \"$abssrcdir/libraries/crlibm/configure\" -C $filtered \
+@@ -1533 +1533 @@ then
+-  doconfig="$SHELL $abssrcdir/libraries/libffi/configure -C $filtered \
++  doconfig="$SHELL \"$abssrcdir/libraries/libffi/configure\" -C $filtered \
+@@ -1557 +1557 @@ setpasscc
+-doconfig="$SHELL $abssrcdir/libraries/libedit-$LIBEDIT_VERSION/configure -C \
++doconfig="$SHELL \"$abssrcdir/libraries/libedit-$LIBEDIT_VERSION/configure\" -C \

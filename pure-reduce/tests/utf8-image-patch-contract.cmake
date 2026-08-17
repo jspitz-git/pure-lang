@@ -10,10 +10,11 @@ _pure_reduce_expected_upstream_stamp("commit" "tree" _stamp)
 string(CONCAT _expected_stamp
   "commit\ntree\n"
   "2d88d6d4a842ccb4574b60b0bd7e3af91896cea76708551a6e54489792e91d08\n"
-  "ad89f9581eefaaf4191b65af1b769a18883e865ee2740e4e6f053d1c5615d0e9\n")
+  "ad89f9581eefaaf4191b65af1b769a18883e865ee2740e4e6f053d1c5615d0e9\n"
+  "32a737b72bec3000fc2da6e701b80234bb34bf757a236049a5dd7347d555fee6\n")
 if(NOT _stamp STREQUAL _expected_stamp OR _stamp MATCHES ";")
   message(FATAL_ERROR
-    "upstream stamp must be four newline-delimited identity fields")
+    "upstream stamp must be five newline-delimited identity fields")
 endif()
 
 set(_fixture "${CMAKE_CURRENT_BINARY_DIR}/pure-reduce-utf8-image-patch")
@@ -22,7 +23,9 @@ _pure_reduce_checkout_pinned_files(
   "${PURE_REDUCE_SOURCE_DIR}" "${_fixture}"
   csl/cslbase/preserve.cpp
   csl/cslbase/winsupport.cpp
-  csl/cslbase/winsupport.h)
+  csl/cslbase/winsupport.h
+  configure
+  configure.ac)
 
 _pure_reduce_apply_private_source_patch(
   "${_fixture}"
@@ -36,7 +39,19 @@ _pure_reduce_apply_private_source_patch(
   "${PURE_REDUCE_SOURCE_TREE_SHA256}"
   "${_fixture}/patches.log"
   _utf8_patch_json)
+_pure_reduce_apply_private_source_patch(
+  "${_fixture}"
+  "${CMAKE_CURRENT_LIST_DIR}/../patches/0003-configure-quote-source-paths.patch"
+  "${PURE_REDUCE_SOURCE_TREE_SHA256}"
+  "${_fixture}/patches.log"
+  _configure_paths_patch_json)
 
+string(JSON _configure_target_count LENGTH
+  "${_configure_paths_patch_json}" targets)
+if(NOT _configure_target_count EQUAL 2)
+  message(FATAL_ERROR
+    "configure path patch provenance must cover exactly two targets")
+endif()
 string(JSON _target_count LENGTH "${_utf8_patch_json}" targets)
 if(NOT _target_count EQUAL 3)
   message(FATAL_ERROR
@@ -74,7 +89,7 @@ endif()
 file(REMOVE_RECURSE "${_fixture}")
 
 # The recipe marker invalidates cached closures when build flags change without
-# changing the public four-field source/patch identity stamp.
+# changing the public five-field source/patch identity stamp.
 set(PURE_REDUCE_VERIFIED_COMMIT "commit")
 set(_recipe_fixture
   "${CMAKE_CURRENT_BINARY_DIR}/pure-reduce-recipe-stamp-contract")

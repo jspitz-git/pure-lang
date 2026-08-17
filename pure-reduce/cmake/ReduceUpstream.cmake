@@ -6,15 +6,18 @@ set(_PURE_REDUCE_NIL_PATCH_SHA256
   "2d88d6d4a842ccb4574b60b0bd7e3af91896cea76708551a6e54489792e91d08")
 set(_PURE_REDUCE_UTF8_IMAGE_PATCH_SHA256
   "ad89f9581eefaaf4191b65af1b769a18883e865ee2740e4e6f053d1c5615d0e9")
+set(_PURE_REDUCE_CONFIGURE_PATHS_PATCH_SHA256
+  "32a737b72bec3000fc2da6e701b80234bb34bf757a236049a5dd7347d555fee6")
 set(_PURE_REDUCE_BUILD_RECIPE_VERSION
-  "windows-clang-file-prefix-map-v3")
+  "windows-clang-spaced-upstream-v4")
 
 function(_pure_reduce_expected_upstream_stamp COMMIT TREE_SHA256 OUT_STAMP)
   string(CONCAT _stamp
     "${COMMIT}\n"
     "${TREE_SHA256}\n"
     "${_PURE_REDUCE_NIL_PATCH_SHA256}\n"
-    "${_PURE_REDUCE_UTF8_IMAGE_PATCH_SHA256}\n")
+    "${_PURE_REDUCE_UTF8_IMAGE_PATCH_SHA256}\n"
+    "${_PURE_REDUCE_CONFIGURE_PATHS_PATCH_SHA256}\n")
   set(${OUT_STAMP} "${_stamp}" PARENT_SCOPE)
 endfunction()
 
@@ -60,6 +63,16 @@ function(_pure_reduce_apply_private_source_patch
       "e41bf9426557db8fa5b958072dc908119f2af392d56f52345ad55ae1819b153e"
       "1c01db3e1783831f3db9bf4d657182806e4b09f011387a07c28514e2b340fd3a"
       "4a5e4165b414a8a9e5ab9b551f7e67f6ba47a42b780e8c509502d97fef93be70")
+  elseif(_patch_name STREQUAL "0003-configure-quote-source-paths.patch")
+    set(_expected_patch_sha256
+      "${_PURE_REDUCE_CONFIGURE_PATHS_PATCH_SHA256}")
+    set(_targets "configure" "configure.ac")
+    set(_expected_preimages
+      "d99238883db3034cedb6c687beac83e0f6b2b29183b876f09e43b39e2d20437b"
+      "3db18b7bad046a04ab722f2729f5fadfe74d17f4f1cfc3effeb876cdf6ff1126")
+    set(_expected_postimages
+      "dfcc6bd9907df1b732695eab29f1a445a76245536f724a814b60f45beb001232"
+      "e9e0cb4160a1948f49d352ca7fab162b44960be0469983fde6fc106e36f6a0fe")
   else()
     message(FATAL_ERROR "source patch is not in the approved registry: ${PATCH_FILE}")
   endif()
@@ -112,7 +125,8 @@ function(_pure_reduce_apply_private_source_patch
   cmake_path(RELATIVE_PATH PRIVATE_ROOT
     BASE_DIRECTORY "${_worktree_root}" OUTPUT_VARIABLE _private_relative)
   execute_process(
-    COMMAND git -C "${_worktree_root}" apply --check --whitespace=nowarn
+    COMMAND git -C "${_worktree_root}" apply --check --unidiff-zero
+      --whitespace=nowarn
       "--directory=${_private_relative}" "${PATCH_FILE}"
     RESULT_VARIABLE _check_result
     ERROR_VARIABLE _check_error)
@@ -120,7 +134,7 @@ function(_pure_reduce_apply_private_source_patch
     message(FATAL_ERROR "approved source patch check failed: ${_check_error}")
   endif()
   execute_process(
-    COMMAND git -C "${_worktree_root}" apply --whitespace=nowarn
+    COMMAND git -C "${_worktree_root}" apply --unidiff-zero --whitespace=nowarn
       "--directory=${_private_relative}" "${PATCH_FILE}"
     RESULT_VARIABLE _apply_result
     ERROR_VARIABLE _apply_error)
@@ -646,6 +660,8 @@ function(_pure_reduce_run_upstream_build)
     "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/../patches/0001-csl-winsupport-define-nil.patch")
   set(_utf8_image_patch_file
     "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/../patches/0002-csl-windows-utf8-image-open.patch")
+  set(_configure_paths_patch_file
+    "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/../patches/0003-configure-quote-source-paths.patch")
   set(_autogen_log "${_logs}/autogen.log")
   set(_patch_log "${_logs}/applied-source-patches.log")
   set(_restore_log "${_logs}/restored-top-level-files.log")
@@ -713,6 +729,10 @@ cd "$src"
   _pure_reduce_restore_top_level_generated_files(
     "${_pinned_generated}" "${_private_source}" "${_restore_log}"
     _restored_files_json)
+  _pure_reduce_apply_private_source_patch(
+    "${_private_source}" "${_configure_paths_patch_file}"
+    "${PURE_REDUCE_SOURCE_TREE_SHA256}" "${_patch_log}"
+    _configure_paths_patch_json)
 
   set(_configure_script [=[
 set -eu
@@ -930,7 +950,7 @@ printf 'autoconf=%s\n' "$(autoconf --version | sed -n '1p')"
     "  \"commit\": \"${PURE_REDUCE_VERIFIED_COMMIT}\",\n"
     "  \"source_tree_sha256\": \"${PURE_REDUCE_SOURCE_TREE_SHA256}\",\n"
     "  \"source_materialization\": \"git -c core.autocrlf=false checkout-index\",\n"
-    "  \"source_patches\": [${_nil_patch_json},${_utf8_image_patch_json}],\n"
+    "  \"source_patches\": [${_nil_patch_json},${_utf8_image_patch_json},${_configure_paths_patch_json}],\n"
     "  \"tool_versions\": \"${_tool_versions_json}\",\n"
     "  \"autogen_arguments\": [\"--with-csl\", \"--without-gui\", \"--without-redfront\"],\n"
     "  \"configure_arguments\": [\"--without-autogen\", \"--with-csl\", \"--without-gui\", \"--without-redfront\", \"CC=clang\", \"CXX=clang++\"],\n"

@@ -41,6 +41,8 @@ checksum-covered patches:
   `2d88d6d4a842ccb4574b60b0bd7e3af91896cea76708551a6e54489792e91d08`.
 - `0002-csl-windows-utf8-image-open.patch`, SHA-256
   `ad89f9581eefaaf4191b65af1b769a18883e865ee2740e4e6f053d1c5615d0e9`.
+- `0003-configure-quote-source-paths.patch`, SHA-256
+  `32a737b72bec3000fc2da6e701b80234bb34bf757a236049a5dd7347d555fee6`.
 
 The installed metrics JSON contains every patched path and exact preimage and
 postimage SHA-256.

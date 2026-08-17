@@ -376,9 +376,9 @@ if(_manifest_text MATCHES "[;|]" OR
 endif()
 file(STRINGS "${_manifest}" _manifest_lines)
 list(LENGTH _manifest_lines _manifest_count)
-if(NOT _manifest_count EQUAL 80)
+if(NOT _manifest_count EQUAL 81)
   message(FATAL_ERROR
-    "authoritative manifest must contain exactly 80 payloads: ${_manifest_count}")
+    "authoritative manifest must contain exactly 81 payloads: ${_manifest_count}")
 endif()
 
 set(_expected_paths)
