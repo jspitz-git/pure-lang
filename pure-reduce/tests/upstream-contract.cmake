@@ -25,6 +25,22 @@ if(_csl_archive EQUAL -1)
     "current CSL object closure archive is absent from link inputs")
 endif()
 
+set(_expected_link_tail
+  -Wl,-Bstatic -lz -lncurses -lstdc++ -lpthread -static-libgcc
+  -lcomctl32 -lgdi32 -lws2_32 -lwsock32 -lwinspool -lmpr
+  -Wl,--subsystem,console)
+if(NOT PURE_REDUCE_CSL_LINK_ARTIFACTS)
+  message(FATAL_ERROR "verified CSL link artifacts are not exported")
+endif()
+set(_expected_link_interface
+  ${PURE_REDUCE_CSL_LINK_ARTIFACTS} ${_expected_link_tail})
+if(NOT PURE_REDUCE_CSL_LINK_INTERFACE STREQUAL _expected_link_interface OR
+   NOT PURE_REDUCE_CSL_LINK_INPUTS STREQUAL _expected_link_interface)
+  message(FATAL_ERROR
+    "complete ordered CSL link interface is not exported:\n"
+    "${PURE_REDUCE_CSL_LINK_INTERFACE}")
+endif()
+
 set(_canonical_fixture
   "${CMAKE_CURRENT_BINARY_DIR}/pure-reduce-canonical-fixture")
 file(REMOVE_RECURSE "${_canonical_fixture}")
@@ -50,6 +66,44 @@ endif()
 set(_patch_fixture
   "${CMAKE_CURRENT_BINARY_DIR}/pure-reduce-patch-fixture")
 file(REMOVE_RECURSE "${_patch_fixture}")
+
+set(_tampered_fixture
+  "${CMAKE_CURRENT_BINARY_DIR}/pure-reduce-tampered-patch-fixture")
+file(REMOVE_RECURSE "${_tampered_fixture}")
+file(MAKE_DIRECTORY "${_tampered_fixture}")
+_pure_reduce_checkout_pinned_files(
+  "${PURE_REDUCE_SOURCE_DIR}" "${_tampered_fixture}/private"
+  csl/cslbase/winsupport.cpp)
+file(COPY
+  "${CMAKE_CURRENT_LIST_DIR}/../patches/0001-csl-winsupport-define-nil.patch"
+  DESTINATION "${_tampered_fixture}")
+set(_tampered_patch
+  "${_tampered_fixture}/0001-csl-winsupport-define-nil.patch")
+file(APPEND "${_tampered_patch}" "\n# unapproved extra bytes\n")
+file(TO_CMAKE_PATH "${CMAKE_CURRENT_LIST_DIR}/../cmake/ReduceUpstream.cmake"
+  _module_path)
+file(TO_CMAKE_PATH "${_tampered_fixture}/private" _private_path)
+file(TO_CMAKE_PATH "${_tampered_patch}" _tampered_patch_path)
+file(WRITE "${_tampered_fixture}/reject.cmake"
+  "include(\"${_module_path}\")\n"
+  "_pure_reduce_apply_private_source_patch(\n"
+  "  \"${_private_path}\" \"${_tampered_patch_path}\"\n"
+  "  \"${PURE_REDUCE_SOURCE_TREE_SHA256}\"\n"
+  "  \"${_tampered_fixture}/patch.log\" _patch_json)\n")
+execute_process(
+  COMMAND "${CMAKE_COMMAND}" -P "${_tampered_fixture}/reject.cmake"
+  RESULT_VARIABLE _tampered_result
+  OUTPUT_VARIABLE _tampered_output ERROR_VARIABLE _tampered_error)
+file(REMOVE_RECURSE "${_tampered_fixture}")
+if(_tampered_result EQUAL 0)
+  message(FATAL_ERROR "approved patch registry accepted extra bytes")
+endif()
+if(NOT "${_tampered_output}${_tampered_error}" MATCHES
+    "approved source patch SHA-256 mismatch")
+  message(FATAL_ERROR
+    "tampered patch failed for the wrong reason:\n"
+    "${_tampered_output}${_tampered_error}")
+endif()
 _pure_reduce_checkout_pinned_files(
   "${PURE_REDUCE_SOURCE_DIR}" "${_patch_fixture}"
   csl/cslbase/winsupport.cpp)
@@ -88,6 +142,7 @@ endif()
 
 set(_configuration_fixture
   "${CMAKE_CURRENT_BINARY_DIR}/pure-reduce-configuration-fixture")
+file(REMOVE_RECURSE "${_configuration_fixture}")
 file(MAKE_DIRECTORY
   "${_configuration_fixture}/cslbuild/native/csl"
   "${_configuration_fixture}/cslbuild/windows/csl")
@@ -102,6 +157,32 @@ file(WRITE "${_configuration_fixture}/cslbuild/windows/csl/config.h"
 file(WRITE "${_configuration_fixture}/cslbuild/windows/Makefile" "all:\n")
 _pure_reduce_select_windows_configuration(
   "${_configuration_fixture}" _selected_configuration)
+
+file(MAKE_DIRECTORY "${_configuration_fixture}/cslbuild/second/csl")
+file(WRITE "${_configuration_fixture}/cslbuild/second/csl/config.h"
+  "#define HOST_CPU \"x86_64\"\n"
+  "#define HOST_OS \"mingw32\"\n"
+  "/* #undef RAW_CYGWIN */\n")
+file(WRITE "${_configuration_fixture}/cslbuild/second/Makefile" "all:\n")
+file(TO_CMAKE_PATH "${CMAKE_CURRENT_LIST_DIR}/../cmake/ReduceUpstream.cmake"
+  _negative_module)
+file(TO_CMAKE_PATH "${_configuration_fixture}" _negative_configuration)
+file(WRITE "${_configuration_fixture}/reject-multiple.cmake"
+  "include(\"${_negative_module}\")\n"
+  "_pure_reduce_select_windows_configuration(\n"
+  "  \"${_negative_configuration}\" _selected)\n")
+execute_process(
+  COMMAND "${CMAKE_COMMAND}"
+    -P "${_configuration_fixture}/reject-multiple.cmake"
+  RESULT_VARIABLE _multiple_result
+  OUTPUT_VARIABLE _multiple_output ERROR_VARIABLE _multiple_error)
+if(_multiple_result EQUAL 0 OR
+   NOT "${_multiple_output}${_multiple_error}" MATCHES
+     "expected exactly one non-Cygwin x86-64 CSL build configuration")
+  message(FATAL_ERROR
+    "multiple complete CSL configurations did not fail closed:\n"
+    "${_multiple_output}${_multiple_error}")
+endif()
 file(REMOVE_RECURSE "${_configuration_fixture}")
 
 set(_closure_fixture
@@ -143,6 +224,25 @@ _pure_reduce_select_configuration_image(
 if(NOT _selected_image MATCHES "/cslbuild/windows/csl/reduce[.]img$")
   message(FATAL_ERROR "selected an image from a different CSL configuration")
 endif()
+file(MAKE_DIRECTORY "${_configuration_fixture}/cslbuild/empty/csl")
+file(TO_CMAKE_PATH
+  "${_configuration_fixture}/cslbuild/empty" _empty_configuration)
+file(WRITE "${_configuration_fixture}/reject-missing-image.cmake"
+  "include(\"${_negative_module}\")\n"
+  "_pure_reduce_select_configuration_image(\n"
+  "  \"${_empty_configuration}\" _selected)\n")
+execute_process(
+  COMMAND "${CMAKE_COMMAND}"
+    -P "${_configuration_fixture}/reject-missing-image.cmake"
+  RESULT_VARIABLE _missing_image_result
+  OUTPUT_VARIABLE _missing_image_output ERROR_VARIABLE _missing_image_error)
+if(_missing_image_result EQUAL 0 OR
+   NOT "${_missing_image_output}${_missing_image_error}" MATCHES
+     "expected exactly one complete CSL image")
+  message(FATAL_ERROR
+    "missing selected-configuration image did not fail closed:\n"
+    "${_missing_image_output}${_missing_image_error}")
+endif()
 file(REMOVE_RECURSE "${_configuration_fixture}")
 
 set(_restore_fixture
@@ -180,9 +280,46 @@ if(NOT _restored_count EQUAL _expected_restored_count)
 endif()
 file(REMOVE_RECURSE "${_restore_fixture}")
 
+set(_runtime_fixture
+  "${CMAKE_CURRENT_BINARY_DIR}/pure-reduce-runtime-fixture")
+set(_contract_upstream_root "${PURE_REDUCE_UPSTREAM_BINARY_DIR}")
+file(REMOVE_RECURSE "${_runtime_fixture}")
+file(MAKE_DIRECTORY
+  "${_runtime_fixture}/source/cslbuild/windows/csl/reduce.resources"
+  "${_runtime_fixture}/source/cslbuild/windows/csl/reduce.fonts")
+file(WRITE "${_runtime_fixture}/source/cslbuild/windows/csl/config.h"
+  "#define HOST_CPU \"x86_64\"\n"
+  "#define HOST_OS \"mingw32\"\n"
+  "/* #undef RAW_CYGWIN */\n")
+file(WRITE "${_runtime_fixture}/source/cslbuild/windows/Makefile" "all:\n")
+file(WRITE "${_runtime_fixture}/source/cslbuild/windows/csl/reduce.img"
+  "fixture image")
+file(WRITE
+  "${_runtime_fixture}/source/cslbuild/windows/csl/reduce.resources/data"
+  "resource")
+file(WRITE
+  "${_runtime_fixture}/source/cslbuild/windows/csl/reduce.fonts/font"
+  "font")
+set(PURE_REDUCE_UPSTREAM_BINARY_DIR "${_runtime_fixture}")
+_pure_reduce_run_runtime_artifact_refresh()
+file(REMOVE_RECURSE
+  "${_runtime_fixture}/artifacts/runtime/reduce.resources")
+_pure_reduce_run_runtime_artifact_refresh()
+if(NOT EXISTS
+    "${_runtime_fixture}/artifacts/runtime/reduce.resources/data" OR
+   NOT EXISTS
+    "${_runtime_fixture}/artifacts/runtime/reduce.resources.manifest" OR
+   NOT EXISTS
+    "${_runtime_fixture}/artifacts/runtime/reduce.fonts.manifest")
+  message(FATAL_ERROR "runtime manifest contract did not restore deleted data")
+endif()
+file(REMOVE_RECURSE "${_runtime_fixture}")
+set(PURE_REDUCE_UPSTREAM_BINARY_DIR "${_contract_upstream_root}")
+
 foreach(path IN ITEMS
     "${PURE_REDUCE_CSL_IMAGE}"
-    ${PURE_REDUCE_CSL_LINK_INPUTS}
+    ${PURE_REDUCE_CSL_LINK_ARTIFACTS}
+    ${PURE_REDUCE_RUNTIME_MANIFESTS}
     ${PURE_REDUCE_RUNTIME_DATA})
   if(NOT IS_ABSOLUTE "${path}")
     message(FATAL_ERROR "upstream artifact is not absolute: ${path}")
@@ -197,6 +334,9 @@ endforeach()
 if(NOT PURE_REDUCE_CSL_LINK_INPUTS)
   message(FATAL_ERROR "current CSL link inputs are empty")
 endif()
+if(NOT PURE_REDUCE_RUNTIME_MANIFESTS)
+  message(FATAL_ERROR "CSL runtime manifests are empty")
+endif()
 if(NOT PURE_REDUCE_RUNTIME_DATA)
   message(FATAL_ERROR "CSL runtime data is empty")
 endif()
@@ -204,6 +344,45 @@ endif()
 set(_artifact_contract_log
   "${PURE_REDUCE_UPSTREAM_BINARY_DIR}/logs/artifact-contract.log")
 if(EXISTS "${PURE_REDUCE_UPSTREAM_BINARY_DIR}/pure-reduce-upstream.stamp")
+  foreach(_artifact IN ITEMS
+      "${PURE_REDUCE_CSL_IMAGE}"
+      ${PURE_REDUCE_CSL_LINK_ARTIFACTS}
+      ${PURE_REDUCE_RUNTIME_MANIFESTS}
+      "${PURE_REDUCE_UPSTREAM_METRICS}"
+      "${PURE_REDUCE_UPSTREAM_BINARY_DIR}/logs/artifact-contract-probe.exe")
+    if(NOT EXISTS "${_artifact}" OR IS_DIRECTORY "${_artifact}")
+      message(FATAL_ERROR "built upstream artifact is missing: ${_artifact}")
+    endif()
+    file(SIZE "${_artifact}" _artifact_size)
+    if(_artifact_size LESS 16)
+      message(FATAL_ERROR "built upstream artifact is empty: ${_artifact}")
+    endif()
+  endforeach()
+  if(NOT EXISTS "${PURE_REDUCE_CSL_IMAGE}")
+    message(FATAL_ERROR "built upstream image is missing")
+  endif()
+  file(SIZE "${PURE_REDUCE_CSL_IMAGE}" _image_size)
+  if(_image_size LESS 1000000)
+    message(FATAL_ERROR "built upstream image is not a complete CSL image")
+  endif()
+  foreach(_runtime IN LISTS PURE_REDUCE_RUNTIME_DATA)
+    if(NOT IS_DIRECTORY "${_runtime}")
+      message(FATAL_ERROR "built upstream runtime directory is missing: ${_runtime}")
+    endif()
+    file(GLOB_RECURSE _runtime_files LIST_DIRECTORIES FALSE "${_runtime}/*")
+    if(NOT _runtime_files)
+      message(FATAL_ERROR "built upstream runtime directory is empty: ${_runtime}")
+    endif()
+  endforeach()
+  file(READ "${PURE_REDUCE_UPSTREAM_METRICS}" _metrics)
+  string(JSON _metrics_commit GET "${_metrics}" commit)
+  string(JSON _metrics_tree GET "${_metrics}" source_tree_sha256)
+  string(JSON _object_count GET "${_metrics}" link_closure object_count)
+  if(NOT _metrics_commit STREQUAL PURE_REDUCE_VERIFIED_COMMIT OR
+      NOT _metrics_tree STREQUAL PURE_REDUCE_SOURCE_TREE_SHA256 OR
+      _object_count LESS 50)
+    message(FATAL_ERROR "built upstream metrics do not describe the verified build")
+  endif()
   if(NOT EXISTS "${_artifact_contract_log}")
     message(FATAL_ERROR "built upstream omits artifact link/symbol assertions")
   endif()
@@ -215,6 +394,75 @@ if(EXISTS "${PURE_REDUCE_UPSTREAM_BINARY_DIR}/pure-reduce-upstream.stamp")
     if(NOT _artifact_contract MATCHES "${_assertion}")
       message(FATAL_ERROR
         "built upstream artifact assertion is missing: ${_assertion}")
+    endif()
+  endforeach()
+  if(NOT _artifact_contract MATCHES "imports:[\r\n]+[^\r\n]+[.]dll")
+    message(FATAL_ERROR "artifact import assertion has no inspected DLLs")
+  endif()
+  set(_consumer_source
+    "${CMAKE_CURRENT_BINARY_DIR}/pure-reduce-link-interface-consumer.cpp")
+  set(_consumer_executable
+    "${CMAKE_CURRENT_BINARY_DIR}/pure-reduce-link-interface-consumer.exe")
+  file(WRITE "${_consumer_source}" [=[
+extern "C" int PROC_clear_stack();
+namespace CSL_LISP {
+using character_writer = int(int);
+void cslstart(int, const char*[], character_writer*);
+}
+int main() {
+  void (*volatile start)(int, const char*[], CSL_LISP::character_writer*) =
+      &CSL_LISP::cslstart;
+  return PROC_clear_stack() + (start == nullptr);
+}
+]=])
+  set(_consumer_script [=[
+set -eu
+export MSYSTEM=CLANG64
+export PATH=/clang64/bin:/usr/bin
+source_file=$(cygpath -u "$1")
+output_file=$(cygpath -u "$2")
+shift 2
+args=()
+for arg in "$@"; do
+  case "$arg" in
+    [A-Za-z]:/*) args+=("$(cygpath -u "$arg")") ;;
+    *) args+=("$arg") ;;
+  esac
+done
+clang++ -std=gnu++26 -flto -O3 "$source_file" "${args[@]}" -o "$output_file"
+llvm-nm -C --defined-only "$output_file" | grep -q 'PROC_clear_stack$'
+llvm-nm -C --defined-only "$output_file" | grep -q 'CSL_LISP::cslstart('
+imports=$(llvm-readobj --coff-imports "$output_file" | sed -n 's/^  Name: //p')
+if printf '%s\n' "$imports" | grep -Eiq \
+    '(^|/)(msys|cygwin|zlib|libstdc\+\+|libwinpthread|ncurses)'; then
+  exit 1
+fi
+printf 'ordered_link_interface=linked\n'
+printf 'PROC_clear_stack=defined\n'
+printf 'CSL_LISP::cslstart=defined\n'
+printf 'non_system_runtime_imports=none\n'
+]=])
+  execute_process(
+    COMMAND "${PURE_REDUCE_MSYS2_BASH}" --noprofile --norc -c
+      "${_consumer_script}" pure-reduce
+      "${_consumer_source}" "${_consumer_executable}"
+      ${PURE_REDUCE_CSL_LINK_INTERFACE}
+    RESULT_VARIABLE _consumer_result
+    OUTPUT_VARIABLE _consumer_output ERROR_VARIABLE _consumer_error)
+  file(REMOVE "${_consumer_source}" "${_consumer_executable}")
+  if(NOT _consumer_result EQUAL 0 OR
+     NOT _consumer_output MATCHES "ordered_link_interface=linked" OR
+     NOT _consumer_output MATCHES "non_system_runtime_imports=none")
+    message(FATAL_ERROR
+      "exported CSL link interface is not independently consumable:\n"
+      "${_consumer_output}${_consumer_error}")
+  endif()
+  foreach(_manifest IN LISTS PURE_REDUCE_RUNTIME_MANIFESTS)
+    file(STRINGS "${_manifest}" _manifest_lines LIMIT_COUNT 1)
+    string(REGEX MATCH "^[0-9a-f]+" _manifest_hash "${_manifest_lines}")
+    string(LENGTH "${_manifest_hash}" _manifest_hash_length)
+    if(NOT _manifest_hash_length EQUAL 64)
+      message(FATAL_ERROR "runtime manifest has no SHA-256 entries: ${_manifest}")
     endif()
   endforeach()
 endif()

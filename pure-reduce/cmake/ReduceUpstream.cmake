@@ -24,6 +24,8 @@ function(_pure_reduce_apply_private_source_patch
     "134a68fdb10403d3a4c69051eb4e133803ff2659784f2d38ac4d94c7ee9f86d8")
   get_filename_component(_patch_name "${PATCH_FILE}" NAME)
   if(_patch_name STREQUAL "0001-csl-winsupport-define-nil.patch")
+    set(_expected_patch_sha256
+      "2d88d6d4a842ccb4574b60b0bd7e3af91896cea76708551a6e54489792e91d08")
     set(_target "csl/cslbase/winsupport.cpp")
     set(_expected_preimage
       "8e51f7c1fe17e960626f714c5e91e158ec73427ebcb7b886c8a0ffb6e2e633d2")
@@ -38,6 +40,12 @@ function(_pure_reduce_apply_private_source_patch
   endif()
   if(NOT EXISTS "${PATCH_FILE}")
     message(FATAL_ERROR "approved private source patch is missing: ${PATCH_FILE}")
+  endif()
+  file(SHA256 "${PATCH_FILE}" _patch_sha256)
+  if(NOT _patch_sha256 STREQUAL _expected_patch_sha256)
+    message(FATAL_ERROR
+      "approved source patch SHA-256 mismatch for ${_patch_name}: "
+      "${_patch_sha256}; expected ${_expected_patch_sha256}")
   endif()
   set(_target_path "${PRIVATE_ROOT}/${_target}")
   file(SHA256 "${_target_path}" _preimage)
@@ -78,7 +86,6 @@ function(_pure_reduce_apply_private_source_patch
     message(FATAL_ERROR
       "private source patch postimage mismatch for ${_target}: ${_postimage}")
   endif()
-  file(SHA256 "${PATCH_FILE}" _patch_sha256)
   file(APPEND "${TRANSCRIPT}"
     "patch=${_patch_name}\n"
     "patch_sha256=${_patch_sha256}\n"
@@ -89,6 +96,151 @@ function(_pure_reduce_apply_private_source_patch
   set(${OUT_JSON}
     "{\"patch\":\"${_patch_name}\",\"patch_sha256\":\"${_patch_sha256}\",\"target\":\"${_target}\",\"preimage_sha256\":\"${_preimage}\",\"postimage_sha256\":\"${_postimage}\"}"
     PARENT_SCOPE)
+endfunction()
+
+function(_pure_reduce_csl_link_interface
+    CSL_ARCHIVE CRLIBM_ARCHIVE FFI_ARCHIVE OUT_INTERFACE)
+  # This order is the successfully probed CLANG64 static link interface.
+  # Consumers must not reorder it or substitute host library search paths.
+  set(${OUT_INTERFACE}
+    "${CSL_ARCHIVE}"
+    "${CRLIBM_ARCHIVE}"
+    "${FFI_ARCHIVE}"
+    -Wl,-Bstatic
+    -lz
+    -lncurses
+    -lstdc++
+    -lpthread
+    -static-libgcc
+    -lcomctl32
+    -lgdi32
+    -lws2_32
+    -lwsock32
+    -lwinspool
+    -lmpr
+    -Wl,--subsystem,console
+    PARENT_SCOPE)
+endfunction()
+
+function(_pure_reduce_write_directory_manifest DIRECTORY MANIFEST)
+  if(NOT IS_DIRECTORY "${DIRECTORY}")
+    message(FATAL_ERROR "CSL runtime directory is missing: ${DIRECTORY}")
+  endif()
+  file(GLOB_RECURSE _files LIST_DIRECTORIES FALSE "${DIRECTORY}/*")
+  list(SORT _files)
+  if(NOT _files)
+    message(FATAL_ERROR "CSL runtime directory is empty: ${DIRECTORY}")
+  endif()
+  file(WRITE "${MANIFEST}" "")
+  foreach(_file IN LISTS _files)
+    file(SHA256 "${_file}" _sha256)
+    file(SIZE "${_file}" _bytes)
+    cmake_path(RELATIVE_PATH _file BASE_DIRECTORY "${DIRECTORY}"
+      OUTPUT_VARIABLE _relative)
+    file(APPEND "${MANIFEST}" "${_sha256} ${_bytes} ${_relative}\n")
+  endforeach()
+endfunction()
+
+function(_pure_reduce_run_source_verification)
+  foreach(_required IN ITEMS PURE_REDUCE_SOURCE_DIR
+      PURE_REDUCE_VERIFIED_COMMIT PURE_REDUCE_SOURCE_TREE_SHA256)
+    if(NOT DEFINED ${_required} OR "${${_required}}" STREQUAL "")
+      message(FATAL_ERROR "${_required} is required by source revalidation")
+    endif()
+  endforeach()
+  pure_reduce_verify_source(
+    "${PURE_REDUCE_SOURCE_DIR}" _actual_commit _actual_tree_sha256)
+  if(NOT _actual_commit STREQUAL PURE_REDUCE_VERIFIED_COMMIT OR
+      NOT _actual_tree_sha256 STREQUAL PURE_REDUCE_SOURCE_TREE_SHA256)
+    message(FATAL_ERROR
+      "verified REDUCE source identity changed after configuration")
+  endif()
+  message(STATUS
+    "verified REDUCE source remains ${_actual_commit} (${_actual_tree_sha256})")
+endfunction()
+
+function(_pure_reduce_run_runtime_artifact_refresh)
+  if(NOT DEFINED PURE_REDUCE_UPSTREAM_BINARY_DIR OR
+      PURE_REDUCE_UPSTREAM_BINARY_DIR STREQUAL "")
+    message(FATAL_ERROR
+      "PURE_REDUCE_UPSTREAM_BINARY_DIR is required by runtime refresh")
+  endif()
+  get_filename_component(_root "${PURE_REDUCE_UPSTREAM_BINARY_DIR}" ABSOLUTE)
+  _pure_reduce_select_windows_configuration("${_root}/source" _configuration)
+  _pure_reduce_select_configuration_image("${_configuration}" _image)
+  get_filename_component(_producer "${_image}" DIRECTORY)
+  set(_runtime_root "${_root}/artifacts/runtime")
+  set(_runtime_complete TRUE)
+  foreach(_name IN ITEMS reduce.resources reduce.fonts)
+    if(NOT IS_DIRECTORY "${_runtime_root}/${_name}" OR
+       NOT EXISTS "${_runtime_root}/${_name}.manifest")
+      set(_runtime_complete FALSE)
+    endif()
+  endforeach()
+  if(_runtime_complete)
+    message(STATUS "complete CSL runtime data remains staged")
+    return()
+  endif()
+  file(MAKE_DIRECTORY "${_runtime_root}")
+  foreach(_name IN ITEMS reduce.resources reduce.fonts)
+    set(_source "${_producer}/${_name}")
+    set(_destination "${_runtime_root}/${_name}")
+    if(NOT IS_DIRECTORY "${_source}")
+      message(FATAL_ERROR
+        "complete CSL runtime data is missing from the image producer: ${_source}")
+    endif()
+    file(REMOVE_RECURSE "${_destination}")
+    file(COPY "${_source}" DESTINATION "${_runtime_root}")
+    _pure_reduce_write_directory_manifest(
+      "${_destination}" "${_runtime_root}/${_name}.manifest")
+  endforeach()
+endfunction()
+
+function(_pure_reduce_run_upstream_build_ensure)
+  foreach(_required IN ITEMS PURE_REDUCE_UPSTREAM_BINARY_DIR
+      PURE_REDUCE_SOURCE_DIR PURE_REDUCE_MSYS2_BASH PURE_REDUCE_MAKE
+      PURE_REDUCE_VERIFIED_COMMIT PURE_REDUCE_SOURCE_TREE_SHA256)
+    if(NOT DEFINED ${_required} OR "${${_required}}" STREQUAL "")
+      message(FATAL_ERROR "${_required} is required by upstream build ensure")
+    endif()
+  endforeach()
+  get_filename_component(_root "${PURE_REDUCE_UPSTREAM_BINARY_DIR}" ABSOLUTE)
+  set(_required_artifacts
+    "${_root}/artifacts/reduce.img"
+    "${_root}/artifacts/link/libreduce-csl.a"
+    "${_root}/artifacts/link/libcrlibm.a"
+    "${_root}/artifacts/link/libffi.a"
+    "${_root}/reduce-upstream-metrics.json"
+    "${_root}/logs/artifact-contract-probe.exe"
+    "${_root}/logs/artifact-contract.log")
+  set(_complete TRUE)
+  foreach(_artifact IN LISTS _required_artifacts)
+    if(NOT EXISTS "${_artifact}" OR IS_DIRECTORY "${_artifact}")
+      set(_complete FALSE)
+    else()
+      file(SIZE "${_artifact}" _size)
+      if(_size LESS 16)
+        set(_complete FALSE)
+      endif()
+    endif()
+  endforeach()
+  set(_stamp "${_root}/pure-reduce-upstream.stamp")
+  if(EXISTS "${_stamp}")
+    file(READ "${_stamp}" _stamp_content)
+    string(REPLACE "\r" "" _stamp_content "${_stamp_content}")
+    set(_expected_stamp
+      "${PURE_REDUCE_VERIFIED_COMMIT}\n${PURE_REDUCE_SOURCE_TREE_SHA256}\n")
+    if(NOT _stamp_content STREQUAL _expected_stamp)
+      set(_complete FALSE)
+    endif()
+  else()
+    set(_complete FALSE)
+  endif()
+  if(_complete)
+    message(STATUS "complete pinned REDUCE/CSL artifacts remain valid")
+    return()
+  endif()
+  _pure_reduce_run_upstream_build()
 endfunction()
 
 function(_pure_reduce_discover_current_link_closure
@@ -514,14 +666,16 @@ set -eu
 export MSYSTEM=CLANG64
 export PATH=/clang64/bin:/usr/bin
 source_file=$(cygpath -u "$1")
-archive=$(cygpath -u "$2")
-crlibm=$(cygpath -u "$3")
-ffi=$(cygpath -u "$4")
-probe=$(cygpath -u "$5")
-clang++ -std=gnu++26 -flto -O3 "$source_file" "$archive" "$crlibm" "$ffi" \
-  -Wl,-Bstatic -lz -lncurses -lstdc++ -lpthread -static-libgcc \
-  -lcomctl32 -lgdi32 -lws2_32 -lwsock32 -lwinspool -lmpr \
-  -Wl,--subsystem,console -o "$probe"
+probe=$(cygpath -u "$2")
+shift 2
+link_args=()
+for arg in "$@"; do
+  case "$arg" in
+    [A-Za-z]:/*) link_args+=("$(cygpath -u "$arg")") ;;
+    *) link_args+=("$arg") ;;
+  esac
+done
+clang++ -std=gnu++26 -flto -O3 "$source_file" "${link_args[@]}" -o "$probe"
 llvm-nm -C --defined-only "$probe" | grep -q 'PROC_clear_stack$'
 llvm-nm -C --defined-only "$probe" | grep -q 'CSL_LISP::cslstart('
 imports=$(llvm-readobj --coff-imports "$probe" | sed -n 's/^  Name: //p')
@@ -537,11 +691,13 @@ printf 'imports:\n%s\n' "$imports"
 ]=])
   list(GET _selected_static_libraries 0 _crlibm_artifact)
   list(GET _selected_static_libraries 1 _ffi_artifact)
+  _pure_reduce_csl_link_interface(
+    "${_csl_archive}" "${_crlibm_artifact}" "${_ffi_artifact}"
+    _link_interface)
   _pure_reduce_run_logged(
     "current CSL artifact link and symbol contract" "${_artifact_contract_log}"
     "${PURE_REDUCE_MSYS2_BASH}" "${_probe_script}"
-    "${_probe_source}" "${_csl_archive}" "${_crlibm_artifact}"
-    "${_ffi_artifact}" "${_probe_executable}")
+    "${_probe_source}" "${_probe_executable}" ${_link_interface})
   list(LENGTH _current_objects _current_object_count)
 
   set(_tool_script [=[
@@ -624,20 +780,34 @@ function(pure_reduce_define_upstream_build)
   file(TO_CMAKE_PATH "${_root}" _root)
 
   set(_image "${_root}/artifacts/reduce.img")
-  set(_link_inputs
+  set(_link_artifacts
     "${_root}/artifacts/link/libreduce-csl.a"
     "${_root}/artifacts/link/libcrlibm.a"
     "${_root}/artifacts/link/libffi.a")
+  list(GET _link_artifacts 0 _csl_archive)
+  list(GET _link_artifacts 1 _crlibm_archive)
+  list(GET _link_artifacts 2 _ffi_archive)
+  _pure_reduce_csl_link_interface(
+    "${_csl_archive}" "${_crlibm_archive}" "${_ffi_archive}"
+    _link_interface)
   set(_runtime_data
     "${_root}/artifacts/runtime/reduce.resources"
     "${_root}/artifacts/runtime/reduce.fonts")
+  set(_runtime_manifests
+    "${_root}/artifacts/runtime/reduce.resources.manifest"
+    "${_root}/artifacts/runtime/reduce.fonts.manifest")
   set(_metrics "${_root}/reduce-upstream-metrics.json")
   set(_stamp "${_root}/pure-reduce-upstream.stamp")
 
   set(PURE_REDUCE_UPSTREAM_BINARY_DIR "${_root}" PARENT_SCOPE)
   set(PURE_REDUCE_CSL_IMAGE "${_image}" PARENT_SCOPE)
-  set(PURE_REDUCE_CSL_LINK_INPUTS "${_link_inputs}" PARENT_SCOPE)
+  # LINK_ARTIFACTS are verified files. LINK_INTERFACE (and its compatibility
+  # alias LINK_INPUTS) is the complete ordered sequence for target_link_libraries.
+  set(PURE_REDUCE_CSL_LINK_ARTIFACTS "${_link_artifacts}" PARENT_SCOPE)
+  set(PURE_REDUCE_CSL_LINK_INTERFACE "${_link_interface}" PARENT_SCOPE)
+  set(PURE_REDUCE_CSL_LINK_INPUTS "${_link_interface}" PARENT_SCOPE)
   set(PURE_REDUCE_RUNTIME_DATA "${_runtime_data}" PARENT_SCOPE)
+  set(PURE_REDUCE_RUNTIME_MANIFESTS "${_runtime_manifests}" PARENT_SCOPE)
   set(PURE_REDUCE_UPSTREAM_METRICS "${_metrics}" PARENT_SCOPE)
 
   if(CMAKE_SCRIPT_MODE_FILE)
@@ -653,11 +823,18 @@ function(pure_reduce_define_upstream_build)
     return()
   endif()
 
-  add_custom_command(
-    OUTPUT "${_stamp}"
-    BYPRODUCTS "${_image}" ${_link_inputs} "${_metrics}"
+  add_custom_target(pure-reduce-upstream-source-verify
     COMMAND "${CMAKE_COMMAND}"
-      -DPURE_REDUCE_RUN_UPSTREAM_BUILD=ON
+      -DPURE_REDUCE_RUN_SOURCE_VERIFICATION=ON
+      "-DPURE_REDUCE_SOURCE_DIR=${PURE_REDUCE_SOURCE_DIR}"
+      "-DPURE_REDUCE_VERIFIED_COMMIT=${PURE_REDUCE_VERIFIED_COMMIT}"
+      "-DPURE_REDUCE_SOURCE_TREE_SHA256=${PURE_REDUCE_SOURCE_TREE_SHA256}"
+      -P "${CMAKE_CURRENT_FUNCTION_LIST_FILE}"
+    COMMENT "Revalidating pinned REDUCE source"
+    VERBATIM)
+  add_custom_target(pure-reduce-upstream-build-ensure
+    COMMAND "${CMAKE_COMMAND}"
+      -DPURE_REDUCE_RUN_UPSTREAM_BUILD_ENSURE=ON
       "-DPURE_REDUCE_SOURCE_DIR=${PURE_REDUCE_SOURCE_DIR}"
       "-DPURE_REDUCE_UPSTREAM_BINARY_DIR=${_root}"
       "-DPURE_REDUCE_MSYS2_BASH=${PURE_REDUCE_MSYS2_BASH}"
@@ -665,15 +842,34 @@ function(pure_reduce_define_upstream_build)
       "-DPURE_REDUCE_VERIFIED_COMMIT=${PURE_REDUCE_VERIFIED_COMMIT}"
       "-DPURE_REDUCE_SOURCE_TREE_SHA256=${PURE_REDUCE_SOURCE_TREE_SHA256}"
       -P "${CMAKE_CURRENT_FUNCTION_LIST_FILE}"
-    DEPENDS
-      "${CMAKE_CURRENT_FUNCTION_LIST_FILE}"
-      "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/../patches/0001-csl-winsupport-define-nil.patch"
-    COMMENT "Building complete pinned REDUCE/CSL and current link closure"
+    BYPRODUCTS "${_stamp}" "${_image}" ${_link_artifacts} "${_metrics}"
+      "${_root}/logs/artifact-contract-probe.exe"
+      "${_root}/logs/artifact-contract.log"
+    COMMENT "Ensuring complete pinned REDUCE/CSL artifacts"
     USES_TERMINAL
     VERBATIM)
-  add_custom_target(pure-reduce-upstream DEPENDS "${_stamp}")
+  add_dependencies(
+    pure-reduce-upstream-build-ensure pure-reduce-upstream-source-verify)
+  add_custom_target(pure-reduce-upstream-runtime-ensure
+    COMMAND "${CMAKE_COMMAND}"
+      -DPURE_REDUCE_RUN_RUNTIME_ARTIFACT_REFRESH=ON
+      "-DPURE_REDUCE_UPSTREAM_BINARY_DIR=${_root}"
+      -P "${CMAKE_CURRENT_FUNCTION_LIST_FILE}"
+    BYPRODUCTS ${_runtime_manifests} ${_runtime_data}
+    COMMENT "Ensuring complete CSL runtime data"
+    VERBATIM)
+  add_dependencies(
+    pure-reduce-upstream-runtime-ensure pure-reduce-upstream-build-ensure)
+  add_custom_target(pure-reduce-upstream)
+  add_dependencies(pure-reduce-upstream pure-reduce-upstream-runtime-ensure)
 endfunction()
 
 if(PURE_REDUCE_RUN_UPSTREAM_BUILD)
   _pure_reduce_run_upstream_build()
+elseif(PURE_REDUCE_RUN_SOURCE_VERIFICATION)
+  _pure_reduce_run_source_verification()
+elseif(PURE_REDUCE_RUN_RUNTIME_ARTIFACT_REFRESH)
+  _pure_reduce_run_runtime_artifact_refresh()
+elseif(PURE_REDUCE_RUN_UPSTREAM_BUILD_ENSURE)
+  _pure_reduce_run_upstream_build_ensure()
 endif()

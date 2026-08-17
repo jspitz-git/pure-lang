@@ -43,5 +43,15 @@ if(BUILD_TESTING)
         -P "${CMAKE_CURRENT_LIST_DIR}/tests/upstream-contract.cmake")
     set_tests_properties(pure-reduce-upstream-contract PROPERTIES
       LABELS "reduce")
+    add_test(
+      NAME pure-reduce-upstream-revalidation
+      COMMAND "${CMAKE_COMMAND}"
+        "-DPURE_REDUCE_SOURCE_DIR=${PURE_REDUCE_SOURCE_DIR}"
+        "-DPURE_REDUCE_UPSTREAM_MODULE=${CMAKE_CURRENT_LIST_DIR}/cmake/ReduceUpstream.cmake"
+        "-DPURE_REDUCE_MSYS2_BASH=${PURE_REDUCE_MSYS2_BASH}"
+        "-DPURE_REDUCE_MAKE=${PURE_REDUCE_MAKE}"
+        -P "${CMAKE_CURRENT_LIST_DIR}/tests/upstream-revalidation.cmake")
+    set_tests_properties(pure-reduce-upstream-revalidation PROPERTIES
+      LABELS "reduce")
   endif()
 endif()
