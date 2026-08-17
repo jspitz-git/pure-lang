@@ -1,12 +1,19 @@
 foreach(_required IN ITEMS
-    CMAKE_COMMAND REDUCE_DLL REDUCE_IMAGE PURE_EXECUTABLE PURE_LIBRARY_DIR
+    CMAKE_COMMAND REDUCE_DLL REDUCE_IMAGE PURE_MODULE
+    PURE_EXECUTABLE PURE_LIBRARY_DIR
     PURE_SOURCE_DIR TEST_DRIVER TEST_SCRIPT STAGE_ROOT EXPECTED_MARKER)
   if(NOT DEFINED ${_required} OR "${${_required}}" STREQUAL "")
     message(FATAL_ERROR "${_required} is required")
   endif()
 endforeach()
 
-set(_module_dir "${STAGE_ROOT}/relocated 日本語 module")
+file(READ "${PURE_MODULE}" _pure_module)
+if(_pure_module MATCHES "GetShortPathNameW")
+  message(FATAL_ERROR
+    "production Pure module still calls forbidden GetShortPathNameW")
+endif()
+
+set(_module_dir "${STAGE_ROOT}/relocated 日本語 no aliases")
 file(REMOVE_RECURSE "${_module_dir}")
 file(MAKE_DIRECTORY "${_module_dir}")
 file(COPY_FILE "${REDUCE_DLL}" "${_module_dir}/reduce.dll" ONLY_IF_DIFFERENT)

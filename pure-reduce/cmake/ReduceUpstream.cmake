@@ -2,6 +2,20 @@ include_guard(GLOBAL)
 
 include("${CMAKE_CURRENT_LIST_DIR}/ReduceSource.cmake")
 
+set(_PURE_REDUCE_NIL_PATCH_SHA256
+  "2d88d6d4a842ccb4574b60b0bd7e3af91896cea76708551a6e54489792e91d08")
+set(_PURE_REDUCE_UTF8_IMAGE_PATCH_SHA256
+  "ad89f9581eefaaf4191b65af1b769a18883e865ee2740e4e6f053d1c5615d0e9")
+
+function(_pure_reduce_expected_upstream_stamp COMMIT TREE_SHA256 OUT_STAMP)
+  string(CONCAT _stamp
+    "${COMMIT}\n"
+    "${TREE_SHA256}\n"
+    "${_PURE_REDUCE_NIL_PATCH_SHA256}\n"
+    "${_PURE_REDUCE_UTF8_IMAGE_PATCH_SHA256}\n")
+  set(${OUT_STAMP} "${_stamp}" PARENT_SCOPE)
+endfunction()
+
 function(_pure_reduce_checkout_pinned_files SOURCE_ROOT DESTINATION)
   file(MAKE_DIRECTORY "${DESTINATION}")
   # The private build must use the exact bytes in the pinned Git objects.
@@ -24,13 +38,26 @@ function(_pure_reduce_apply_private_source_patch
     "134a68fdb10403d3a4c69051eb4e133803ff2659784f2d38ac4d94c7ee9f86d8")
   get_filename_component(_patch_name "${PATCH_FILE}" NAME)
   if(_patch_name STREQUAL "0001-csl-winsupport-define-nil.patch")
-    set(_expected_patch_sha256
-      "2d88d6d4a842ccb4574b60b0bd7e3af91896cea76708551a6e54489792e91d08")
-    set(_target "csl/cslbase/winsupport.cpp")
-    set(_expected_preimage
+    set(_expected_patch_sha256 "${_PURE_REDUCE_NIL_PATCH_SHA256}")
+    set(_targets "csl/cslbase/winsupport.cpp")
+    set(_expected_preimages
       "8e51f7c1fe17e960626f714c5e91e158ec73427ebcb7b886c8a0ffb6e2e633d2")
-    set(_expected_postimage
+    set(_expected_postimages
       "8721a10c8ba5d9a82b5b0f5d2d83a46a4b98d87bb5519f92ce37940d15f936e0")
+  elseif(_patch_name STREQUAL "0002-csl-windows-utf8-image-open.patch")
+    set(_expected_patch_sha256 "${_PURE_REDUCE_UTF8_IMAGE_PATCH_SHA256}")
+    set(_targets
+      "csl/cslbase/preserve.cpp"
+      "csl/cslbase/winsupport.cpp"
+      "csl/cslbase/winsupport.h")
+    set(_expected_preimages
+      "12631daf354b0120b622cf8751bea763ae352567bf43193ecffe54d7a2e57ffd"
+      "8721a10c8ba5d9a82b5b0f5d2d83a46a4b98d87bb5519f92ce37940d15f936e0"
+      "dc18bee02f947203f14fc3827a04c96c54161ac6f80408ad8d72e70cce8d2ade")
+    set(_expected_postimages
+      "e41bf9426557db8fa5b958072dc908119f2af392d56f52345ad55ae1819b153e"
+      "1c01db3e1783831f3db9bf4d657182806e4b09f011387a07c28514e2b340fd3a"
+      "4a5e4165b414a8a9e5ab9b551f7e67f6ba47a42b780e8c509502d97fef93be70")
   else()
     message(FATAL_ERROR "source patch is not in the approved registry: ${PATCH_FILE}")
   endif()
@@ -47,12 +74,29 @@ function(_pure_reduce_apply_private_source_patch
       "approved source patch SHA-256 mismatch for ${_patch_name}: "
       "${_patch_sha256}; expected ${_expected_patch_sha256}")
   endif()
-  set(_target_path "${PRIVATE_ROOT}/${_target}")
-  file(SHA256 "${_target_path}" _preimage)
-  if(NOT _preimage STREQUAL _expected_preimage)
-    message(FATAL_ERROR
-      "private source patch preimage mismatch for ${_target}: ${_preimage}")
+  list(LENGTH _targets _target_count)
+  list(LENGTH _expected_preimages _preimage_count)
+  list(LENGTH _expected_postimages _postimage_count)
+  if(NOT _target_count EQUAL _preimage_count OR
+     NOT _target_count EQUAL _postimage_count)
+    message(FATAL_ERROR "invalid approved source patch registry for ${_patch_name}")
   endif()
+  set(_preimages)
+  math(EXPR _last_target "${_target_count} - 1")
+  foreach(_index RANGE 0 ${_last_target})
+    list(GET _targets ${_index} _target)
+    list(GET _expected_preimages ${_index} _expected_preimage)
+    set(_target_path "${PRIVATE_ROOT}/${_target}")
+    if(NOT EXISTS "${_target_path}")
+      message(FATAL_ERROR "private source patch target is missing: ${_target}")
+    endif()
+    file(SHA256 "${_target_path}" _preimage)
+    if(NOT _preimage STREQUAL _expected_preimage)
+      message(FATAL_ERROR
+        "private source patch preimage mismatch for ${_target}: ${_preimage}")
+    endif()
+    list(APPEND _preimages "${_preimage}")
+  endforeach()
   execute_process(
     COMMAND git -C "${PRIVATE_ROOT}" rev-parse --show-toplevel
     RESULT_VARIABLE _top_result
@@ -81,21 +125,47 @@ function(_pure_reduce_apply_private_source_patch
   if(NOT _apply_result EQUAL 0)
     message(FATAL_ERROR "approved source patch failed: ${_apply_error}")
   endif()
-  file(SHA256 "${_target_path}" _postimage)
-  if(NOT _postimage STREQUAL _expected_postimage)
-    message(FATAL_ERROR
-      "private source patch postimage mismatch for ${_target}: ${_postimage}")
-  endif()
+  set(_postimages)
   file(APPEND "${TRANSCRIPT}"
     "patch=${_patch_name}\n"
     "patch_sha256=${_patch_sha256}\n"
-    "source_tree_sha256=${SOURCE_TREE_SHA256}\n"
-    "target=${_target}\n"
-    "preimage_sha256=${_preimage}\n"
-    "postimage_sha256=${_postimage}\n\n")
-  set(${OUT_JSON}
-    "{\"patch\":\"${_patch_name}\",\"patch_sha256\":\"${_patch_sha256}\",\"target\":\"${_target}\",\"preimage_sha256\":\"${_preimage}\",\"postimage_sha256\":\"${_postimage}\"}"
-    PARENT_SCOPE)
+    "source_tree_sha256=${SOURCE_TREE_SHA256}\n")
+  set(_targets_json "[")
+  set(_separator "")
+  foreach(_index RANGE 0 ${_last_target})
+    list(GET _targets ${_index} _target)
+    list(GET _preimages ${_index} _preimage)
+    list(GET _expected_postimages ${_index} _expected_postimage)
+    set(_target_path "${PRIVATE_ROOT}/${_target}")
+    file(SHA256 "${_target_path}" _postimage)
+    if(NOT _postimage STREQUAL _expected_postimage)
+      message(FATAL_ERROR
+        "private source patch postimage mismatch for ${_target}: ${_postimage}")
+    endif()
+    list(APPEND _postimages "${_postimage}")
+    file(APPEND "${TRANSCRIPT}"
+      "target=${_target}\n"
+      "preimage_sha256=${_preimage}\n"
+      "postimage_sha256=${_postimage}\n")
+    string(APPEND _targets_json
+      "${_separator}{\"path\":\"${_target}\",\"preimage_sha256\":\"${_preimage}\",\"postimage_sha256\":\"${_postimage}\"}")
+    set(_separator ",")
+  endforeach()
+  file(APPEND "${TRANSCRIPT}" "\n")
+  string(APPEND _targets_json "]")
+  set(_patch_json
+    "{\"patch\":\"${_patch_name}\",\"patch_sha256\":\"${_patch_sha256}\",\"targets\":${_targets_json}")
+  # Keep the original scalar provenance fields for the existing one-target
+  # patch contract while all patches also expose a complete targets array.
+  if(_target_count EQUAL 1)
+    list(GET _targets 0 _target)
+    list(GET _preimages 0 _preimage)
+    list(GET _postimages 0 _postimage)
+    string(APPEND _patch_json
+      ",\"target\":\"${_target}\",\"preimage_sha256\":\"${_preimage}\",\"postimage_sha256\":\"${_postimage}\"")
+  endif()
+  string(APPEND _patch_json "}")
+  set(${OUT_JSON} "${_patch_json}" PARENT_SCOPE)
 endfunction()
 
 function(_pure_reduce_csl_link_interface
@@ -228,8 +298,10 @@ function(_pure_reduce_run_upstream_build_ensure)
   if(EXISTS "${_stamp}")
     file(READ "${_stamp}" _stamp_content)
     string(REPLACE "\r" "" _stamp_content "${_stamp_content}")
-    set(_expected_stamp
-      "${PURE_REDUCE_VERIFIED_COMMIT}\n${PURE_REDUCE_SOURCE_TREE_SHA256}\n")
+    _pure_reduce_expected_upstream_stamp(
+      "${PURE_REDUCE_VERIFIED_COMMIT}"
+      "${PURE_REDUCE_SOURCE_TREE_SHA256}"
+      _expected_stamp)
     if(NOT _stamp_content STREQUAL _expected_stamp)
       set(_complete FALSE)
     endif()
@@ -476,6 +548,8 @@ function(_pure_reduce_run_upstream_build)
   set(_logs "${_root}/logs")
   set(_nil_patch_file
     "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/../patches/0001-csl-winsupport-define-nil.patch")
+  set(_utf8_image_patch_file
+    "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/../patches/0002-csl-windows-utf8-image-open.patch")
   set(_autogen_log "${_logs}/autogen.log")
   set(_patch_log "${_logs}/applied-source-patches.log")
   set(_restore_log "${_logs}/restored-top-level-files.log")
@@ -512,6 +586,10 @@ function(_pure_reduce_run_upstream_build)
     "${_private_source}" "${_nil_patch_file}"
     "${PURE_REDUCE_SOURCE_TREE_SHA256}" "${_patch_log}"
     _nil_patch_json)
+  _pure_reduce_apply_private_source_patch(
+    "${_private_source}" "${_utf8_image_patch_file}"
+    "${PURE_REDUCE_SOURCE_TREE_SHA256}" "${_patch_log}"
+    _utf8_image_patch_json)
   _pure_reduce_tree_bytes(
     "${_private_source}" "${PURE_REDUCE_MSYS2_BASH}" _source_bytes)
 
@@ -742,7 +820,7 @@ printf 'autoconf=%s\n' "$(autoconf --version | sed -n '1p')"
     "  \"commit\": \"${PURE_REDUCE_VERIFIED_COMMIT}\",\n"
     "  \"source_tree_sha256\": \"${PURE_REDUCE_SOURCE_TREE_SHA256}\",\n"
     "  \"source_materialization\": \"git -c core.autocrlf=false checkout-index\",\n"
-    "  \"source_patches\": [${_nil_patch_json}],\n"
+    "  \"source_patches\": [${_nil_patch_json},${_utf8_image_patch_json}],\n"
     "  \"tool_versions\": \"${_tool_versions_json}\",\n"
     "  \"autogen_arguments\": [\"--with-csl\", \"--without-gui\", \"--without-redfront\"],\n"
     "  \"configure_arguments\": [\"--without-autogen\", \"--with-csl\", \"--without-gui\", \"--without-redfront\", \"CC=clang\", \"CXX=clang++\"],\n"
@@ -755,9 +833,11 @@ printf 'autoconf=%s\n' "$(autoconf --version | sed -n '1p')"
     "  \"build_tree_bytes\": ${_build_tree_bytes},\n"
     "  \"logs\": {\"source_patches\": \"${_patch_log_json}\", \"autogen\": \"${_autogen_log_json}\", \"restored_top_level_files\": \"${_restore_log_json}\", \"configure\": \"${_configure_log_json}\", \"build\": \"${_build_log_json}\", \"no_startup_object\": \"${_no_startup_log_json}\", \"closure_archive\": \"${_archive_log_json}\", \"closure_manifest\": \"${_closure_manifest_json}\", \"artifact_contract\": \"${_artifact_contract_log_json}\"}\n"
     "}\n")
-  file(WRITE "${_stamp}"
-    "${PURE_REDUCE_VERIFIED_COMMIT}\n"
-    "${PURE_REDUCE_SOURCE_TREE_SHA256}\n")
+  _pure_reduce_expected_upstream_stamp(
+    "${PURE_REDUCE_VERIFIED_COMMIT}"
+    "${PURE_REDUCE_SOURCE_TREE_SHA256}"
+    _expected_stamp)
+  file(WRITE "${_stamp}" "${_expected_stamp}")
 endfunction()
 
 function(pure_reduce_define_upstream_build)

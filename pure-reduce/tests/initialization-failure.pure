@@ -8,7 +8,7 @@ is_initialization_error (reduce::initialization_error _) = true;
 is_initialization_error _ = false otherwise;
 
 let initialization_failed = catch is_initialization_error
-  (reduce::test_initialization_failure "setup" $$ false);
+  (reduce::test_initialization_failure $$ false);
 check "mandatory setup failure is categorized" initialization_failed;
 check "failed initialization is not running" (reduce::pure_reduce_state == 2);
 

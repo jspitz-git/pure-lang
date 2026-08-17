@@ -1,0 +1,146 @@
+diff --git a/csl/cslbase/preserve.cpp b/csl/cslbase/preserve.cpp
+index c800489b..cb199964 100644
+--- a/csl/cslbase/preserve.cpp
++++ b/csl/cslbase/preserve.cpp
+@@ -493,6 +493,26 @@ static int builtinread(void *b, size_t s, size_t n)
+ 
+ #endif
+ 
++static int image_file_status(const char *name)
++{
++#ifdef WIN32
++    return windowsFileStatusUtf8(name);
++#else
++    struct stat buf;
++    if (stat(name, &buf) == -1) return 0;
++    return (buf.st_mode & S_IFMT) == S_IFDIR ? 2 : 1;
++#endif
++}
++
++static std::FILE *image_fopen(const char *name, const char *mode)
++{
++#ifdef WIN32
++    return windowsFopenUtf8(name, mode);
++#else
++    return std::fopen(name, mode);
++#endif
++}
++
+ directory *open_pds(const char *name, int mode)
+ // Given a file-name, open the associated file, make space for
+ // a directory and return same. This now has to detect if the file-name
+@@ -506,7 +526,6 @@ directory *open_pds(const char *name, int mode)
+ {   char expanded[LONGEST_LEGAL_FILENAME];
+     directory hdr, *d;
+     bool write_OK = false, fileExists, nameDir, fileDir;
+-    struct stat buf;
+     std::FILE *f;
+     int l, i, n;
+     std::memset(expanded, 0, sizeof(expanded));
+@@ -522,10 +541,9 @@ directory *open_pds(const char *name, int mode)
+     fileExists = true;
+     binary_read_filep = reduce_image;
+ #else
+-    if (stat(expanded, &buf) != -1)
+-    {   fileExists = true;
+-        if ((buf.st_mode & S_IFMT) == S_IFDIR) fileDir = true;
+-    }
++    int fileStatus = image_file_status(expanded);
++    fileExists = fileStatus != 0;
++    fileDir = fileStatus == 2;
+     if (nameDir && fileExists && !fileDir)
+         return make_empty_directory(expanded);
+     if (mode != PDS_INPUT)
+@@ -540,15 +558,15 @@ directory *open_pds(const char *name, int mode)
+         {   Cmkdir(expanded);
+             return make_native_directory(name, expanded, 0);
+         }
+-        else if (fileExists) f = std::fopen(expanded, "r+b");
++        else if (fileExists) f = image_fopen(expanded, "r+b");
+         else f = nullptr;
+         if (f != nullptr) write_OK = true;
+         else if (mode == PDS_PENDING)
+-        {   f = std::fopen(expanded, "rb");
++        {   f = image_fopen(expanded, "rb");
+             if (f == nullptr) return make_pending_directory(expanded, !nameDir);
+         }
+         else
+-        {   f = std::fopen(expanded, "w+b");
++        {   f = image_fopen(expanded, "w+b");
+             if (f != nullptr) write_OK = true;
+         }
+     }
+@@ -557,7 +575,7 @@ directory *open_pds(const char *name, int mode)
+     if (f == nullptr)
+     {   if (!fileExists) return make_empty_directory(expanded);
+         if (fileDir) return make_native_directory(name, expanded, 1);
+-        f = std::fopen(expanded, "rb");
++        f = image_fopen(expanded, "rb");
+     }
+ // If the file does not exist I will just hand back a directory that shows
+ // no files in it.  This seems as easy a thing to do at this stage as I can
+diff --git a/csl/cslbase/winsupport.cpp b/csl/cslbase/winsupport.cpp
+index 2ab3ece5..289c5388 100644
+--- a/csl/cslbase/winsupport.cpp
++++ b/csl/cslbase/winsupport.cpp
+@@ -970,6 +970,47 @@ bool valid_address(void *pointer)
+     return false;  // ::VirtualQuery failed.
+ }
+ 
++static wchar_t *widenUtf8(const char *text)
++{
++    if (text == nullptr) return nullptr;
++    int length = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS,
++                                     text, -1, nullptr, 0);
++    if (length == 0) return nullptr;
++    wchar_t *wide = new (std::nothrow) wchar_t[length];
++    if (wide == nullptr) return nullptr;
++    if (MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS,
++                            text, -1, wide, length) != length)
++    {   delete [] wide;
++        return nullptr;
++    }
++    return wide;
++}
++
++std::FILE *windowsFopenUtf8(const char *name, const char *mode)
++{
++    wchar_t *wideName = widenUtf8(name);
++    if (wideName == nullptr) return nullptr;
++    wchar_t *wideMode = widenUtf8(mode);
++    if (wideMode == nullptr)
++    {   delete [] wideName;
++        return nullptr;
++    }
++    std::FILE *result = ::_wfopen(wideName, wideMode);
++    delete [] wideMode;
++    delete [] wideName;
++    return result;
++}
++
++int windowsFileStatusUtf8(const char *name)
++{
++    wchar_t *wideName = widenUtf8(name);
++    if (wideName == nullptr) return 0;
++    DWORD attributes = GetFileAttributesW(wideName);
++    delete [] wideName;
++    if (attributes == INVALID_FILE_ATTRIBUTES) return 0;
++    return (attributes & FILE_ATTRIBUTE_DIRECTORY) != 0 ? 2 : 1;
++}
++
+ } // end namespace
+ 
+ #elif defined __CYGWIN__
+diff --git a/csl/cslbase/winsupport.h b/csl/cslbase/winsupport.h
+index 2abddcc0..bda17e12 100644
+--- a/csl/cslbase/winsupport.h
++++ b/csl/cslbase/winsupport.h
+@@ -81,6 +81,8 @@ extern int windowsFindGnuplot1(char *name);
+ extern size_t windowsGetTempPath(size_t n, char *s);
+ extern bool valid_address(void *pointer);
+ extern int windowsFindGnuplot2(char *name);
++extern std::FILE *windowsFopenUtf8(const char *name, const char *mode);
++extern int windowsFileStatusUtf8(const char *name);
+ 
+ #elif defined __CYGWIN__
+ 

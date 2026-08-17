@@ -157,6 +157,7 @@ if(BUILD_TESTING)
           "-DPURE_EXECUTABLE=${PURE_EXECUTABLE}"
           "-DPURE_LIBRARY_DIR=${_pure_reduce_library_dir}"
           "-DPURE_SOURCE_DIR=${CMAKE_CURRENT_LIST_DIR}"
+          "-DPURE_MODULE=${CMAKE_CURRENT_LIST_DIR}/reduce.pure"
           "-DTEST_DRIVER=${CMAKE_CURRENT_LIST_DIR}/cmake/RunPureReduceTest.cmake"
           "-DTEST_SCRIPT=${CMAKE_CURRENT_LIST_DIR}/tests/unicode-relocation.pure"
           "-DSTAGE_ROOT=${CMAKE_CURRENT_BINARY_DIR}"
@@ -205,6 +206,14 @@ if(BUILD_TESTING)
         "-DPURE_REDUCE_MAKE=${PURE_REDUCE_MAKE}"
         -P "${CMAKE_CURRENT_LIST_DIR}/tests/upstream-revalidation.cmake")
     set_tests_properties(pure-reduce-upstream-revalidation PROPERTIES
+      LABELS "reduce")
+    add_test(
+      NAME pure-reduce-utf8-image-patch-contract
+      COMMAND "${CMAKE_COMMAND}"
+        "-DPURE_REDUCE_SOURCE_DIR=${PURE_REDUCE_SOURCE_DIR}"
+        "-DPURE_REDUCE_SOURCE_TREE_SHA256=${PURE_REDUCE_SOURCE_TREE_SHA256}"
+        -P "${CMAKE_CURRENT_LIST_DIR}/tests/utf8-image-patch-contract.cmake")
+    set_tests_properties(pure-reduce-utf8-image-patch-contract PROPERTIES
       LABELS "reduce")
   endif()
 endif()
