@@ -11,6 +11,14 @@ include("${REDUCE_UPSTREAM_MODULE}")
 string(SHA256 _root_key "${CMAKE_CURRENT_BINARY_DIR}")
 file(TO_CMAKE_PATH
   "$ENV{TEMP}/pure reduce prefix map response-${_root_key}" _root)
+_pure_reduce_private_source_path(
+  "${MSYS2_BASH}" "${_root}/build root with spaces" _private_source)
+if(_private_source MATCHES "[ \t\r\n]" OR
+   NOT _private_source MATCHES "/tmp/pure-reduce-source-[0-9a-f]+$")
+  message(FATAL_ERROR
+    "private REDUCE source path is not isolated in no-space scratch: "
+    "${_private_source}")
+endif()
 set(_source "${_root}/source with spaces")
 file(REMOVE_RECURSE "${_root}")
 file(MAKE_DIRECTORY "${_source}")

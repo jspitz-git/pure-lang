@@ -17,7 +17,9 @@ if(NOT _stamp STREQUAL _expected_stamp OR _stamp MATCHES ";")
     "upstream stamp must be five newline-delimited identity fields")
 endif()
 
-set(_fixture "${CMAKE_CURRENT_BINARY_DIR}/pure-reduce-utf8-image-patch")
+string(SHA256 _fixture_key "${CMAKE_CURRENT_BINARY_DIR}")
+file(TO_CMAKE_PATH
+  "$ENV{TEMP}/pure-reduce-utf8-image-patch-${_fixture_key}" _fixture)
 file(REMOVE_RECURSE "${_fixture}")
 _pure_reduce_checkout_pinned_files(
   "${PURE_REDUCE_SOURCE_DIR}" "${_fixture}"

@@ -51,9 +51,12 @@ if ($LASTEXITCODE -ne 0 -or $remoteRefs.Count -ne 0) {
 The identity and status assertions must complete without error. The CMake
 source verifier additionally hashes Git's
 pathname-sorted tracked-object record stream and rejects a different commit,
-tree identity, non-top-level checkout, or dirty tracked tree. Two checked-in,
+tree identity, non-top-level checkout, or dirty tracked tree. Three checked-in,
 checksum-covered corrections are applied only to a private canonical source
-materialization below the build directory; the checkout is not patched.
+materialization; the checkout is not patched. Because Automake rejects an
+absolute source directory containing whitespace, that private copy is built in
+deterministic no-space MSYS2 scratch. The repository, CMake build, stage, and
+artifact-verification paths remain whitespace-bearing validation paths.
 
 The historical `reduce-algebra-csl-r2204` archive under `reduce-files` is not
 a Windows input and is not the supported upstream baseline.

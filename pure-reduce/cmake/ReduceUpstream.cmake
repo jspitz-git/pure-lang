@@ -9,7 +9,7 @@ set(_PURE_REDUCE_UTF8_IMAGE_PATCH_SHA256
 set(_PURE_REDUCE_CONFIGURE_PATHS_PATCH_SHA256
   "32a737b72bec3000fc2da6e701b80234bb34bf757a236049a5dd7347d555fee6")
 set(_PURE_REDUCE_BUILD_RECIPE_VERSION
-  "windows-clang-native-layout-v5")
+  "windows-clang-scratch-source-v6")
 
 function(_pure_reduce_expected_upstream_stamp COMMIT TREE_SHA256 OUT_STAMP)
   string(CONCAT _stamp
@@ -113,29 +113,16 @@ function(_pure_reduce_apply_private_source_patch
     list(APPEND _preimages "${_preimage}")
   endforeach()
   execute_process(
-    COMMAND git -C "${PRIVATE_ROOT}" rev-parse --show-toplevel
-    RESULT_VARIABLE _top_result
-    OUTPUT_VARIABLE _worktree_root
-    ERROR_VARIABLE _top_error
-    OUTPUT_STRIP_TRAILING_WHITESPACE)
-  if(NOT _top_result EQUAL 0)
-    message(FATAL_ERROR
-      "private source patch root is not below the project worktree: ${_top_error}")
-  endif()
-  cmake_path(RELATIVE_PATH PRIVATE_ROOT
-    BASE_DIRECTORY "${_worktree_root}" OUTPUT_VARIABLE _private_relative)
-  execute_process(
-    COMMAND git -C "${_worktree_root}" apply --check --unidiff-zero
-      --whitespace=nowarn
-      "--directory=${_private_relative}" "${PATCH_FILE}"
+    COMMAND git -C "${PRIVATE_ROOT}" apply --check --unidiff-zero
+      --whitespace=nowarn "${PATCH_FILE}"
     RESULT_VARIABLE _check_result
     ERROR_VARIABLE _check_error)
   if(NOT _check_result EQUAL 0)
     message(FATAL_ERROR "approved source patch check failed: ${_check_error}")
   endif()
   execute_process(
-    COMMAND git -C "${_worktree_root}" apply --unidiff-zero --whitespace=nowarn
-      "--directory=${_private_relative}" "${PATCH_FILE}"
+    COMMAND git -C "${PRIVATE_ROOT}" apply --unidiff-zero --whitespace=nowarn
+      "${PATCH_FILE}"
     RESULT_VARIABLE _apply_result
     ERROR_VARIABLE _apply_error)
   if(NOT _apply_result EQUAL 0)
@@ -576,6 +563,24 @@ function(_pure_reduce_json_escape VALUE OUT_VALUE)
   set(${OUT_VALUE} "${_escaped}" PARENT_SCOPE)
 endfunction()
 
+function(_pure_reduce_private_source_path BASH_EXECUTABLE BUILD_ROOT OUT_PATH)
+  get_filename_component(_bash "${BASH_EXECUTABLE}" ABSOLUTE)
+  file(TO_CMAKE_PATH "${_bash}" _bash)
+  cmake_path(GET _bash PARENT_PATH _bin)
+  cmake_path(GET _bin PARENT_PATH _usr)
+  cmake_path(GET _usr PARENT_PATH _msys_root)
+  set(_scratch_root "${_msys_root}/tmp")
+  string(SHA256 _build_key "${BUILD_ROOT}")
+  set(_private_source "${_scratch_root}/pure-reduce-source-${_build_key}")
+  cmake_path(IS_PREFIX _scratch_root "${_private_source}"
+    NORMALIZE _inside_scratch)
+  if(NOT _inside_scratch OR _private_source MATCHES "[ \t\r\n]")
+    message(FATAL_ERROR
+      "private REDUCE source scratch path is unsafe: ${_private_source}")
+  endif()
+  set(${OUT_PATH} "${_private_source}" PARENT_SCOPE)
+endfunction()
+
 function(_pure_reduce_write_prefix_map_response
     SOURCE BASH_EXECUTABLE OUT_FILE OUT_ARGUMENT)
   get_filename_component(_bash "${BASH_EXECUTABLE}" ABSOLUTE)
@@ -652,7 +657,8 @@ function(_pure_reduce_run_upstream_build)
 
   string(TIMESTAMP _started "%s" UTC)
   get_filename_component(_root "${PURE_REDUCE_UPSTREAM_BINARY_DIR}" ABSOLUTE)
-  set(_private_source "${_root}/source")
+  _pure_reduce_private_source_path(
+    "${PURE_REDUCE_MSYS2_BASH}" "${_root}" _private_source)
   set(_pinned_generated "${_root}/pinned-generated")
   set(_artifacts "${_root}/artifacts")
   set(_link_artifacts "${_artifacts}/link")
@@ -935,7 +941,10 @@ printf 'autoconf=%s\n' "$(autoconf --version | sed -n '1p')"
   string(TIMESTAMP _finished "%s" UTC)
   math(EXPR _elapsed_seconds "${_finished} - ${_started}")
   _pure_reduce_tree_bytes(
-    "${_root}" "${PURE_REDUCE_MSYS2_BASH}" _build_tree_bytes)
+    "${_root}" "${PURE_REDUCE_MSYS2_BASH}" _root_tree_bytes)
+  _pure_reduce_tree_bytes(
+    "${_private_source}" "${PURE_REDUCE_MSYS2_BASH}" _private_tree_bytes)
+  math(EXPR _build_tree_bytes "${_root_tree_bytes} + ${_private_tree_bytes}")
   _pure_reduce_json_escape("${_tool_versions}" _tool_versions_json)
   _pure_reduce_json_escape("${_patch_log}" _patch_log_json)
   _pure_reduce_json_escape("${_autogen_log}" _autogen_log_json)
@@ -951,7 +960,7 @@ printf 'autoconf=%s\n' "$(autoconf --version | sed -n '1p')"
     "{\n"
     "  \"commit\": \"${PURE_REDUCE_VERIFIED_COMMIT}\",\n"
     "  \"source_tree_sha256\": \"${PURE_REDUCE_SOURCE_TREE_SHA256}\",\n"
-    "  \"source_materialization\": \"git -c core.autocrlf=false checkout-index\",\n"
+    "  \"source_materialization\": \"git -c core.autocrlf=false checkout-index into MSYS2 no-space scratch\",\n"
     "  \"source_patches\": [${_nil_patch_json},${_utf8_image_patch_json},${_configure_paths_patch_json}],\n"
     "  \"tool_versions\": \"${_tool_versions_json}\",\n"
     "  \"autogen_arguments\": [\"--with-csl\", \"--without-gui\", \"--without-redfront\"],\n"
@@ -973,6 +982,7 @@ printf 'autoconf=%s\n' "$(autoconf --version | sed -n '1p')"
   file(WRITE "${_root}/pure-reduce-upstream.recipe"
     "${_PURE_REDUCE_BUILD_RECIPE_VERSION}\n")
   file(REMOVE "${_prefix_map_response}")
+  file(REMOVE_RECURSE "${_private_source}")
 endfunction()
 
 function(pure_reduce_define_upstream_build)
