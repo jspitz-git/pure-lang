@@ -28,6 +28,12 @@ endif()
 
 if(PURE_REDUCE_SOURCE_DIR)
   enable_language(CXX)
+  cmake_path(GET CMAKE_CXX_COMPILER PARENT_PATH
+    _pure_reduce_compiler_directory)
+  find_program(PURE_REDUCE_LLVM_READOBJ
+    NAMES llvm-readobj
+    HINTS "${_pure_reduce_compiler_directory}"
+    REQUIRED)
   set(_pure_reduce_cslbase
     "${PURE_REDUCE_UPSTREAM_BINARY_DIR}/source/csl/cslbase")
   add_library(pure-reduce-bridge-objects OBJECT
@@ -80,6 +86,8 @@ if(PURE_REDUCE_SOURCE_DIR)
   target_link_libraries(pure-reduce-bridge-contract PRIVATE
     ${PURE_REDUCE_CSL_LINK_INTERFACE})
 endif()
+
+include("${CMAKE_CURRENT_LIST_DIR}/cmake/Install.cmake")
 
 include(CTest)
 if(BUILD_TESTING)
@@ -215,5 +223,36 @@ if(BUILD_TESTING)
         -P "${CMAKE_CURRENT_LIST_DIR}/tests/utf8-image-patch-contract.cmake")
     set_tests_properties(pure-reduce-utf8-image-patch-contract PROPERTIES
       LABELS "reduce")
+    cmake_path(GET PURE_REDUCE_LLVM_READOBJ PARENT_PATH
+      _pure_reduce_clang64_bin)
+    add_test(
+      NAME pure-reduce-audit-windows-dependencies
+      COMMAND "${CMAKE_COMMAND}"
+        "-DPURE_REDUCE_SOURCE_DIR=${CMAKE_CURRENT_LIST_DIR}"
+        "-DPURE_REDUCE_LLVM_READOBJ=${PURE_REDUCE_LLVM_READOBJ}"
+        "-DPURE_REDUCE_CXX_COMPILER=${CMAKE_CXX_COMPILER}"
+        "-DPURE_REDUCE_DLL=$<TARGET_FILE:reduce>"
+        "-DPURE_REDUCE_SEARCH_DIRS=${PURE_REDUCE_UPSTREAM_BINARY_DIR};$<TARGET_FILE_DIR:reduce>;${_pure_reduce_clang64_bin}"
+        "-DPURE_REDUCE_TEST_ROOT=${CMAKE_CURRENT_BINARY_DIR}/audit windows dependencies"
+        -P "${CMAKE_CURRENT_LIST_DIR}/tests/audit-windows-dependencies.cmake")
+    set_tests_properties(pure-reduce-audit-windows-dependencies PROPERTIES
+      LABELS "reduce;audit;windows"
+      REQUIRED_FILES "$<TARGET_FILE:reduce>"
+      TIMEOUT 60)
+    if(PURE_EXECUTABLE)
+      add_test(
+        NAME pure-reduce-install-component
+        COMMAND "${CMAKE_COMMAND}"
+          "-DBUILD_DIR=${CMAKE_CURRENT_BINARY_DIR}"
+          "-DSTAGE_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/PureReduce component stage"
+          "-DPURE_EXECUTABLE=${PURE_EXECUTABLE}"
+          "-DPURE_LIBRARY_DIR=${_pure_reduce_library_dir}"
+          "-DTEST_DRIVER=${CMAKE_CURRENT_LIST_DIR}/cmake/RunPureReduceTest.cmake"
+          -P "${CMAKE_CURRENT_LIST_DIR}/tests/install-component.cmake")
+      set_tests_properties(pure-reduce-install-component PROPERTIES
+        LABELS "reduce;install;windows"
+        REQUIRED_FILES "$<TARGET_FILE:reduce>"
+        TIMEOUT 120)
+    endif()
   endif()
 endif()
