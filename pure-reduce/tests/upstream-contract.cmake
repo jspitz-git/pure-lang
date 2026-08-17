@@ -17,6 +17,13 @@ pure_reduce_verify_source(
   PURE_REDUCE_SOURCE_TREE_SHA256)
 pure_reduce_define_upstream_build()
 
+if(NOT EXISTS
+    "${PURE_REDUCE_UPSTREAM_BINARY_DIR}/pure-reduce-upstream.stamp")
+  message(FATAL_ERROR
+    "upstream artifacts must be built before running the contract: "
+    "${PURE_REDUCE_UPSTREAM_BINARY_DIR}")
+endif()
+
 list(FIND PURE_REDUCE_CSL_LINK_INPUTS
   "${PURE_REDUCE_UPSTREAM_BINARY_DIR}/artifacts/link/libreduce-csl.a"
   _csl_archive)
@@ -343,7 +350,6 @@ endif()
 
 set(_artifact_contract_log
   "${PURE_REDUCE_UPSTREAM_BINARY_DIR}/logs/artifact-contract.log")
-if(EXISTS "${PURE_REDUCE_UPSTREAM_BINARY_DIR}/pure-reduce-upstream.stamp")
   foreach(_artifact IN ITEMS
       "${PURE_REDUCE_CSL_IMAGE}"
       ${PURE_REDUCE_CSL_LINK_ARTIFACTS}
@@ -465,6 +471,5 @@ printf 'non_system_runtime_imports=none\n'
       message(FATAL_ERROR "runtime manifest has no SHA-256 entries: ${_manifest}")
     endif()
   endforeach()
-endif()
 
 message(STATUS "pure-reduce upstream contract passed")

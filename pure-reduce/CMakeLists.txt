@@ -34,6 +34,13 @@ if(BUILD_TESTING)
   set_tests_properties(pure-reduce-source-contract PROPERTIES LABELS "reduce")
   if(PURE_REDUCE_SOURCE_DIR)
     add_test(
+      NAME pure-reduce-upstream-build
+      COMMAND "${CMAKE_COMMAND}" --build "${CMAKE_BINARY_DIR}"
+        --target pure-reduce-upstream -- -j1)
+    set_tests_properties(pure-reduce-upstream-build PROPERTIES
+      FIXTURES_SETUP pure-reduce-upstream-built
+      LABELS "reduce")
+    add_test(
       NAME pure-reduce-upstream-contract
       COMMAND "${CMAKE_COMMAND}"
         "-DPURE_REDUCE_SOURCE_DIR=${PURE_REDUCE_SOURCE_DIR}"
@@ -42,6 +49,17 @@ if(BUILD_TESTING)
         "-DPURE_REDUCE_MAKE=${PURE_REDUCE_MAKE}"
         -P "${CMAKE_CURRENT_LIST_DIR}/tests/upstream-contract.cmake")
     set_tests_properties(pure-reduce-upstream-contract PROPERTIES
+      FIXTURES_REQUIRED pure-reduce-upstream-built
+      LABELS "reduce")
+    add_test(
+      NAME pure-reduce-upstream-artifacts-required
+      COMMAND "${CMAKE_COMMAND}"
+        "-DPURE_REDUCE_SOURCE_DIR=${PURE_REDUCE_SOURCE_DIR}"
+        "-DPURE_REDUCE_UPSTREAM_CONTRACT=${CMAKE_CURRENT_LIST_DIR}/tests/upstream-contract.cmake"
+        "-DPURE_REDUCE_MSYS2_BASH=${PURE_REDUCE_MSYS2_BASH}"
+        "-DPURE_REDUCE_MAKE=${PURE_REDUCE_MAKE}"
+        -P "${CMAKE_CURRENT_LIST_DIR}/tests/upstream-artifacts-required.cmake")
+    set_tests_properties(pure-reduce-upstream-artifacts-required PROPERTIES
       LABELS "reduce")
     add_test(
       NAME pure-reduce-upstream-revalidation
