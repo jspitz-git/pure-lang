@@ -9,7 +9,7 @@ set(_PURE_REDUCE_UTF8_IMAGE_PATCH_SHA256
 set(_PURE_REDUCE_CONFIGURE_PATHS_PATCH_SHA256
   "32a737b72bec3000fc2da6e701b80234bb34bf757a236049a5dd7347d555fee6")
 set(_PURE_REDUCE_BUILD_RECIPE_VERSION
-  "windows-clang-spaced-upstream-v4")
+  "windows-clang-native-layout-v5")
 
 function(_pure_reduce_expected_upstream_stamp COMMIT TREE_SHA256 OUT_STAMP)
   string(CONCAT _stamp
@@ -429,7 +429,7 @@ endfunction()
 
 function(_pure_reduce_select_windows_configuration SOURCE_ROOT OUT_DIRECTORY)
   file(GLOB _configuration_headers LIST_DIRECTORIES FALSE
-    "${SOURCE_ROOT}/cslbuild/*/csl/config.h")
+    "${SOURCE_ROOT}/cslbuild/x86_64-pc-windows*/win64/csl/config.h")
   list(SORT _configuration_headers)
   set(_candidates)
   foreach(_header IN LISTS _configuration_headers)
@@ -437,8 +437,9 @@ function(_pure_reduce_select_windows_configuration SOURCE_ROOT OUT_DIRECTORY)
     get_filename_component(_csl_directory "${_header}" DIRECTORY)
     get_filename_component(_configuration_directory
       "${_csl_directory}" DIRECTORY)
-    get_filename_component(_configuration_name
-      "${_configuration_directory}" NAME)
+    get_filename_component(_configuration_base
+      "${_configuration_directory}" DIRECTORY)
+    get_filename_component(_configuration_name "${_configuration_base}" NAME)
     if(_configuration_name MATCHES "^x86_64-pc-windows($|-)" AND
        NOT _configuration MATCHES
         "#define[ \t]+RAW_CYGWIN[ \t]+1" AND
@@ -454,14 +455,15 @@ function(_pure_reduce_select_windows_configuration SOURCE_ROOT OUT_DIRECTORY)
       set(_candidate_lines "<none>")
     endif()
     file(GLOB _configuration_entries LIST_DIRECTORIES TRUE
-      "${SOURCE_ROOT}/cslbuild/*")
+      "${SOURCE_ROOT}/cslbuild/*/win64")
     list(SORT _configuration_entries)
     set(_observations)
     foreach(_entry IN LISTS _configuration_entries)
       if(NOT IS_DIRECTORY "${_entry}")
         continue()
       endif()
-      get_filename_component(_entry_name "${_entry}" NAME)
+      cmake_path(RELATIVE_PATH _entry
+        BASE_DIRECTORY "${SOURCE_ROOT}/cslbuild" OUTPUT_VARIABLE _entry_name)
       set(_has_header "no")
       set(_has_makefile "no")
       set(_raw_cygwin "unknown")
@@ -749,7 +751,7 @@ src=$(cygpath -u "$1")
 cd "$src"
 prefix_map=@$2
 set +e
-./configure --without-autogen --with-csl --without-gui --without-redfront CC=clang CXX=clang++ CFLAGS="$prefix_map" CXXFLAGS="$prefix_map"
+./configure --without-autogen --with-csl --without-gui --without-redfront --with-windows_layout=new CC=clang CXX=clang++ CFLAGS="$prefix_map" CXXFLAGS="$prefix_map"
 configure_result=$?
 set -e
 if [ "$configure_result" -ne 0 ]; then
@@ -953,7 +955,7 @@ printf 'autoconf=%s\n' "$(autoconf --version | sed -n '1p')"
     "  \"source_patches\": [${_nil_patch_json},${_utf8_image_patch_json},${_configure_paths_patch_json}],\n"
     "  \"tool_versions\": \"${_tool_versions_json}\",\n"
     "  \"autogen_arguments\": [\"--with-csl\", \"--without-gui\", \"--without-redfront\"],\n"
-    "  \"configure_arguments\": [\"--without-autogen\", \"--with-csl\", \"--without-gui\", \"--without-redfront\", \"CC=clang\", \"CXX=clang++\"],\n"
+    "  \"configure_arguments\": [\"--without-autogen\", \"--with-csl\", \"--without-gui\", \"--without-redfront\", \"--with-windows_layout=new\", \"CC=clang\", \"CXX=clang++\"],\n"
     "  \"dependency_profile\": \"text-only CSL/image runtime; upstream GUI, Redfront, FOX, X11, and libedit dependencies excluded\",\n"
     "  \"configure_environment\": {\"enable_symvers\": \"no\"},\n"
     "  \"restored_top_level_files\": ${_restored_files_json},\n"

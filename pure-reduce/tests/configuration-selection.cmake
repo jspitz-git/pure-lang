@@ -11,13 +11,17 @@ file(TO_CMAKE_PATH
   "$ENV{TEMP}/pure reduce configuration selection-${_root_key}" _root)
 file(REMOVE_RECURSE "${_root}")
 
-set(_cygwin "${_root}/cslbuild/x86_64-pc-cygwin-nogui")
-set(_windows "${_root}/cslbuild/x86_64-pc-windows-nogui")
+set(_cygwin "${_root}/cslbuild/x86_64-pc-cygwin-nogui/cyg64")
+set(_windows "${_root}/cslbuild/x86_64-pc-windows-nogui/win64")
+set(_legacy_windows "${_root}/cslbuild/x86_64-pc-windows-legacy")
 file(MAKE_DIRECTORY "${_cygwin}/csl" "${_windows}/csl")
 file(WRITE "${_cygwin}/csl/config.h" "#define RAW_CYGWIN 1\n")
 file(WRITE "${_cygwin}/Makefile" "all:\n")
 file(WRITE "${_windows}/csl/config.h" "/* #undef RAW_CYGWIN */\n")
 file(WRITE "${_windows}/Makefile" "all:\n")
+file(MAKE_DIRECTORY "${_legacy_windows}/csl")
+file(WRITE "${_legacy_windows}/csl/config.h" "/* #undef RAW_CYGWIN */\n")
+file(WRITE "${_legacy_windows}/Makefile" "all:\n")
 
 _pure_reduce_select_windows_configuration("${_root}" _selected)
 if(NOT _selected STREQUAL _windows)
@@ -40,7 +44,7 @@ execute_process(
   ENCODING UTF-8)
 if(_incomplete_result EQUAL 0 OR
     NOT "${_incomplete_output}${_incomplete_error}" MATCHES
-      "x86_64-pc-windows-nogui: config.h=yes, Makefile=no")
+      "x86_64-pc-windows-nogui/win64: config.h=yes, Makefile=no")
   file(REMOVE_RECURSE "${_root}")
   message(FATAL_ERROR
     "incomplete-configuration diagnostic omitted candidate evidence:\n"
