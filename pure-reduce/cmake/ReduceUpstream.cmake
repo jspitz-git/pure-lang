@@ -439,10 +439,54 @@ function(_pure_reduce_select_windows_configuration SOURCE_ROOT OUT_DIRECTORY)
     if(_candidate_lines STREQUAL "")
       set(_candidate_lines "<none>")
     endif()
+    file(GLOB _configuration_entries LIST_DIRECTORIES TRUE
+      "${SOURCE_ROOT}/cslbuild/*")
+    list(SORT _configuration_entries)
+    set(_observations)
+    foreach(_entry IN LISTS _configuration_entries)
+      if(NOT IS_DIRECTORY "${_entry}")
+        continue()
+      endif()
+      get_filename_component(_entry_name "${_entry}" NAME)
+      set(_has_header "no")
+      set(_has_makefile "no")
+      set(_raw_cygwin "unknown")
+      if(EXISTS "${_entry}/csl/config.h")
+        set(_has_header "yes")
+        file(READ "${_entry}/csl/config.h" _entry_configuration)
+        if(_entry_configuration MATCHES
+            "#define[ \t]+RAW_CYGWIN[ \t]+1")
+          set(_raw_cygwin "yes")
+        else()
+          set(_raw_cygwin "no")
+        endif()
+      endif()
+      if(EXISTS "${_entry}/Makefile")
+        set(_has_makefile "yes")
+      endif()
+      list(APPEND _observations
+        "${_entry_name}: config.h=${_has_header}, Makefile=${_has_makefile}, RAW_CYGWIN=${_raw_cygwin}")
+    endforeach()
+    if(_observations)
+      string(JOIN "\n  " _observation_lines ${_observations})
+    else()
+      set(_observation_lines "<no cslbuild directories>")
+    endif()
+    set(_configure_tail "")
+    if(ARGC GREATER 2 AND EXISTS "${ARGV2}" AND NOT IS_DIRECTORY "${ARGV2}")
+      file(SIZE "${ARGV2}" _configure_size)
+      set(_configure_offset 0)
+      if(_configure_size GREATER 65536)
+        math(EXPR _configure_offset "${_configure_size} - 65536")
+      endif()
+      file(READ "${ARGV2}" _configure_tail
+        OFFSET ${_configure_offset} LIMIT 65536)
+    endif()
     message(FATAL_ERROR
       "expected exactly one non-Cygwin x86-64 CSL build configuration "
       "below ${SOURCE_ROOT}/cslbuild; found ${_candidate_count}:\n  "
-      "${_candidate_lines}")
+      "${_candidate_lines}\nobserved configurations:\n  "
+      "${_observation_lines}\nconfigure transcript tail:\n${_configure_tail}")
   endif()
   list(GET _candidates 0 _selected)
   set(${OUT_DIRECTORY} "${_selected}" PARENT_SCOPE)
@@ -702,7 +746,7 @@ fi
     "${_private_source}" "${_prefix_map_response}")
 
   _pure_reduce_select_windows_configuration(
-    "${_private_source}" _build_configuration)
+    "${_private_source}" _build_configuration "${_configure_log}")
 
   set(_build_script [=[
 set -eu

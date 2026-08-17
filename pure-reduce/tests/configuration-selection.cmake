@@ -26,4 +26,25 @@ if(NOT _selected STREQUAL _windows)
     "selected the wrong pinned REDUCE Windows configuration: ${_selected}")
 endif()
 
+file(REMOVE "${_windows}/Makefile")
+file(TO_CMAKE_PATH "${REDUCE_UPSTREAM_MODULE}" _module)
+file(WRITE "${_root}/reject-incomplete.cmake"
+  "include(\"${_module}\")\n"
+  "_pure_reduce_select_windows_configuration(\n"
+  "  \"${_root}\" _selected)\n")
+execute_process(
+  COMMAND "${CMAKE_COMMAND}" -P "${_root}/reject-incomplete.cmake"
+  RESULT_VARIABLE _incomplete_result
+  OUTPUT_VARIABLE _incomplete_output
+  ERROR_VARIABLE _incomplete_error
+  ENCODING UTF-8)
+if(_incomplete_result EQUAL 0 OR
+    NOT "${_incomplete_output}${_incomplete_error}" MATCHES
+      "x86_64-pc-windows-nogui: config.h=yes, Makefile=no")
+  file(REMOVE_RECURSE "${_root}")
+  message(FATAL_ERROR
+    "incomplete-configuration diagnostic omitted candidate evidence:\n"
+    "${_incomplete_output}${_incomplete_error}")
+endif()
+
 file(REMOVE_RECURSE "${_root}")
