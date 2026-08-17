@@ -110,11 +110,19 @@ set(PURE_REDUCE_MAKE "fixture-make")
 file(REMOVE_RECURSE "${_recipe_fixture}")
 file(MAKE_DIRECTORY
   "${_recipe_fixture}/artifacts/include"
+  "${_recipe_fixture}/artifacts/install-inputs/csl/cslbase/cm-unicode"
+  "${_recipe_fixture}/artifacts/install-inputs/libraries/crlibm"
+  "${_recipe_fixture}/artifacts/install-inputs/libraries/libffi"
   "${_recipe_fixture}/artifacts/link"
   "${_recipe_fixture}/logs")
 foreach(_artifact IN ITEMS
     artifacts/reduce.img
     artifacts/include/proc.h
+    artifacts/install-inputs/csl/cslbase/COPYING
+    artifacts/install-inputs/csl/cslbase/cm-unicode/LICENSE
+    artifacts/install-inputs/libraries/crlibm/COPYING
+    artifacts/install-inputs/libraries/crlibm/COPYING.LIB
+    artifacts/install-inputs/libraries/libffi/LICENSE
     artifacts/link/libreduce-csl.a
     artifacts/link/libcrlibm.a
     artifacts/link/libffi.a

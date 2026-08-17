@@ -16,9 +16,20 @@ set(_configuration
 set(_producer "${_configuration}/csl")
 file(MAKE_DIRECTORY
   "${_root}/source/csl/cslbase"
+  "${_root}/source/csl/cslbase/cm-unicode"
+  "${_root}/source/libraries/crlibm"
+  "${_root}/source/libraries/libffi"
   "${_producer}/reduce.resources"
   "${_producer}/reduce.fonts")
 file(WRITE "${_root}/source/csl/cslbase/proc.h" "fixture proc header\n")
+foreach(_license IN ITEMS
+    csl/cslbase/COPYING
+    csl/cslbase/cm-unicode/LICENSE
+    libraries/crlibm/COPYING
+    libraries/crlibm/COPYING.LIB
+    libraries/libffi/LICENSE)
+  file(WRITE "${_root}/source/${_license}" "fixture ${_license}\n")
+endforeach()
 file(WRITE "${_configuration}/Makefile" "all:\n")
 file(WRITE "${_producer}/config.h" "/* #undef RAW_CYGWIN */\n")
 file(WRITE "${_producer}/reduce.img" "fixture image\n")
@@ -28,6 +39,8 @@ file(WRITE "${_producer}/reduce.fonts/font" "font\n")
 set(PURE_REDUCE_UPSTREAM_BINARY_DIR "${_root}")
 _pure_reduce_stage_public_headers(
   "${_root}/source" "${_root}/artifacts/include")
+_pure_reduce_stage_install_inputs(
+  "${_root}/source" "${_root}/artifacts/install-inputs")
 _pure_reduce_run_runtime_artifact_refresh()
 foreach(_manifest IN ITEMS reduce.resources.manifest reduce.fonts.manifest)
   file(SHA256 "${_root}/artifacts/runtime/${_manifest}"
@@ -43,6 +56,17 @@ _pure_reduce_run_runtime_artifact_refresh()
 if(NOT EXISTS "${_root}/artifacts/include/proc.h")
   message(FATAL_ERROR "staged CSL public header did not survive source handoff")
 endif()
+foreach(_license IN ITEMS
+    csl/cslbase/COPYING
+    csl/cslbase/cm-unicode/LICENSE
+    libraries/crlibm/COPYING
+    libraries/crlibm/COPYING.LIB
+    libraries/libffi/LICENSE)
+  if(NOT EXISTS "${_root}/artifacts/install-inputs/${_license}")
+    message(FATAL_ERROR
+      "staged installation input did not survive source handoff: ${_license}")
+  endif()
+endforeach()
 
 foreach(_manifest IN ITEMS reduce.resources.manifest reduce.fonts.manifest)
   file(SHA256 "${_root}/artifacts/runtime/${_manifest}"

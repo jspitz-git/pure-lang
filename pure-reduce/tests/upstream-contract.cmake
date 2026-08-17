@@ -331,10 +331,16 @@ if(NOT EXISTS
 endif()
 file(REMOVE_RECURSE "${_runtime_fixture}")
 set(PURE_REDUCE_UPSTREAM_BINARY_DIR "${_contract_upstream_root}")
+set(_install_input_artifacts)
+foreach(_relative IN LISTS _PURE_REDUCE_INSTALL_INPUT_PATHS)
+  list(APPEND _install_input_artifacts
+    "${PURE_REDUCE_UPSTREAM_BINARY_DIR}/artifacts/install-inputs/${_relative}")
+endforeach()
 
 foreach(path IN ITEMS
     "${PURE_REDUCE_CSL_IMAGE}"
     "${PURE_REDUCE_CSL_INCLUDE_DIR}/proc.h"
+    ${_install_input_artifacts}
     ${PURE_REDUCE_CSL_LINK_ARTIFACTS}
     ${PURE_REDUCE_RUNTIME_MANIFESTS}
     ${PURE_REDUCE_RUNTIME_DATA})
@@ -363,6 +369,7 @@ set(_artifact_contract_log
   foreach(_artifact IN ITEMS
       "${PURE_REDUCE_CSL_IMAGE}"
       "${PURE_REDUCE_CSL_INCLUDE_DIR}/proc.h"
+      ${_install_input_artifacts}
       ${PURE_REDUCE_CSL_LINK_ARTIFACTS}
       ${PURE_REDUCE_RUNTIME_MANIFESTS}
       "${PURE_REDUCE_UPSTREAM_METRICS}"

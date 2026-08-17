@@ -263,7 +263,8 @@ if(PURE_REDUCE_RUN_COMPONENT_INSTALL)
 
   set(_library "${PURE_REDUCE_LIBRARY_INSTALL_DIR}")
   set(_docs "${PURE_REDUCE_DOCUMENTATION_INSTALL_DIR}")
-  set(_upstream_source "${PURE_REDUCE_UPSTREAM_BINARY_DIR}/source")
+  set(_upstream_install_inputs
+    "${PURE_REDUCE_UPSTREAM_BINARY_DIR}/artifacts/install-inputs")
   set(_runtime_root
     "${PURE_REDUCE_UPSTREAM_BINARY_DIR}/artifacts/runtime")
   set(_metrics
@@ -392,19 +393,19 @@ if(PURE_REDUCE_RUN_COMPONENT_INSTALL)
     "${PURE_REDUCE_SOURCE_ROOT}/licenses/REDUCE-LICENSE.txt"
     "REDUCE-LICENSE.txt" "canonical REDUCE license")
   _pure_reduce_add_license(
-    "${_upstream_source}/csl/cslbase/COPYING"
+    "${_upstream_install_inputs}/csl/cslbase/COPYING"
     "CSL-COPYING.txt" "detailed CSL notices")
   _pure_reduce_add_license(
-    "${_upstream_source}/libraries/crlibm/COPYING"
+    "${_upstream_install_inputs}/libraries/crlibm/COPYING"
     "CRLIBM-COPYING.txt" "crlibm GPL notice")
   _pure_reduce_add_license(
-    "${_upstream_source}/libraries/crlibm/COPYING.LIB"
+    "${_upstream_install_inputs}/libraries/crlibm/COPYING.LIB"
     "CRLIBM-COPYING.LIB.txt" "crlibm LGPL notice")
   _pure_reduce_add_license(
-    "${_upstream_source}/libraries/libffi/LICENSE"
+    "${_upstream_install_inputs}/libraries/libffi/LICENSE"
     "LIBFFI-LICENSE.txt" "libffi license")
   _pure_reduce_add_license(
-    "${_upstream_source}/csl/cslbase/cm-unicode/LICENSE"
+    "${_upstream_install_inputs}/csl/cslbase/cm-unicode/LICENSE"
     "CM-UNICODE-LICENSE.txt" "CM Unicode font license")
   foreach(_license_name IN ITEMS
       ZLIB-LICENSE.txt

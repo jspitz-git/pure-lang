@@ -151,29 +151,29 @@ set(_mapped_stage "${_mapped_root}/stage")
 file(REMOVE_RECURSE "${_mapped_root}")
 file(MAKE_DIRECTORY
   "${_mapped_upstream}/artifacts"
-  "${_mapped_upstream}/source/csl/cslbase/cm-unicode"
-  "${_mapped_upstream}/source/libraries/crlibm"
-  "${_mapped_upstream}/source/libraries/libffi"
+  "${_mapped_upstream}/artifacts/install-inputs/csl/cslbase/cm-unicode"
+  "${_mapped_upstream}/artifacts/install-inputs/libraries/crlibm"
+  "${_mapped_upstream}/artifacts/install-inputs/libraries/libffi"
   "${_mapped_binary}")
 file(COPY "${RUNTIME_ROOT}"
   DESTINATION "${_mapped_upstream}/artifacts")
 file(COPY_FILE "${RUNTIME_ROOT}/../../reduce-upstream-metrics.json"
   "${_mapped_upstream}/reduce-upstream-metrics.json")
 file(COPY_FILE
-  "${RUNTIME_ROOT}/../../source/csl/cslbase/COPYING"
-  "${_mapped_upstream}/source/csl/cslbase/COPYING")
+  "${RUNTIME_ROOT}/../install-inputs/csl/cslbase/COPYING"
+  "${_mapped_upstream}/artifacts/install-inputs/csl/cslbase/COPYING")
 file(COPY_FILE
-  "${RUNTIME_ROOT}/../../source/csl/cslbase/cm-unicode/LICENSE"
-  "${_mapped_upstream}/source/csl/cslbase/cm-unicode/LICENSE")
+  "${RUNTIME_ROOT}/../install-inputs/csl/cslbase/cm-unicode/LICENSE"
+  "${_mapped_upstream}/artifacts/install-inputs/csl/cslbase/cm-unicode/LICENSE")
 file(COPY_FILE
-  "${RUNTIME_ROOT}/../../source/libraries/crlibm/COPYING"
-  "${_mapped_upstream}/source/libraries/crlibm/COPYING")
+  "${RUNTIME_ROOT}/../install-inputs/libraries/crlibm/COPYING"
+  "${_mapped_upstream}/artifacts/install-inputs/libraries/crlibm/COPYING")
 file(COPY_FILE
-  "${RUNTIME_ROOT}/../../source/libraries/crlibm/COPYING.LIB"
-  "${_mapped_upstream}/source/libraries/crlibm/COPYING.LIB")
+  "${RUNTIME_ROOT}/../install-inputs/libraries/crlibm/COPYING.LIB"
+  "${_mapped_upstream}/artifacts/install-inputs/libraries/crlibm/COPYING.LIB")
 file(COPY_FILE
-  "${RUNTIME_ROOT}/../../source/libraries/libffi/LICENSE"
-  "${_mapped_upstream}/source/libraries/libffi/LICENSE")
+  "${RUNTIME_ROOT}/../install-inputs/libraries/libffi/LICENSE"
+  "${_mapped_upstream}/artifacts/install-inputs/libraries/libffi/LICENSE")
 
 set(_mapped_dependency_source "${_mapped_root}/mapped-dependency.cpp")
 set(_mapped_root_source "${_mapped_root}/mapped-root.cpp")

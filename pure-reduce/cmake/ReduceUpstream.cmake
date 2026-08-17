@@ -9,7 +9,13 @@ set(_PURE_REDUCE_UTF8_IMAGE_PATCH_SHA256
 set(_PURE_REDUCE_CONFIGURE_PATHS_PATCH_SHA256
   "ec94278f24718963e68aeac737a168c704c81cc72f48af903c4675770f3518df")
 set(_PURE_REDUCE_BUILD_RECIPE_VERSION
-  "windows-clang-intel-layout-v10")
+  "windows-clang-intel-layout-v11")
+set(_PURE_REDUCE_INSTALL_INPUT_PATHS
+  csl/cslbase/COPYING
+  csl/cslbase/cm-unicode/LICENSE
+  libraries/crlibm/COPYING
+  libraries/crlibm/COPYING.LIB
+  libraries/libffi/LICENSE)
 
 function(_pure_reduce_expected_upstream_stamp COMMIT TREE_SHA256 OUT_STAMP)
   string(CONCAT _stamp
@@ -240,6 +246,20 @@ function(_pure_reduce_stage_public_headers SOURCE_ROOT INCLUDE_ROOT)
   file(COPY_FILE "${_source}" "${INCLUDE_ROOT}/proc.h" ONLY_IF_DIFFERENT)
 endfunction()
 
+function(_pure_reduce_stage_install_inputs SOURCE_ROOT INSTALL_INPUT_ROOT)
+  foreach(_relative IN LISTS _PURE_REDUCE_INSTALL_INPUT_PATHS)
+    set(_source "${SOURCE_ROOT}/${_relative}")
+    set(_destination "${INSTALL_INPUT_ROOT}/${_relative}")
+    if(NOT EXISTS "${_source}" OR IS_DIRECTORY "${_source}")
+      message(FATAL_ERROR
+        "required installation input is missing from the verified source: ${_source}")
+    endif()
+    cmake_path(GET _destination PARENT_PATH _destination_parent)
+    file(MAKE_DIRECTORY "${_destination_parent}")
+    file(COPY_FILE "${_source}" "${_destination}" ONLY_IF_DIFFERENT)
+  endforeach()
+endfunction()
+
 function(_pure_reduce_run_source_verification)
   foreach(_required IN ITEMS PURE_REDUCE_SOURCE_DIR
       PURE_REDUCE_VERIFIED_COMMIT PURE_REDUCE_SOURCE_TREE_SHA256)
@@ -302,6 +322,10 @@ function(_pure_reduce_run_upstream_build_ensure)
     "${_root}/pure-reduce-upstream.recipe"
     "${_root}/logs/artifact-contract-probe.exe"
     "${_root}/logs/artifact-contract.log")
+  foreach(_relative IN LISTS _PURE_REDUCE_INSTALL_INPUT_PATHS)
+    list(APPEND _required_artifacts
+      "${_root}/artifacts/install-inputs/${_relative}")
+  endforeach()
   set(_complete TRUE)
   foreach(_artifact IN LISTS _required_artifacts)
     if(NOT EXISTS "${_artifact}" OR IS_DIRECTORY "${_artifact}")
@@ -810,6 +834,8 @@ cd "$src"
     "${_full_configuration}" "${_runtime_artifacts}")
   _pure_reduce_stage_public_headers(
     "${_private_source}" "${_artifacts}/include")
+  _pure_reduce_stage_install_inputs(
+    "${_private_source}" "${_artifacts}/install-inputs")
 
   set(_closure_script [=[
 set -eu
@@ -1011,6 +1037,11 @@ function(pure_reduce_define_upstream_build)
 
   set(_image "${_root}/artifacts/reduce.img")
   set(_include_dir "${_root}/artifacts/include")
+  set(_install_inputs)
+  foreach(_relative IN LISTS _PURE_REDUCE_INSTALL_INPUT_PATHS)
+    list(APPEND _install_inputs
+      "${_root}/artifacts/install-inputs/${_relative}")
+  endforeach()
   set(_link_artifacts
     "${_root}/artifacts/link/libreduce-csl.a"
     "${_root}/artifacts/link/libcrlibm.a"
@@ -1075,7 +1106,7 @@ function(pure_reduce_define_upstream_build)
       "-DPURE_REDUCE_SOURCE_TREE_SHA256=${PURE_REDUCE_SOURCE_TREE_SHA256}"
       -P "${CMAKE_CURRENT_FUNCTION_LIST_FILE}"
     BYPRODUCTS "${_stamp}" "${_image}" "${_include_dir}/proc.h"
-      ${_link_artifacts} "${_metrics}"
+      ${_install_inputs} ${_link_artifacts} "${_metrics}"
       "${_root}/logs/artifact-contract-probe.exe"
       "${_root}/logs/artifact-contract.log"
     COMMENT "Ensuring complete pinned REDUCE/CSL artifacts"
