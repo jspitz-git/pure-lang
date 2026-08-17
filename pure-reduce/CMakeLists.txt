@@ -12,6 +12,8 @@ set(PURE_REDUCE_MAKE "C:/msys64/usr/bin/make.exe" CACHE FILEPATH
 set(PURE_REDUCE_UPSTREAM_BINARY_DIR
   "${CMAKE_CURRENT_BINARY_DIR}/reduce-upstream" CACHE PATH
   "Private binary root for the complete pinned REDUCE build")
+set(PURE_EXECUTABLE "" CACHE FILEPATH
+  "Pure interpreter used for pure-reduce functional tests")
 
 include("${CMAKE_CURRENT_LIST_DIR}/cmake/ReduceSource.cmake")
 include("${CMAKE_CURRENT_LIST_DIR}/cmake/ReduceUpstream.cmake")
@@ -49,6 +51,11 @@ if(PURE_REDUCE_SOURCE_DIR)
     PREFIX ""
     OUTPUT_NAME "reduce"
     WINDOWS_EXPORT_ALL_SYMBOLS OFF)
+  add_custom_command(TARGET reduce POST_BUILD
+    COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+      "${PURE_REDUCE_CSL_IMAGE}" "$<TARGET_FILE_DIR:reduce>/reduce.img"
+    COMMENT "Staging reduce.img beside reduce.dll"
+    VERBATIM)
   add_dependencies(reduce pure-reduce-upstream)
   target_link_options(reduce PRIVATE
     -Wl,--no-undefined)
@@ -100,6 +107,39 @@ if(BUILD_TESTING)
         --live-cleanup "${PURE_REDUCE_CSL_IMAGE}")
     set_tests_properties(pure-reduce-bridge-contract-live-cleanup PROPERTIES
       LABELS "reduce")
+    if(PURE_EXECUTABLE)
+      if(NOT IS_ABSOLUTE "${PURE_EXECUTABLE}" OR
+         NOT EXISTS "${PURE_EXECUTABLE}")
+        message(FATAL_ERROR
+          "PURE_EXECUTABLE must be an existing absolute file: ${PURE_EXECUTABLE}")
+      endif()
+      get_filename_component(_pure_reduce_runtime_dir
+        "${PURE_EXECUTABLE}" DIRECTORY)
+      get_filename_component(_pure_reduce_prefix
+        "${_pure_reduce_runtime_dir}" DIRECTORY)
+      set(_pure_reduce_library_dir "${_pure_reduce_prefix}/lib/pure")
+      if(NOT IS_DIRECTORY "${_pure_reduce_library_dir}")
+        message(FATAL_ERROR
+          "Pure library directory does not exist: ${_pure_reduce_library_dir}")
+      endif()
+      foreach(_test_name IN ITEMS smoke lifecycle)
+        add_test(
+          NAME "pure-reduce-${_test_name}"
+          COMMAND "${CMAKE_COMMAND}"
+            "-DPURE_EXECUTABLE=${PURE_EXECUTABLE}"
+            "-DPURE_LIBRARY_DIR=${_pure_reduce_library_dir}"
+            "-DPURE_SOURCE_DIR=${CMAKE_CURRENT_LIST_DIR}"
+            "-DMODULE_DIR=$<TARGET_FILE_DIR:reduce>"
+            "-DTEST_SCRIPT=${CMAKE_CURRENT_LIST_DIR}/tests/${_test_name}.pure"
+            "-DEXPECTED_MARKER=pure-reduce ${_test_name} passed"
+            -P "${CMAKE_CURRENT_LIST_DIR}/cmake/RunPureReduceTest.cmake")
+        set_tests_properties("pure-reduce-${_test_name}" PROPERTIES
+          LABELS "reduce")
+      endforeach()
+    else()
+      message(STATUS
+        "PURE_EXECUTABLE is not set; pure-reduce functional tests are disabled")
+    endif()
     add_test(
       NAME pure-reduce-upstream-build
       COMMAND "${CMAKE_COMMAND}" --build "${CMAKE_BINARY_DIR}"

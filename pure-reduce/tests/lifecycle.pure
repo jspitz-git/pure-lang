@@ -1,0 +1,26 @@
+using system, reduce;
+
+check name condition
+  = () if condition;
+  = fprintf stderr "FAIL: %s\n" name $$ exit 1 otherwise;
+
+is_finished_error (reduce::finished_error _) = true;
+is_finished_error _ = false otherwise;
+
+check "module load is lazy" (reduce::pure_reduce_state == 0);
+check "first evaluation starts REDUCE" (simplify (1+1) === 2);
+check "started state is running" (reduce::pure_reduce_state == 1);
+
+reduce::finish;
+check "finish reaches terminal state" (reduce::pure_reduce_state == 2);
+reduce::finish;
+check "second finish is idempotent" (reduce::pure_reduce_state == 2);
+
+check "evaluation after finish is rejected"
+  (catch is_finished_error (simplify (1+1) $$ false));
+check "restart after finish is rejected"
+  (catch is_finished_error (reduce::start "reduce.img" {} $$ false));
+check "rejected restart preserves terminal state"
+  (reduce::pure_reduce_state == 2);
+
+puts "pure-reduce lifecycle passed";

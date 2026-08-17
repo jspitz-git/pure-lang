@@ -1,0 +1,47 @@
+using system, reduce;
+
+check name condition
+  = () if condition;
+  = fprintf stderr "FAIL: %s\n" name $$ exit 1 otherwise;
+
+check "rational simplification"
+  (simplify ((x^2-1)/(x-1)) === x+1);
+check "differentiation"
+  (simplify (simplify (df ((x+1)^3) x)-3*(x+1)^2) === 0);
+check "integration"
+  (simplify (intg (2*x) x) === x^2);
+check "Lisp arithmetic"
+  (lisp ('plus 20 22) === 42);
+check "Lisp value conversion"
+  (lispval ('plus 20 22) === [plus,20,22]);
+
+check "big integer conversion"
+  (simplify (123456789012345678901234567890L+10L)
+   === 123456789012345678901234567900L);
+check "floating conversion" (lisp ('plus 1.25 2.5) === 3.75);
+check "string conversion" (lispval "reduce-string" === "reduce-string");
+check "list conversion" (lisp ('list 1 2 3) === [1,2,3]);
+
+let factors = simplify (factorize (x^2-1));
+check "factorization"
+  (#factors == 2 && any ([x+1,1]===) factors && any ([x-1,1]===) factors);
+check "expansion"
+  (simplify (simplify ((x+1)*(x-1))-(x^2-1)) === 0);
+check "package load" (reduce::load "algint" == 0);
+
+reduce::capture 1;
+let captured_value = lisp ('prin2 "pure-reduce captured output");
+reduce::capture 0;
+check "captured evaluation value" (captured_value === "pure-reduce captured output");
+check "output capture"
+  (index reduce::output "pure-reduce captured output" >= 0);
+
+is_evaluation_error (reduce::evaluation_error _) = true;
+is_evaluation_error _ = false otherwise;
+
+let invalid_was_caught = catch is_evaluation_error
+  (lisp ('identity "invalid arity") $$ false);
+check "invalid evaluation is categorized" invalid_was_caught;
+check "evaluation recovers" (simplify (1+1) === 2);
+
+puts "pure-reduce smoke passed";

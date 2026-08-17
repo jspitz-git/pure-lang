@@ -98,7 +98,10 @@ namespace reduce;
  * argv and see a big banner.
  */
 
-extern void cslstart(int argc, char **argv, int *wr);
+extern int pure_reduce_start(char *image);
+extern int pure_reduce_finish();
+extern int pure_reduce_state();
+extern char *pure_reduce_last_error();
 
 /*
  * At the end of a run please call cslfinish to close down everything
@@ -109,7 +112,6 @@ extern void cslstart(int argc, char **argv, int *wr);
  * is used to process any output generated during close-down.
  */
 
-extern int cslfinish(int *wr);
 
 /*
  * As a general-purpose escape it is possible to get a Lisp function
@@ -122,7 +124,6 @@ extern int cslfinish(int *wr);
  * easier to use.
  */
 
-extern int execute_lisp_function(char *fname,int *r, int *w);
 
 
 /*
@@ -180,13 +181,13 @@ extern int execute_lisp_function(char *fname,int *r, int *w);
  * your responsibility to cope with whatever text gets exchanged!
  */
 
-extern int PROC_set_callbacks(int *r, int *w);
+extern int PROC_set_callbacks(int *r, int *w) = __PROC_set_callbacks;
 
 /*
  * Load a Reduce "package".
  */
 
-extern int PROC_load_package(char *name);
+extern int PROC_load_package(char *name) = __PROC_load_package;
 
 /*
  * Set of clear a Reduce switch. As on "on expandlogs;"
@@ -194,7 +195,7 @@ extern int PROC_load_package(char *name);
  * Use 0 to switch something off and 1 to switch it on.
  */
 
-extern int PROC_set_switch(char *name, int val);
+extern int PROC_set_switch(char *name, int val) = __PROC_set_switch;
 
 /*
  * Set level of garbage collector noise. This might often be a bit irrelevant,
@@ -208,24 +209,24 @@ extern int PROC_set_switch(char *name, int val);
  * call here has +1 and +2 forced active.
  */
 
-extern int PROC_gc_messages(int n);
+extern int PROC_gc_messages(int n) = __PROC_gc_messages;
 
 /*
  *    stack = nil;
  */
-extern int PROC_clear_stack();
+extern int PROC_clear_stack() = __PROC_clear_stack;
 
 /*
  *    stack = name . stack;
  */
 
-extern int PROC_push_symbol(char *name);
+extern int PROC_push_symbol(char *name) = __PROC_push_symbol;
 
 /*
  *    stack = the-string . stack;
  */
 
-extern int PROC_push_string(char *data);
+extern int PROC_push_string(char *data) = __PROC_push_string;
 
 /*
  *    stack = n . stack;
@@ -236,11 +237,11 @@ extern int PROC_push_string(char *data);
  *      PROC_push_big_integer("-12345678901234567890");
  */
 
-extern int PROC_push_small_integer(int n);
+extern int PROC_push_small_integer(int n) = __PROC_push_small_integer;
 
-extern int PROC_push_big_integer(char *n);
+extern int PROC_push_big_integer(char *n) = __PROC_push_big_integer;
 
-extern int PROC_push_floating(double n);
+extern int PROC_push_floating(double n) = __PROC_push_floating;
 
 /*
  * Takes n items from the top of the stack and uses them as arguments
@@ -249,32 +250,33 @@ extern int PROC_push_floating(double n);
  * first and the last argument pushed last.
  */
 
-extern int PROC_make_function_call(char *name, int n);
+extern int PROC_make_function_call(char *name, int n)
+  = __PROC_make_function_call;
 
 /*
  * Save whatever is on top of the stack in memory location n. At present
  * I provide 100 memory locations, whihc ar enumbered 0 to 99.
  */
 
-extern int PROC_save(int n);
+extern int PROC_save(int n) = __PROC_save;
 
 /*
  * Push the contents of memory location n onto the stack.
  */
 
-extern int PROC_load(int n);
+extern int PROC_load(int n) = __PROC_load;
 
 /*
  * Duplicate the top stack element.
  */
 
-extern int PROC_dup();
+extern int PROC_dup() = __PROC_dup;
 
 /*
  * Discard the top stack element.
  */
 
-extern int PROC_pop();
+extern int PROC_pop() = __PROC_pop;
 
 /*
  * The top item on the stack is replaced with what happens when Reduce
@@ -283,7 +285,7 @@ extern int PROC_pop();
  * directly convenient for use by humans.
  */
 
-extern int PROC_simplify();
+extern int PROC_simplify() = __PROC_simplify;
 
 /*
  * Replace the top item on the stack with a version of the same expression
@@ -295,7 +297,7 @@ extern int PROC_simplify();
  * other transformations that would hurt attempts to re-use the expression.
  */
 
-extern int PROC_make_printable();
+extern int PROC_make_printable() = __PROC_make_printable;
 
 /*
  * Return a handle to the top item on the stack, and pop the stack. This
@@ -342,7 +344,7 @@ extern void* PROC_rest(void* p);
 extern int PROC_integer_value(void* p);
 extern double PROC_floating_value(void* p);
 extern char *PROC_symbol_name(void* p);
-//extern char *PROC_string_data(void* p);
+extern char *PROC_string_data(void* p);
 
 /*
  * I also provide some calls that support a sort of ultimate cop-out in
@@ -361,7 +363,7 @@ extern char *PROC_symbol_name(void* p);
  * me to put in a cleaner abstraction to support it.
  */
 
-extern int PROC_lisp_eval();
+extern int PROC_lisp_eval() = __PROC_lisp_eval;
 
 /*
  * Return a handle to the top item on the stack, and pop the stack.
@@ -375,12 +377,11 @@ extern void* PROC_get_raw_value();
 
 /* Our own addons and replacements, cf. proc-add.c. -ag */
 
-extern int PROC_make_cons();
-extern int PROC_capture_output(int flag);
+extern int PROC_make_cons() = __PROC_make_cons;
+extern int PROC_capture_output(int flag) = __PROC_capture_output;
 extern char *PROC_get_output();
 extern void PROC_clear_output();
-extern int PROC_feed_input(char *s);
-extern char *PROC_my_string_data(void* p) = PROC_string_data;
+extern int PROC_feed_input(char *s) = __PROC_feed_input;
 extern int PROC_checksym(char *s) = checksym;
 
 // TeXmacs pretty-printing support. This is needed by the texmacs.pure module
@@ -432,36 +433,25 @@ namespace;
 
      using reduce;
 
-   This starts up Reduce and makes the following variables and functions
-   available in Pure.
+   This makes the following variables and functions available in Pure. Reduce
+   starts lazily on the first operation which needs it.
 
    Starting and Stopping Reduce
    ----------------------------
 
-   .. variable:: REDUCE_PATH
-
-      This variable holds a colon-delimited search path used to locate the
-      Reduce image file (see :func:`reduce::start` below). By default this
-      includes the current directory and the Pure library directory.
-
    .. function:: reduce::start image::string args::smatrix
 
-      Initializes the Reduce system. This is done automatically when loading
-      this module, so normally you shouldn't have to call this manually,
-      unless the default image file wasn't found or you want to restart the
-      Reduce system with your own image file or your own set of options. When
-      calling this operation manually, you need to specify the name of the
-      Reduce image file and any desired extra arguments as a string vector.
-      Unless the filename contains a slash, :func:`reduce::start` searches the
-      directories in :var:`REDUCE_PATH` for the image file. An exception is
-      raised if the image file isn't found.
+      Initializes the bundled Reduce system. The legacy parameters remain for
+      source compatibility, but the Windows bridge accepts only
+      ``"reduce.img"`` and an empty option vector. The image is resolved from
+      the directory of the loaded ``reduce.dll``; the current directory,
+      ``PATH`` and ``PURELIB`` are never searched. The embedded CSL runtime is
+      single-use, so a finished instance cannot be restarted in-process.
 
    .. function:: reduce::finish
 
-      Finalizes the Reduce system. You can call this to release the resources
-      of the Reduce system. (:func:`reduce::start` also invokes this
-      automatically if a Reduce instance is already running, so it isn't
-      necessary to call :func:`reduce::finish` in this case.)
+      Finalizes the Reduce system and releases bridge-owned callback storage.
+      Repeated calls are harmless.
 
    Maintenance Operations
    ----------------------
@@ -642,9 +632,6 @@ namespace;
    you try to execute them with invalid arguments, and will most likely crash
    the Reduce system in such cases. You have been warned! */
 
-// Search path for the Reduce image file. Edit as needed.
-let REDUCE_PATH = ".:/usr/lib/pure";
-
 /* Exception constructors. The bad_reduce_image and bad_reduce_file exceptions
    get thrown when reduce::start fails because it cannot find the Reduce image
    file, or if you try to open a non-existing Reduce source file, respectively.
@@ -656,8 +643,52 @@ public lisp;
 
 namespace reduce with
 
+public initialization_error evaluation_error finished_error;
 public get_started;
-let started = ref false;
+
+bridge_diagnostic fallback = fallback if null message
+  when message = pure_reduce_last_error end;
+= message otherwise when message = pure_reduce_last_error end;
+
+evaluation_result operation result = result if result==0;
+= throw (evaluation_error
+    (operation+" failed with code "+str result+": "+
+     bridge_diagnostic "no bridge diagnostic")) otherwise;
+
+PROC_set_callbacks r w = evaluation_result "PROC_set_callbacks"
+  (__PROC_set_callbacks r w);
+PROC_load_package name = evaluation_result "PROC_load_package"
+  (__PROC_load_package name);
+PROC_set_switch name val = evaluation_result "PROC_set_switch"
+  (__PROC_set_switch name val);
+PROC_gc_messages n = evaluation_result "PROC_gc_messages"
+  (__PROC_gc_messages n);
+PROC_clear_stack = evaluation_result "PROC_clear_stack" __PROC_clear_stack;
+PROC_push_symbol name = evaluation_result "PROC_push_symbol"
+  (__PROC_push_symbol name);
+PROC_push_string data = evaluation_result "PROC_push_string"
+  (__PROC_push_string data);
+PROC_push_small_integer n = evaluation_result "PROC_push_small_integer"
+  (__PROC_push_small_integer n);
+PROC_push_big_integer n = evaluation_result "PROC_push_big_integer"
+  (__PROC_push_big_integer n);
+PROC_push_floating n = evaluation_result "PROC_push_floating"
+  (__PROC_push_floating n);
+PROC_make_function_call name n = evaluation_result "PROC_make_function_call"
+  (__PROC_make_function_call name n);
+PROC_save n = evaluation_result "PROC_save" (__PROC_save n);
+PROC_load n = evaluation_result "PROC_load" (__PROC_load n);
+PROC_dup = evaluation_result "PROC_dup" __PROC_dup;
+PROC_pop = evaluation_result "PROC_pop" __PROC_pop;
+PROC_simplify = evaluation_result "PROC_simplify" __PROC_simplify;
+PROC_make_printable = evaluation_result "PROC_make_printable"
+  __PROC_make_printable;
+PROC_lisp_eval = evaluation_result "PROC_lisp_eval" __PROC_lisp_eval;
+PROC_make_cons = evaluation_result "PROC_make_cons" __PROC_make_cons;
+PROC_capture_output flag = evaluation_result "PROC_capture_output"
+  (__PROC_capture_output flag);
+PROC_feed_input input = evaluation_result "PROC_feed_input"
+  (__PROC_feed_input input);
 
 load name::string = PROC_load_package name if get_started;
 switch name::string val::int = PROC_set_switch name val if get_started;
@@ -680,7 +711,11 @@ namespace __C with
 extern int fclose(FILE*);
 extern FILE* fopen(char*, char*);
 extern int puts(char*);
-extern char *getenv(char*);
+extern int GetModuleHandleExW(int, void*, void*);
+extern int GetModuleFileNameW(void*, void*, int);
+extern int WideCharToMultiByte(int, int, void*, int, void*, int, void*, void*);
+extern int MultiByteToWideChar(int, int, char*, int, void*, int);
+extern int GetFileAttributesW(void*);
 // These are in the runtime; used for lispsym below.
 extern int pure_sym(void *s);
 extern expr *pure_quoted_symbol(int tag);
@@ -688,32 +723,74 @@ end;
 
 using namespace __C;
 
-// Perform a search for the image file.
-search image::string = () if null image;
-= catch id (if index image "/" > 0 then check ()
-	    else do check (split ":" REDUCE_PATH+[getenv "PURELIB"])) with
-  abspath name = null name || any (==image!0) [".","/"];
-  check dir = () when
-    image = if null dir then image else join "/" [dir,image];
-    fp = fopen image "r";
-    null fp || (fclose fp $$ throw image);
-  end;
+// Locate reduce.img beside the exact DLL which supplied pure_reduce_start.
+// Wide Win32 APIs keep this independent of the active ANSI code page. The
+// normalized result handed to the bridge is UTF-8.
+bundle_image = image when
+  handle_slot = sentry free $ malloc SIZEOF_POINTER;
+  ~null handle_slot || throw (initialization_error "out of memory");
+  GetModuleHandleExW 6 (addr "pure_reduce_start") handle_slot
+    || throw (initialization_error "could not identify loaded reduce.dll");
+  handle = get_pointer handle_slot;
+  wide_module = sentry free $ malloc (32768*2);
+  ~null wide_module || throw (initialization_error "out of memory");
+  module_length = GetModuleFileNameW handle wide_module 32768;
+  module_length>0 && module_length<32768
+    || throw (initialization_error "could not resolve loaded reduce.dll");
+  utf8_length = WideCharToMultiByte 65001 0 wide_module (-1)
+    NULL 0 NULL NULL;
+  utf8_length>1
+    || throw (initialization_error "could not encode reduce.dll path");
+  utf8_module = malloc utf8_length;
+  ~null utf8_module || throw (initialization_error "out of memory");
+  WideCharToMultiByte 65001 0 wide_module (-1) utf8_module utf8_length
+    NULL NULL == utf8_length ||
+    (free utf8_module $$
+     throw (initialization_error "could not encode reduce.dll path"));
+  module_path = join "/" (split "\\" (cstring utf8_module));
+  path_parts = split "/" module_path;
+  #path_parts>1
+    || throw (initialization_error "reduce.dll path has no directory");
+  image = join "/" (init path_parts)+"/reduce.img";
+  wide_length = MultiByteToWideChar 65001 8 image (-1) NULL 0;
+  wide_length>1
+    || throw (initialization_error "reduce.img path is not valid UTF-8");
+  wide_image = sentry free $ malloc (wide_length*2);
+  ~null wide_image || throw (initialization_error "out of memory");
+  MultiByteToWideChar 65001 8 image (-1) wide_image wide_length
+    == wide_length
+    || throw (initialization_error "could not decode reduce.img path");
+  attributes = GetFileAttributesW wide_image;
+  attributes ~= -1 && (attributes and 16) == 0
+    || throw (initialization_error
+      ("reduce.img is not a regular file: "+image));
 end;
 
 // Initialization and finalization.
 
-finish = put started false $$ cslfinish NULL $$ () if get started;
+finish = () if pure_reduce_state ~= 1;
+= () when result = pure_reduce_finish;
+  result==0 || throw (evaluation_error
+    (bridge_diagnostic "could not finish REDUCE"));
+end;
 
 start image::string args::smatrix = res when
-  // Nuke any running instance.
-  finish;
-  // Look for the image and load it.
-  myimage = search image;
-  stringp myimage || throw (bad_reduce_image image);
+  state = pure_reduce_state;
+  state~=2 || throw (finished_error
+    "the embedded REDUCE runtime cannot be restarted in this process");
+  state~=1 || throw (initialization_error
+    "the embedded REDUCE runtime is already running");
+  state~=3 || throw (initialization_error
+    (bridge_diagnostic "the embedded REDUCE runtime failed"));
+  image=="reduce.img" || throw (initialization_error
+    "only the bundled reduce.img can be selected");
+  #args==0 || throw (initialization_error
+    "custom REDUCE startup options are not supported by the bridge");
+  myimage = bundle_image;
   all (~="-v") args || puts $ "Loading image file "+myimage;
-  res = cslstart (#args+3) {"reduce","-i",myimage,args} NULL;
-  // Record that we're up and running.
-  put started true;
+  res = pure_reduce_start myimage;
+  res==0 || throw (initialization_error
+    (bridge_diagnostic "could not start REDUCE"));
   // Reduce is pretty noisy by default, shut it up. You might want to comment
   // this line for debugging purposes, or call reduce::verbosity yourself.
   verbosity 0;
@@ -724,10 +801,15 @@ start image::string args::smatrix = res when
   load "matrix";
 end if all stringp args;
 
-// Automatic startup. Print an error message if we can't find the image.
-get_started = true if get started;
-get_started = catch (\_->puts "** Couldn't load image file reduce.img")
-  (start "reduce.img" {}) $$ get started;
+// Startup is lazy and terminal: current CSL can be initialized once per
+// process, while finish remains safely idempotent.
+get_started = true if pure_reduce_state==1;
+= start "reduce.img" {} $$ true if pure_reduce_state==0;
+= throw (finished_error
+    "the embedded REDUCE runtime has already been finished")
+  if pure_reduce_state==2;
+= throw (initialization_error
+    (bridge_diagnostic "the embedded REDUCE runtime failed")) otherwise;
 
 // Source a Reduce (.red) file. This captures all output, so you may want to
 // inspect reduce::output for messages while loading the file.
@@ -838,6 +920,31 @@ let pure_syms = {y=>x | x=>y = reduce_syms};
 let special_syms =
   '{(~=)=>neq,(>=)=>geq,(<=)=>leq,(>)=>greaterp,(<)=>lessp,
     (~)=>(not),(&&)=>(and),(||)=>(or)};
+
+pure_to_reduce x = case opstr x of
+  "+" = "plus"; "-" = "difference"; "*" = "times";
+  "inf" = "infinity"; "intg" = "int"; "ceil" = "ceiling";
+  "neg" = "minus"; "/" = "quotient"; "^" = "expt";
+  "==" = "equal"; "~=" = "neq"; ">=" = "geq"; "<=" = "leq";
+  ">" = "greaterp"; "<" = "lessp"; "~" = "not";
+  "&&" = "and"; "||" = "or"; "=>" = "replaceby";
+  ":=" = "set"; ".." = "*interval*"; "map" = "~map";
+  name = name otherwise;
+end;
+
+reduce_to_pure x = case opstr x of
+  "plus" = (+); "difference" = (-); "times" = (*);
+  "infinity" = inf; "int" = intg; "ceiling" = ceil;
+  "minus" = neg; "quotient" = (/); "expt" = (^);
+  "equal" = (==); "neq" = (~=); "geq" = (>=); "leq" = (<=);
+  "greaterp" = (>); "lessp" = (<); "not" = (~);
+  "and" = (&&); "or" = (||); "replaceby" = (=>);
+  "set" = (:=); "*interval*" = (..); "~map" = map;
+  _ = x otherwise;
+end;
+
+variadic_symbol x = any (\name -> name==opstr x)
+  ["plus","difference","times","min","max"];
 
 // Property symbols.
 let prop_syms =
@@ -1030,7 +1137,7 @@ simplify x = y when
     from_expr x = error x otherwise;
     // Convert symbols, with mapping as needed.
     from_sym () = error ();
-    from_sym x = opstr (catch (cst x) (pure_syms!x));
+    from_sym x = pure_to_reduce x;
   end;
   // Run Reduce to simplify the expression.
   PROC_simplify;
@@ -1136,7 +1243,7 @@ simplify x = y when
     // List with a variadic symbol in front, map this to the appropriate Pure
     // term (e.g. (plus a b c) -> a+b+c etc.).
     to_expr (f::symbol:xs::rlist) =
-      pretty (foldl1 (to_expr f$) (map to_expr xs)) if member variadic_syms f;
+      pretty (foldl1 (to_expr f$) (map to_expr xs)) if variadic_symbol f;
     // Other list (with a non-variadic symbol in front). Here we also deal
     // with the case of unevaluated embedded SQ terms (Reduce's internal
     // representation of algebraic terms, cf. Section 3 of the "REDUCE
@@ -1186,13 +1293,14 @@ simplify x = y when
     to_sym [f::symbol,n::int] = val ("β"+str n) if f === arbint;
     to_sym [f::symbol,n::int] = val ("ζ"+str n) if f === arbcomplex;
     //to_sym x::symbol = true if x === 't;
-    to_sym x = catch (cst x) (reduce_syms!x);
+    to_sym x = reduce_to_pure x;
   end;
   // Clear the stack once again (clean up).
   PROC_clear_stack;
 end with
   // Error handler, this gets invoked if we choke on an input or output x we
   // don't understand (yet).
+  error x@(evaluation_error _) = __PROC_clear_stack $$ throw x;
   error x = PROC_clear_stack $$ throw (bad_reduce_value x);
 end if get_started;
 
@@ -1288,7 +1396,7 @@ lispval x = y when
     from_expr x = error x otherwise;
     // Convert symbols, with mapping as needed.
     from_sym () = error ();
-    from_sym x = opstr (catch (cst x) (pure_syms!x));
+    from_sym x = pure_to_reduce x;
   end;
   /* XXXFIXME: This barks on matrix values, so we can't just run
      PROC_make_printable on the entire expression here. Unfortunately, this is
@@ -1328,6 +1436,7 @@ lispval x = y when
   end;
   PROC_clear_stack;
 end with
+  error x@(evaluation_error _) = __PROC_clear_stack $$ throw x;
   error x = PROC_clear_stack $$ throw (bad_reduce_value x);
 end if get_started;
 
@@ -1413,13 +1522,14 @@ lisp x = y when
 end with
   // Error handler, this gets invoked if we choke on an input or output x we
   // don't understand (yet).
+  error x@(evaluation_error _) = __PROC_clear_stack $$ throw x;
   error x = PROC_clear_stack $$ throw (bad_lisp_value x);
 end if get_started;
 
 declare x::symbol y::symbol = declare x [y] if y~==[];
 declare x::symbol ys::rlist = lisp (x (map ('quote) ys)) $$ () when
   x = if x==='precedence && null (tail ys) then lispsym "infix" else x;
-  ys = map (\y -> catch (cst y) (pure_syms!y)) ys;
+  ys = map (\y -> lispsym (pure_to_reduce y)) ys;
 end if any (x===) ['operator,'precedence] && #ys>=1 && all symbolp ys;
 declare x::symbol ys::rlist = lisp (x (map mkquoted ys)) $$ () with
   mkquoted y::appl = 'quote y;
@@ -1430,5 +1540,3 @@ declare x::symbol ys::rlist = lisp ('flag ys x) $$ ()
 
 precision prec::int = lisp ('precision prec);
 plotreset = lisp ('plotreset) $$ ();
-
-get_started;
