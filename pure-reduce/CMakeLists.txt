@@ -24,6 +24,55 @@ if(PURE_REDUCE_SOURCE_DIR)
   pure_reduce_define_upstream_build()
 endif()
 
+if(PURE_REDUCE_SOURCE_DIR)
+  enable_language(CXX)
+  set(_pure_reduce_cslbase
+    "${PURE_REDUCE_UPSTREAM_BINARY_DIR}/source/csl/cslbase")
+  add_library(pure-reduce-bridge-objects OBJECT
+    bridge/reduce_bridge.cpp)
+  set_target_properties(pure-reduce-bridge-objects PROPERTIES
+    CXX_STANDARD 17
+    CXX_STANDARD_REQUIRED YES
+    CXX_EXTENSIONS NO
+    POSITION_INDEPENDENT_CODE YES)
+  target_compile_definitions(pure-reduce-bridge-objects PRIVATE
+    PURE_REDUCE_BUILDING)
+  target_include_directories(pure-reduce-bridge-objects PRIVATE
+    "${CMAKE_CURRENT_LIST_DIR}/bridge"
+    "${_pure_reduce_cslbase}")
+  add_dependencies(pure-reduce-bridge-objects pure-reduce-upstream)
+
+  add_library(reduce MODULE
+    $<TARGET_OBJECTS:pure-reduce-bridge-objects>
+    bridge/reduce.def)
+  set_target_properties(reduce PROPERTIES
+    PREFIX ""
+    OUTPUT_NAME "reduce"
+    WINDOWS_EXPORT_ALL_SYMBOLS OFF)
+  add_dependencies(reduce pure-reduce-upstream)
+  target_link_options(reduce PRIVATE
+    -Wl,--no-undefined)
+  target_link_libraries(reduce PRIVATE
+    ${PURE_REDUCE_CSL_LINK_INTERFACE})
+
+  add_executable(pure-reduce-bridge-contract
+    tests/bridge-contract.cpp
+    $<TARGET_OBJECTS:pure-reduce-bridge-objects>)
+  set_target_properties(pure-reduce-bridge-contract PROPERTIES
+    CXX_STANDARD 17
+    CXX_STANDARD_REQUIRED YES
+    CXX_EXTENSIONS NO)
+  target_include_directories(pure-reduce-bridge-contract PRIVATE
+    "${CMAKE_CURRENT_LIST_DIR}/bridge")
+  target_compile_definitions(pure-reduce-bridge-contract PRIVATE
+    PURE_REDUCE_STATIC)
+  add_dependencies(pure-reduce-bridge-contract pure-reduce-upstream)
+  target_link_options(pure-reduce-bridge-contract PRIVATE
+    -Wl,--no-undefined)
+  target_link_libraries(pure-reduce-bridge-contract PRIVATE
+    ${PURE_REDUCE_CSL_LINK_INTERFACE})
+endif()
+
 include(CTest)
 if(BUILD_TESTING)
   add_test(
@@ -33,6 +82,11 @@ if(BUILD_TESTING)
       -P "${CMAKE_CURRENT_LIST_DIR}/tests/source-contract.cmake")
   set_tests_properties(pure-reduce-source-contract PROPERTIES LABELS "reduce")
   if(PURE_REDUCE_SOURCE_DIR)
+    add_test(
+      NAME pure-reduce-bridge-contract
+      COMMAND pure-reduce-bridge-contract)
+    set_tests_properties(pure-reduce-bridge-contract PROPERTIES
+      LABELS "reduce")
     add_test(
       NAME pure-reduce-upstream-build
       COMMAND "${CMAKE_COMMAND}" --build "${CMAKE_BINARY_DIR}"
