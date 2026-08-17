@@ -132,7 +132,8 @@ foreach(_required_relative IN ITEMS
     share/doc/pure-reduce/README
     share/doc/pure-reduce/COPYING
     share/doc/pure-reduce/THIRD_PARTY.md
-    share/doc/pure-reduce/reduce-upstream-metrics.json
+    share/doc/pure-reduce/PureReduceInventory.tsv
+    share/doc/pure-reduce/pure-reduce-package-metrics.json
     share/doc/pure-reduce/runtime/reduce.resources.manifest
     share/doc/pure-reduce/runtime/reduce.fonts.manifest
     share/doc/pure-reduce/licenses/REDUCE-LICENSE.txt
@@ -151,6 +152,8 @@ foreach(_installed IN LISTS _installed_files)
   string(REPLACE "\\" "/" _relative "${_relative}")
   string(TOLOWER "${_relative}" _relative_lower)
   if(_relative_lower MATCHES "\\.(a|lib|o|obj|exe)$" OR
+      _relative_lower MATCHES "(^|/)src/" OR
+      _relative_lower MATCHES "\\.(asm\\.gz|tar|tar\\.gz|tar\\.bz2|tar\\.xz|zip)$" OR
       _relative_lower MATCHES
         "(^|/)(bash|sh|dash|zsh|fish|cmd|powershell|pwsh|make|ninja|pacman)(\\.exe)?$" OR
       _relative_lower MATCHES "(^|/)reduce\\.exe$")
@@ -165,6 +168,105 @@ if(NOT _installed_relative STREQUAL _expected_relative)
     "installed inventory differs from authoritative manifest\n"
     "installed: ${_installed_relative}\nexpected: ${_expected_relative}")
 endif()
+
+set(_installed_inventory
+  "${_stage}/share/doc/pure-reduce/PureReduceInventory.tsv")
+file(STRINGS "${_installed_inventory}" _installed_inventory_lines)
+list(POP_FRONT _installed_inventory_lines _installed_inventory_header)
+if(NOT _installed_inventory_header STREQUAL _inventory_header)
+  message(FATAL_ERROR "installed inventory header differs")
+endif()
+math(EXPR _remaining_payload_count "${_expected_count} - 1")
+list(LENGTH _installed_inventory_lines _installed_inventory_count)
+if(NOT _installed_inventory_count EQUAL _remaining_payload_count)
+  message(FATAL_ERROR
+    "installed inventory must describe the remaining payload: "
+    "${_installed_inventory_count} vs ${_remaining_payload_count}")
+endif()
+set(_expected_installed_inventory_lines)
+foreach(_line IN LISTS _inventory_lines)
+  if(NOT _line MATCHES
+      "^share/doc/pure-reduce/PureReduceInventory\\.tsv\t")
+    list(APPEND _expected_installed_inventory_lines "${_line}")
+  endif()
+endforeach()
+if(NOT _installed_inventory_lines STREQUAL
+    _expected_installed_inventory_lines)
+  message(FATAL_ERROR
+    "installed inventory does not exactly describe the remaining payload")
+endif()
+
+set(_required_reduce_dll_licenses
+  REDUCE-LICENSE.txt
+  COPYING
+  CRLIBM-COPYING.LIB.txt
+  LIBFFI-LICENSE.txt
+  ZLIB-LICENSE.txt
+  NCURSES-LICENSE.txt
+  WINPTHREADS-COPYING.txt
+  LIBCXX-LICENSE.txt
+  LIBUNWIND-LICENSE.txt
+  COMPILER-RT-LICENSE.txt
+  MINGW-W64-CRT-COPYING.txt
+  MINGW-W64-RUNTIME-COPYING.txt)
+set(_reduce_dll_inventory_line "")
+foreach(_line IN LISTS _inventory_lines)
+  if(_line MATCHES "^lib/pure/reduce\\.dll\t")
+    set(_reduce_dll_inventory_line "${_line}")
+  endif()
+endforeach()
+foreach(_license_name IN LISTS _required_reduce_dll_licenses)
+  if(NOT _reduce_dll_inventory_line MATCHES "${_license_name}")
+    message(FATAL_ERROR
+      "reduce.dll inventory omits applicable license: ${_license_name}")
+  endif()
+endforeach()
+
+set(_metrics
+  "${_stage}/share/doc/pure-reduce/pure-reduce-package-metrics.json")
+file(READ "${_metrics}" _metrics_json)
+foreach(_metric_key IN ITEMS
+    commit source_tree_sha256 upstream_build_elapsed_seconds
+    upstream_source_bytes upstream_build_tree_bytes link_object_count
+    runtime_resource_count runtime_font_count installed_file_count)
+  string(JSON _metric_value ERROR_VARIABLE _metric_error
+    GET "${_metrics_json}" "${_metric_key}")
+  if(_metric_error)
+    message(FATAL_ERROR "package metrics omit ${_metric_key}: ${_metric_error}")
+  endif()
+endforeach()
+if(_metrics_json MATCHES
+    "(source_materialization|source_patches|tool_versions|logs|[A-Za-z]:[/\\\\])")
+  message(FATAL_ERROR "package metrics contain non-deterministic path/build data")
+endif()
+string(JSON _metrics_installed_count GET
+  "${_metrics_json}" installed_file_count)
+if(NOT _metrics_installed_count EQUAL _expected_count)
+  message(FATAL_ERROR
+    "package metrics installed count differs: "
+    "${_metrics_installed_count} vs ${_expected_count}")
+endif()
+
+set(_forbidden_prefixes "${_build_dir}" "${_stage}")
+if(DEFINED SOURCE_PREFIX AND NOT "${SOURCE_PREFIX}" STREQUAL "")
+  list(APPEND _forbidden_prefixes "${SOURCE_PREFIX}")
+endif()
+file(GLOB_RECURSE _installed_text_files LIST_DIRECTORIES FALSE
+  "${_stage}/*.md" "${_stage}/*.txt" "${_stage}/*.json"
+  "${_stage}/*.tsv" "${_stage}/*.manifest" "${_stage}/*.pure"
+  "${_stage}/*.awk" "${_stage}/README" "${_stage}/COPYING")
+foreach(_text_file IN LISTS _installed_text_files)
+  file(READ "${_text_file}" _text)
+  foreach(_prefix IN LISTS _forbidden_prefixes)
+    file(TO_CMAKE_PATH "${_prefix}" _prefix_normalized)
+    string(REPLACE "\\" "/" _text_normalized "${_text}")
+    string(FIND "${_text_normalized}" "${_prefix_normalized}" _prefix_at)
+    if(NOT _prefix_at EQUAL -1)
+      message(FATAL_ERROR
+        "installed text leaks source/build/stage prefix in ${_text_file}")
+    endif()
+  endforeach()
+endforeach()
 
 foreach(_runtime_var IN ITEMS PURE_EXECUTABLE PURE_LIBRARY_DIR TEST_DRIVER)
   if(NOT DEFINED ${_runtime_var} OR "${${_runtime_var}}" STREQUAL "")

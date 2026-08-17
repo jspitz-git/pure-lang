@@ -15,31 +15,8 @@ set(_PURE_REDUCE_WINDOWS_SYSTEM_DLLS
   api-ms-win-crt-string-l1-1-0.dll
   api-ms-win-crt-time-l1-1-0.dll
   api-ms-win-crt-utility-l1-1-0.dll
-  bcrypt.dll
-  comctl32.dll
-  comdlg32.dll
-  crypt32.dll
-  gdi32.dll
-  imm32.dll
   kernel32.dll
-  mpr.dll
-  msvcrt.dll
-  ntdll.dll
-  ole32.dll
-  oleaut32.dll
-  rpcrt4.dll
-  secur32.dll
-  setupapi.dll
-  shell32.dll
-  shlwapi.dll
-  ucrtbase.dll
-  user32.dll
-  uuid.dll
-  version.dll
-  winmm.dll
-  winspool.drv
-  ws2_32.dll
-  wsock32.dll)
+  user32.dll)
 
 function(_pure_reduce_audit_canonical_file INPUT OUTPUT)
   if(NOT IS_ABSOLUTE "${INPUT}" OR NOT EXISTS "${INPUT}" OR

@@ -11,6 +11,29 @@ endforeach()
 
 include("${PURE_REDUCE_SOURCE_DIR}/cmake/AuditWindowsDependencies.cmake")
 
+set(_expected_system_dlls
+  advapi32.dll
+  api-ms-win-crt-convert-l1-1-0.dll
+  api-ms-win-crt-environment-l1-1-0.dll
+  api-ms-win-crt-filesystem-l1-1-0.dll
+  api-ms-win-crt-heap-l1-1-0.dll
+  api-ms-win-crt-locale-l1-1-0.dll
+  api-ms-win-crt-math-l1-1-0.dll
+  api-ms-win-crt-multibyte-l1-1-0.dll
+  api-ms-win-crt-private-l1-1-0.dll
+  api-ms-win-crt-runtime-l1-1-0.dll
+  api-ms-win-crt-stdio-l1-1-0.dll
+  api-ms-win-crt-string-l1-1-0.dll
+  api-ms-win-crt-time-l1-1-0.dll
+  api-ms-win-crt-utility-l1-1-0.dll
+  kernel32.dll
+  user32.dll)
+if(NOT _PURE_REDUCE_WINDOWS_SYSTEM_DLLS STREQUAL _expected_system_dlls)
+  message(FATAL_ERROR
+    "Windows system DLL allowlist is not the reviewed exact set: "
+    "${_PURE_REDUCE_WINDOWS_SYSTEM_DLLS}")
+endif()
+
 if(PURE_REDUCE_AUDIT_PROBE)
   pure_reduce_audit_pe(
     "${PURE_REDUCE_AUDIT_ROOT_FILES}"
@@ -166,5 +189,31 @@ endif()
 _expect_audit_rejection("${_forbidden_root}"
   "${PURE_REDUCE_TEST_ROOT}/dependency"
   "forbidden MSYS/Cygwin PE import msys-2\\.0\\.dll")
+
+set(_uuid_dll "${PURE_REDUCE_TEST_ROOT}/dependency/uuid.dll")
+set(_uuid_import "${PURE_REDUCE_TEST_ROOT}/dependency/uuid.dll.a")
+set(_uuid_root "${PURE_REDUCE_TEST_ROOT}/uuid-root.dll")
+execute_process(
+  COMMAND "${PURE_REDUCE_CXX_COMPILER}" -shared "${_dependency_source}"
+    -o "${_uuid_dll}" "-Wl,--out-implib,${_uuid_import}"
+  RESULT_VARIABLE _uuid_dependency_result
+  ERROR_VARIABLE _uuid_dependency_error
+  ENCODING UTF-8)
+if(NOT _uuid_dependency_result EQUAL 0)
+  message(FATAL_ERROR "uuid fixture build failed: ${_uuid_dependency_error}")
+endif()
+execute_process(
+  COMMAND "${PURE_REDUCE_CXX_COMPILER}" -shared "${_root_source}"
+    "${_uuid_import}" -o "${_uuid_root}"
+  RESULT_VARIABLE _uuid_root_result
+  ERROR_VARIABLE _uuid_root_error
+  ENCODING UTF-8)
+if(NOT _uuid_root_result EQUAL 0)
+  message(FATAL_ERROR "uuid root fixture build failed: ${_uuid_root_error}")
+endif()
+file(REMOVE "${_uuid_dll}")
+_expect_audit_rejection("${_uuid_root}"
+  "${PURE_REDUCE_TEST_ROOT}/dependency"
+  "unresolved PE import uuid\\.dll")
 
 message(STATUS "pure-reduce recursive Windows dependency audit passed")

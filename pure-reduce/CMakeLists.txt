@@ -149,6 +149,7 @@ if(BUILD_TESTING)
         COMMAND "${CMAKE_COMMAND}"
           "-DPURE_EXECUTABLE=${PURE_EXECUTABLE}"
           "-DPURE_LIBRARY_DIR=${_pure_reduce_library_dir}"
+          "-DSOURCE_PREFIX=${CMAKE_CURRENT_LIST_DIR}"
           "-DPURE_SOURCE_DIR=${CMAKE_CURRENT_LIST_DIR}"
           "-DMODULE_DIR=$<TARGET_FILE_DIR:reduce>"
           "-DTEST_SCRIPT=${CMAKE_CURRENT_LIST_DIR}/tests/initialization-failure.pure"
@@ -238,6 +239,19 @@ if(BUILD_TESTING)
     set_tests_properties(pure-reduce-audit-windows-dependencies PROPERTIES
       LABELS "reduce;audit;windows"
       REQUIRED_FILES "$<TARGET_FILE:reduce>"
+      TIMEOUT 60)
+    add_test(
+      NAME pure-reduce-install-contract-failures
+      COMMAND "${CMAKE_COMMAND}"
+        "-DSOURCE_DIR=${CMAKE_CURRENT_LIST_DIR}"
+        "-DRUNTIME_ROOT=${PURE_REDUCE_UPSTREAM_BINARY_DIR}/artifacts/runtime"
+        "-DTEST_ROOT=${CMAKE_CURRENT_BINARY_DIR}/install contract failures"
+        "-DCXX_COMPILER=${CMAKE_CXX_COMPILER}"
+        "-DLLVM_READOBJ=${PURE_REDUCE_LLVM_READOBJ}"
+        "-DREDUCE_IMAGE=${PURE_REDUCE_CSL_IMAGE}"
+        -P "${CMAKE_CURRENT_LIST_DIR}/tests/install-contract-failures.cmake")
+    set_tests_properties(pure-reduce-install-contract-failures PROPERTIES
+      LABELS "reduce;install;failure;windows"
       TIMEOUT 60)
     if(PURE_EXECUTABLE)
       add_test(
