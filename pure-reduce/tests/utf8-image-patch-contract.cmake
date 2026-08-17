@@ -72,3 +72,62 @@ if(NOT _preserve MATCHES "windowsFopenUtf8" OR
 endif()
 
 file(REMOVE_RECURSE "${_fixture}")
+
+# The recipe marker invalidates cached closures when build flags change without
+# changing the public four-field source/patch identity stamp.
+set(PURE_REDUCE_VERIFIED_COMMIT "commit")
+set(_recipe_fixture
+  "${CMAKE_CURRENT_BINARY_DIR}/pure-reduce-recipe-stamp-contract")
+set(PURE_REDUCE_UPSTREAM_BINARY_DIR "${_recipe_fixture}")
+set(PURE_REDUCE_MSYS2_BASH "fixture-bash")
+set(PURE_REDUCE_MAKE "fixture-make")
+file(REMOVE_RECURSE "${_recipe_fixture}")
+file(MAKE_DIRECTORY
+  "${_recipe_fixture}/artifacts/link"
+  "${_recipe_fixture}/logs")
+foreach(_artifact IN ITEMS
+    artifacts/reduce.img
+    artifacts/link/libreduce-csl.a
+    artifacts/link/libcrlibm.a
+    artifacts/link/libffi.a
+    reduce-upstream-metrics.json
+    logs/artifact-contract-probe.exe
+    logs/artifact-contract.log)
+  file(WRITE "${_recipe_fixture}/${_artifact}"
+    "fixture artifact bytes for recipe contract\n")
+endforeach()
+_pure_reduce_expected_upstream_stamp(
+  "${PURE_REDUCE_VERIFIED_COMMIT}"
+  "${PURE_REDUCE_SOURCE_TREE_SHA256}"
+  _recipe_expected_stamp)
+file(WRITE "${_recipe_fixture}/pure-reduce-upstream.stamp"
+  "${_recipe_expected_stamp}")
+
+function(_pure_reduce_run_upstream_build)
+  set_property(GLOBAL PROPERTY PURE_REDUCE_RECIPE_REBUILD_CALLED ON)
+endfunction()
+
+foreach(_recipe_case IN ITEMS missing stale current)
+  set_property(GLOBAL PROPERTY PURE_REDUCE_RECIPE_REBUILD_CALLED OFF)
+  if(_recipe_case STREQUAL "missing")
+    file(REMOVE "${_recipe_fixture}/pure-reduce-upstream.recipe")
+  elseif(_recipe_case STREQUAL "stale")
+    file(WRITE "${_recipe_fixture}/pure-reduce-upstream.recipe"
+      "stale recipe identity with enough bytes\n")
+  else()
+    file(WRITE "${_recipe_fixture}/pure-reduce-upstream.recipe"
+      "${_PURE_REDUCE_BUILD_RECIPE_VERSION}\n")
+  endif()
+  _pure_reduce_run_upstream_build_ensure()
+  get_property(_rebuild_called GLOBAL
+    PROPERTY PURE_REDUCE_RECIPE_REBUILD_CALLED)
+  if(_recipe_case STREQUAL "current")
+    if(_rebuild_called)
+      message(FATAL_ERROR "current upstream recipe marker forced regeneration")
+    endif()
+  elseif(NOT _rebuild_called)
+    message(FATAL_ERROR
+      "${_recipe_case} upstream recipe marker did not force regeneration")
+  endif()
+endforeach()
+file(REMOVE_RECURSE "${_recipe_fixture}")

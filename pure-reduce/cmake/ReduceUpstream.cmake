@@ -6,6 +6,8 @@ set(_PURE_REDUCE_NIL_PATCH_SHA256
   "2d88d6d4a842ccb4574b60b0bd7e3af91896cea76708551a6e54489792e91d08")
 set(_PURE_REDUCE_UTF8_IMAGE_PATCH_SHA256
   "ad89f9581eefaaf4191b65af1b769a18883e865ee2740e4e6f053d1c5615d0e9")
+set(_PURE_REDUCE_BUILD_RECIPE_VERSION
+  "windows-clang-file-prefix-map-v1")
 
 function(_pure_reduce_expected_upstream_stamp COMMIT TREE_SHA256 OUT_STAMP)
   string(CONCAT _stamp
@@ -281,6 +283,7 @@ function(_pure_reduce_run_upstream_build_ensure)
     "${_root}/artifacts/link/libcrlibm.a"
     "${_root}/artifacts/link/libffi.a"
     "${_root}/reduce-upstream-metrics.json"
+    "${_root}/pure-reduce-upstream.recipe"
     "${_root}/logs/artifact-contract-probe.exe"
     "${_root}/logs/artifact-contract.log")
   set(_complete TRUE)
@@ -303,6 +306,16 @@ function(_pure_reduce_run_upstream_build_ensure)
       "${PURE_REDUCE_SOURCE_TREE_SHA256}"
       _expected_stamp)
     if(NOT _stamp_content STREQUAL _expected_stamp)
+      set(_complete FALSE)
+    endif()
+  else()
+    set(_complete FALSE)
+  endif()
+  set(_recipe_stamp "${_root}/pure-reduce-upstream.recipe")
+  if(EXISTS "${_recipe_stamp}")
+    file(READ "${_recipe_stamp}" _recipe_content)
+    string(STRIP "${_recipe_content}" _recipe_content)
+    if(NOT _recipe_content STREQUAL _PURE_REDUCE_BUILD_RECIPE_VERSION)
       set(_complete FALSE)
     endif()
   else()
@@ -628,7 +641,8 @@ export WANT_AUTOCONF=2.73
 export enable_symvers=no
 src=$(cygpath -u "$1")
 cd "$src"
-./configure --without-autogen --with-csl --without-gui --without-redfront CC=clang CXX=clang++
+prefix_map="-ffile-prefix-map=$src=/usr/src/pure-reduce-upstream -fmacro-prefix-map=$src=/usr/src/pure-reduce-upstream"
+./configure --without-autogen --with-csl --without-gui --without-redfront CC=clang CXX=clang++ CFLAGS="$prefix_map" CXXFLAGS="$prefix_map"
 ]=])
   _pure_reduce_run_logged(
     "official REDUCE CSL configure" "${_configure_log}"
@@ -838,6 +852,8 @@ printf 'autoconf=%s\n' "$(autoconf --version | sed -n '1p')"
     "${PURE_REDUCE_SOURCE_TREE_SHA256}"
     _expected_stamp)
   file(WRITE "${_stamp}" "${_expected_stamp}")
+  file(WRITE "${_root}/pure-reduce-upstream.recipe"
+    "${_PURE_REDUCE_BUILD_RECIPE_VERSION}\n")
 endfunction()
 
 function(pure_reduce_define_upstream_build)

@@ -1,5 +1,67 @@
 cmake_minimum_required(VERSION 3.25)
 
+function(_pure_reduce_utf16le_hex INPUT OUTPUT)
+  string(HEX "${INPUT}" _narrow_hex)
+  string(LENGTH "${_narrow_hex}" _hex_length)
+  set(_utf16le_hex "")
+  if(_hex_length GREATER 0)
+    math(EXPR _last_pair "${_hex_length} - 2")
+    foreach(_offset RANGE 0 ${_last_pair} 2)
+      string(SUBSTRING "${_narrow_hex}" ${_offset} 2 _pair)
+      string(APPEND _utf16le_hex "${_pair}00")
+    endforeach()
+  endif()
+  string(TOLOWER "${_utf16le_hex}" _utf16le_hex)
+  set(${OUTPUT} "${_utf16le_hex}" PARENT_SCOPE)
+endfunction()
+
+function(_pure_reduce_scan_file_bytes FILE PREFIX_NEEDLES MSYS_NEEDLES OUTPUT)
+  set(_all_needles ${PREFIX_NEEDLES} ${MSYS_NEEDLES})
+  set(_max_needle_length 0)
+  foreach(_needle IN LISTS _all_needles)
+    string(LENGTH "${_needle}" _needle_length)
+    if(_needle_length GREATER _max_needle_length)
+      set(_max_needle_length ${_needle_length})
+    endif()
+  endforeach()
+  math(EXPR _carry_length "${_max_needle_length} - 2")
+  file(SIZE "${FILE}" _file_bytes)
+  set(_offset 0)
+  set(_carry "")
+  set(_match "")
+  while(_offset LESS _file_bytes AND _match STREQUAL "")
+    file(READ "${FILE}" _chunk_hex
+      OFFSET ${_offset} LIMIT 1048576 HEX)
+    string(TOLOWER "${_chunk_hex}" _chunk_hex)
+    set(_haystack "${_carry}${_chunk_hex}")
+    foreach(_needle IN LISTS PREFIX_NEEDLES)
+      string(FIND "${_haystack}" "${_needle}" _match_at)
+      if(NOT _match_at EQUAL -1)
+        set(_match "prefix")
+        break()
+      endif()
+    endforeach()
+    if(_match STREQUAL "")
+      foreach(_needle IN LISTS MSYS_NEEDLES)
+        string(FIND "${_haystack}" "${_needle}" _match_at)
+        if(NOT _match_at EQUAL -1)
+          set(_match "msys")
+          break()
+        endif()
+      endforeach()
+    endif()
+    string(LENGTH "${_haystack}" _haystack_length)
+    if(_haystack_length GREATER _carry_length)
+      math(EXPR _carry_at "${_haystack_length} - ${_carry_length}")
+      string(SUBSTRING "${_haystack}" ${_carry_at} -1 _carry)
+    else()
+      set(_carry "${_haystack}")
+    endif()
+    math(EXPR _offset "${_offset} + 1048576")
+  endwhile()
+  set(${OUTPUT} "${_match}" PARENT_SCOPE)
+endfunction()
+
 foreach(_required IN ITEMS
     BUILD_DIR STAGE_PREFIX AUTHORITATIVE_MANIFEST PURE_EXECUTABLE LLVM_READOBJ)
   if(NOT DEFINED ${_required} OR "${${_required}}" STREQUAL "")
@@ -28,6 +90,57 @@ if(NOT VERIFY_ONLY)
     message(FATAL_ERROR
       "install verification stage must be a child of BUILD_DIR: ${_stage}")
   endif()
+
+  set(_expected_manifest "${_build_dir}/PureReduceExpected.sha256")
+  set(_expected_external_inventory
+    "${_build_dir}/PureReduceInventory.tsv")
+  set(_expected_installed_inventory
+    "${_build_dir}/PureReduceInstalledInventory.tsv")
+  string(TOLOWER "${_manifest}" _manifest_lower)
+  string(TOLOWER "${_expected_manifest}" _expected_manifest_lower)
+  if(NOT _manifest_lower STREQUAL _expected_manifest_lower)
+    message(FATAL_ERROR
+      "authoritative manifest must be BUILD_DIR/PureReduceExpected.sha256")
+  endif()
+  foreach(_oracle IN ITEMS
+      "${_expected_manifest}"
+      "${_expected_external_inventory}"
+      "${_expected_installed_inventory}")
+    if(NOT EXISTS "${_oracle}" OR IS_DIRECTORY "${_oracle}")
+      message(FATAL_ERROR
+        "trusted package oracle must preexist before install: ${_oracle}")
+    endif()
+  endforeach()
+
+  string(SHA256 _snapshot_key "${_stage}")
+  set(_snapshot_dir
+    "${_build_dir}/installed-verifier-snapshot-${_snapshot_key}")
+  file(REMOVE_RECURSE "${_snapshot_dir}")
+  file(MAKE_DIRECTORY "${_snapshot_dir}")
+  execute_process(
+    COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+      "${_expected_manifest}"
+      "${_expected_external_inventory}"
+      "${_expected_installed_inventory}"
+      "${_snapshot_dir}"
+    RESULT_VARIABLE _snapshot_result
+    OUTPUT_VARIABLE _snapshot_output
+    ERROR_VARIABLE _snapshot_error
+    ENCODING UTF-8)
+  if(NOT _snapshot_result EQUAL 0)
+    file(REMOVE_RECURSE "${_snapshot_dir}")
+    message(FATAL_ERROR
+      "unable to snapshot trusted package oracles (${_snapshot_result})\n"
+      "stdout:\n${_snapshot_output}\nstderr:\n${_snapshot_error}")
+  endif()
+  foreach(_oracle_name IN ITEMS
+      PureReduceExpected.sha256
+      PureReduceInventory.tsv
+      PureReduceInstalledInventory.tsv)
+    file(SHA256 "${_build_dir}/${_oracle_name}"
+      "_trusted_hash_${_oracle_name}")
+  endforeach()
+
   file(REMOVE_RECURSE "${_stage}")
   execute_process(
     COMMAND "${CMAKE_COMMAND}" --install "${_build_dir}"
@@ -37,10 +150,88 @@ if(NOT VERIFY_ONLY)
     ERROR_VARIABLE _install_error
     ENCODING UTF-8)
   if(NOT _install_result EQUAL 0)
+    file(REMOVE_RECURSE "${_snapshot_dir}" "${_stage}")
     message(FATAL_ERROR
       "PureReduce component installation failed (${_install_result})\n"
       "stdout:\n${_install_output}\nstderr:\n${_install_error}")
   endif()
+
+  set(_oracle_failure "")
+  foreach(_oracle_name IN ITEMS
+      PureReduceExpected.sha256
+      PureReduceInventory.tsv
+      PureReduceInstalledInventory.tsv)
+    foreach(_oracle_root IN ITEMS "${_build_dir}" "${_snapshot_dir}")
+      set(_oracle_file "${_oracle_root}/${_oracle_name}")
+      if(NOT EXISTS "${_oracle_file}" OR IS_DIRECTORY "${_oracle_file}")
+        set(_oracle_failure
+          "component install removed trusted package oracle: ${_oracle_name}")
+      else()
+        file(SHA256 "${_oracle_file}" _oracle_hash_after)
+        if(NOT _oracle_hash_after STREQUAL
+            "${_trusted_hash_${_oracle_name}}")
+          set(_oracle_failure
+            "component install changed trusted package oracle: ${_oracle_name}")
+        endif()
+      endif()
+    endforeach()
+  endforeach()
+  if(NOT _oracle_failure STREQUAL "")
+    file(REMOVE_RECURSE "${_snapshot_dir}" "${_stage}")
+    message(FATAL_ERROR "${_oracle_failure}")
+  endif()
+
+  set(_child_command
+    "${CMAKE_COMMAND}"
+    "-DBUILD_DIR=${_snapshot_dir}"
+    "-DSTAGE_PREFIX=${_stage}"
+    "-DAUTHORITATIVE_MANIFEST=${_snapshot_dir}/PureReduceExpected.sha256"
+    "-DPURE_EXECUTABLE=${_pure_executable}"
+    "-DLLVM_READOBJ=${_llvm_readobj}"
+    "-DORIGINAL_BUILD_PREFIX=${_build_dir}"
+    -DVERIFY_ONLY=ON)
+  if(DEFINED SOURCE_PREFIX AND NOT "${SOURCE_PREFIX}" STREQUAL "")
+    list(APPEND _child_command "-DSOURCE_PREFIX=${SOURCE_PREFIX}")
+  endif()
+  list(APPEND _child_command -P "${CMAKE_CURRENT_LIST_FILE}")
+  execute_process(
+    COMMAND ${_child_command}
+    RESULT_VARIABLE _child_result
+    OUTPUT_VARIABLE _child_output
+    ERROR_VARIABLE _child_error
+    ENCODING UTF-8)
+
+  foreach(_oracle_name IN ITEMS
+      PureReduceExpected.sha256
+      PureReduceInventory.tsv
+      PureReduceInstalledInventory.tsv)
+    foreach(_oracle_root IN ITEMS "${_build_dir}" "${_snapshot_dir}")
+      if(EXISTS "${_oracle_root}/${_oracle_name}")
+        file(SHA256 "${_oracle_root}/${_oracle_name}" _oracle_hash_after)
+        if(NOT _oracle_hash_after STREQUAL
+            "${_trusted_hash_${_oracle_name}}")
+          set(_child_result 1)
+          set(_child_error
+            "trusted package oracle changed during installed verification: "
+            "${_oracle_name}")
+        endif()
+      else()
+        set(_child_result 1)
+        set(_child_error
+          "trusted package oracle disappeared during installed verification: "
+          "${_oracle_name}")
+      endif()
+    endforeach()
+  endforeach()
+  file(REMOVE_RECURSE "${_snapshot_dir}")
+  if(NOT _child_result EQUAL 0)
+    file(REMOVE_RECURSE "${_stage}")
+    message(FATAL_ERROR
+      "installed package verification failed (${_child_result})\n"
+      "stdout:\n${_child_output}\nstderr:\n${_child_error}")
+  endif()
+  message("${_child_output}")
+  return()
 endif()
 
 if(NOT IS_DIRECTORY "${_stage}")
@@ -165,6 +356,64 @@ foreach(_relative IN LISTS _expected_paths)
   endif()
 endforeach()
 
+set(_external_inventory "${_build_dir}/PureReduceInventory.tsv")
+if(NOT EXISTS "${_external_inventory}" OR
+    IS_DIRECTORY "${_external_inventory}")
+  message(FATAL_ERROR
+    "trusted external inventory is missing: ${_external_inventory}")
+endif()
+file(STRINGS "${_external_inventory}" _external_inventory_lines)
+list(POP_FRONT _external_inventory_lines _external_inventory_header)
+if(NOT _external_inventory_header STREQUAL
+    "relative_path\tpurpose\torigin\tsha256\tbytes\tlicense")
+  message(FATAL_ERROR "trusted external inventory header is malformed")
+endif()
+list(LENGTH _external_inventory_lines _external_inventory_count)
+if(NOT _external_inventory_count EQUAL _manifest_count)
+  message(FATAL_ERROR
+    "trusted external inventory count differs from manifest: "
+    "${_external_inventory_count} vs ${_manifest_count}")
+endif()
+set(_external_inventory_paths)
+foreach(_external_line IN LISTS _external_inventory_lines)
+  string(REPLACE "${_tab}" ";" _fields "${_external_line}")
+  list(LENGTH _fields _field_count)
+  if(NOT _field_count EQUAL 6)
+    message(FATAL_ERROR
+      "malformed trusted external inventory row: ${_external_line}")
+  endif()
+  list(GET _fields 0 _external_relative)
+  list(GET _fields 1 _external_purpose)
+  list(GET _fields 2 _external_origin)
+  list(GET _fields 3 _external_sha)
+  list(GET _fields 4 _external_bytes)
+  list(GET _fields 5 _external_license)
+  string(TOLOWER "${_external_relative}" _external_relative_lower)
+  if(NOT _external_relative IN_LIST _expected_paths)
+    message(FATAL_ERROR
+      "trusted external inventory contains an unexpected path: "
+      "${_external_relative}")
+  endif()
+  file(SIZE "${_stage}/${_external_relative}" _actual_external_bytes)
+  if(_external_purpose STREQUAL "" OR _external_origin STREQUAL "" OR
+      _external_license STREQUAL "" OR
+      NOT _external_sha STREQUAL
+        "${_expected_sha_${_external_relative_lower}}" OR
+      NOT _external_bytes EQUAL _actual_external_bytes)
+    message(FATAL_ERROR
+      "trusted external inventory differs from manifest/payload: "
+      "${_external_relative}")
+  endif()
+  list(APPEND _external_inventory_paths "${_external_relative}")
+endforeach()
+list(SORT _external_inventory_paths COMPARE NATURAL CASE INSENSITIVE)
+set(_sorted_expected_paths "${_expected_paths}")
+list(SORT _sorted_expected_paths COMPARE NATURAL CASE INSENSITIVE)
+if(NOT _external_inventory_paths STREQUAL _sorted_expected_paths)
+  message(FATAL_ERROR
+    "trusted external inventory paths differ from authoritative manifest")
+endif()
+
 file(GLOB_RECURSE _installed_files LIST_DIRECTORIES FALSE "${_stage}/*")
 set(_actual_paths)
 foreach(_installed IN LISTS _installed_files)
@@ -265,6 +514,10 @@ if(_metrics_error OR NOT _metrics_count EQUAL _manifest_count)
 endif()
 
 set(_forbidden_prefixes "${_build_dir}" "${_stage}")
+if(DEFINED ORIGINAL_BUILD_PREFIX AND
+    NOT "${ORIGINAL_BUILD_PREFIX}" STREQUAL "")
+  list(APPEND _forbidden_prefixes "${ORIGINAL_BUILD_PREFIX}")
+endif()
 if(DEFINED SOURCE_PREFIX AND NOT "${SOURCE_PREFIX}" STREQUAL "")
   list(APPEND _forbidden_prefixes "${SOURCE_PREFIX}")
 endif()
@@ -272,31 +525,67 @@ if(DEFINED ORIGINAL_STAGE_PREFIX AND
     NOT "${ORIGINAL_STAGE_PREFIX}" STREQUAL "")
   list(APPEND _forbidden_prefixes "${ORIGINAL_STAGE_PREFIX}")
 endif()
-set(_metadata_files)
-foreach(_installed IN LISTS _installed_files)
-  string(TOLOWER "${_installed}" _installed_lower)
-  if(NOT _installed_lower MATCHES "\\.(dll|img|ttf|pfb|pfa|pfm)$")
-    list(APPEND _metadata_files "${_installed}")
+set(_prefix_needles)
+foreach(_prefix IN LISTS _forbidden_prefixes)
+  file(TO_CMAKE_PATH "${_prefix}" _prefix_forward)
+  string(REPLACE "/" "\\" _prefix_backward "${_prefix_forward}")
+  set(_path_variants "${_prefix_forward}" "${_prefix_backward}")
+  if(_prefix_forward MATCHES "^([A-Za-z]):(/.*)$")
+    string(TOLOWER "${CMAKE_MATCH_1}" _drive_lower)
+    set(_drive_tail "${CMAKE_MATCH_2}")
+    list(APPEND _path_variants
+      "/${_drive_lower}${_drive_tail}"
+      "/cygdrive/${_drive_lower}${_drive_tail}")
   endif()
-endforeach()
-foreach(_text_file IN LISTS _metadata_files)
-  file(READ "${_text_file}" _text)
-  string(REPLACE "\\" "/" _text_normalized "${_text}")
-  string(TOLOWER "${_text_normalized}" _text_lower)
-  if(_text_lower MATCHES "(^|[^a-z])msys2([^a-z]|$)" OR
-      _text_lower MATCHES "[a-z]:/msys[0-9]*/")
-    message(FATAL_ERROR
-      "installed content contains a forbidden MSYS2 reference: ${_text_file}")
-  endif()
-  foreach(_prefix IN LISTS _forbidden_prefixes)
-    file(TO_CMAKE_PATH "${_prefix}" _prefix_normalized)
-    string(TOLOWER "${_prefix_normalized}" _prefix_lower)
-    string(FIND "${_text_lower}" "${_prefix_lower}" _prefix_at)
-    if(NOT _prefix_at EQUAL -1)
-      message(FATAL_ERROR
-        "installed content leaks a forbidden prefix: ${_text_file}")
-    endif()
+  foreach(_variant IN LISTS _path_variants)
+    string(TOLOWER "${_variant}" _variant_lower)
+    string(TOUPPER "${_variant}" _variant_upper)
+    foreach(_case_variant IN ITEMS
+        "${_variant}" "${_variant_lower}" "${_variant_upper}")
+      string(HEX "${_case_variant}" _narrow_hex)
+      string(TOLOWER "${_narrow_hex}" _narrow_hex)
+      _pure_reduce_utf16le_hex("${_case_variant}" _utf16le_hex)
+      list(APPEND _prefix_needles "${_narrow_hex}" "${_utf16le_hex}")
+    endforeach()
   endforeach()
+endforeach()
+list(REMOVE_DUPLICATES _prefix_needles)
+
+set(_msys_needles)
+foreach(_msys_text IN ITEMS
+    msys2 MSYS2 C:/msys C:\\msys c:/msys c:\\msys)
+  string(HEX "${_msys_text}" _msys_narrow_hex)
+  string(TOLOWER "${_msys_narrow_hex}" _msys_narrow_hex)
+  _pure_reduce_utf16le_hex("${_msys_text}" _msys_utf16le_hex)
+  list(APPEND _msys_needles "${_msys_narrow_hex}" "${_msys_utf16le_hex}")
+endforeach()
+list(REMOVE_DUPLICATES _msys_needles)
+
+foreach(_installed IN LISTS _installed_files)
+  file(RELATIVE_PATH _relative "${_stage}" "${_installed}")
+  string(REPLACE "\\" "/" _relative "${_relative}")
+  string(TOLOWER "${_relative}" _relative_lower)
+  set(_file_msys_needles "${_msys_needles}")
+  if(_relative_lower MATCHES "\\.(dll|img|ttf|pfb|pfa|pfm)$")
+    # Toolchain provenance strings in binary debug records are not runtime
+    # search paths. Runtime transcripts below remain the MSYS2 boundary; all
+    # binary files are still byte-scanned for forbidden package prefixes.
+    set(_file_msys_needles "")
+  endif()
+  _pure_reduce_scan_file_bytes(
+    "${_installed}" "${_prefix_needles}" "${_file_msys_needles}" _byte_match)
+  if(_byte_match STREQUAL "prefix")
+    if(_relative_lower MATCHES "\\.(dll|img|ttf|pfb|pfa|pfm)$")
+      message(FATAL_ERROR
+        "installed binary content leaks a forbidden prefix: ${_relative}")
+    else()
+      message(FATAL_ERROR
+        "installed content leaks a forbidden prefix: ${_relative}")
+    endif()
+  elseif(_byte_match STREQUAL "msys")
+    message(FATAL_ERROR
+      "installed content contains a forbidden MSYS2 reference: ${_relative}")
+  endif()
 endforeach()
 
 set(PURE_REDUCE_LLVM_READOBJ "${_llvm_readobj}")
@@ -324,63 +613,14 @@ if(NOT DEFINED RUN_RUNTIME_TESTS OR RUN_RUNTIME_TESTS)
   set(ENV{PATH}
     "${_stage}/bin;C:/Windows/System32/WindowsPowerShell/v1.0;C:/Windows/System32;C:/Windows")
   set(ENV{PURELIB} "")
-  # Pure's Windows CLI cannot open a Unicode pathname supplied to -x/-I.
-  # Execute byte-for-byte copies of the manifest-verified staged Pure sources
-  # from a private ASCII build path. The DLL and image remain in the Unicode
-  # installed prefix, exercising the production wide-character startup path.
-  string(SHA256 _stage_key "${_stage}")
-  set(_script_run_dir
-    "${_build_dir}/installed-test-scripts-${_stage_key}")
-  file(REMOVE_RECURSE "${_script_run_dir}")
-  file(MAKE_DIRECTORY "${_script_run_dir}")
-  file(COPY_FILE "${_stage}/lib/pure/reduce.pure"
-    "${_script_run_dir}/reduce.pure")
-  # Pure resolves lib:reduce through the Windows basename search after finding
-  # the Pure source. Exercise the prescribed sanitized stage/bin PATH with a
-  # transient runtime view made only from already hash-verified payload bytes.
-  set(_stage_bin "${_stage}/bin")
-  set(_stage_bin_existed FALSE)
-  if(IS_DIRECTORY "${_stage_bin}")
-    set(_stage_bin_existed TRUE)
-  endif()
-  foreach(_runtime_name IN ITEMS reduce.dll reduce.img)
-    if(EXISTS "${_stage_bin}/${_runtime_name}")
-      message(FATAL_ERROR
-        "runtime verification would overwrite an installed file: "
-        "bin/${_runtime_name}")
-    endif()
-  endforeach()
-  file(MAKE_DIRECTORY "${_stage_bin}")
-  execute_process(
-    COMMAND "${CMAKE_COMMAND}" -E copy_if_different
-      "${_stage}/lib/pure/reduce.dll"
-      "${_stage}/lib/pure/reduce.img"
-      "${_stage_bin}"
-    RESULT_VARIABLE _runtime_copy_result
-    OUTPUT_VARIABLE _runtime_copy_output
-    ERROR_VARIABLE _runtime_copy_error
-    ENCODING UTF-8)
-  if(NOT _runtime_copy_result EQUAL 0)
-    file(REMOVE "${_stage_bin}/reduce.dll" "${_stage_bin}/reduce.img")
-    if(NOT _stage_bin_existed)
-      file(REMOVE_RECURSE "${_stage_bin}")
-    endif()
-    message(FATAL_ERROR
-      "unable to create sanitized runtime view (${_runtime_copy_result})\n"
-      "stdout:\n${_runtime_copy_output}\n"
-      "stderr:\n${_runtime_copy_error}")
-  endif()
   set(_runtime_failure "")
   foreach(_test_name IN ITEMS smoke lifecycle)
-    file(COPY_FILE
-      "${_stage}/share/doc/pure-reduce/tests/${_test_name}.pure"
-      "${_script_run_dir}/${_test_name}.pure")
     execute_process(
       COMMAND "${_pure_executable}" --norc -q
         -I "${_pure_library}"
-        -I "${_script_run_dir}"
+        -I "${_stage}/lib/pure"
         -L "${_stage}/lib/pure"
-        -x "${_script_run_dir}/${_test_name}.pure"
+        -x "${_stage}/share/doc/pure-reduce/tests/${_test_name}.pure"
       WORKING_DIRECTORY "C:/Windows"
       RESULT_VARIABLE _test_result
       OUTPUT_VARIABLE _test_output
@@ -411,10 +651,37 @@ if(NOT DEFINED RUN_RUNTIME_TESTS OR RUN_RUNTIME_TESTS)
       endif()
     endif()
   endforeach()
-  file(REMOVE "${_stage_bin}/reduce.dll" "${_stage_bin}/reduce.img")
-  if(NOT _stage_bin_existed)
-    file(REMOVE_RECURSE "${_stage_bin}")
+  file(GLOB_RECURSE _post_runtime_files LIST_DIRECTORIES FALSE "${_stage}/*")
+  set(_post_runtime_paths)
+  foreach(_post_runtime_file IN LISTS _post_runtime_files)
+    file(RELATIVE_PATH _post_runtime_relative
+      "${_stage}" "${_post_runtime_file}")
+    string(REPLACE "\\" "/" _post_runtime_relative
+      "${_post_runtime_relative}")
+    list(APPEND _post_runtime_paths "${_post_runtime_relative}")
+  endforeach()
+  list(SORT _post_runtime_paths COMPARE NATURAL CASE INSENSITIVE)
+  if(NOT _post_runtime_paths STREQUAL _sorted_expected_paths AND
+      _runtime_failure STREQUAL "")
+    set(_runtime_failure
+      "installed runtime changed the exact staged file set")
   endif()
+  foreach(_relative IN LISTS _expected_paths)
+    if(EXISTS "${_stage}/${_relative}" AND
+        NOT IS_DIRECTORY "${_stage}/${_relative}")
+      file(SHA256 "${_stage}/${_relative}" _post_runtime_sha)
+      string(TOLOWER "${_relative}" _relative_lower)
+      if(NOT _post_runtime_sha STREQUAL
+          "${_expected_sha_${_relative_lower}}" AND
+          _runtime_failure STREQUAL "")
+        set(_runtime_failure
+          "installed runtime changed staged payload bytes: ${_relative}")
+      endif()
+    elseif(_runtime_failure STREQUAL "")
+      set(_runtime_failure
+        "installed runtime removed staged payload: ${_relative}")
+    endif()
+  endforeach()
   if(NOT _runtime_failure STREQUAL "")
     message(FATAL_ERROR "${_runtime_failure}")
   endif()

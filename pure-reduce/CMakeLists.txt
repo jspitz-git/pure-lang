@@ -45,6 +45,11 @@ if(PURE_REDUCE_SOURCE_DIR)
     POSITION_INDEPENDENT_CODE YES)
   target_compile_definitions(pure-reduce-bridge-objects PRIVATE
     PURE_REDUCE_BUILDING)
+  target_compile_options(pure-reduce-bridge-objects PRIVATE
+    "-ffile-prefix-map=${CMAKE_CURRENT_LIST_DIR}=/usr/src/pure-reduce"
+    "-ffile-prefix-map=${CMAKE_CURRENT_BINARY_DIR}=/usr/src/pure-reduce-build"
+    "-fmacro-prefix-map=${CMAKE_CURRENT_LIST_DIR}=/usr/src/pure-reduce"
+    "-fmacro-prefix-map=${CMAKE_CURRENT_BINARY_DIR}=/usr/src/pure-reduce-build")
   target_include_directories(pure-reduce-bridge-objects PRIVATE
     "${CMAKE_CURRENT_LIST_DIR}/bridge"
     "${_pure_reduce_cslbase}")
@@ -88,6 +93,23 @@ if(PURE_REDUCE_SOURCE_DIR)
 endif()
 
 include("${CMAKE_CURRENT_LIST_DIR}/cmake/Install.cmake")
+
+if(TARGET reduce)
+  set(_pure_reduce_oracle_stage
+    "${CMAKE_CURRENT_BINARY_DIR}/package oracle generation stage")
+  add_custom_target(pure-reduce-package-oracles ALL
+    COMMAND "${CMAKE_COMMAND}"
+      "-DBUILD_DIR=${CMAKE_CURRENT_BINARY_DIR}"
+      "-DSTAGE_PREFIX=${_pure_reduce_oracle_stage}"
+      -P "${CMAKE_CURRENT_LIST_DIR}/cmake/GeneratePackageOracles.cmake"
+    BYPRODUCTS
+      "${CMAKE_CURRENT_BINARY_DIR}/PureReduceExpected.sha256"
+      "${CMAKE_CURRENT_BINARY_DIR}/PureReduceInventory.tsv"
+      "${CMAKE_CURRENT_BINARY_DIR}/PureReduceInstalledInventory.tsv"
+    COMMENT "Generating trusted PureReduce package oracles before tests"
+    VERBATIM)
+  add_dependencies(pure-reduce-package-oracles reduce)
+endif()
 
 include(CTest)
 if(BUILD_TESTING)
@@ -269,7 +291,7 @@ if(BUILD_TESTING)
         REQUIRED_FILES "$<TARGET_FILE:reduce>"
         TIMEOUT 120)
       set(_pure_reduce_installed_stage
-        "${CMAKE_CURRENT_BINARY_DIR}/installed PureReduce 日本語 stage")
+        "${CMAKE_CURRENT_BINARY_DIR}/installed PureReduce package stage")
       add_test(
         NAME pure-reduce-installed
         COMMAND "${CMAKE_COMMAND}"
@@ -296,6 +318,7 @@ if(BUILD_TESTING)
           "-DLLVM_READOBJ=${PURE_REDUCE_LLVM_READOBJ}"
           "-DSOURCE_PREFIX=${CMAKE_CURRENT_LIST_DIR}"
           "-DVERIFIER=${CMAKE_CURRENT_LIST_DIR}/cmake/VerifyInstalledPackage.cmake"
+          "-DORACLE_GENERATOR=${CMAKE_CURRENT_LIST_DIR}/cmake/GeneratePackageOracles.cmake"
           -P "${CMAKE_CURRENT_LIST_DIR}/tests/manifest-failures.cmake")
       set_tests_properties(pure-reduce-manifest-failures PROPERTIES
         FIXTURES_REQUIRED pure-reduce-installed-package
