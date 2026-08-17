@@ -102,11 +102,36 @@ pacman --noconfirm -S --needed \
 if ($LASTEXITCODE -ne 0) { throw 'MSYS2 prerequisite installation failed' }
 ```
 
+Expose the installed CLANG64 and MSYS2 tools to this PowerShell process, with
+CLANG64 first, and verify native tool discovery before configuring either
+project:
+
+```powershell
+$env:PATH = "C:/msys64/clang64/bin;C:/msys64/usr/bin;$env:PATH"
+$expectedTools = [ordered]@{
+  ninja = 'C:/msys64/clang64/bin/ninja.exe'
+  bison = 'C:/msys64/usr/bin/bison.exe'
+  flex = 'C:/msys64/usr/bin/flex.exe'
+  pkgconf = 'C:/msys64/clang64/bin/pkgconf.exe'
+}
+foreach ($tool in $expectedTools.Keys) {
+  $command = Get-Command $tool -CommandType Application `
+    -ErrorAction Stop | Select-Object -First 1
+  $actual = $command.Source.Replace('\', '/')
+  if ($actual -ine $expectedTools[$tool]) {
+    throw "$tool resolved outside C:/msys64: $actual"
+  }
+  & $actual --version
+  if ($LASTEXITCODE -ne 0) { throw "$tool version probe failed" }
+}
+```
+
 The validation workflow uses the officially supported
 `msys2/setup-msys2@v2` equivalent with `msystem: CLANG64`, `update: true`, the
 same exact package list, and an assertion that the reused runner installation
-is `C:/msys64`. Never use `pacman -Sy` to refresh the package database and then
-install only a subset of packages.
+is `C:/msys64`. It publishes the two directories above through
+`GITHUB_PATH` for later native PowerShell steps. Never use `pacman -Sy` to
+refresh the package database and then install only a subset of packages.
 
 `gcc-compat` is required even though the native compiler is Clang: one
 vendored upstream build rule invokes `g++`, and CLANG64 supplies the compatible

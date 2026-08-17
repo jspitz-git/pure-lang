@@ -91,6 +91,28 @@ jobs:
           if ($msys2Root -ine 'C:/msys64') {
             throw "setup-msys2 selected an unexpected root: $msys2Root"
           }
+          # The Actions runner prepends GITHUB_PATH entries in reverse write order.
+          'C:/msys64/usr/bin' |
+            Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          'C:/msys64/clang64/bin' |
+            Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          $env:PATH = "C:/msys64/clang64/bin;C:/msys64/usr/bin;$env:PATH"
+          $expectedTools = [ordered]@{
+            ninja = 'C:/msys64/clang64/bin/ninja.exe'
+            bison = 'C:/msys64/usr/bin/bison.exe'
+            flex = 'C:/msys64/usr/bin/flex.exe'
+            pkgconf = 'C:/msys64/clang64/bin/pkgconf.exe'
+          }
+          foreach ($tool in $expectedTools.Keys) {
+            $command = Get-Command $tool -CommandType Application `
+              -ErrorAction Stop | Select-Object -First 1
+            $actual = $command.Source.Replace('\', '/')
+            if ($actual -ine $expectedTools[$tool]) {
+              throw "$tool resolved outside C:/msys64: $actual"
+            }
+            & $actual --version
+            if ($LASTEXITCODE -ne 0) { throw "$tool version probe failed" }
+          }
           & C:/msys64/usr/bin/bash.exe --noprofile --norc -c @'
           set -euxo pipefail
           export MSYSTEM=CLANG64
