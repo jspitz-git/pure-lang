@@ -1,5 +1,43 @@
 cmake_minimum_required(VERSION 3.25)
 
+if(NOT DEFINED SMOKE_PORT_PROBE_TIMEOUT_SECONDS)
+  set(SMOKE_PORT_PROBE_TIMEOUT_SECONDS 3)
+endif()
+if(NOT DEFINED SMOKE_PURE_CHILD_TIMEOUT_SECONDS)
+  set(SMOKE_PURE_CHILD_TIMEOUT_SECONDS 20)
+endif()
+if(NOT DEFINED SMOKE_SETUP_CLEANUP_RESERVE_SECONDS)
+  set(SMOKE_SETUP_CLEANUP_RESERVE_SECONDS 5)
+endif()
+
+foreach(timeout_variable IN ITEMS
+    SMOKE_OUTER_TIMEOUT_SECONDS
+    SMOKE_PORT_PROBE_TIMEOUT_SECONDS
+    SMOKE_PURE_CHILD_TIMEOUT_SECONDS
+    SMOKE_SETUP_CLEANUP_RESERVE_SECONDS)
+  if(NOT DEFINED ${timeout_variable} OR
+     NOT "${${timeout_variable}}" MATCHES "^[1-9][0-9]*$")
+    message(FATAL_ERROR
+      "Smoke timeout budget invariant requires positive integer "
+      "${timeout_variable}; got [${${timeout_variable}}]")
+  endif()
+endforeach()
+
+math(EXPR smoke_composed_timeout_seconds
+  "${SMOKE_PORT_PROBE_TIMEOUT_SECONDS} + ${SMOKE_PURE_CHILD_TIMEOUT_SECONDS} + ${SMOKE_SETUP_CLEANUP_RESERVE_SECONDS}")
+if(smoke_composed_timeout_seconds GREATER_EQUAL SMOKE_OUTER_TIMEOUT_SECONDS)
+  message(FATAL_ERROR
+    "Smoke timeout budget invariant requires probe "
+    "(${SMOKE_PORT_PROBE_TIMEOUT_SECONDS}) + Pure child "
+    "(${SMOKE_PURE_CHILD_TIMEOUT_SECONDS}) + setup/cleanup reserve "
+    "(${SMOKE_SETUP_CLEANUP_RESERVE_SECONDS}) < outer CTest timeout "
+    "(${SMOKE_OUTER_TIMEOUT_SECONDS})")
+endif()
+
+if(SMOKE_BUDGET_CHECK_ONLY)
+  return()
+endif()
+
 foreach(required_path IN ITEMS
     PURE_EXECUTABLE MODULE_PATH WRAPPER_PATH SMOKE_SCRIPT)
   if(NOT DEFINED ${required_path} OR "${${required_path}}" STREQUAL "")
@@ -38,7 +76,7 @@ execute_process(
   RESULT_VARIABLE probe_result
   OUTPUT_VARIABLE probe_output
   ERROR_VARIABLE probe_error
-  TIMEOUT 5)
+  TIMEOUT ${SMOKE_PORT_PROBE_TIMEOUT_SECONDS})
 if(NOT probe_result STREQUAL "0" OR
    NOT probe_output MATCHES "^[0-9]+\\|[0-9]+\\|[0-9]+$")
   message(FATAL_ERROR
@@ -89,7 +127,7 @@ else()
       RESULT_VARIABLE smoke_result
       OUTPUT_VARIABLE smoke_output
       ERROR_VARIABLE smoke_error
-      TIMEOUT 25)
+      TIMEOUT ${SMOKE_PURE_CHILD_TIMEOUT_SECONDS})
     string(REPLACE "\r\n" "\n" smoke_output "${smoke_output}")
     if(NOT smoke_result STREQUAL "0")
       set(failure

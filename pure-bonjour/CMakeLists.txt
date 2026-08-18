@@ -61,6 +61,15 @@ if(BUILD_TESTING)
     LABELS "bonjour;lifecycle" TIMEOUT 10 ENVIRONMENT_MODIFICATION
     "PATH=path_list_prepend:${PURE_PREFIX}/bin")
 
+  set(PURE_BONJOUR_LOOPBACK_TIMEOUT_SECONDS 30)
+  add_test(NAME pure-bonjour-smoke-budget-contract
+    COMMAND "${CMAKE_COMMAND}"
+      "-DRUNNER=${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunSmokeTest.cmake"
+      "-DSMOKE_OUTER_TIMEOUT_SECONDS=${PURE_BONJOUR_LOOPBACK_TIMEOUT_SECONDS}"
+      -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/TestSmokeBudgets.cmake")
+  set_tests_properties(pure-bonjour-smoke-budget-contract PROPERTIES
+    LABELS "bonjour;unit" TIMEOUT 5)
+
   set(PURE_EXECUTABLE "${PURE_PREFIX}/bin/pure.exe")
   if(EXISTS "${PURE_EXECUTABLE}")
     add_test(NAME pure-bonjour-loopback
@@ -70,8 +79,10 @@ if(BUILD_TESTING)
         "-DWRAPPER_PATH=${CMAKE_CURRENT_SOURCE_DIR}/bonjour.pure"
         "-DSMOKE_SCRIPT=${CMAKE_CURRENT_SOURCE_DIR}/tests/smoke.pure"
         "-DSMOKE_ROOT=${CMAKE_CURRENT_BINARY_DIR}"
+        "-DSMOKE_OUTER_TIMEOUT_SECONDS=${PURE_BONJOUR_LOOPBACK_TIMEOUT_SECONDS}"
         -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunSmokeTest.cmake")
     set_tests_properties(pure-bonjour-loopback PROPERTIES
-      LABELS "bonjour;dnssd;integration" TIMEOUT 30)
+      LABELS "bonjour;dnssd;integration"
+      TIMEOUT ${PURE_BONJOUR_LOOPBACK_TIMEOUT_SECONDS})
   endif()
 endif()
