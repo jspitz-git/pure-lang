@@ -566,7 +566,7 @@ int wmain(int argc, wchar_t **argv) {
   }
   deadline_ms = fcgi_now_ms() +
                 (scenario == FCGI_SCENARIO_SUCCESS ? 15000
-                 : scenario == FCGI_SCENARIO_TRUNCATED ? 7000
+                 : scenario == FCGI_SCENARIO_TRUNCATED ? 9000
                                                        : 4000);
   if (swprintf(pipe_name, sizeof pipe_name / sizeof pipe_name[0],
                L"\\\\.\\pipe\\FastCGI\\pure-fastcgi-%lu-%ld",
@@ -656,6 +656,9 @@ int wmain(int argc, wchar_t **argv) {
       goto cleanup;
     }
     server = INVALID_HANDLE_VALUE;
+  }
+  if (scenario == FCGI_SCENARIO_TRUNCATED) {
+    Sleep(4500);
   }
   if (ResumeThread(process.hThread) == (DWORD)-1) {
     fprintf(stderr, "ResumeThread failed: %lu\n", GetLastError());
