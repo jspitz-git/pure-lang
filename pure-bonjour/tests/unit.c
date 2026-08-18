@@ -136,6 +136,23 @@ static void test_resolve_updates_existing_key(void)
   bonjour_results_clear(&set);
 }
 
+static void test_result_fqdn_keys_are_case_insensitive(void)
+{
+  bonjour_result_set_t set = {0};
+
+  assert(bonjour_results_put(&set, L"Probe._puretodo45._tcp.local", 7,
+                             "Probe", "_puretodo45._tcp", "local",
+                             "127.0.0.1", 41000) == 1);
+  assert(bonjour_results_put(&set, L"pROBE._PURETODO45._TCP.LOCAL", 7,
+                             "Probe", "_puretodo45._tcp", "local", "::1",
+                             41000) == 1);
+  assert(set.count == 1);
+  assert(strcmp(set.head->address, "::1") == 0);
+  assert(bonjour_results_remove(&set, L"PROBE._puretodo45._tcp.local", 7) ==
+         1);
+  assert(set.count == 0);
+}
+
 int main(void)
 {
   test_utf8_round_trips();
@@ -143,6 +160,7 @@ int main(void)
   test_status_errors();
   test_results_are_deep_owned_and_keyed_by_interface();
   test_resolve_updates_existing_key();
+  test_result_fqdn_keys_are_case_insensitive();
   puts("pure-bonjour unit tests passed");
   return 0;
 }

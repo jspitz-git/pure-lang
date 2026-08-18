@@ -89,10 +89,10 @@ an available Windows Bonjour implementation.
     interface entry for the matching FQDN.
   - Every non-null browse RR list is freed exactly once, and every non-null
     resolve instance is freed exactly once. IPv4 and IPv6 addresses use
-    `InetNtopA`. The installed Windows SDK declares `wPort` as the same `WORD`
-    used by construction and resolve; the registration fixture observes network
-    order and the resolve regression requires `ntohs(htons(41000)) == 41000` in
-    the Pure snapshot.
+    `InetNtopA`. Microsoft exposes the service port as an unqualified `WORD` and
+    `DnsServiceConstructInstance` copies it unchanged, so registration and
+    resolve use literal host-order values; deterministic regressions require
+    `43210` at construction and `41000` in the Pure snapshot.
   - Discovery cancellation marks closing under the SRW lock, invokes browse and
     resolver cancellation without the lock, and waits with a production limit of
     10 seconds for dispatches, callbacks, and resolver contexts to quiesce.
@@ -103,3 +103,10 @@ an available Windows Bonjour implementation.
     passed 10 consecutive runs in 30.85 seconds. The DLL exports exactly the
     seven bridge symbols: `bonjour_avail`, `bonjour_browse`, `bonjour_check`,
     `bonjour_close`, `bonjour_get`, `bonjour_publish`, and `bonjour_unpublish`.
+  - Fix round 1 strengthened callback and identity contracts. Browser cleanup now
+    requires the terminal `ERROR_CANCELLED` browse callback, resolver cancellation
+    receives the original resolver-owned cancel address, and case-insensitive
+    per-FQDN generations prevent add/delete races and late old resolves while
+    allowing remove/re-add. The Microsoft port `WORD` is now passed and read in
+    host order. The expanded 25-function deterministic suite passed 10 consecutive
+    runs in 23.69 seconds, and the exact seven-export audit remained unchanged.

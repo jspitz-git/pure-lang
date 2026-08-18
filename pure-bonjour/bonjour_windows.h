@@ -84,6 +84,7 @@ typedef struct {
                                PDNS_SERVICE_CANCEL);
   DNS_STATUS (WINAPI *cancel_resolve)(PDNS_SERVICE_CANCEL);
   VOID (WINAPI *free_records)(PDNS_RECORD, DNS_FREE_TYPE);
+  VOID (WINAPI *before_resolver_link)(void);
 } bonjour_dns_api_t;
 
 BONJOUR_WINDOWS_PRIVATE bonjour_service_t *bonjour_publish_with_api(

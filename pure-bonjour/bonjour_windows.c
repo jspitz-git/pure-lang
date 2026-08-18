@@ -33,6 +33,14 @@ typedef struct {
 #endif
 
 typedef struct bonjour_resolver_t bonjour_resolver_t;
+typedef struct bonjour_name_state_t bonjour_name_state_t;
+
+struct bonjour_name_state_t {
+  bonjour_name_state_t *next;
+  wchar_t *fqdn;
+  uint64_t generation;
+  int present;
+};
 
 struct bonjour_resolver_t {
   bonjour_resolver_t *next;
@@ -41,9 +49,9 @@ struct bonjour_resolver_t {
   DNS_SERVICE_CANCEL cancel;
   wchar_t *fqdn;
   DWORD interface_index;
+  uint64_t generation;
   int dispatching;
   int completed;
-  int removed;
 };
 
 struct bonjour_browser_t {
@@ -54,11 +62,13 @@ struct bonjour_browser_t {
   bonjour_result_set_t results;
   bonjour_resolver_t *resolvers;
   bonjour_resolver_t *retired;
+  bonjour_name_state_t *names;
   DWORD status;
   unsigned callbacks;
   unsigned dispatches;
   int avail;
   int closing;
+  int browse_cancel_acknowledged;
   const bonjour_dns_api_t *api;
   DWORD wait_ms;
 };
@@ -106,6 +116,9 @@ static const bonjour_dns_api_t bonjour_system_dns_api = {
   DnsServiceResolve,
   DnsServiceResolveCancel,
   bonjour_system_free_records,
+#ifdef BONJOUR_WINDOWS_TESTING
+  NULL,
+#endif
 };
 
 static char *bonjour_string_duplicate(const char *text)
@@ -121,14 +134,15 @@ static char *bonjour_string_duplicate(const char *text)
   return copy;
 }
 
+static int bonjour_fqdn_equal(const wchar_t *left, const wchar_t *right)
+{
+  if (left == NULL || right == NULL) return 0;
+  return CompareStringOrdinal(left, -1, right, -1, TRUE) == CSTR_EQUAL;
+}
+
 static int bonjour_request_accepted(DWORD status)
 {
   return status == ERROR_SUCCESS || status == DNS_REQUEST_PENDING;
-}
-
-static WORD bonjour_network_port(uint16_t port)
-{
-  return (WORD)((port << 8) | (port >> 8));
 }
 
 static void WINAPI bonjour_register_complete(DWORD status, void *context,
@@ -228,7 +242,7 @@ static bonjour_service_t *bonjour_publish_using_api(
   }
 
   service->instance = api->construct_instance(
-      fqdn, NULL, NULL, NULL, bonjour_network_port((uint16_t)port), 0, 0, 0,
+      fqdn, NULL, NULL, NULL, (WORD)port, 0, 0, 0,
       NULL, NULL);
   free(fqdn);
   if (service->instance == NULL) {
@@ -463,7 +477,7 @@ BONJOUR_WINDOWS_PRIVATE int bonjour_results_put(
     return -1;
   for (result = set->head; result != NULL; result = result->next)
     if (result->interface_index == interface_index &&
-        wcscmp(result->fqdn, fqdn) == 0)
+        bonjour_fqdn_equal(result->fqdn, fqdn))
       break;
   if (result != NULL && strcmp(result->name, name) == 0 &&
       strcmp(result->type, type) == 0 && strcmp(result->domain, domain) == 0 &&
@@ -526,7 +540,7 @@ BONJOUR_WINDOWS_PRIVATE int bonjour_results_remove(
     bonjour_result_t *result = *link;
 
     if (result->interface_index != interface_index ||
-        wcscmp(result->fqdn, fqdn) != 0)
+        !bonjour_fqdn_equal(result->fqdn, fqdn))
       continue;
     *link = result->next;
     bonjour_result_free(result);
@@ -557,7 +571,7 @@ static int bonjour_results_remove_fqdn(bonjour_result_set_t *set,
   while (*link != NULL) {
     bonjour_result_t *result = *link;
 
-    if (wcscmp(result->fqdn, fqdn) != 0) {
+    if (!bonjour_fqdn_equal(result->fqdn, fqdn)) {
       link = &result->next;
       continue;
     }
@@ -567,6 +581,81 @@ static int bonjour_results_remove_fqdn(bonjour_result_set_t *set,
     changed = 1;
   }
   return changed;
+}
+
+static bonjour_name_state_t *bonjour_name_find_locked(
+    bonjour_browser_t *browser, const wchar_t *fqdn)
+{
+  bonjour_name_state_t *state;
+
+  for (state = browser->names; state != NULL; state = state->next)
+    if (bonjour_fqdn_equal(state->fqdn, fqdn)) return state;
+  return NULL;
+}
+
+static bonjour_name_state_t *bonjour_name_get_locked(
+    bonjour_browser_t *browser, const wchar_t *fqdn)
+{
+  bonjour_name_state_t *state = bonjour_name_find_locked(browser, fqdn);
+
+  if (state != NULL) return state;
+  state = calloc(1, sizeof(*state));
+  if (state == NULL) return NULL;
+  state->fqdn = bonjour_wide_duplicate_range(fqdn, wcslen(fqdn));
+  if (state->fqdn == NULL) {
+    free(state);
+    return NULL;
+  }
+  state->next = browser->names;
+  browser->names = state;
+  return state;
+}
+
+static int bonjour_name_add_locked(bonjour_browser_t *browser,
+                                   const wchar_t *fqdn,
+                                   uint64_t *generation)
+{
+  bonjour_name_state_t *state = bonjour_name_get_locked(browser, fqdn);
+
+  if (state == NULL || generation == NULL) return 0;
+  if (!state->present) {
+    if (state->generation == UINT64_MAX) return 0;
+    ++state->generation;
+    state->present = 1;
+  }
+  *generation = state->generation;
+  return 1;
+}
+
+static int bonjour_name_delete_locked(bonjour_browser_t *browser,
+                                      const wchar_t *fqdn)
+{
+  bonjour_name_state_t *state = bonjour_name_get_locked(browser, fqdn);
+
+  if (state == NULL || state->generation == UINT64_MAX) return 0;
+  ++state->generation;
+  state->present = 0;
+  return 1;
+}
+
+static int bonjour_name_is_current_locked(bonjour_browser_t *browser,
+                                          const wchar_t *fqdn,
+                                          uint64_t generation)
+{
+  bonjour_name_state_t *state = bonjour_name_find_locked(browser, fqdn);
+
+  return state != NULL && state->present && state->generation == generation;
+}
+
+static void bonjour_names_clear(bonjour_browser_t *browser)
+{
+  bonjour_name_state_t *state;
+
+  while ((state = browser->names) != NULL) {
+    browser->names = state->next;
+    free(state->fqdn);
+    free(state);
+  }
 }
 
 static void bonjour_resolver_free(bonjour_resolver_t *resolver)
@@ -625,12 +714,14 @@ static void WINAPI bonjour_resolve_complete(DWORD status, void *context,
                         sizeof(address)) != NULL;
     if (valid) {
       interface_index = instance->dwInterfaceIndex;
-      port = ntohs(instance->wPort);
+      port = instance->wPort;
     }
   }
 
   AcquireSRWLockExclusive(&browser->lock);
-  if (valid && !browser->closing && !resolver->removed) {
+  if (valid && !browser->closing &&
+      bonjour_name_is_current_locked(browser, resolver->fqdn,
+                                     resolver->generation)) {
     int changed = bonjour_results_put(
         &browser->results, instance->pszInstanceName, interface_index, name,
         type, domain, address, port);
@@ -664,7 +755,8 @@ static void WINAPI bonjour_resolve_complete(DWORD status, void *context,
 
 static void bonjour_start_resolver(bonjour_browser_t *browser,
                                    const wchar_t *fqdn,
-                                   DWORD interface_index)
+                                   DWORD interface_index,
+                                   uint64_t generation)
 {
   bonjour_resolver_t *resolver;
   bonjour_resolver_t *scan;
@@ -681,17 +773,25 @@ static void bonjour_start_resolver(bonjour_browser_t *browser,
   }
   resolver->browser = browser;
   resolver->interface_index = interface_index;
+  resolver->generation = generation;
   resolver->dispatching = 1;
 
+#ifdef BONJOUR_WINDOWS_TESTING
+  if (browser->api->before_resolver_link != NULL)
+    browser->api->before_resolver_link();
+#endif
+
   AcquireSRWLockExclusive(&browser->lock);
-  if (browser->closing) {
+  if (browser->closing ||
+      !bonjour_name_is_current_locked(browser, fqdn, generation)) {
     ReleaseSRWLockExclusive(&browser->lock);
     bonjour_resolver_free(resolver);
     return;
   }
   for (scan = browser->resolvers; scan != NULL; scan = scan->next) {
     if (scan->interface_index == interface_index &&
-        wcscmp(scan->fqdn, fqdn) == 0) {
+        scan->generation == generation &&
+        bonjour_fqdn_equal(scan->fqdn, fqdn)) {
       ReleaseSRWLockExclusive(&browser->lock);
       bonjour_resolver_free(resolver);
       return;
@@ -735,6 +835,8 @@ static void WINAPI bonjour_browse_complete(DWORD status, void *context,
 
   AcquireSRWLockExclusive(&browser->lock);
   ++browser->callbacks;
+  if (browser->closing && status == ERROR_CANCELLED)
+    browser->browse_cancel_acknowledged = 1;
   if (status != ERROR_SUCCESS && status != ERROR_CANCELLED &&
       browser->status == ERROR_SUCCESS && !browser->closing) {
     browser->status = status;
@@ -747,22 +849,29 @@ static void WINAPI bonjour_browse_complete(DWORD status, void *context,
       const wchar_t *target;
       if (record->wType != DNS_TYPE_PTR || record->pName == NULL ||
           record->Data.PTR.pNameHost == NULL ||
-          _wcsicmp(record->pName, browser->type_fqdn) != 0)
+          !bonjour_fqdn_equal(record->pName, browser->type_fqdn))
         continue;
       target = record->Data.PTR.pNameHost;
       if (record->Flags.S.Delete) {
-        bonjour_resolver_t *resolver;
-
         AcquireSRWLockExclusive(&browser->lock);
-        for (resolver = browser->resolvers; resolver != NULL;
-             resolver = resolver->next)
-          if (wcscmp(resolver->fqdn, target) == 0)
-            resolver->removed = 1;
+        if (!bonjour_name_delete_locked(browser, target) &&
+            browser->status == ERROR_SUCCESS)
+          browser->status = ERROR_NOT_ENOUGH_MEMORY;
         if (bonjour_results_remove_fqdn(&browser->results, target))
           browser->avail = 1;
         ReleaseSRWLockExclusive(&browser->lock);
       } else {
-        bonjour_start_resolver(browser, target, 0);
+        uint64_t generation = 0;
+        int valid_generation;
+
+        AcquireSRWLockExclusive(&browser->lock);
+        valid_generation = bonjour_name_add_locked(browser, target,
+                                                   &generation);
+        if (!valid_generation && browser->status == ERROR_SUCCESS)
+          browser->status = ERROR_NOT_ENOUGH_MEMORY;
+        ReleaseSRWLockExclusive(&browser->lock);
+        if (valid_generation)
+          bonjour_start_resolver(browser, target, 0, generation);
       }
     }
   }
@@ -885,14 +994,17 @@ pure_expr *bonjour_get(bonjour_browser_t *browser)
 }
 
 static int bonjour_browser_wait(bonjour_browser_t *browser,
-                                int require_empty_resolvers)
+                                int require_empty_resolvers,
+                                int require_browse_cancel_ack)
 {
   ULONGLONG started = GetTickCount64();
   int quiescent = 1;
 
   AcquireSRWLockExclusive(&browser->lock);
   while (browser->callbacks != 0 || browser->dispatches != 0 ||
-         (require_empty_resolvers && browser->resolvers != NULL)) {
+         (require_empty_resolvers && browser->resolvers != NULL) ||
+         (require_browse_cancel_ack &&
+          !browser->browse_cancel_acknowledged)) {
     ULONGLONG elapsed = GetTickCount64() - started;
     DWORD remaining;
 
@@ -914,7 +1026,7 @@ static int bonjour_browser_wait(bonjour_browser_t *browser,
 
 void bonjour_close(bonjour_browser_t *browser)
 {
-  DNS_SERVICE_CANCEL *resolver_cancels = NULL;
+  PDNS_SERVICE_CANCEL *resolver_cancels = NULL;
   bonjour_resolver_t *resolver;
   bonjour_resolver_t *retired;
   size_t resolver_count = 0;
@@ -929,10 +1041,11 @@ void bonjour_close(bonjour_browser_t *browser)
     return;
   }
   browser->closing = 1;
+  browser->browse_cancel_acknowledged = 0;
   ReleaseSRWLockExclusive(&browser->lock);
 
   browse_status = browser->api->cancel_browse(&browser->cancel);
-  if (!bonjour_browser_wait(browser, 0)) goto retain;
+  if (!bonjour_browser_wait(browser, 0, 1)) goto retain;
 
   AcquireSRWLockShared(&browser->lock);
   for (resolver = browser->resolvers; resolver != NULL; resolver = resolver->next)
@@ -947,11 +1060,11 @@ void bonjour_close(bonjour_browser_t *browser)
     AcquireSRWLockShared(&browser->lock);
     for (resolver = browser->resolvers; resolver != NULL && i < resolver_count;
          resolver = resolver->next)
-      resolver_cancels[i++] = resolver->cancel;
+      resolver_cancels[i++] = &resolver->cancel;
     ReleaseSRWLockShared(&browser->lock);
     resolver_count = i;
     for (i = 0; i < resolver_count; ++i) {
-      DNS_STATUS status = browser->api->cancel_resolve(&resolver_cancels[i]);
+      DNS_STATUS status = browser->api->cancel_resolve(resolver_cancels[i]);
       if (!bonjour_request_accepted((DWORD)status) &&
           bonjour_request_accepted((DWORD)resolver_status))
         resolver_status = status;
@@ -961,10 +1074,11 @@ void bonjour_close(bonjour_browser_t *browser)
   resolver_cancels = NULL;
   if (!bonjour_request_accepted((DWORD)browse_status) ||
       !bonjour_request_accepted((DWORD)resolver_status) ||
-      !bonjour_browser_wait(browser, 1))
+      !bonjour_browser_wait(browser, 1, 1))
     goto retain;
 
   bonjour_results_clear(&browser->results);
+  bonjour_names_clear(browser);
   while ((retired = browser->retired) != NULL) {
     browser->retired = retired->retired_next;
     bonjour_resolver_free(retired);
