@@ -40,6 +40,7 @@ static void test_names(void)
   char *split_type = NULL;
   char *domain = NULL;
   char too_long_type[71];
+  char too_long_instance[65];
   char too_long_name[240];
 
   assert(type != NULL);
@@ -64,6 +65,12 @@ static void test_names(void)
   memset(too_long_type + 1, 'a', 63);
   memcpy(too_long_type + 64, "._tcp", 6);
   assert(bonjour_make_type_fqdn(too_long_type) == NULL);
+
+  memset(too_long_instance, 'a', sizeof(too_long_instance) - 1);
+  too_long_instance[sizeof(too_long_instance) - 1] = '\0';
+  assert(bonjour_make_instance_fqdn(too_long_instance,
+                                    "_puretodo45._tcp") == NULL);
+  assert(bonjour_make_instance_fqdn("Probe.raw", "_puretodo45._tcp") == NULL);
 
   memset(too_long_name, 'a', sizeof(too_long_name) - 1);
   too_long_name[sizeof(too_long_name) - 1] = '\0';

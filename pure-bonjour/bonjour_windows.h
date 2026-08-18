@@ -13,7 +13,9 @@
 BONJOUR_WINDOWS_PRIVATE wchar_t *bonjour_utf8_to_wide(const char *utf8);
 BONJOUR_WINDOWS_PRIVATE char *bonjour_wide_to_utf8(const wchar_t *wide);
 
-/* Each FQDN result is heap allocated and must be released with free(). */
+/* Each FQDN result is heap allocated and must be released with free().
+   Instance names are one raw UTF-8 DNS-SD label (at most 63 bytes); raw dots
+   are rejected because this private helper has no escaping contract. */
 BONJOUR_WINDOWS_PRIVATE wchar_t *bonjour_make_type_fqdn(const char *type);
 BONJOUR_WINDOWS_PRIVATE wchar_t *bonjour_make_instance_fqdn(const char *name,
                                                             const char *type);

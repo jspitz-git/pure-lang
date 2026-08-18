@@ -26,7 +26,7 @@ if(BUILD_TESTING)
   target_compile_features(pure-bonjour-unit PRIVATE c_std_11)
   target_compile_definitions(pure-bonjour-unit PRIVATE
     _WIN32_WINNT=0x0A00 BONJOUR_WINDOWS_TESTING)
-  target_compile_options(pure-bonjour-unit PRIVATE -Wall -Wextra -Werror)
+  target_compile_options(pure-bonjour-unit PRIVATE -Wall -Wextra -Werror -UNDEBUG)
   target_include_directories(pure-bonjour-unit PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
   target_link_libraries(pure-bonjour-unit PRIVATE PkgConfig::PURE dnsapi ws2_32)
   add_test(NAME pure-bonjour-unit COMMAND pure-bonjour-unit)

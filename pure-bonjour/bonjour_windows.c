@@ -29,6 +29,15 @@ static int bonjour_service_type_valid(const char *type)
   return 1;
 }
 
+static int bonjour_instance_label_valid(const char *name)
+{
+  size_t length;
+
+  if (name == NULL || name[0] == '\0' || strchr(name, '.') != NULL) return 0;
+  length = strlen(name);
+  return length <= 63;
+}
+
 static wchar_t *bonjour_wide_duplicate_range(const wchar_t *text, size_t length)
 {
   wchar_t *copy;
@@ -107,7 +116,7 @@ BONJOUR_WINDOWS_PRIVATE wchar_t *bonjour_make_instance_fqdn(const char *name,
   char *utf8_fqdn;
   wchar_t *wide_fqdn;
 
-  if (name == NULL || name[0] == '\0' || !bonjour_service_type_valid(type))
+  if (!bonjour_instance_label_valid(name) || !bonjour_service_type_valid(type))
     return NULL;
   name_length = strlen(name);
   type_length = strlen(type);
