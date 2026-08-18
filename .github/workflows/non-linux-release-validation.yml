@@ -95,6 +95,8 @@ jobs:
             -DCMAKE_BUILD_TYPE=Release `
             -DCMAKE_C_COMPILER=C:/msys64/clang64/bin/clang.exe `
             -DCMAKE_CXX_COMPILER=C:/msys64/clang64/bin/clang++.exe `
+            -DBISON_EXECUTABLE=C:/msys64/usr/bin/bison.exe `
+            -DFLEX_EXECUTABLE=C:/msys64/usr/bin/flex.exe `
             -DLLVM_DIR=C:/msys64/clang64/lib/cmake/llvm `
             "-DCMAKE_INSTALL_PREFIX=$purePrefix" `
             -DPURE_STRICT_TOOLCHAIN=ON

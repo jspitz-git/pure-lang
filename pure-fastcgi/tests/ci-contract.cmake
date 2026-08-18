@@ -59,6 +59,8 @@ require_text("${job}" JOB
 extract_step("Build and install the matching Windows Pure runtime" pure_step)
 require_text("${pure_step}" PURE "-S pure" "-G Ninja"
   "C:/msys64/clang64/bin/clang.exe" "C:/msys64/clang64/bin/clang++.exe"
+  "-DBISON_EXECUTABLE=C:/msys64/usr/bin/bison.exe"
+  "-DFLEX_EXECUTABLE=C:/msys64/usr/bin/flex.exe"
   "--build $pureBuild --parallel 1" "--install $pureBuild"
   "PURE_FASTCGI_PURE_PREFIX=" "PURE_BUILD_SECONDS=")
 extract_step("Explicitly fetch and verify pinned fcgi2" fetch_step)
@@ -101,6 +103,8 @@ if(NOT MUTATION_MODE)
     "FCGI2_COMMIT: 47f2c03b7771f0ef61d887734ef91e6fa747f837"
     "FCGI2_SIZE: 263969"
     "FCGI2_SHA256: e41ddc3a473b555bdc0cbd80703dcb1f4610c1a7700d3b9d3d0c14a416e1074b"
+    "-DBISON_EXECUTABLE=C:/msys64/usr/bin/bison.exe"
+    "-DFLEX_EXECUTABLE=C:/msys64/usr/bin/flex.exe"
     "--install $pureBuild" "PURE_FASTCGI_PURE_PREFIX="
     "FetchFcgi2Entry.cmake" "PURE_FASTCGI_FCGI2_ARCHIVE="
     "-L fastcgi" "--component PureFastCGI" "Remove-Item Env:PURELIB"
