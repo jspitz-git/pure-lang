@@ -17,18 +17,24 @@ function(pure_fastcgi_fetch_fcgi2)
   endif()
 
   set(part "${arg_OUTPUT}.part")
-  file(DOWNLOAD "${PURE_FASTCGI_FCGI2_URL}" "${part}"
-    EXPECTED_HASH "SHA256=${PURE_FASTCGI_FCGI2_ARCHIVE_SHA256}"
-    STATUS status)
-  list(GET status 0 status_code)
-  list(GET status 1 status_message)
-  if(NOT status_code EQUAL 0)
-    message(FATAL_ERROR "fcgi2 archive download failed: ${status_message}")
+  if(NOT EXISTS "${part}")
+    file(DOWNLOAD "${PURE_FASTCGI_FCGI2_URL}" "${part}"
+      EXPECTED_HASH "SHA256=${PURE_FASTCGI_FCGI2_ARCHIVE_SHA256}"
+      STATUS status)
+    list(GET status 0 status_code)
+    list(GET status 1 status_message)
+    if(NOT status_code EQUAL 0)
+      message(FATAL_ERROR "fcgi2 archive download failed: ${status_message}")
+    endif()
   endif()
 
   file(SIZE "${part}" actual_size)
+  file(SHA256 "${part}" actual_sha256)
   if(NOT actual_size EQUAL PURE_FASTCGI_FCGI2_ARCHIVE_SIZE)
-    message(FATAL_ERROR "fcgi2 archive size mismatch")
+    message(FATAL_ERROR "fcgi2 partial archive size mismatch")
+  endif()
+  if(NOT actual_sha256 STREQUAL PURE_FASTCGI_FCGI2_ARCHIVE_SHA256)
+    message(FATAL_ERROR "fcgi2 partial archive SHA-256 mismatch")
   endif()
   file(RENAME "${part}" "${arg_OUTPUT}")
 endfunction()

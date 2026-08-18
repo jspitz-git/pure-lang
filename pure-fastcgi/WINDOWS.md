@@ -1,8 +1,9 @@
 # Building PureFastCGI on Windows
 
-PureFastCGI is supported as an optional 64-bit Windows component for the
-MSYS2 CLANG64 Pure distribution. It embeds the required fcgi2 2.4.7 C sources
-in `fastcgi.dll`; no separate `libfcgi.dll` is installed or loaded.
+PureFastCGI is a candidate optional 64-bit Windows component for the MSYS2
+CLANG64 Pure distribution. The candidate build embeds the required fcgi2
+2.4.7 C sources in `fastcgi.dll`; it is designed not to install or load a
+separate `libfcgi.dll`. Shipping remains conditional on clean-runner evidence.
 
 The commands below are PowerShell commands. They deliberately keep source,
 build, and staging paths containing spaces. Replace `C:/pure-lang` and the
@@ -27,10 +28,10 @@ $archive = "$repo/build/deps/fcgi2-2.4.7.tar.gz"
 New-Item -ItemType Directory -Path (Split-Path $archive) -Force | Out-Null
 & C:/msys64/clang64/bin/cmake.exe `
   "-DOUTPUT=$archive" `
-  -P "$repo/pure-fastcgi/cmake/FetchFcgi2.cmake"
+  -P "$repo/pure-fastcgi/cmake/FetchFcgi2Entry.cmake"
 ```
 
-The helper accepts only release 2.4.7, commit
+The entry point invokes the fetch helper and accepts only release 2.4.7, commit
 `47f2c03b7771f0ef61d887734ef91e6fa747f837`, URL
 `https://github.com/FastCGI-Archives/fcgi2/archive/refs/tags/2.4.7.tar.gz`,
 size `263969`, and SHA-256
@@ -101,15 +102,17 @@ try {
 }
 ```
 
-An unqualified install excludes PureFastCGI. Consumers must explicitly select
-component `PureFastCGI`. The component owns exactly the files declared by its
-external build oracle and installed inventory.
+In the candidate build, an unqualified install excludes PureFastCGI and local
+validation explicitly selects component `PureFastCGI`. Its planned ownership
+boundary is exactly the files declared by the external build oracle and
+installed inventory. This is not a shipping claim before clean CI evidence.
 
 ## Deployment boundary
 
-The component supplies the Pure module and its provenance documents only. It
-does not install, configure, or validate IIS, Apache, nginx, or any other web
-server. Deployment must separately provide and configure a FastCGI listener
+The proposed component would supply the Pure module and provenance documents
+only. It is not intended to install, configure, or validate IIS, Apache,
+nginx, or any other web server. A deployment would need to separately provide
+and configure a FastCGI listener
 compatible with the standard FastCGI responder protocol and must arrange the
 process environment, permissions, request limits, logging, and supervision.
 The local named-pipe harness is a protocol test tool, not a production server.

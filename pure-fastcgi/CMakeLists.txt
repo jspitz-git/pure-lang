@@ -70,6 +70,16 @@ if(BUILD_TESTING)
   set_tests_properties(pure-fastcgi-ci-contract PROPERTIES
     LABELS "fastcgi;ci;contract"
     TIMEOUT 20)
+  add_test(
+    NAME pure-fastcgi-fetch-entry
+    COMMAND "${CMAKE_COMMAND}"
+      "-DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
+      "-DFCGI2_ARCHIVE=${PURE_FASTCGI_FCGI2_ARCHIVE}"
+      "-DTEST_ROOT=${CMAKE_CURRENT_BINARY_DIR}/fetch-entry"
+      -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/fetch-entry.cmake")
+  set_tests_properties(pure-fastcgi-fetch-entry PROPERTIES
+    LABELS "fastcgi;source;fetch;contract"
+    TIMEOUT 20)
 
   add_executable(pure-fastcgi-protocol-harness
     tests/protocol_harness.c)

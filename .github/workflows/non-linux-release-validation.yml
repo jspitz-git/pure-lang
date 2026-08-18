@@ -115,14 +115,8 @@ jobs:
           $repo = (Get-Location).Path
           $archive = Join-Path (Get-Location).Path 'build/deps/fcgi2-2.4.7.tar.gz'
           New-Item -ItemType Directory -Path (Split-Path $archive) -Force | Out-Null
-          $fetchDriver = Join-Path (Split-Path $archive) 'fetch-fcgi2.cmake'
-          $includePath = (Join-Path $repo 'pure-fastcgi/cmake/FetchFcgi2.cmake').Replace('\', '/')
-          $archivePath = $archive.Replace('\', '/')
-          @"
-          include("$includePath")
-          pure_fastcgi_fetch_fcgi2(OUTPUT "$archivePath")
-          "@ | Set-Content -LiteralPath $fetchDriver -Encoding utf8
-          & $env:CMAKE_EXE -P $fetchDriver
+          & $env:CMAKE_EXE "-DOUTPUT=$archive" `
+            -P pure-fastcgi/cmake/FetchFcgi2Entry.cmake
           if ($LASTEXITCODE -ne 0) { throw 'explicit fcgi2 fetch failed' }
           $item = Get-Item -LiteralPath $archive
           $hash = (Get-FileHash $archive -Algorithm SHA256).Hash.ToLowerInvariant()

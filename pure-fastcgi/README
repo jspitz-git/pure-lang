@@ -32,15 +32,18 @@ Installation
 Windows
 -------
 
-On 64-bit Windows, the CMake build provides the optional ``PureFastCGI``
-component for the MSYS2 CLANG64 Pure distribution. It statically embeds the
-pinned fcgi2 implementation, so users do not install a separate FastCGI DLL.
-See ``WINDOWS.md`` for reproducible fetch, build, test, staging, and installed
-verification commands.
+On 64-bit Windows, the CMake work prepares a candidate optional
+``PureFastCGI`` component for the MSYS2 CLANG64 Pure distribution. The
+candidate statically embeds the pinned fcgi2 implementation and is designed
+not to install a separate FastCGI DLL. It is not advertised as supported or
+shippable until the clean Windows job and downloaded artifact verification
+succeed. See ``WINDOWS.md`` in the source tree for reproducible local fetch,
+build, test, staging, and installed verification commands.
 
-The Windows component does not install or configure IIS, Apache, nginx, or
-another web server. Deployment must provide a compatible FastCGI listener;
-the included named-pipe harness is for bounded protocol validation only.
+The proposed Windows component is not intended to install or configure IIS,
+Apache, nginx, or another web server. A future deployment would have to provide
+a compatible FastCGI listener; the included named-pipe harness is only for
+bounded local protocol validation.
 
 Other systems
 -------------
