@@ -207,6 +207,8 @@ jobs:
           }
           $queue = [Collections.Generic.Queue[string]]::new()
           $visited = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+          $resolvedRuntimeNames = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+          $expectedRuntimeImports = @('libpure.dll', 'libmpfr-6.dll', 'libgmp-10.dll')
           $queue.Enqueue($module)
           $importSections = [Collections.Generic.List[string]]::new()
           while ($queue.Count -gt 0) {
@@ -222,12 +224,27 @@ jobs:
               "runtime/" + [IO.Path]::GetRelativePath("$env:PURE_FASTCGI_PURE_PREFIX/bin", $pe).Replace('\', '/')
             }
             $importSections.Add("===== $relativePe =====`n$readobj")
-            foreach ($match in [regex]::Matches($readobj, 'DLLName:\s*([^\r\n]+)', 'IgnoreCase')) {
+            $importMatches = [regex]::Matches(
+              $readobj, '(?ms)^Import \{\r?\n\s{2}Name:\s*([^\r\n]+)\r?\n.*?^\}')
+            if ($pe -eq $module -and $importMatches.Count -eq 0) {
+              throw 'fastcgi.dll imports did not match the expected llvm-readobj Import format'
+            }
+            foreach ($match in $importMatches) {
               $name = $match.Groups[1].Value.Trim().ToLowerInvariant()
-              if ($peByName.ContainsKey($name)) { $queue.Enqueue($peByName[$name]) }
+              if ($peByName.ContainsKey($name)) {
+                $resolvedRuntimeNames.Add($name) | Out-Null
+                $queue.Enqueue($peByName[$name])
+              }
             }
           }
-          if ($visited.Count -lt 1) { throw 'recursive PE import closure is empty' }
+          foreach ($expectedRuntime in $expectedRuntimeImports) {
+            if (-not $resolvedRuntimeNames.Contains($expectedRuntime)) {
+              throw "recursive PE import closure did not resolve runtime dependencies: $expectedRuntime"
+            }
+          }
+          if ($visited.Count -le 1) {
+            throw 'recursive PE import closure did not resolve runtime dependencies'
+          }
           $imports = $importSections -join "`n"
           $compiler = (& C:/msys64/clang64/bin/clang.exe --version | Select-Object -First 1)
           $cmakeVersion = (& $env:CMAKE_EXE --version | Select-Object -First 1)

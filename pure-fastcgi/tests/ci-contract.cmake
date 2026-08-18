@@ -98,8 +98,13 @@ require_text("${metrics_step}" METRICS "clang.exe --version" "cmakeVersion"
   "ninjaVersion" "pkgconfVersion" "gmpVersion" "mpfrVersion"
   "PURE_BUILD_SECONDS" "FASTCGI_BUILD_SECONDS" "workers: $env:PURE_BUILD_SECONDS / 1"
   "module bytes / stage bytes / staged files" "files.Count -ne 6"
-  "inventory SHA-256" "Collections.Generic.Queue[string]" "DLLName:\\s*"
-  "recursive PE import closure is empty" "Complete fastcgi.dll imports")
+  "inventory SHA-256" "Collections.Generic.Queue[string]"
+  "^Import \\{\\r?\\n\\s{2}Name:"
+  "importMatches.Count -eq 0" "expectedRuntimeImports"
+  "resolvedRuntimeNames" "visited.Count -le 1"
+  "recursive PE import closure did not resolve runtime dependencies"
+  "Complete fastcgi.dll imports")
+reject_text("${metrics_step}" METRICS "DLLName:")
 extract_step("Create the deterministic PureFastCGI ZIP twice" zip_step)
 require_text("${zip_step}" ZIP "windows-pure-fastcgi-first.zip"
   "windows-pure-fastcgi-second.zip" "[Array]::Sort($relative, [StringComparer]::Ordinal)"
@@ -129,7 +134,10 @@ if(NOT MUTATION_MODE)
     "-DORIGINAL_BUILD_PREFIX=$env:PURE_FASTCGI_BUILD"
     "-DORIGINAL_STAGE_PREFIX=$stage"
     "RUN_RUNTIME_TESTS=ON" "files.Count -ne 6" "gmpVersion"
-    "inventory SHA-256" "Collections.Generic.Queue[string]" "DLLName:\\s*"
+    "inventory SHA-256" "Collections.Generic.Queue[string]"
+    "^Import \\{\\r?\\n\\s{2}Name:"
+    "importMatches.Count -eq 0" "expectedRuntimeImports"
+    "resolvedRuntimeNames" "visited.Count -le 1"
     "[Array]::Sort($relative, [StringComparer]::Ordinal)"
     "2000-01-01T00:00:00+00:00" "firstHash -cne $secondHash"
     "actions/upload-artifact@v4"
