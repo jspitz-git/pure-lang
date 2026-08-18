@@ -12,6 +12,14 @@ function(require_text scope category)
     endif()
   endforeach()
 endfunction()
+function(reject_text scope category)
+  foreach(forbidden IN LISTS ARGN)
+    string(FIND "${scope}" "${forbidden}" position)
+    if(NOT position EQUAL -1)
+      message(FATAL_ERROR "CI_CONTRACT_${category}: obsolete ${forbidden}")
+    endif()
+  endforeach()
+endfunction()
 string(FIND "${workflow}" "\njobs:\n" jobs_position)
 if(jobs_position EQUAL -1)
   message(FATAL_ERROR "CI_CONTRACT_STRUCTURE: jobs mapping is missing")
@@ -80,7 +88,11 @@ extract_step("Install only PureFastCGI and verify sanitized runtime" verify_step
 require_text("${verify_step}" VERIFY "--component PureFastCGI"
   "Remove-Item Env:PURELIB" "System32/WindowsPowerShell/v1.0"
   "VerifyInstalledPackage.cmake" "RUN_RUNTIME_TESTS=ON"
+  "-DSOURCE_PREFIX=$repo/pure-fastcgi"
+  "-DORIGINAL_BUILD_PREFIX=$env:PURE_FASTCGI_BUILD"
+  "-DORIGINAL_STAGE_PREFIX=$stage"
   "PROTOCOL_HARNESS=" "PROTOCOL_WORKER=")
+reject_text("${verify_step}" VERIFY "-DSOURCE_DIR=")
 extract_step("Record fail-closed package metrics and recursive PE imports" metrics_step)
 require_text("${metrics_step}" METRICS "clang.exe --version" "cmakeVersion"
   "ninjaVersion" "pkgconfVersion" "gmpVersion" "mpfrVersion"
@@ -113,6 +125,9 @@ if(NOT MUTATION_MODE)
     "FetchFcgi2Entry.cmake" "PURE_FASTCGI_FCGI2_ARCHIVE="
     "-DPATCH_EXECUTABLE=C:/msys64/usr/bin/patch.exe"
     "-L fastcgi" "--component PureFastCGI" "Remove-Item Env:PURELIB"
+    "-DSOURCE_PREFIX=$repo/pure-fastcgi"
+    "-DORIGINAL_BUILD_PREFIX=$env:PURE_FASTCGI_BUILD"
+    "-DORIGINAL_STAGE_PREFIX=$stage"
     "RUN_RUNTIME_TESTS=ON" "files.Count -ne 6" "gmpVersion"
     "inventory SHA-256" "Collections.Generic.Queue[string]" "DLLName:\\s*"
     "[Array]::Sort($relative, [StringComparer]::Ordinal)"

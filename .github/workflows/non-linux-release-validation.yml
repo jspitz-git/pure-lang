@@ -163,7 +163,8 @@ jobs:
       - name: Install only PureFastCGI and verify sanitized runtime
         run: |
           $ErrorActionPreference = 'Stop'
-          $stage = Join-Path (Get-Location).Path 'build/staged PureFastCGI package'
+          $repo = (Get-Location).Path.Replace('\', '/')
+          $stage = (Join-Path $repo 'build/staged PureFastCGI package').Replace('\', '/')
           & $env:CMAKE_EXE --install $env:PURE_FASTCGI_BUILD `
             --prefix $stage --component PureFastCGI
           if ($LASTEXITCODE -ne 0) { throw 'PureFastCGI component install failed' }
@@ -172,7 +173,9 @@ jobs:
           & $env:CMAKE_EXE `
             "-DBUILD_DIR=$env:PURE_FASTCGI_BUILD" `
             "-DSTAGE_PREFIX=$stage" `
-            "-DSOURCE_DIR=$((Join-Path (Get-Location).Path 'pure-fastcgi'))" `
+            "-DSOURCE_PREFIX=$repo/pure-fastcgi" `
+            "-DORIGINAL_BUILD_PREFIX=$env:PURE_FASTCGI_BUILD" `
+            "-DORIGINAL_STAGE_PREFIX=$stage" `
             "-DPURE_RUNTIME_ROOT=$env:PURE_FASTCGI_PURE_PREFIX/bin" `
             "-DLLVM_READOBJ=$env:LLVM_READOBJ_EXE" `
             "-DPOWERSHELL_EXECUTABLE=$env:SystemRoot/System32/WindowsPowerShell/v1.0/powershell.exe" `

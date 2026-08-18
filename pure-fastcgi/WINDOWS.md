@@ -102,7 +102,9 @@ try {
   & C:/msys64/clang64/bin/cmake.exe `
     "-DBUILD_DIR=$build" `
     "-DSTAGE_PREFIX=$stage" `
-    "-DSOURCE_DIR=$repo/pure-fastcgi" `
+    "-DSOURCE_PREFIX=$repo/pure-fastcgi" `
+    "-DORIGINAL_BUILD_PREFIX=$build" `
+    "-DORIGINAL_STAGE_PREFIX=$stage" `
     "-DPURE_RUNTIME_ROOT=$purePrefix/bin" `
     -DLLVM_READOBJ=C:/msys64/clang64/bin/llvm-readobj.exe `
     "-DPOWERSHELL_EXECUTABLE=$env:SystemRoot/System32/WindowsPowerShell/v1.0/powershell.exe" `
