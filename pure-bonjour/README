@@ -73,6 +73,11 @@ it in the Pure library directory. This requires GNU make, and of course you
 need to have Pure and Bonjour installed. The latter should be readily available
 on most Linux systems, and ports are available for BSD systems as well.
 
+On 64-bit Windows 10 or later, the CMake build uses Microsoft's DNS Service
+Discovery API supplied by ``dnsapi.dll``. Install its optional payload with
+``cmake --install <build-dir> --component PureBonjour``. Apple Bonjour is not
+required and no Apple runtime or service is installed by this component.
+
 ``make`` tries to guess your Pure installation directory and platform-specific
 setup. If it gets this wrong, you can set some variables manually, please
 check the Makefile for details.
@@ -88,6 +93,11 @@ compatible Zeroconf implementation such as Avahi) installed and the
 corresponding service running on your system. If you have a Mac running OS X,
 then most likely Bonjour is already up and running, but for other systems
 you'll have to consult your system documentation for instructions.
+
+The Windows backend is an exception to that portable ``dns_sd`` arrangement:
+it calls the Windows DNS-SD API directly. Discovery remains local-link traffic,
+so firewall or multicast policy can produce API failures or an empty result
+even though no separate Bonjour service is needed.
 
 The following import declaration loads the functions of the bonjour module in
 your Pure script::

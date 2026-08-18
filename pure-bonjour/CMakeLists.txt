@@ -21,8 +21,57 @@ target_compile_definitions(pure-bonjour PRIVATE
 target_compile_options(pure-bonjour PRIVATE -Wall -Wextra -Werror)
 target_link_libraries(pure-bonjour PRIVATE PkgConfig::PURE dnsapi ws2_32)
 
+include(cmake/Install.cmake)
+
+get_filename_component(pure_bonjour_compiler_directory
+  "${CMAKE_C_COMPILER}" DIRECTORY)
+find_program(PURE_BONJOUR_LLVM_READOBJ
+  NAMES llvm-readobj
+  HINTS "${pure_bonjour_compiler_directory}"
+  REQUIRED)
+add_custom_target(verify-windows-dependencies
+  COMMAND "${CMAKE_COMMAND}"
+    "-DLLVM_READOBJ=${PURE_BONJOUR_LLVM_READOBJ}"
+    "-DMODULE=$<TARGET_FILE:pure-bonjour>"
+    "-DPURE_PREFIX=${PURE_PREFIX}"
+    "-DVERIFY_WORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/dependency-audit"
+    "-DDEPENDENCY_REPORT=${CMAKE_CURRENT_BINARY_DIR}/PureBonjourDependencies.tsv"
+    -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/VerifyWindowsDependencies.cmake"
+  DEPENDS pure-bonjour
+  COMMENT "Verifying recursive PureBonjour Windows dependencies"
+  VERBATIM)
+
 include(CTest)
 if(BUILD_TESTING)
+  add_test(NAME pure-bonjour-install-destinations
+    COMMAND "${CMAKE_COMMAND}"
+      -DTEST_MODE=destinations
+      "-DCMAKE_COMMAND=${CMAKE_COMMAND}"
+      "-DINSTALL_MODULE=${CMAKE_CURRENT_SOURCE_DIR}/cmake/Install.cmake"
+      -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/install-component.cmake")
+  set_tests_properties(pure-bonjour-install-destinations PROPERTIES
+    LABELS "bonjour;unit;packaging" TIMEOUT 10)
+
+  add_test(NAME pure-bonjour-dependency-parser
+    COMMAND "${CMAKE_COMMAND}"
+      -DTEST_MODE=parser
+      "-DCMAKE_COMMAND=${CMAKE_COMMAND}"
+      "-DVERIFIER=${CMAKE_CURRENT_SOURCE_DIR}/cmake/VerifyWindowsDependencies.cmake"
+      "-DTEST_ROOT=${CMAKE_CURRENT_BINARY_DIR}/dependency-parser-fixtures"
+      -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/install-component.cmake")
+  set_tests_properties(pure-bonjour-dependency-parser PROPERTIES
+    LABELS "bonjour;unit;packaging" TIMEOUT 10)
+
+  add_test(NAME pure-bonjour-install-component
+    COMMAND "${CMAKE_COMMAND}"
+      -DTEST_MODE=install
+      "-DCMAKE_COMMAND=${CMAKE_COMMAND}"
+      "-DBUILD_DIR=${CMAKE_CURRENT_BINARY_DIR}"
+      "-DSTAGE_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/PureBonjour component stage"
+      -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/install-component.cmake")
+  set_tests_properties(pure-bonjour-install-component PROPERTIES
+    LABELS "bonjour;packaging" TIMEOUT 30)
+
   add_library(pure-bonjour-test-backend OBJECT bonjour_windows.c)
   target_compile_features(pure-bonjour-test-backend PRIVATE c_std_11)
   target_compile_definitions(pure-bonjour-test-backend PRIVATE

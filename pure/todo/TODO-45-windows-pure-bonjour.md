@@ -143,3 +143,41 @@ an available Windows Bonjour implementation.
       "^pure-bonjour-(unit|lifecycle|loopback)$" --output-on-failure` passed all
       three tests in 7.54 seconds. The deterministic suites now contain 30 named
       test functions.
+- 2026-08-19: Added exact optional-component packaging and a fail-closed
+  recursive PE dependency audit.
+  - A default install owns none of the PureBonjour paths. Installing component
+    `PureBonjour` owns exactly eight files; its seven non-inventory payloads are
+    described by `PureBonjourInventory.tsv`, while the non-installed trusted
+    `PureBonjourExpected.sha256` oracle authenticates all eight paths, including
+    the inventory itself.
+  - Installed size and SHA-256 evidence:
+
+    | Relative path | Bytes | SHA-256 |
+    | --- | ---: | --- |
+    | `lib/pure/bonjour.dll` | 65536 | `313dd0c4578e2d3ce3587b57da93bea4e3c7cfc5ef01a581ff5ad4138cfb7921` |
+    | `lib/pure/bonjour.pure` | 3430 | `c8e5413133079718936c19fafbcb1c84d44af02f778f79f949657760b5bd2a75` |
+    | `share/doc/pure-bonjour/COPYING` | 35821 | `0b383d5a63da644f628d99c33976ea6487ed89aaa59f0b3257992deac1171e6b` |
+    | `share/doc/pure-bonjour/COPYING.LESSER` | 7802 | `03c570a068086ee577dcd795519ea93462b2ed2fcb6dcc4dfce56a71a2fd6e5a` |
+    | `share/doc/pure-bonjour/examples/bonjour_examp.pure` | 1944 | `0953f2a348248c1f9fb50c357af3bcb989cc62d9658a143399bd56c7f26596cd` |
+    | `share/doc/pure-bonjour/PureBonjourInventory.tsv` | 1356 | `743c1066d158ef4cfa19cf1dfdea45a656ad4b2e1769c1fb14952665e03f2e6c` |
+    | `share/doc/pure-bonjour/README` | 10192 | `6a49982a6933b75933e2cc774ee9450da1cd7cadd7f88acc0200a565f04efe32` |
+    | `share/doc/pure-bonjour/WINDOWS.md` | 269 | `1314752f1538d03dac9b9071c7e241a8ed123dd51ad314228b2d3adda3689552` |
+  - The recursive audit traversed 11 PE files and 126 import edges rooted at
+    `bonjour.dll`. Every non-system import resolved case-insensitively beneath
+    the staged Pure `bin` directory, no Apple Bonjour or MSYS2 runtime was found,
+    and the module retained exactly its seven public bridge exports.
+  - Synthetic parser mutations reject a malformed llvm-readobj header,
+    undeclared DLL, `dnssd.dll`, and ambiguous case-folded duplicate with the
+    stable `IMPORTS_MALFORMED`, `IMPORT_UNKNOWN`, `IMPORT_FORBIDDEN`, and
+    `IMPORT_AMBIGUOUS` categories. Absolute and parent-traversing values are
+    rejected for all three install destination variables.
+  - Validation:
+    - `ctest.exe --test-dir build/pure-bonjour -R
+      "^pure-bonjour-(install-component|dependency-parser|install-destinations)$"
+      --output-on-failure` passed all three packaging tests in 2.37 seconds.
+    - `cmake.exe --build build/pure-bonjour --target
+      verify-windows-dependencies` passed with 11 PE files, 126 import edges,
+      and exactly seven exports.
+    - `ctest.exe --test-dir build/pure-bonjour -R
+      "^pure-bonjour-install-component$" --output-on-failure` passed in 1.51
+      seconds, and the full seven-test suite passed in 11.69 seconds.
