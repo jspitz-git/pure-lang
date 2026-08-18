@@ -9,7 +9,7 @@ set(PURE_FASTCGI_FCGI2_ARCHIVE_SHA256
 set(PURE_FASTCGI_FCGI2_PATCH
   "${CMAKE_CURRENT_LIST_DIR}/../patches/fcgi2-2.4.7-clang64-types.patch")
 set(PURE_FASTCGI_FCGI2_PATCH_SHA256
-  "d2157e18ae4199780f225a8965adeae5173a0db443b8d7cec16325c0cbf68413")
+  "a95286e560aba3733a74929d0057168a605efcdc112beef2eccc31cf55854f7f")
 
 function(pure_fastcgi_prepare_fcgi2)
   cmake_parse_arguments(PARSE_ARGV 0 arg "" "ARCHIVE;OUT_SOURCE_DIR" "")
@@ -31,6 +31,18 @@ function(pure_fastcgi_prepare_fcgi2)
   file(MAKE_DIRECTORY "${root}")
   file(ARCHIVE_EXTRACT INPUT "${arg_ARCHIVE}" DESTINATION "${root}")
   set(source "${root}/fcgi2-2.4.7")
+  set(wsaa_accept_source
+    "        hSock = WSAAccept((unsigned int) hListen,                    \n")
+  set(wsaa_accept_normalized
+    "        hSock = WSAAccept((unsigned int) hListen,\n")
+  file(READ "${source}/libfcgi/os_win32.c" os_win32_source)
+  string(FIND "${os_win32_source}" "${wsaa_accept_source}" wsaa_accept_index)
+  if(wsaa_accept_index EQUAL -1)
+    message(FATAL_ERROR "unexpected fcgi2 WSAAccept source line")
+  endif()
+  string(REPLACE "${wsaa_accept_source}" "${wsaa_accept_normalized}"
+    os_win32_source "${os_win32_source}")
+  file(WRITE "${source}/libfcgi/os_win32.c" "${os_win32_source}")
   if(NOT EXISTS "${PURE_FASTCGI_FCGI2_PATCH}")
     message(FATAL_ERROR "fcgi2 Windows patch is missing")
   endif()

@@ -38,12 +38,10 @@ target_link_libraries(pure-fastcgi PRIVATE
 
 include(CTest)
 find_program(LLVM_READOBJ NAMES llvm-readobj REQUIRED)
-find_program(LLVM_NM NAMES llvm-nm REQUIRED)
 add_custom_target(
   verify-windows-dependencies
   COMMAND "${CMAKE_COMMAND}"
     "-DLLVM_READOBJ=${LLVM_READOBJ}"
-    "-DLLVM_NM=${LLVM_NM}"
     "-DMODULE=$<TARGET_FILE:pure-fastcgi>"
     -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/VerifyWindowsDependencies.cmake"
   DEPENDS pure-fastcgi
@@ -60,5 +58,23 @@ if(BUILD_TESTING)
       -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/source-contract.cmake")
   set_tests_properties(pure-fastcgi-source-contract PROPERTIES
     LABELS "fastcgi;source;contract"
+    TIMEOUT 30)
+  add_test(
+    NAME pure-fastcgi-compile-contract
+    COMMAND "${CMAKE_COMMAND}"
+      "-DBUILD_DIR=${CMAKE_CURRENT_BINARY_DIR}"
+      -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/CompilePatchedSources.cmake")
+  set_tests_properties(pure-fastcgi-compile-contract PROPERTIES
+    LABELS "fastcgi;compile;contract"
+    RUN_SERIAL TRUE
+    TIMEOUT 60)
+  add_test(
+    NAME pure-fastcgi-windows-dependency-verifier
+    COMMAND "${CMAKE_COMMAND}"
+      "-DVERIFIER=${CMAKE_CURRENT_SOURCE_DIR}/cmake/VerifyWindowsDependencies.cmake"
+      "-DTEST_ROOT=${CMAKE_CURRENT_BINARY_DIR}/windows-dependency-verifier"
+      -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/VerifyWindowsDependenciesTest.cmake")
+  set_tests_properties(pure-fastcgi-windows-dependency-verifier PROPERTIES
+    LABELS "fastcgi;windows;verifier"
     TIMEOUT 30)
 endif()

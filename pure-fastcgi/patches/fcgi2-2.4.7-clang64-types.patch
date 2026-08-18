@@ -1,15 +1,65 @@
 diff --git a/libfcgi/os_win32.c b/libfcgi/os_win32.c
 --- a/libfcgi/os_win32.c
 +++ b/libfcgi/os_win32.c
+@@ -78 +78 @@ typedef union {
+-    unsigned int value;
++    UINT_PTR value;
+@@ -145 +145 @@ static struct FD_TABLE fdTable[WIN32_OPEN_MAX];
+-static int Win32NewDescriptor(FILE_TYPE type, int fd, int desiredFd)
++static int Win32NewDescriptor(FILE_TYPE type, UINT_PTR fd, int desiredFd)
 @@ -225 +225 @@ static void StdinThread(void * startup)
 -    unsigned long fd;
 +    ULONG_PTR fd;
+@@ -355 +355 @@ int OS_LibInit(int stdioFds[3])
+-        HANDLE shutdownEvent = (HANDLE) atoi(val);
++        HANDLE shutdownEvent = (HANDLE)(UINT_PTR)strtoull(val, NULL, 0);
+@@ -369 +369 @@ int OS_LibInit(int stdioFds[3])
+-            acceptMutex = (HANDLE) atoi(val);
++            acceptMutex = (HANDLE)(UINT_PTR)strtoull(val, NULL, 0);
+@@ -459 +459 @@ int OS_LibInit(int stdioFds[3])
+-				     (int)stdioHandles[STDIN_FILENO],
++				     (UINT_PTR)stdioHandles[STDIN_FILENO],
+@@ -514 +514 @@ int OS_LibInit(int stdioFds[3])
+-				     (int)stdioHandles[STDOUT_FILENO],
++				     (UINT_PTR)stdioHandles[STDOUT_FILENO],
+@@ -531 +531 @@ int OS_LibInit(int stdioFds[3])
+-				     (int)stdioHandles[STDERR_FILENO],
++				     (UINT_PTR)stdioHandles[STDERR_FILENO],
+@@ -774 +774 @@ int OS_CreateListener(char *bindPath, int backlog)
+-        pseudoFd = Win32NewDescriptor(listenType, (int) hListenPipe, -1);
++        pseudoFd = Win32NewDescriptor(listenType, (UINT_PTR)hListenPipe, -1);
+@@ -891 +891 @@ int OS_Connect(char *bindPath)
+-        pseudoFd = Win32NewDescriptor(FD_PIPE_ASYNC, (int) hPipe, -1);
++        pseudoFd = Win32NewDescriptor(FD_PIPE_ASYNC, (UINT_PTR)hPipe, -1);
+@@ -1390 +1390 @@ int OS_Close(int fd)
+-                int sock = fdTable[fd].fid.sock;
++                SOCKET sock = fdTable[fd].fid.sock;
+@@ -1398 +1398 @@ int OS_Close(int fd)
+-	            FD_SET((unsigned) sock, &rfds);
++	            FD_SET(sock, &rfds);
 @@ -1470 +1470 @@ int OS_DoIo(struct timeval *tmo)
 -    unsigned long fd;
 +    ULONG_PTR fd;
 @@ -1549 +1549 @@ static int CALLBACK isAddrOKCallback(LPWSABUF  lpCallerId,
 -                                     DWORD     data)
 +                                     DWORD_PTR data)
+@@ -1620 +1620 @@ static int acceptNamedPipe(void)
+-    ipcFd = Win32NewDescriptor(FD_PIPE_SYNC, (int) hListen, -1);
++    ipcFd = Win32NewDescriptor(FD_PIPE_SYNC, (UINT_PTR)hListen, -1);
+@@ -1646 +1646 @@ static int acceptSocket(const char *webServerAddrs)
+-            FD_SET((unsigned int) hListen, &readfds);
++            FD_SET((SOCKET)hListen, &readfds);
+@@ -1677 +1677 @@ static int acceptSocket(const char *webServerAddrs)
+-        hSock = WSAAccept((unsigned int) hListen,
++        hSock = WSAAccept((SOCKET)hListen,
 @@ -1681 +1681 @@ static int OS_FcgiConnect(char *bindPath, int listenQueue)
 -                          (DWORD) webServerAddrs);
 +                          (DWORD_PTR) webServerAddrs);
+diff --git a/libfcgi/fcgiapp.c b/libfcgi/fcgiapp.c
+--- a/libfcgi/fcgiapp.c
++++ b/libfcgi/fcgiapp.c
+@@ -1324,2 +1324,2 @@ static unsigned char *AlignPtr8(unsigned char *p) {
+-    unsigned long u = (unsigned long) p;
+-    u = ((u + 7) & (ULONG_MAX - 7)) - u;
++    uintptr_t u = (uintptr_t)p;
++    u = ((u + 7) & ~(uintptr_t)7) - u;
