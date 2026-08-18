@@ -45,9 +45,39 @@ file(READ "${extracted}/libfcgi/os_win32.c" patched_os_win32)
 foreach(required_patch IN ITEMS
     "ULONG_PTR fd;"
     "DWORD_PTR data"
-    "\\(DWORD_PTR\\) webServerAddrs")
+    "\\(DWORD_PTR\\) webServerAddrs"
+    "DWORD first_pipe_error = ERROR_SUCCESS;"
+    "FlushFileBuffers"
+    "DisconnectNamedPipe"
+    "unsigned int reset_attempts = 0;"
+    "reset_attempts"
+    "reset_error"
+    "SetLastError")
   if(NOT patched_os_win32 MATCHES "${required_patch}")
     message(FATAL_ERROR "fcgi2 Windows patch was not applied: ${required_patch}")
+  endif()
+endforeach()
+foreach(required_snippet IN ITEMS
+    "if (reset_attempts++ != 0) {"
+    "if (! DisconnectNamedPipe(hListen)) {"
+    "if (! ConnectNamedPipe(hListen, NULL)) {"
+    "close_result = OS_Close(ipcFd, shutdown);"
+    "SetLastError(first_pipe_error);"
+    "return close_result;")
+  string(FIND "${patched_os_win32}" "${required_snippet}" snippet_index)
+  if(snippet_index EQUAL -1)
+    message(FATAL_ERROR
+      "fcgi2 Windows lifecycle patch is missing: ${required_snippet}")
+  endif()
+endforeach()
+foreach(required_failure_sequence IN ITEMS
+    "printLastError(\"DisconnectNamedPipe() failed\");\n                            SetLastError(reset_error);\n                            return -1;"
+    "printLastError(\"ConnectNamedPipe() retry failed\");\n                            SetLastError(reset_error);\n                            return -1;")
+  string(FIND "${patched_os_win32}" "${required_failure_sequence}"
+    sequence_index)
+  if(sequence_index EQUAL -1)
+    message(FATAL_ERROR
+      "fcgi2 Windows lifecycle failure ordering is missing: ${required_failure_sequence}")
   endif()
 endforeach()
 

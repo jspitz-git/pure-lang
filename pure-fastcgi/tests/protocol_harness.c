@@ -41,7 +41,8 @@ enum fcgi_drain_result {
 enum fcgi_scenario {
   FCGI_SCENARIO_SUCCESS,
   FCGI_SCENARIO_TRUNCATED,
-  FCGI_SCENARIO_TIMEOUT
+  FCGI_SCENARIO_TIMEOUT,
+  FCGI_SCENARIO_DEADLINE_PRESSURE
 };
 
 #define FCGI_PROCESS_CREATION_FLAGS                                           \
@@ -546,7 +547,8 @@ int wmain(int argc, wchar_t **argv) {
   if (argc != 4 && argc != 8) {
     fprintf(stderr,
             "usage: protocol-harness PURE MODULE-DIR WORKER "
-            "[--scenario success|truncated|timeout --cleanup-report PATH]\n");
+            "[--scenario success|truncated|timeout|deadline-pressure "
+            "--cleanup-report PATH]\n");
     goto cleanup;
   }
   if (argc == 8) {
@@ -562,15 +564,29 @@ int wmain(int argc, wchar_t **argv) {
       scenario = FCGI_SCENARIO_TRUNCATED;
     } else if (wcscmp(argv[5], L"timeout") == 0) {
       scenario = FCGI_SCENARIO_TIMEOUT;
+    } else if (wcscmp(argv[5], L"deadline-pressure") == 0) {
+      scenario = FCGI_SCENARIO_DEADLINE_PRESSURE;
     } else {
       fprintf(stderr, "unknown protocol-harness scenario\n");
       goto cleanup;
     }
   }
   deadline_ms = fcgi_now_ms() +
-                (scenario == FCGI_SCENARIO_SUCCESS ? 15000
-                 : scenario == FCGI_SCENARIO_TRUNCATED ? 9000
-                                                       : 4000);
+                 (scenario == FCGI_SCENARIO_SUCCESS ? 15000
+                  : scenario == FCGI_SCENARIO_TRUNCATED ? 9000
+                                                        : 4000);
+  if (scenario == FCGI_SCENARIO_DEADLINE_PRESSURE) {
+    unsigned char probe = 0;
+    if (fcgi_transfer(INVALID_HANDLE_VALUE, &probe, sizeof probe,
+                      fcgi_now_ms(), 1) != FCGI_IO_TIMEOUT) {
+      fprintf(stderr, "expired deadline started I/O\n");
+      goto cleanup;
+    }
+    puts("pure-fastcgi expired deadline probe passed");
+    pipe_closed = 1;
+    result = 0;
+    goto cleanup;
+  }
   if (swprintf(pipe_name, sizeof pipe_name / sizeof pipe_name[0],
                L"\\\\.\\pipe\\FastCGI\\pure-fastcgi-%lu-%ld",
                GetCurrentProcessId(), InterlockedIncrement(&pipe_counter)) < 0) {
@@ -645,13 +661,13 @@ int wmain(int argc, wchar_t **argv) {
     fprintf(stderr, "AssignProcessToJobObject failed: %lu\n", GetLastError());
     goto cleanup;
   }
-  client = fcgi_open_pipe_client(pipe_name, deadline_ms);
-  if (client == INVALID_HANDLE_VALUE) {
-    fprintf(stderr, "CreateFileW failed: %lu\n", GetLastError());
-    goto cleanup;
-  }
-  pipe_closed = 0;
   if (scenario != FCGI_SCENARIO_TRUNCATED) {
+    client = fcgi_open_pipe_client(pipe_name, deadline_ms);
+    if (client == INVALID_HANDLE_VALUE) {
+      fprintf(stderr, "CreateFileW failed: %lu\n", GetLastError());
+      goto cleanup;
+    }
+    pipe_closed = 0;
     if (!CloseHandle(server)) {
       fprintf(stderr, "could not close the named-pipe server: %lu\n",
               GetLastError());
@@ -660,12 +676,17 @@ int wmain(int argc, wchar_t **argv) {
     }
     server = INVALID_HANDLE_VALUE;
   }
-  if (scenario == FCGI_SCENARIO_TRUNCATED) {
-    Sleep(4500);
-  }
   if (ResumeThread(process.hThread) == (DWORD)-1) {
     fprintf(stderr, "ResumeThread failed: %lu\n", GetLastError());
     goto cleanup;
+  }
+  if (scenario == FCGI_SCENARIO_TRUNCATED) {
+    client = fcgi_open_pipe_client(pipe_name, deadline_ms);
+    if (client == INVALID_HANDLE_VALUE) {
+      fprintf(stderr, "CreateFileW failed: %lu\n", GetLastError());
+      goto cleanup;
+    }
+    pipe_closed = 0;
   }
 
 #define ADD_PARAM(name_literal, value, value_len)                              \
@@ -714,11 +735,6 @@ int wmain(int argc, wchar_t **argv) {
     }
     client = INVALID_HANDLE_VALUE;
     pipe_closed = 0;
-    if (!DisconnectNamedPipe(server)) {
-      fprintf(stderr, "could not reset the truncated named pipe: %lu\n",
-              GetLastError());
-      goto cleanup;
-    }
     if (!CloseHandle(server)) {
       fprintf(stderr, "could not close the named-pipe server: %lu\n",
               GetLastError());

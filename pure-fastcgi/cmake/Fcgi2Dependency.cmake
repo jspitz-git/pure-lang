@@ -9,7 +9,7 @@ set(PURE_FASTCGI_FCGI2_ARCHIVE_SHA256
 set(PURE_FASTCGI_FCGI2_PATCH
   "${CMAKE_CURRENT_LIST_DIR}/../patches/fcgi2-2.4.7-clang64-types.patch")
 set(PURE_FASTCGI_FCGI2_PATCH_SHA256
-  "a95286e560aba3733a74929d0057168a605efcdc112beef2eccc31cf55854f7f")
+  "7b59719a8d334de8416effe460fb585dc8678184a714f15e44691141cf00f4d4")
 
 function(pure_fastcgi_prepare_fcgi2)
   cmake_parse_arguments(PARSE_ARGV 0 arg "" "ARCHIVE;OUT_SOURCE_DIR" "")

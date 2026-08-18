@@ -113,7 +113,7 @@ function(expect_failure scenario expected worker)
     message(FATAL_ERROR "${scenario} did not fail as ${expected}:\n${out}\n${err}")
   endif()
   if(scenario STREQUAL "truncated")
-    check_cleanup("${scenario}" 1 positive 4500)
+    check_cleanup("${scenario}" 1 positive 0)
   else()
     check_cleanup("${scenario}" 1 positive 0)
   endif()
@@ -130,7 +130,7 @@ function(expect_truncated_outcome_rejected)
       NOT "${out}\n${err}" MATCHES "unexpected truncated sentinel status")
     message(FATAL_ERROR "wrong truncated worker outcome was accepted:\n${out}\n${err}")
   endif()
-  check_cleanup("truncated-wrong" 1 positive 4500)
+  check_cleanup("truncated-wrong" 1 positive 0)
 endfunction()
 
 function(expect_launch_failure)
@@ -146,6 +146,21 @@ function(expect_launch_failure)
   check_cleanup("launch-failure" 0 zero 0)
 endfunction()
 
+function(expect_expired_deadline_probe)
+  execute_process(
+    COMMAND "${HARNESS}" "${PURE_EXECUTABLE}" "${TEST_ROOT}"
+      "${TEST_ROOT}/${worker_name}" --scenario deadline-pressure
+      --cleanup-report "${TEST_ROOT}/deadline-pressure.txt"
+    RESULT_VARIABLE result OUTPUT_VARIABLE out ERROR_VARIABLE err
+    TIMEOUT 12)
+  if(NOT result EQUAL 0 OR
+      NOT "${out}\n${err}" MATCHES "expired deadline probe passed")
+    message(FATAL_ERROR "expired deadline probe failed:\n${out}\n${err}")
+  endif()
+  check_cleanup("deadline-pressure" 0 zero 0)
+endfunction()
+
+expect_expired_deadline_probe()
 expect_failure(truncated "protocol error while reading PARAMS"
   "${truncated_worker_name}")
 expect_truncated_outcome_rejected()

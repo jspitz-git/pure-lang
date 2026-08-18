@@ -43,7 +43,46 @@ diff --git a/libfcgi/os_win32.c b/libfcgi/os_win32.c
 @@ -1549 +1549 @@ static int CALLBACK isAddrOKCallback(LPWSABUF  lpCallerId,
 -                                     DWORD     data)
 +                                     DWORD_PTR data)
-@@ -1620 +1620 @@ static int acceptNamedPipe(void)
+@@ -1585,4 +1585,5 @@ static int acceptNamedPipe()
+ {
+     int ipcFd = -1;
++    unsigned int reset_attempts = 0;
+ 
+     if (! ConnectNamedPipe(hListen, NULL))
+@@ -1609,6 +1610,32 @@ static int acceptNamedPipe()
+             case ERROR_NO_DATA:
+ 
+                 // The previous client closed its handle (and we failed
+                 // to call DisconnectNamedPipe)
++                {
++                    DWORD reset_error;
++
++                    if (reset_attempts++ != 0) {
++                        SetLastError(ERROR_NO_DATA);
++                        return -1;
++                    }
++                    if (! DisconnectNamedPipe(hListen)) {
++                        reset_error = GetLastError();
++                        if (reset_error != ERROR_PIPE_NOT_CONNECTED) {
++                            printLastError("DisconnectNamedPipe() failed");
++                            SetLastError(reset_error);
++                            return -1;
++                        }
++                    }
++                    if (! ConnectNamedPipe(hListen, NULL)) {
++                        reset_error = GetLastError();
++                        if (reset_error != ERROR_PIPE_CONNECTED) {
++                            printLastError("ConnectNamedPipe() retry failed");
++                            SetLastError(reset_error);
++                            return -1;
++                        }
++                    }
++                    break;
++                }
++
+ 
+             default:
+@@ -1620 +1639 @@ static int acceptNamedPipe(void)
 -    ipcFd = Win32NewDescriptor(FD_PIPE_SYNC, (int) hListen, -1);
 +    ipcFd = Win32NewDescriptor(FD_PIPE_SYNC, (UINT_PTR)hListen, -1);
 @@ -1646 +1646 @@ static int acceptSocket(const char *webServerAddrs)
@@ -55,6 +94,42 @@ diff --git a/libfcgi/os_win32.c b/libfcgi/os_win32.c
 @@ -1681 +1681 @@ static int OS_FcgiConnect(char *bindPath, int listenQueue)
 -                          (DWORD) webServerAddrs);
 +                          (DWORD_PTR) webServerAddrs);
+@@ -1806,15 +1806,26 @@ int OS_IpcClose(int ipcFd, int shutdown)
+     switch (listenType) 
+     {
+     case FD_PIPE_SYNC:
+-	    /*
+-	     * Make sure that the client (ie. a Web Server in this case) has
+-	     * read all data from the pipe before we disconnect.
+-	     */
+-	    if (! FlushFileBuffers(fdTable[ipcFd].fid.fileHandle)) return -1;
+-
+-	    if (! DisconnectNamedPipe(fdTable[ipcFd].fid.fileHandle)) return -1;
+-
+-        /* fall through */
++        {
++            DWORD first_pipe_error = ERROR_SUCCESS;
++            int close_result;
++
++            /* A peer may have closed a malformed request before the
++             * flush. Still reset the listener so FCGX_Accept_r can retry. */
++            if (! FlushFileBuffers(fdTable[ipcFd].fid.fileHandle)) {
++                first_pipe_error = GetLastError();
++            }
++            if (! DisconnectNamedPipe(fdTable[ipcFd].fid.fileHandle) &&
++                first_pipe_error == ERROR_SUCCESS) {
++                first_pipe_error = GetLastError();
++            }
++            close_result = OS_Close(ipcFd, shutdown);
++            if (first_pipe_error != ERROR_SUCCESS) {
++                SetLastError(first_pipe_error);
++                return -1;
++            }
++            return close_result;
++        }
+ 
+     case FD_SOCKET_SYNC:
+ 
 diff --git a/libfcgi/fcgiapp.c b/libfcgi/fcgiapp.c
 --- a/libfcgi/fcgiapp.c
 +++ b/libfcgi/fcgiapp.c
