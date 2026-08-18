@@ -220,7 +220,7 @@ frontend.
 
 ## Installed layout and runtime contract
 
-The `PureReduce` component currently owns exactly 81 files. Its stable roots
+The `PureReduce` component currently owns exactly 85 files. Its stable roots
 are:
 
 ```text
@@ -234,11 +234,15 @@ share/doc/pure-reduce/**
 
 `share/doc/pure-reduce/PureReduceInventory.tsv` records purpose, origin,
 SHA-256, byte count, and license for every other payload. The build-tree
-`PureReduceExpected.sha256` is the authoritative 81-file manifest. The package
+`PureReduceExpected.sha256` is the authoritative 85-file manifest. The package
 contains the Pure and REDUCE licenses, detailed licenses for the statically
-linked closure, all three applied patch files, runtime manifests, sanitized metrics,
+linked closure, all four applied patch files, runtime manifests, sanitized metrics,
 and functional tests. It contains no development archives, source tree,
 MSYS2 tools, `reduce.exe`, or non-system runtime DLL at the current pin.
+The installed metrics embed the exact seven rolling CLANG64 package versions,
+resolved static-input owners and hashes, and matching system/vendored notice
+hashes captured for that artifact; cache reuse, installation, and CI packaging
+all fail if those records differ from the live toolchain.
 
 `reduce.pure` finds the loaded `reduce.dll` through the Pure module loader, and
 the bridge opens the adjacent `reduce.img` through Windows wide-character

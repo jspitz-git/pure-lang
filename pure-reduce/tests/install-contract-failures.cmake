@@ -149,31 +149,27 @@ set(_mapped_upstream "${_mapped_root}/upstream")
 set(_mapped_binary "${_mapped_root}/binary")
 set(_mapped_stage "${_mapped_root}/stage")
 file(REMOVE_RECURSE "${_mapped_root}")
-file(MAKE_DIRECTORY
-  "${_mapped_upstream}/artifacts"
-  "${_mapped_upstream}/artifacts/install-inputs/csl/cslbase/cm-unicode"
-  "${_mapped_upstream}/artifacts/install-inputs/libraries/crlibm"
-  "${_mapped_upstream}/artifacts/install-inputs/libraries/libffi"
-  "${_mapped_binary}")
-file(COPY "${RUNTIME_ROOT}"
-  DESTINATION "${_mapped_upstream}/artifacts")
-file(COPY_FILE "${RUNTIME_ROOT}/../../reduce-upstream-metrics.json"
-  "${_mapped_upstream}/reduce-upstream-metrics.json")
-file(COPY_FILE
-  "${RUNTIME_ROOT}/../install-inputs/csl/cslbase/COPYING"
-  "${_mapped_upstream}/artifacts/install-inputs/csl/cslbase/COPYING")
-file(COPY_FILE
-  "${RUNTIME_ROOT}/../install-inputs/csl/cslbase/cm-unicode/LICENSE"
-  "${_mapped_upstream}/artifacts/install-inputs/csl/cslbase/cm-unicode/LICENSE")
-file(COPY_FILE
-  "${RUNTIME_ROOT}/../install-inputs/libraries/crlibm/COPYING"
-  "${_mapped_upstream}/artifacts/install-inputs/libraries/crlibm/COPYING")
-file(COPY_FILE
-  "${RUNTIME_ROOT}/../install-inputs/libraries/crlibm/COPYING.LIB"
-  "${_mapped_upstream}/artifacts/install-inputs/libraries/crlibm/COPYING.LIB")
-file(COPY_FILE
-  "${RUNTIME_ROOT}/../install-inputs/libraries/libffi/LICENSE"
-  "${_mapped_upstream}/artifacts/install-inputs/libraries/libffi/LICENSE")
+get_filename_component(_source_artifacts "${RUNTIME_ROOT}/.." ABSOLUTE)
+get_filename_component(_source_upstream "${_source_artifacts}/.." ABSOLUTE)
+file(MAKE_DIRECTORY "${_mapped_upstream}" "${_mapped_binary}")
+file(COPY "${_source_artifacts}" DESTINATION "${_mapped_upstream}")
+foreach(_root_relative IN ITEMS
+    toolchain-packages.tsv
+    reduce-upstream-metrics.json
+    pure-reduce-upstream.stamp
+    pure-reduce-upstream.recipe
+    pure-reduce-upstream-inputs.manifest
+    pure-reduce-upstream.complete)
+  file(COPY_FILE "${_source_upstream}/${_root_relative}"
+    "${_mapped_upstream}/${_root_relative}")
+endforeach()
+file(MAKE_DIRECTORY "${_mapped_upstream}/logs")
+foreach(_log_relative IN ITEMS
+    artifact-contract-probe.exe
+    artifact-contract.log)
+  file(COPY_FILE "${_source_upstream}/logs/${_log_relative}"
+    "${_mapped_upstream}/logs/${_log_relative}")
+endforeach()
 
 set(_mapped_dependency_source "${_mapped_root}/mapped-dependency.cpp")
 set(_mapped_root_source "${_mapped_root}/mapped-root.cpp")
@@ -221,7 +217,9 @@ execute_process(
     "-DPURE_REDUCE_BINARY_ROOT=${_mapped_binary}"
     "-DPURE_REDUCE_UPSTREAM_BINARY_DIR=${_mapped_upstream}"
     "-DPURE_REDUCE_DLL=${_mapped_dll}"
-    "-DPURE_REDUCE_IMAGE=${REDUCE_IMAGE}"
+    "-DPURE_REDUCE_IMAGE=${_mapped_upstream}/artifacts/reduce.img"
+    -DPURE_REDUCE_VERIFIED_COMMIT=7efba90661139ae9c73c99fddd55f3fb2fabf69a
+    -DPURE_REDUCE_SOURCE_TREE_SHA256=134a68fdb10403d3a4c69051eb4e133803ff2659784f2d38ac4d94c7ee9f86d8
     "-DPURE_REDUCE_LLVM_READOBJ=${LLVM_READOBJ}"
     "-DPURE_REDUCE_CLANG64_ROOT=${_clang_root}"
     "-DPURE_REDUCE_RUNTIME_DLL_MAPPING_FILE=${_mapped_mapping_file}"

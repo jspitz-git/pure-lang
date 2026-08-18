@@ -695,11 +695,11 @@ switch name::string val::int = PROC_set_switch name val if get_started;
 verbosity n::int = PROC_gc_messages n if get_started;
 
 // Capture output from Reduce in a string buffer.
-capture flag::int = PROC_capture_output flag;
+capture flag::int = PROC_capture_output flag if get_started;
 output = PROC_get_output;
 
 // Feed input to Reduce from a string buffer.
-feed s::string = PROC_feed_input s;
+feed s::string = PROC_feed_input s if get_started;
 
 // tmprint helpers, for the benefit of the texmacs.pure module included in the
 // Pure distribution.

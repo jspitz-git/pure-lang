@@ -70,6 +70,8 @@ if(PURE_REDUCE_SOURCE_DIR)
     -Wl,--no-undefined)
   target_link_libraries(reduce PRIVATE
     ${PURE_REDUCE_CSL_LINK_INTERFACE})
+  set_property(TARGET reduce APPEND PROPERTY LINK_DEPENDS
+    "${PURE_REDUCE_UPSTREAM_COMPLETION}")
 
   add_executable(pure-reduce-bridge-contract
     tests/bridge-contract.cpp
@@ -88,6 +90,8 @@ if(PURE_REDUCE_SOURCE_DIR)
     -Wl,--no-undefined)
   target_link_libraries(pure-reduce-bridge-contract PRIVATE
     ${PURE_REDUCE_CSL_LINK_INTERFACE})
+  set_property(TARGET pure-reduce-bridge-contract APPEND PROPERTY LINK_DEPENDS
+    "${PURE_REDUCE_UPSTREAM_COMPLETION}")
 endif()
 
 include("${CMAKE_CURRENT_LIST_DIR}/cmake/Install.cmake")
@@ -141,6 +145,30 @@ if(BUILD_TESTING)
       -P "${CMAKE_CURRENT_LIST_DIR}/tests/runtime-artifact-handoff.cmake")
   set_tests_properties(pure-reduce-runtime-artifact-handoff PROPERTIES
     LABELS "reduce")
+  add_test(
+    NAME pure-reduce-upstream-cache-identity
+    COMMAND "${CMAKE_COMMAND}"
+      "-DREDUCE_UPSTREAM_MODULE=${CMAKE_CURRENT_LIST_DIR}/cmake/ReduceUpstream.cmake"
+      -P "${CMAKE_CURRENT_LIST_DIR}/tests/upstream-cache-identity.cmake")
+  set_tests_properties(pure-reduce-upstream-cache-identity PROPERTIES
+    LABELS "reduce")
+  add_test(
+    NAME pure-reduce-toolchain-provenance
+    COMMAND "${CMAKE_COMMAND}"
+      "-DPURE_REDUCE_SOURCE_DIR=${CMAKE_CURRENT_LIST_DIR}"
+      -P "${CMAKE_CURRENT_LIST_DIR}/tests/toolchain-provenance.cmake")
+  set_tests_properties(pure-reduce-toolchain-provenance PROPERTIES
+    LABELS "reduce")
+  if(EXISTS "${PURE_REDUCE_MSYS2_BASH}")
+    add_test(
+      NAME pure-reduce-toolchain-provenance-live
+      COMMAND "${CMAKE_COMMAND}"
+        "-DREDUCE_UPSTREAM_MODULE=${CMAKE_CURRENT_LIST_DIR}/cmake/ReduceUpstream.cmake"
+        "-DMSYS2_BASH=${PURE_REDUCE_MSYS2_BASH}"
+        -P "${CMAKE_CURRENT_LIST_DIR}/tests/toolchain-provenance-live.cmake")
+    set_tests_properties(pure-reduce-toolchain-provenance-live PROPERTIES
+      LABELS "reduce")
+  endif()
   if(PURE_REDUCE_SOURCE_DIR)
     add_test(
       NAME pure-reduce-prefix-map-response
@@ -168,6 +196,12 @@ if(BUILD_TESTING)
         --live-cleanup "${PURE_REDUCE_CSL_IMAGE}")
     set_tests_properties(pure-reduce-bridge-contract-live-cleanup PROPERTIES
       LABELS "reduce")
+    add_test(
+      NAME pure-reduce-bridge-contract-live-cons-slot
+      COMMAND pure-reduce-bridge-contract
+        --live-cons-slot "${PURE_REDUCE_CSL_IMAGE}")
+    set_tests_properties(pure-reduce-bridge-contract-live-cons-slot PROPERTIES
+      LABELS "reduce")
     if(PURE_EXECUTABLE)
       if(NOT IS_ABSOLUTE "${PURE_EXECUTABLE}" OR
          NOT EXISTS "${PURE_EXECUTABLE}")
@@ -183,7 +217,7 @@ if(BUILD_TESTING)
         message(FATAL_ERROR
           "Pure library directory does not exist: ${_pure_reduce_library_dir}")
       endif()
-      foreach(_test_name IN ITEMS smoke lifecycle)
+      foreach(_test_name IN ITEMS smoke lifecycle first-capture first-feed)
         add_test(
           NAME "pure-reduce-${_test_name}"
           COMMAND "${CMAKE_COMMAND}"
@@ -374,7 +408,7 @@ if(BUILD_TESTING)
         # This runs one full relocated-package verifier, five adversarial
         # verifier fixtures, and two component-install ownership rounds.
         # A clean hosted Windows runner can exceed three minutes even though
-        # the same 81-file package completes in about two minutes locally.
+        # the same 85-file package completes in about two minutes locally.
         TIMEOUT 360)
     endif()
   endif()

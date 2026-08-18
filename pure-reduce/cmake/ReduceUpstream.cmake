@@ -1,6 +1,7 @@
 include_guard(GLOBAL)
 
 include("${CMAKE_CURRENT_LIST_DIR}/ReduceSource.cmake")
+include("${CMAKE_CURRENT_LIST_DIR}/ToolchainProvenance.cmake")
 
 set(_PURE_REDUCE_NIL_PATCH_SHA256
   "2d88d6d4a842ccb4574b60b0bd7e3af91896cea76708551a6e54489792e91d08")
@@ -8,8 +9,10 @@ set(_PURE_REDUCE_UTF8_IMAGE_PATCH_SHA256
   "ad89f9581eefaaf4191b65af1b769a18883e865ee2740e4e6f053d1c5615d0e9")
 set(_PURE_REDUCE_CONFIGURE_PATHS_PATCH_SHA256
   "ec94278f24718963e68aeac737a168c704c81cc72f48af903c4675770f3518df")
+set(_PURE_REDUCE_RAW_CONS_PATCH_SHA256
+  "0863ce92c9cd6d89b74f7605bb216c3734e3b95902643239bf890de70d49612f")
 set(_PURE_REDUCE_BUILD_RECIPE_VERSION
-  "windows-clang-intel-layout-v11")
+  "windows-clang-intel-layout-v13")
 set(_PURE_REDUCE_INSTALL_INPUT_PATHS
   csl/cslbase/COPYING
   csl/cslbase/cm-unicode/LICENSE
@@ -23,7 +26,8 @@ function(_pure_reduce_expected_upstream_stamp COMMIT TREE_SHA256 OUT_STAMP)
     "${TREE_SHA256}\n"
     "${_PURE_REDUCE_NIL_PATCH_SHA256}\n"
     "${_PURE_REDUCE_UTF8_IMAGE_PATCH_SHA256}\n"
-    "${_PURE_REDUCE_CONFIGURE_PATHS_PATCH_SHA256}\n")
+    "${_PURE_REDUCE_CONFIGURE_PATHS_PATCH_SHA256}\n"
+    "${_PURE_REDUCE_RAW_CONS_PATCH_SHA256}\n")
   set(${OUT_STAMP} "${_stamp}" PARENT_SCOPE)
 endfunction()
 
@@ -79,6 +83,15 @@ function(_pure_reduce_apply_private_source_patch
     set(_expected_postimages
       "f021db49d1807b1679b7b3def369719c09628c61633dfd1a608cbc2b9e2930c9"
       "d374e776af1c5ce06107b181c4147fe2d251b6b3d0ba544f1eee2f6ebeaaca5f")
+  elseif(_patch_name STREQUAL "0004-csl-procedural-raw-cons.patch")
+    set(_expected_patch_sha256 "${_PURE_REDUCE_RAW_CONS_PATCH_SHA256}")
+    set(_targets "csl/cslbase/proc.h" "csl/cslbase/csl.cpp")
+    set(_expected_preimages
+      "eb4c10c476e4103ecae930f0d1919193867b6be6599b960c082e0b6847562c61"
+      "a3a0413c3b0b2a32d55e54eb2eab98221afaf33c4aec33905ca62b5a7c9c847e")
+    set(_expected_postimages
+      "bca15cb24078deb280ce07bd3e10287fbd8e32ae46327b7785e9ff0dcbbe2cbf"
+      "d5c01a06b309faaadff3f17c8f0386d78bfb9c9c5ec03bc807d6d19f8bb1b0fd")
   else()
     message(FATAL_ERROR "source patch is not in the approved registry: ${PATCH_FILE}")
   endif()
@@ -294,6 +307,336 @@ function(_pure_reduce_runtime_directory_is_complete DIRECTORY MANIFEST OUT_VALID
   set(${OUT_VALID} "${_valid}" PARENT_SCOPE)
 endfunction()
 
+function(_pure_reduce_required_upstream_identity_relatives OUT_RELATIVES)
+  set(_required
+    artifacts/reduce.img
+    artifacts/include/proc.h
+    artifacts/link/libreduce-csl.a
+    artifacts/link/libcrlibm.a
+    artifacts/link/libffi.a
+    artifacts/runtime/reduce.resources.manifest
+    artifacts/runtime/reduce.fonts.manifest
+    toolchain-packages.tsv
+    reduce-upstream-metrics.json
+    pure-reduce-upstream.stamp
+    pure-reduce-upstream.recipe
+    logs/artifact-contract-probe.exe
+    logs/artifact-contract.log)
+  foreach(_relative IN LISTS _PURE_REDUCE_INSTALL_INPUT_PATHS)
+    list(APPEND _required "artifacts/install-inputs/${_relative}")
+  endforeach()
+  set(${OUT_RELATIVES} "${_required}" PARENT_SCOPE)
+endfunction()
+
+function(_pure_reduce_upstream_identity_relatives ROOT OUT_RELATIVES)
+  file(GLOB_RECURSE _artifact_files LIST_DIRECTORIES FALSE
+    "${ROOT}/artifacts/*")
+  set(_relatives)
+  foreach(_file IN LISTS _artifact_files)
+    cmake_path(RELATIVE_PATH _file BASE_DIRECTORY "${ROOT}"
+      OUTPUT_VARIABLE _relative)
+    string(REPLACE "\\" "/" _relative "${_relative}")
+    list(APPEND _relatives "${_relative}")
+  endforeach()
+  foreach(_relative IN ITEMS
+      toolchain-packages.tsv
+      reduce-upstream-metrics.json
+      pure-reduce-upstream.stamp
+      pure-reduce-upstream.recipe
+      logs/artifact-contract-probe.exe
+      logs/artifact-contract.log)
+    if(EXISTS "${ROOT}/${_relative}" AND
+       NOT IS_DIRECTORY "${ROOT}/${_relative}")
+      list(APPEND _relatives "${_relative}")
+    endif()
+  endforeach()
+  list(SORT _relatives)
+  set(${OUT_RELATIVES} "${_relatives}" PARENT_SCOPE)
+endfunction()
+
+function(_pure_reduce_upstream_identity_path_is_safe RELATIVE OUT_SAFE)
+  set(_safe TRUE)
+  foreach(_delimiter IN ITEMS ";" "|" "\\" "\t" "\r" "\n")
+    string(FIND "${RELATIVE}" "${_delimiter}" _delimiter_position)
+    if(NOT _delimiter_position EQUAL -1)
+      set(_safe FALSE)
+    endif()
+  endforeach()
+  if("${RELATIVE}" STREQUAL "" OR IS_ABSOLUTE "${RELATIVE}" OR
+     "${RELATIVE}" MATCHES "(^|/)\\.\\.(/|$)" OR
+     "${RELATIVE}" MATCHES "^[./]")
+    set(_safe FALSE)
+  endif()
+  set(${OUT_SAFE} "${_safe}" PARENT_SCOPE)
+endfunction()
+
+function(_pure_reduce_write_upstream_identity ROOT)
+  set(_manifest "${ROOT}/pure-reduce-upstream-inputs.manifest")
+  set(_completion "${ROOT}/pure-reduce-upstream.complete")
+  file(REMOVE "${_manifest}" "${_completion}")
+  _pure_reduce_upstream_identity_relatives("${ROOT}" _relatives)
+  _pure_reduce_required_upstream_identity_relatives(_required)
+  foreach(_relative IN LISTS _required)
+    if(NOT _relative IN_LIST _relatives)
+      message(FATAL_ERROR
+        "fresh upstream build omits identity input: ${_relative}")
+    endif()
+  endforeach()
+  file(WRITE "${_manifest}" "")
+  foreach(_relative IN LISTS _relatives)
+    _pure_reduce_upstream_identity_path_is_safe("${_relative}" _safe)
+    if(NOT _safe)
+      message(FATAL_ERROR
+        "fresh upstream build has unsafe identity path: ${_relative}")
+    endif()
+    set(_file "${ROOT}/${_relative}")
+    file(SHA256 "${_file}" _sha256)
+    file(SIZE "${_file}" _bytes)
+    string(TOLOWER "${_sha256}" _sha256)
+    file(APPEND "${_manifest}" "${_sha256} ${_bytes} ${_relative}\n")
+  endforeach()
+  file(SHA256 "${_manifest}" _manifest_sha256)
+  file(WRITE "${_completion}"
+    "schema=1\n"
+    "recipe=${_PURE_REDUCE_BUILD_RECIPE_VERSION}\n"
+    "manifest_sha256=${_manifest_sha256}\n")
+endfunction()
+
+function(_pure_reduce_upstream_identity_is_complete ROOT OUT_VALID)
+  set(_manifest "${ROOT}/pure-reduce-upstream-inputs.manifest")
+  set(_completion "${ROOT}/pure-reduce-upstream.complete")
+  set(_valid TRUE)
+  if(NOT EXISTS "${_manifest}" OR IS_DIRECTORY "${_manifest}" OR
+     NOT EXISTS "${_completion}" OR IS_DIRECTORY "${_completion}")
+    set(_valid FALSE)
+  endif()
+
+  if(_valid)
+    file(SHA256 "${_manifest}" _manifest_sha256)
+    file(READ "${_completion}" _completion_text)
+    string(REPLACE "\r" "" _completion_text "${_completion_text}")
+    string(CONCAT _expected_completion
+      "schema=1\n"
+      "recipe=${_PURE_REDUCE_BUILD_RECIPE_VERSION}\n"
+      "manifest_sha256=${_manifest_sha256}\n")
+    if(NOT _completion_text STREQUAL _expected_completion)
+      set(_valid FALSE)
+    endif()
+  endif()
+
+  set(_manifest_relatives)
+  if(_valid)
+    file(READ "${_manifest}" _manifest_text)
+    set(_manifest_has_forbidden FALSE)
+    foreach(_delimiter IN ITEMS ";" "|" "\t" "\r")
+      string(FIND "${_manifest_text}" "${_delimiter}" _delimiter_position)
+      if(NOT _delimiter_position EQUAL -1)
+        set(_manifest_has_forbidden TRUE)
+      endif()
+    endforeach()
+    if(_manifest_text STREQUAL "" OR _manifest_has_forbidden)
+      set(_valid FALSE)
+    else()
+      file(STRINGS "${_manifest}" _manifest_lines)
+    endif()
+  endif()
+  if(_valid)
+    set(_previous_relative "")
+    foreach(_line IN LISTS _manifest_lines)
+      if(NOT _line MATCHES "^([0-9a-f]+) ([0-9]+) (.+)$")
+        set(_valid FALSE)
+        break()
+      endif()
+      set(_expected_sha256 "${CMAKE_MATCH_1}")
+      set(_expected_bytes "${CMAKE_MATCH_2}")
+      set(_relative "${CMAKE_MATCH_3}")
+      string(LENGTH "${_expected_sha256}" _sha256_length)
+      _pure_reduce_upstream_identity_path_is_safe("${_relative}" _safe)
+      if(NOT _sha256_length EQUAL 64 OR NOT _safe OR
+         _relative IN_LIST _manifest_relatives)
+        set(_valid FALSE)
+        break()
+      endif()
+      if(NOT _previous_relative STREQUAL "")
+        set(_order_probe "${_previous_relative};${_relative}")
+        list(SORT _order_probe)
+        list(GET _order_probe 0 _ordered_first)
+        if(NOT _ordered_first STREQUAL _previous_relative OR
+           _previous_relative STREQUAL _relative)
+          set(_valid FALSE)
+          break()
+        endif()
+      endif()
+      set(_file "${ROOT}/${_relative}")
+      cmake_path(IS_PREFIX ROOT "${_file}" NORMALIZE _inside_root)
+      if(NOT _inside_root OR NOT EXISTS "${_file}" OR IS_DIRECTORY "${_file}")
+        set(_valid FALSE)
+        break()
+      endif()
+      file(SHA256 "${_file}" _actual_sha256)
+      file(SIZE "${_file}" _actual_bytes)
+      string(TOLOWER "${_actual_sha256}" _actual_sha256)
+      if(NOT _actual_sha256 STREQUAL _expected_sha256 OR
+         NOT _actual_bytes EQUAL _expected_bytes)
+        set(_valid FALSE)
+        break()
+      endif()
+      list(APPEND _manifest_relatives "${_relative}")
+      set(_previous_relative "${_relative}")
+    endforeach()
+  endif()
+
+  if(_valid)
+    _pure_reduce_upstream_identity_relatives("${ROOT}" _actual_relatives)
+    if(NOT _actual_relatives STREQUAL _manifest_relatives)
+      set(_valid FALSE)
+    endif()
+  endif()
+  if(_valid)
+    _pure_reduce_required_upstream_identity_relatives(_required)
+    foreach(_relative IN LISTS _required)
+      if(NOT _relative IN_LIST _manifest_relatives)
+        set(_valid FALSE)
+      endif()
+    endforeach()
+  endif()
+  if(_valid)
+    foreach(_name IN ITEMS reduce.resources reduce.fonts)
+      _pure_reduce_runtime_directory_is_complete(
+        "${ROOT}/artifacts/runtime/${_name}"
+        "${ROOT}/artifacts/runtime/${_name}.manifest" _runtime_valid)
+      if(NOT _runtime_valid)
+        set(_valid FALSE)
+      endif()
+    endforeach()
+  endif()
+  set(${OUT_VALID} "${_valid}" PARENT_SCOPE)
+endfunction()
+
+function(pure_reduce_verify_upstream_identity ROOT)
+  _pure_reduce_upstream_identity_is_complete("${ROOT}" _valid)
+  if(NOT _valid)
+    message(FATAL_ERROR
+      "cached REDUCE/CSL artifact identity is invalid; rebuild required")
+  endif()
+endfunction()
+
+function(pure_reduce_verify_upstream_install_contract
+    ROOT EXPECTED_COMMIT EXPECTED_TREE_SHA256 IMAGE)
+  pure_reduce_verify_upstream_identity("${ROOT}")
+  _pure_reduce_expected_upstream_stamp(
+    "${EXPECTED_COMMIT}" "${EXPECTED_TREE_SHA256}" _expected_stamp)
+  set(_stamp "${ROOT}/pure-reduce-upstream.stamp")
+  file(READ "${_stamp}" _actual_stamp)
+  string(REPLACE "\r" "" _actual_stamp "${_actual_stamp}")
+  if(NOT _actual_stamp STREQUAL _expected_stamp)
+    message(FATAL_ERROR
+      "cached REDUCE/CSL source/patch stamp differs from the exact pin")
+  endif()
+  set(_recipe "${ROOT}/pure-reduce-upstream.recipe")
+  file(READ "${_recipe}" _actual_recipe)
+  if(NOT _actual_recipe STREQUAL
+      "${_PURE_REDUCE_BUILD_RECIPE_VERSION}\n")
+    message(FATAL_ERROR
+      "cached REDUCE/CSL recipe differs from the exact build recipe")
+  endif()
+  if(NOT IS_ABSOLUTE "${IMAGE}" OR NOT EXISTS "${IMAGE}" OR
+     IS_DIRECTORY "${IMAGE}")
+    message(FATAL_ERROR
+      "PureReduce install image must be an existing absolute file")
+  endif()
+  file(REAL_PATH "${ROOT}/artifacts/reduce.img" _expected_image)
+  file(REAL_PATH "${IMAGE}" _actual_image)
+  if(NOT _actual_image STREQUAL _expected_image)
+    message(FATAL_ERROR
+      "PureReduce install image does not match the manifest-covered upstream image")
+  endif()
+endfunction()
+
+function(_pure_reduce_msys2_toolchain_commands
+    BASH_EXECUTABLE OUT_PACMAN OUT_CLANG)
+  get_filename_component(_usr_bin "${BASH_EXECUTABLE}" DIRECTORY)
+  get_filename_component(_usr "${_usr_bin}" DIRECTORY)
+  get_filename_component(_msys2_root "${_usr}" DIRECTORY)
+  set(_pacman "${_msys2_root}/usr/bin/pacman.exe")
+  set(_clang "${_msys2_root}/clang64/bin/clang++.exe")
+  foreach(_tool IN ITEMS _pacman _clang)
+    if(NOT IS_ABSOLUTE "${${_tool}}" OR NOT EXISTS "${${_tool}}" OR
+       IS_DIRECTORY "${${_tool}}")
+      message(FATAL_ERROR
+        "rolling CLANG64 provenance tool is missing: ${${_tool}}")
+    endif()
+  endforeach()
+  set(${OUT_PACMAN} "${_pacman}" PARENT_SCOPE)
+  set(${OUT_CLANG} "${_clang}" PARENT_SCOPE)
+endfunction()
+
+function(_pure_reduce_capture_live_toolchain_provenance OUTPUT_FILE)
+  _pure_reduce_msys2_toolchain_commands(
+    "${PURE_REDUCE_MSYS2_BASH}" _pacman _clang)
+  pure_reduce_capture_toolchain_provenance(
+    "${_pacman}" "${_clang}"
+    "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/../licenses" "${OUTPUT_FILE}")
+endfunction()
+
+function(_pure_reduce_cached_toolchain_matches_live ROOT OUT_MATCHES)
+  set(_cached "${ROOT}/toolchain-packages.tsv")
+  set(_matches FALSE)
+  if(DEFINED PURE_REDUCE_TOOLCHAIN_PROVENANCE_TEST_OVERRIDE AND
+     NOT "${PURE_REDUCE_TOOLCHAIN_PROVENANCE_TEST_OVERRIDE}" STREQUAL "")
+    set(_live "${PURE_REDUCE_TOOLCHAIN_PROVENANCE_TEST_OVERRIDE}")
+    if(EXISTS "${_cached}" AND EXISTS "${_live}")
+      file(READ "${_cached}" _cached_content)
+      file(READ "${_live}" _live_content)
+      if(_cached_content STREQUAL _live_content)
+        set(_matches TRUE)
+      endif()
+    endif()
+  else()
+    pure_reduce_validate_toolchain_provenance(
+      "${_cached}" "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/../licenses"
+      _cached_records)
+    set(_live "${ROOT}/toolchain-packages.live.tsv")
+    file(REMOVE "${_live}")
+    _pure_reduce_capture_live_toolchain_provenance("${_live}")
+    file(READ "${_cached}" _cached_content)
+    file(READ "${_live}" _live_content)
+    file(REMOVE "${_live}")
+    if(_cached_content STREQUAL _live_content)
+      set(_matches TRUE)
+    endif()
+  endif()
+  set(${OUT_MATCHES} "${_matches}" PARENT_SCOPE)
+endfunction()
+
+function(pure_reduce_verify_live_toolchain_provenance
+    ROOT CLANG64_ROOT VENDORED_LICENSE_DIR)
+  get_filename_component(_msys2_root "${CLANG64_ROOT}" DIRECTORY)
+  set(_pacman "${_msys2_root}/usr/bin/pacman.exe")
+  set(_clang "${CLANG64_ROOT}/bin/clang++.exe")
+  foreach(_tool IN ITEMS _pacman _clang)
+    if(NOT IS_ABSOLUTE "${${_tool}}" OR NOT EXISTS "${${_tool}}" OR
+       IS_DIRECTORY "${${_tool}}")
+      message(FATAL_ERROR
+        "rolling CLANG64 provenance tool is missing: ${${_tool}}")
+    endif()
+  endforeach()
+  set(_cached "${ROOT}/toolchain-packages.tsv")
+  pure_reduce_validate_toolchain_provenance(
+    "${_cached}" "${VENDORED_LICENSE_DIR}" _cached_records)
+  set(_live "${ROOT}/toolchain-packages.install-live.tsv")
+  file(REMOVE "${_live}")
+  pure_reduce_capture_toolchain_provenance(
+    "${_pacman}" "${_clang}" "${VENDORED_LICENSE_DIR}" "${_live}")
+  file(READ "${_cached}" _cached_content)
+  file(READ "${_live}" _live_content)
+  file(REMOVE "${_live}")
+  if(NOT _cached_content STREQUAL _live_content)
+    message(FATAL_ERROR
+      "installed PureReduce provenance differs from the live CLANG64 toolchain")
+  endif()
+endfunction()
+
 function(_pure_reduce_stage_runtime_artifacts PRODUCER RUNTIME_ROOT)
   file(MAKE_DIRECTORY "${RUNTIME_ROOT}")
   foreach(_name IN ITEMS reduce.resources reduce.fonts)
@@ -388,40 +731,7 @@ function(_pure_reduce_run_upstream_build_ensure)
     endif()
   endforeach()
   get_filename_component(_root "${PURE_REDUCE_UPSTREAM_BINARY_DIR}" ABSOLUTE)
-  set(_required_artifacts
-    "${_root}/artifacts/reduce.img"
-    "${_root}/artifacts/include/proc.h"
-    "${_root}/artifacts/link/libreduce-csl.a"
-    "${_root}/artifacts/link/libcrlibm.a"
-    "${_root}/artifacts/link/libffi.a"
-    "${_root}/reduce-upstream-metrics.json"
-    "${_root}/pure-reduce-upstream.recipe"
-    "${_root}/logs/artifact-contract-probe.exe"
-    "${_root}/logs/artifact-contract.log")
-  foreach(_relative IN LISTS _PURE_REDUCE_INSTALL_INPUT_PATHS)
-    list(APPEND _required_artifacts
-      "${_root}/artifacts/install-inputs/${_relative}")
-  endforeach()
-  set(_complete TRUE)
-  foreach(_artifact IN LISTS _required_artifacts)
-    if(NOT EXISTS "${_artifact}" OR IS_DIRECTORY "${_artifact}")
-      set(_complete FALSE)
-    else()
-      file(SIZE "${_artifact}" _size)
-      if(_size LESS 16)
-        set(_complete FALSE)
-      endif()
-    endif()
-  endforeach()
-  set(_runtime_root "${_root}/artifacts/runtime")
-  foreach(_name IN ITEMS reduce.resources reduce.fonts)
-    _pure_reduce_runtime_directory_is_complete(
-      "${_runtime_root}/${_name}"
-      "${_runtime_root}/${_name}.manifest" _directory_complete)
-    if(NOT _directory_complete)
-      set(_complete FALSE)
-    endif()
-  endforeach()
+  _pure_reduce_upstream_identity_is_complete("${_root}" _complete)
   set(_stamp "${_root}/pure-reduce-upstream.stamp")
   if(EXISTS "${_stamp}")
     file(READ "${_stamp}" _stamp_content)
@@ -447,10 +757,57 @@ function(_pure_reduce_run_upstream_build_ensure)
     set(_complete FALSE)
   endif()
   if(_complete)
+    _pure_reduce_cached_toolchain_matches_live("${_root}" _toolchain_matches)
+    if(NOT _toolchain_matches)
+      set(_complete FALSE)
+    endif()
+  endif()
+  if(_complete)
     message(STATUS "complete pinned REDUCE/CSL artifacts remain valid")
     return()
   endif()
   _pure_reduce_run_upstream_build()
+  _pure_reduce_upstream_identity_is_complete("${_root}" _rebuilt_complete)
+  if(_rebuilt_complete)
+    set(_rebuilt_stamp "${_root}/pure-reduce-upstream.stamp")
+    if(EXISTS "${_rebuilt_stamp}" AND NOT IS_DIRECTORY "${_rebuilt_stamp}")
+      file(READ "${_rebuilt_stamp}" _rebuilt_stamp_content)
+      string(REPLACE "\r" "" _rebuilt_stamp_content
+        "${_rebuilt_stamp_content}")
+      _pure_reduce_expected_upstream_stamp(
+        "${PURE_REDUCE_VERIFIED_COMMIT}"
+        "${PURE_REDUCE_SOURCE_TREE_SHA256}" _rebuilt_expected_stamp)
+      if(NOT _rebuilt_stamp_content STREQUAL _rebuilt_expected_stamp)
+        set(_rebuilt_complete FALSE)
+      endif()
+    else()
+      set(_rebuilt_complete FALSE)
+    endif()
+  endif()
+  if(_rebuilt_complete)
+    set(_rebuilt_recipe "${_root}/pure-reduce-upstream.recipe")
+    if(EXISTS "${_rebuilt_recipe}" AND NOT IS_DIRECTORY "${_rebuilt_recipe}")
+      file(READ "${_rebuilt_recipe}" _rebuilt_recipe_content)
+      string(STRIP "${_rebuilt_recipe_content}" _rebuilt_recipe_content)
+      if(NOT _rebuilt_recipe_content STREQUAL
+          _PURE_REDUCE_BUILD_RECIPE_VERSION)
+        set(_rebuilt_complete FALSE)
+      endif()
+    else()
+      set(_rebuilt_complete FALSE)
+    endif()
+  endif()
+  if(_rebuilt_complete)
+    _pure_reduce_cached_toolchain_matches_live(
+      "${_root}" _rebuilt_toolchain_matches)
+    if(NOT _rebuilt_toolchain_matches)
+      set(_rebuilt_complete FALSE)
+    endif()
+  endif()
+  if(NOT _rebuilt_complete)
+    message(FATAL_ERROR
+      "fresh REDUCE/CSL build did not produce a valid artifact identity")
+  endif()
 endfunction()
 
 function(_pure_reduce_discover_current_link_closure
@@ -794,6 +1151,8 @@ function(_pure_reduce_run_upstream_build)
     "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/../patches/0002-csl-windows-utf8-image-open.patch")
   set(_configure_paths_patch_file
     "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/../patches/0003-configure-quote-source-paths.patch")
+  set(_raw_cons_patch_file
+    "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/../patches/0004-csl-procedural-raw-cons.patch")
   set(_autogen_log "${_logs}/autogen.log")
   set(_patch_log "${_logs}/applied-source-patches.log")
   set(_restore_log "${_logs}/restored-top-level-files.log")
@@ -804,7 +1163,10 @@ function(_pure_reduce_run_upstream_build)
   set(_closure_manifest "${_logs}/current-closure-objects.log")
   set(_artifact_contract_log "${_logs}/artifact-contract.log")
   set(_metrics "${_root}/reduce-upstream-metrics.json")
+  set(_toolchain_snapshot "${_root}/toolchain-packages.tsv")
   set(_stamp "${_root}/pure-reduce-upstream.stamp")
+  set(_toolchain_start_snapshot
+    "${_root}/toolchain-packages.build-start.tsv")
 
   cmake_path(IS_PREFIX PURE_REDUCE_SOURCE_DIR "${_private_source}"
     NORMALIZE _private_inside_verified)
@@ -818,10 +1180,20 @@ function(_pure_reduce_run_upstream_build)
 
   file(REMOVE_RECURSE
     "${_private_source}" "${_pinned_generated}" "${_artifacts}" "${_logs}")
-  file(REMOVE "${_metrics}" "${_stamp}")
+  file(REMOVE
+    "${_metrics}"
+    "${_stamp}"
+    "${_toolchain_snapshot}"
+    "${_toolchain_start_snapshot}"
+    "${_root}/toolchain-packages.live.tsv"
+    "${_root}/toolchain-packages.install-live.tsv"
+    "${_root}/pure-reduce-upstream-inputs.manifest"
+    "${_root}/pure-reduce-upstream.complete")
   file(MAKE_DIRECTORY
     "${_root}" "${_private_source}" "${_link_artifacts}"
     "${_runtime_artifacts}" "${_logs}")
+  _pure_reduce_capture_live_toolchain_provenance(
+    "${_toolchain_start_snapshot}")
   _pure_reduce_write_prefix_map_response(
     "${_private_source}" "${PURE_REDUCE_MSYS2_BASH}"
     _prefix_map_response _prefix_map_argument)
@@ -837,6 +1209,10 @@ function(_pure_reduce_run_upstream_build)
     "${_private_source}" "${_utf8_image_patch_file}"
     "${PURE_REDUCE_SOURCE_TREE_SHA256}" "${_patch_log}"
     _utf8_image_patch_json)
+  _pure_reduce_apply_private_source_patch(
+    "${_private_source}" "${_raw_cons_patch_file}"
+    "${PURE_REDUCE_SOURCE_TREE_SHA256}" "${_patch_log}"
+    _raw_cons_patch_json)
   _pure_reduce_tree_bytes(
     "${_private_source}" "${PURE_REDUCE_MSYS2_BASH}" _source_bytes)
 
@@ -986,11 +1362,13 @@ extern "C" int PROC_clear_stack();
 namespace CSL_LISP {
 using character_writer = int(int);
 void cslstart(int, const char*[], character_writer*);
+extern "C" int PROC_make_raw_cons();
 }
 int main() {
   void (*volatile start)(int, const char*[], CSL_LISP::character_writer*) =
       &CSL_LISP::cslstart;
-  return PROC_clear_stack() + (start == nullptr);
+  int (*volatile raw_cons)() = &CSL_LISP::PROC_make_raw_cons;
+  return PROC_clear_stack() + (start == nullptr) + (raw_cons == nullptr);
 }
 ]=])
   set(_probe_script [=[
@@ -1010,6 +1388,7 @@ done
 clang++ -std=gnu++26 -flto -O3 "$source_file" "${link_args[@]}" -o "$probe"
 llvm-nm -C --defined-only "$probe" | grep -q 'PROC_clear_stack$'
 llvm-nm -C --defined-only "$probe" | grep -q 'CSL_LISP::cslstart('
+llvm-nm -C --defined-only "$probe" | grep -q 'PROC_make_raw_cons$'
 imports=$(llvm-readobj --coff-imports "$probe" | sed -n 's/^  Name: //p')
 if printf '%s\n' "$imports" | grep -Eiq \
     '(^|/)(msys|cygwin|zlib|libstdc\+\+|libwinpthread|ncurses)'; then
@@ -1018,6 +1397,7 @@ if printf '%s\n' "$imports" | grep -Eiq \
 fi
 printf 'PROC_clear_stack=defined\n'
 printf 'CSL_LISP::cslstart=defined\n'
+printf 'PROC_make_raw_cons=defined\n'
 printf 'non_system_runtime_imports=none\n'
 printf 'imports:\n%s\n' "$imports"
 ]=])
@@ -1053,6 +1433,16 @@ printf 'autoconf=%s\n' "$(autoconf --version | sed -n '1p')"
   if(NOT _tool_result EQUAL 0)
     message(FATAL_ERROR "could not record upstream tool versions: ${_tool_error}")
   endif()
+  _pure_reduce_capture_live_toolchain_provenance("${_toolchain_snapshot}")
+  pure_reduce_compare_toolchain_provenance(
+    "${_toolchain_start_snapshot}" "${_toolchain_snapshot}"
+    "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/../licenses")
+  pure_reduce_validate_toolchain_provenance(
+    "${_toolchain_snapshot}"
+    "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/../licenses" _toolchain_records)
+  pure_reduce_toolchain_provenance_json(
+    "${_toolchain_records}" _toolchain_packages_json)
+  file(REMOVE "${_toolchain_start_snapshot}")
 
   string(TIMESTAMP _finished "%s" UTC)
   math(EXPR _elapsed_seconds "${_finished} - ${_started}")
@@ -1077,7 +1467,8 @@ printf 'autoconf=%s\n' "$(autoconf --version | sed -n '1p')"
     "  \"commit\": \"${PURE_REDUCE_VERIFIED_COMMIT}\",\n"
     "  \"source_tree_sha256\": \"${PURE_REDUCE_SOURCE_TREE_SHA256}\",\n"
     "  \"source_materialization\": \"git -c core.autocrlf=false checkout-index into MSYS2 no-space scratch\",\n"
-    "  \"source_patches\": [${_nil_patch_json},${_utf8_image_patch_json},${_configure_paths_patch_json}],\n"
+    "  \"source_patches\": [${_nil_patch_json},${_utf8_image_patch_json},${_raw_cons_patch_json},${_configure_paths_patch_json}],\n"
+    "  \"toolchain_packages\": ${_toolchain_packages_json},\n"
     "  \"tool_versions\": \"${_tool_versions_json}\",\n"
     "  \"autogen_arguments\": [\"--with-csl\", \"--without-gui\", \"--without-redfront\"],\n"
     "  \"configure_arguments\": [\"--without-autogen\", \"--with-csl\", \"--without-gui\", \"--without-redfront\", \"--with-windows_layout=new\", \"CC=clang\", \"CXX=clang++\"],\n"
@@ -1099,6 +1490,9 @@ printf 'autoconf=%s\n' "$(autoconf --version | sed -n '1p')"
     "${_PURE_REDUCE_BUILD_RECIPE_VERSION}\n")
   file(REMOVE "${_prefix_map_response}")
   file(REMOVE_RECURSE "${_private_source}")
+  # This is intentionally the final build action. Cache validation never
+  # regenerates identity evidence from already-cached payload bytes.
+  _pure_reduce_write_upstream_identity("${_root}")
 endfunction()
 
 function(pure_reduce_define_upstream_build)
@@ -1144,7 +1538,10 @@ function(pure_reduce_define_upstream_build)
     "${_root}/artifacts/runtime/reduce.resources.manifest"
     "${_root}/artifacts/runtime/reduce.fonts.manifest")
   set(_metrics "${_root}/reduce-upstream-metrics.json")
+  set(_toolchain_snapshot "${_root}/toolchain-packages.tsv")
   set(_stamp "${_root}/pure-reduce-upstream.stamp")
+  set(_identity_manifest "${_root}/pure-reduce-upstream-inputs.manifest")
+  set(_completion "${_root}/pure-reduce-upstream.complete")
 
   set(PURE_REDUCE_UPSTREAM_BINARY_DIR "${_root}" PARENT_SCOPE)
   set(PURE_REDUCE_CSL_IMAGE "${_image}" PARENT_SCOPE)
@@ -1157,6 +1554,11 @@ function(pure_reduce_define_upstream_build)
   set(PURE_REDUCE_RUNTIME_DATA "${_runtime_data}" PARENT_SCOPE)
   set(PURE_REDUCE_RUNTIME_MANIFESTS "${_runtime_manifests}" PARENT_SCOPE)
   set(PURE_REDUCE_UPSTREAM_METRICS "${_metrics}" PARENT_SCOPE)
+  set(PURE_REDUCE_TOOLCHAIN_PROVENANCE
+    "${_toolchain_snapshot}" PARENT_SCOPE)
+  set(PURE_REDUCE_UPSTREAM_IDENTITY_MANIFEST
+    "${_identity_manifest}" PARENT_SCOPE)
+  set(PURE_REDUCE_UPSTREAM_COMPLETION "${_completion}" PARENT_SCOPE)
 
   if(CMAKE_SCRIPT_MODE_FILE)
     return()
@@ -1190,8 +1592,10 @@ function(pure_reduce_define_upstream_build)
       "-DPURE_REDUCE_VERIFIED_COMMIT=${PURE_REDUCE_VERIFIED_COMMIT}"
       "-DPURE_REDUCE_SOURCE_TREE_SHA256=${PURE_REDUCE_SOURCE_TREE_SHA256}"
       -P "${CMAKE_CURRENT_FUNCTION_LIST_FILE}"
-    BYPRODUCTS "${_stamp}" "${_image}" "${_include_dir}/proc.h"
+    BYPRODUCTS "${_stamp}" "${_identity_manifest}" "${_completion}"
+      "${_image}" "${_include_dir}/proc.h"
       ${_install_inputs} ${_link_artifacts} "${_metrics}"
+      "${_toolchain_snapshot}"
       "${_root}/logs/artifact-contract-probe.exe"
       "${_root}/logs/artifact-contract.log"
     COMMENT "Ensuring complete pinned REDUCE/CSL artifacts"

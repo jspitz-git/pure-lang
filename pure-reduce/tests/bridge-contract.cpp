@@ -32,6 +32,19 @@ int basic_contract()
     expect(pure_reduce_state() == PURE_REDUCE_UNINITIALIZED,
            "pre-start finish preserves the uninitialized state");
 
+    expect(PROC_capture_output(1) != 0,
+           "output callback setup is rejected before CSL start");
+    expect(pure_reduce_state() == PURE_REDUCE_UNINITIALIZED,
+           "rejected pre-start capture preserves uninitialized state");
+    expect(std::strcmp(pure_reduce_last_error(), "REDUCE is not running") == 0,
+           "rejected pre-start capture has stable diagnostics");
+    expect(PROC_feed_input("pre-start input") != 0,
+           "input callback setup is rejected before CSL start");
+    expect(pure_reduce_state() == PURE_REDUCE_UNINITIALIZED,
+           "rejected pre-start feed preserves uninitialized state");
+    expect(std::strcmp(pure_reduce_last_error(), "REDUCE is not running") == 0,
+           "rejected pre-start feed has stable diagnostics");
+
     expect(pure_reduce_start(nullptr) != 0,
            "null image path is rejected");
     expect(pure_reduce_state() == PURE_REDUCE_FAILED,
@@ -128,6 +141,49 @@ int live_cleanup_contract(const char *image)
     return failures == 0 ? 0 : 1;
 }
 
+int live_cons_slot_contract(const char *image)
+{
+    if (!start_real_image(image)) return 1;
+
+    expect(CSL_LISP::PROC_clear_stack() == 0,
+           "live cons contract starts with an empty procedural stack");
+    expect(CSL_LISP::PROC_push_small_integer(42) == 0,
+           "public save-slot sentinel can be pushed");
+    expect(CSL_LISP::PROC_save(99) == 0,
+           "public save slot 99 accepts the sentinel");
+    expect(CSL_LISP::PROC_push_small_integer(1) == 0,
+           "raw cons first operand can be pushed");
+    expect(CSL_LISP::PROC_push_small_integer(2) == 0,
+           "raw cons second operand can be pushed");
+    expect(PROC_make_cons() == 0,
+           "bridge constructs a raw cons without evaluating its operands");
+
+    CSL_LISP::PROC_handle pair = CSL_LISP::PROC_get_raw_value();
+    expect(pair != nullptr && CSL_LISP::PROC_atom(pair) == 0,
+           "raw cons result is a pair");
+    if (pair != nullptr && CSL_LISP::PROC_atom(pair) == 0)
+    {
+        CSL_LISP::PROC_handle first = CSL_LISP::PROC_first(pair);
+        CSL_LISP::PROC_handle rest = CSL_LISP::PROC_rest(pair);
+        expect(CSL_LISP::PROC_fixnum(first) != 0 &&
+                   CSL_LISP::PROC_integer_value(first) == 1,
+               "raw cons preserves its first operand");
+        expect(CSL_LISP::PROC_fixnum(rest) != 0 &&
+                   CSL_LISP::PROC_integer_value(rest) == 2,
+               "raw cons preserves its second operand");
+    }
+
+    expect(CSL_LISP::PROC_load(99) == 0,
+           "public save slot 99 remains loadable after raw cons");
+    CSL_LISP::PROC_handle sentinel = CSL_LISP::PROC_get_raw_value();
+    expect(sentinel != nullptr && CSL_LISP::PROC_fixnum(sentinel) != 0 &&
+               CSL_LISP::PROC_integer_value(sentinel) == 42,
+           "raw cons preserves the public save-slot 99 value");
+    expect(pure_reduce_finish() == 0,
+           "live cons contract shuts REDUCE down cleanly");
+    return failures == 0 ? 0 : 1;
+}
+
 int main(int argc, char **argv)
 {
     if (argc == 1) return basic_contract();
@@ -135,6 +191,9 @@ int main(int argc, char **argv)
         return live_redundant_start_contract(argv[2]);
     if (argc == 3 && std::strcmp(argv[1], "--live-cleanup") == 0)
         return live_cleanup_contract(argv[2]);
-    std::cerr << "usage: bridge-contract [--live-redundant|--live-cleanup image]\n";
+    if (argc == 3 && std::strcmp(argv[1], "--live-cons-slot") == 0)
+        return live_cons_slot_contract(argv[2]);
+    std::cerr << "usage: bridge-contract "
+                 "[--live-redundant|--live-cleanup|--live-cons-slot image]\n";
     return 2;
 }

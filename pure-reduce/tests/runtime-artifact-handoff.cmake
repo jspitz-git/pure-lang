@@ -56,6 +56,12 @@ file(WRITE "${_root}/logs/artifact-contract.log"
   "fixture artifact contract log\n")
 file(WRITE "${_root}/reduce-upstream-metrics.json"
   "{\"fixture\":\"runtime handoff\"}\n")
+file(WRITE "${_root}/toolchain-packages.tsv"
+  "fixture toolchain provenance bytes for runtime handoff\n")
+set(PURE_REDUCE_TOOLCHAIN_PROVENANCE_TEST_OVERRIDE
+  "${_root}/toolchain-packages.fixture-live.tsv")
+file(COPY_FILE "${_root}/toolchain-packages.tsv"
+  "${PURE_REDUCE_TOOLCHAIN_PROVENANCE_TEST_OVERRIDE}")
 file(WRITE "${_root}/pure-reduce-upstream.recipe"
   "${_PURE_REDUCE_BUILD_RECIPE_VERSION}\n")
 set(PURE_REDUCE_SOURCE_DIR "${_root}/source")
@@ -67,6 +73,7 @@ _pure_reduce_expected_upstream_stamp(
   "${PURE_REDUCE_VERIFIED_COMMIT}"
   "${PURE_REDUCE_SOURCE_TREE_SHA256}" _fixture_stamp)
 file(WRITE "${_root}/pure-reduce-upstream.stamp" "${_fixture_stamp}")
+_pure_reduce_write_upstream_identity("${_root}")
 
 # A full rebuild is intentionally replaced by a deterministic local producer:
 # the real upstream build is the slow external boundary, while all completeness
@@ -79,6 +86,7 @@ function(_pure_reduce_run_upstream_build)
   file(APPEND "${_rebuild_log}" "rebuild\n")
   _pure_reduce_stage_runtime_artifacts(
     "${_recovery_producer}" "${_root}/artifacts/runtime")
+  _pure_reduce_write_upstream_identity("${_root}")
 endfunction()
 foreach(_manifest IN ITEMS reduce.resources.manifest reduce.fonts.manifest)
   file(SHA256 "${_root}/artifacts/runtime/${_manifest}"

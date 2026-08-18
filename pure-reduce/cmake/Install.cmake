@@ -187,7 +187,7 @@ if(PURE_REDUCE_VERIFY_VENDORED_LICENSES)
   endif()
   pure_reduce_verify_vendored_toolchain_licenses(
     "${PURE_REDUCE_SOURCE_ROOT}")
-  message(STATUS "verified pinned CLANG64 license notice hashes")
+  message(STATUS "verified reviewed CLANG64 license-notice snapshot hashes")
   return()
 endif()
 
@@ -202,6 +202,8 @@ if(PURE_REDUCE_RUN_COMPONENT_INSTALL)
       PURE_REDUCE_UPSTREAM_BINARY_DIR
       PURE_REDUCE_DLL
       PURE_REDUCE_IMAGE
+      PURE_REDUCE_VERIFIED_COMMIT
+      PURE_REDUCE_SOURCE_TREE_SHA256
       PURE_REDUCE_LLVM_READOBJ
       PURE_REDUCE_CLANG64_ROOT
       PURE_REDUCE_RUNTIME_DLL_MAPPING_FILE
@@ -214,6 +216,16 @@ if(PURE_REDUCE_RUN_COMPONENT_INSTALL)
     endif()
   endforeach()
 
+  include("${CMAKE_CURRENT_LIST_DIR}/ReduceUpstream.cmake")
+  pure_reduce_verify_upstream_install_contract(
+    "${PURE_REDUCE_UPSTREAM_BINARY_DIR}"
+    "${PURE_REDUCE_VERIFIED_COMMIT}"
+    "${PURE_REDUCE_SOURCE_TREE_SHA256}"
+    "${PURE_REDUCE_IMAGE}")
+  pure_reduce_verify_live_toolchain_provenance(
+    "${PURE_REDUCE_UPSTREAM_BINARY_DIR}"
+    "${PURE_REDUCE_CLANG64_ROOT}"
+    "${PURE_REDUCE_SOURCE_ROOT}/licenses")
   pure_reduce_verify_vendored_toolchain_licenses(
     "${PURE_REDUCE_SOURCE_ROOT}")
   _pure_reduce_validate_source_file(
@@ -273,7 +285,7 @@ if(PURE_REDUCE_RUN_COMPONENT_INSTALL)
   _pure_reduce_install_record(
     "${PURE_REDUCE_DLL}" "${_library}/reduce.dll"
     "Pure native module and embedded CSL runtime"
-    "PureReduce bridge plus pinned REDUCE CSL closure"
+    "PureReduce bridge plus pinned REDUCE CSL closure with exact rolling CLANG64 inputs recorded in ${_docs}/pure-reduce-package-metrics.json"
     "${_docs}/COPYING and ${_docs}/licenses/REDUCE-LICENSE.txt and ${_docs}/licenses/CRLIBM-COPYING.LIB.txt and ${_docs}/licenses/LIBFFI-LICENSE.txt and ${_docs}/licenses/ZLIB-LICENSE.txt and ${_docs}/licenses/NCURSES-LICENSE.txt and ${_docs}/licenses/WINPTHREADS-COPYING.txt and ${_docs}/licenses/LIBCXX-LICENSE.txt and ${_docs}/licenses/LIBUNWIND-LICENSE.txt and ${_docs}/licenses/COMPILER-RT-LICENSE.txt and ${_docs}/licenses/MINGW-W64-CRT-COPYING.txt and ${_docs}/licenses/MINGW-W64-RUNTIME-COPYING.txt")
   _pure_reduce_install_record(
     "${PURE_REDUCE_IMAGE}" "${_library}/reduce.img"
@@ -352,7 +364,7 @@ if(PURE_REDUCE_RUN_COMPONENT_INSTALL)
       "fonts=${_runtime_font_count}")
   endif()
 
-  foreach(_documentation IN ITEMS README COPYING THIRD_PARTY.md)
+  foreach(_documentation IN ITEMS README WINDOWS.md COPYING THIRD_PARTY.md)
     _pure_reduce_install_record(
       "${PURE_REDUCE_SOURCE_ROOT}/${_documentation}"
       "${_docs}/${_documentation}"
@@ -375,7 +387,8 @@ if(PURE_REDUCE_RUN_COMPONENT_INSTALL)
   foreach(_patch_name IN ITEMS
       0001-csl-winsupport-define-nil.patch
       0002-csl-windows-utf8-image-open.patch
-      0003-configure-quote-source-paths.patch)
+      0003-configure-quote-source-paths.patch
+      0004-csl-procedural-raw-cons.patch)
     _pure_reduce_install_record(
       "${PURE_REDUCE_SOURCE_ROOT}/patches/${_patch_name}"
       "${_docs}/patches/${_patch_name}"
@@ -418,7 +431,7 @@ if(PURE_REDUCE_RUN_COMPONENT_INSTALL)
       MINGW-W64-RUNTIME-COPYING.txt)
     _pure_reduce_add_license(
       "${PURE_REDUCE_SOURCE_ROOT}/licenses/${_license_name}"
-      "${_license_name}" "vendored pinned CLANG64 package license")
+      "${_license_name}" "vendored CLANG64 package license snapshot")
   endforeach()
 
   foreach(_runtime_dll IN LISTS _runtime_dlls)
@@ -473,6 +486,25 @@ if(PURE_REDUCE_RUN_COMPONENT_INSTALL)
     message(FATAL_ERROR
       "upstream metrics omit link object count: ${_metric_error}")
   endif()
+  string(JSON _metric_toolchain_packages ERROR_VARIABLE _metric_error
+    GET "${_upstream_metrics_json}" toolchain_packages)
+  if(_metric_error)
+    message(FATAL_ERROR
+      "upstream metrics omit toolchain package provenance: ${_metric_error}")
+  endif()
+  set(_toolchain_snapshot
+    "${PURE_REDUCE_UPSTREAM_BINARY_DIR}/toolchain-packages.tsv")
+  pure_reduce_validate_toolchain_provenance(
+    "${_toolchain_snapshot}" "${PURE_REDUCE_SOURCE_ROOT}/licenses"
+    _toolchain_records)
+  pure_reduce_toolchain_provenance_json(
+    "${_toolchain_records}" _canonical_toolchain_packages)
+  string(JSON _toolchain_metrics_equal ERROR_VARIABLE _metric_error EQUAL
+    "${_metric_toolchain_packages}" "${_canonical_toolchain_packages}")
+  if(_metric_error OR NOT _toolchain_metrics_equal)
+    message(FATAL_ERROR
+      "upstream metrics toolchain provenance differs from the live-verified snapshot")
+  endif()
   list(LENGTH _records _pre_metrics_count)
   math(EXPR _installed_file_count "${_pre_metrics_count} + 2")
   set(_package_metrics
@@ -485,6 +517,7 @@ if(PURE_REDUCE_RUN_COMPONENT_INSTALL)
     "  \"upstream_source_bytes\": ${_metric_source_bytes},\n"
     "  \"upstream_build_tree_bytes\": ${_metric_build_tree_bytes},\n"
     "  \"link_object_count\": ${_metric_link_object_count},\n"
+    "  \"toolchain_packages\": ${_metric_toolchain_packages},\n"
     "  \"runtime_resource_count\": ${_runtime_resource_count},\n"
     "  \"runtime_font_count\": ${_runtime_font_count},\n"
     "  \"installed_file_count\": ${_installed_file_count}\n"
@@ -603,7 +636,7 @@ if(TARGET reduce)
       -DPURE_REDUCE_VERIFY_VENDORED_LICENSES=ON
       "-DPURE_REDUCE_SOURCE_ROOT=${CMAKE_CURRENT_SOURCE_DIR}"
       -P "${CMAKE_CURRENT_LIST_FILE}"
-    COMMENT "Verifying pinned CLANG64 license notice hashes"
+    COMMENT "Verifying reviewed CLANG64 license-notice snapshot hashes"
     VERBATIM)
   add_dependencies(reduce pure-reduce-vendored-license-verify)
   set(_component_code [=[
@@ -615,6 +648,8 @@ execute_process(
     "-DPURE_REDUCE_UPSTREAM_BINARY_DIR=@PURE_REDUCE_UPSTREAM_BINARY_DIR@"
     "-DPURE_REDUCE_DLL=$<TARGET_FILE:reduce>"
     "-DPURE_REDUCE_IMAGE=@PURE_REDUCE_CSL_IMAGE@"
+    "-DPURE_REDUCE_VERIFIED_COMMIT=@PURE_REDUCE_VERIFIED_COMMIT@"
+    "-DPURE_REDUCE_SOURCE_TREE_SHA256=@PURE_REDUCE_SOURCE_TREE_SHA256@"
     "-DPURE_REDUCE_LLVM_READOBJ=@PURE_REDUCE_LLVM_READOBJ@"
     "-DPURE_REDUCE_CLANG64_ROOT=@_clang64_root@"
     "-DPURE_REDUCE_RUNTIME_DLL_MAPPING_FILE=@PURE_REDUCE_RUNTIME_DLL_MAPPING_FILE@"

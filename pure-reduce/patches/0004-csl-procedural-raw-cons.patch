@@ -1,0 +1,49 @@
+diff --git a/csl/cslbase/proc.h b/csl/cslbase/proc.h
+index 18347f7..2e817e6 100644
+--- a/csl/cslbase/proc.h
++++ b/csl/cslbase/proc.h
+@@ -267,6 +267,14 @@ extern int PROC_push_floating(double n);
+ 
+ extern int PROC_make_function_call(const char *name, int n);
+ 
++//
++// Pop the top two items and push a raw Lisp cons whose first item is the
++// older operand and whose rest is the newer operand. Unlike a Lisp-level
++// call to cons, this neither evaluates nor rewrites either operand.
++//
++
++extern int PROC_make_raw_cons();
++
+ //
+ // Save whatever is on top of the stack in memory location n. At present
+ // I provide 100 memory locations, whihc ar enumbered 0 to 99.
+diff --git a/csl/cslbase/csl.cpp b/csl/cslbase/csl.cpp
+index 927624a..76d85c3 100644
+--- a/csl/cslbase/csl.cpp
++++ b/csl/cslbase/csl.cpp
+@@ -3813,6 +3813,25 @@ int PROC_make_function_call(const char* name, int n)
+     return 0;
+ }
+ 
++// Construct a raw Lisp cons without borrowing a public PROC_save slot. The
++// existing procedural stack is not changed until both allocations succeed,
++// so callers can recover or retry when allocation reports an error.
++
++int PROC_make_raw_cons()
++{   LispObject w = nil, w1 = nil;
++    volatile uintptr_t sp;
++    C_stackBase = reinterpret_cast<uintptr_t>(&sp);
++    if (procstack == nil || cdr(procstack) == nil)
++        return 1; // Not enough args available
++    if_error(
++        w = cons(car(cdr(procstack)), car(procstack));
++        errexit();
++        w1 = cons(w, cdr(cdr(procstack))),
++        return 2);
++    procstack = w1;
++    return 0;
++}
++
+ // Take the top item on the stack and save it in location n (0 <= n <= 99).
+ 
+ int PROC_save(int n)

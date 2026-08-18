@@ -1,0 +1,22 @@
+using system, reduce;
+
+check name condition
+  = () if condition;
+  = fprintf stderr "FAIL: %s\n" name $$ exit 1 otherwise;
+
+check "capture is the first REDUCE operation"
+  (reduce::pure_reduce_state == 0);
+reduce::capture 1;
+check "first capture starts REDUCE"
+  (reduce::pure_reduce_state == 1);
+let captured_value = lisp ('prin2 "pure-reduce first capture marker");
+reduce::capture 0;
+check "captured evaluation value"
+  (captured_value === "pure-reduce first capture marker");
+check "first-operation capture remains installed after lazy startup"
+  (index reduce::output "pure-reduce first capture marker" >= 0);
+reduce::finish;
+check "first-capture lifecycle finishes cleanly"
+  (reduce::pure_reduce_state == 2);
+
+puts "pure-reduce first-capture passed";

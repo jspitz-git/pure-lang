@@ -130,6 +130,7 @@ foreach(_required_relative IN ITEMS
     lib/pure/reduce.resources/mma.awk
     lib/pure/reduce.resources/qepcad.awk
     share/doc/pure-reduce/README
+    share/doc/pure-reduce/WINDOWS.md
     share/doc/pure-reduce/COPYING
     share/doc/pure-reduce/THIRD_PARTY.md
     share/doc/pure-reduce/PureReduceInventory.tsv
@@ -138,7 +139,10 @@ foreach(_required_relative IN ITEMS
     share/doc/pure-reduce/runtime/reduce.fonts.manifest
     share/doc/pure-reduce/licenses/REDUCE-LICENSE.txt
     share/doc/pure-reduce/tests/smoke.pure
-    share/doc/pure-reduce/tests/lifecycle.pure)
+    share/doc/pure-reduce/tests/lifecycle.pure
+    share/doc/pure-reduce/tests/first-capture.pure
+    share/doc/pure-reduce/tests/first-feed.pure
+    share/doc/pure-reduce/patches/0004-csl-procedural-raw-cons.patch)
   if(NOT _required_relative IN_LIST _expected_relative)
     message(FATAL_ERROR
       "required PureReduce payload is missing: ${_required_relative}")
@@ -246,6 +250,63 @@ if(NOT _metrics_installed_count EQUAL _expected_count)
     "package metrics installed count differs: "
     "${_metrics_installed_count} vs ${_expected_count}")
 endif()
+set(_expected_toolchain_packages
+  mingw-w64-clang-x86_64-zlib
+  mingw-w64-clang-x86_64-ncurses
+  mingw-w64-clang-x86_64-winpthreads
+  mingw-w64-clang-x86_64-libc++
+  mingw-w64-clang-x86_64-libunwind
+  mingw-w64-clang-x86_64-compiler-rt
+  mingw-w64-clang-x86_64-crt)
+string(JSON _toolchain_package_count ERROR_VARIABLE _toolchain_error
+  LENGTH "${_metrics_json}" toolchain_packages)
+list(LENGTH _expected_toolchain_packages _expected_toolchain_package_count)
+if(_toolchain_error OR
+   NOT _toolchain_package_count EQUAL _expected_toolchain_package_count)
+  message(FATAL_ERROR
+    "package metrics must contain exactly seven toolchain packages")
+endif()
+math(EXPR _last_toolchain_package "${_toolchain_package_count} - 1")
+foreach(_index RANGE 0 ${_last_toolchain_package})
+  list(GET _expected_toolchain_packages ${_index} _expected_package)
+  foreach(_field IN ITEMS package version role)
+    string(JSON _value ERROR_VARIABLE _toolchain_error GET
+      "${_metrics_json}" toolchain_packages ${_index} "${_field}")
+    if(_toolchain_error OR _value STREQUAL "")
+      message(FATAL_ERROR
+        "toolchain package ${_index} omits ${_field}")
+    endif()
+    set("_toolchain_${_field}" "${_value}")
+  endforeach()
+  if(NOT _toolchain_package STREQUAL _expected_package OR
+     NOT _toolchain_version MATCHES "^[A-Za-z0-9][A-Za-z0-9._+~:-]*$")
+    message(FATAL_ERROR
+      "toolchain package identity is malformed at index ${_index}")
+  endif()
+  foreach(_field IN ITEMS path sha256 owner)
+    string(JSON _value ERROR_VARIABLE _toolchain_error GET
+      "${_metrics_json}" toolchain_packages ${_index} link_input "${_field}")
+    if(_toolchain_error OR _value STREQUAL "")
+      message(FATAL_ERROR
+        "toolchain package ${_index} omits link_input.${_field}")
+    endif()
+    set("_toolchain_input_${_field}" "${_value}")
+  endforeach()
+  string(LENGTH "${_toolchain_input_sha256}" _toolchain_sha_length)
+  if(NOT _toolchain_input_owner STREQUAL _expected_package OR
+     NOT _toolchain_sha_length EQUAL 64 OR
+     _toolchain_input_sha256 MATCHES "[^0-9a-f]" OR
+     _toolchain_input_path MATCHES "(^[/\\]|[A-Za-z]:|\\\\|(^|/)\\.\\.(/|$))")
+    message(FATAL_ERROR
+      "toolchain link input is malformed at index ${_index}")
+  endif()
+  string(JSON _notice_count ERROR_VARIABLE _toolchain_error LENGTH
+    "${_metrics_json}" toolchain_packages ${_index} notices)
+  if(_toolchain_error OR _notice_count LESS 1)
+    message(FATAL_ERROR
+      "toolchain package ${_index} omits license notice provenance")
+  endif()
+endforeach()
 
 set(_forbidden_prefixes "${_build_dir}" "${_stage}")
 if(DEFINED SOURCE_PREFIX AND NOT "${SOURCE_PREFIX}" STREQUAL "")

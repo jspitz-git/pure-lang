@@ -233,6 +233,11 @@ extern "C" PURE_REDUCE_API int PROC_capture_output(int flag)
 {
     try
     {
+        if (bridge_state != PURE_REDUCE_RUNNING)
+        {
+            set_error("REDUCE is not running");
+            return 1;
+        }
         capture_output = flag != 0;
         if (capture_output) output_buffer.clear();
         return update_callbacks();
@@ -277,6 +282,11 @@ extern "C" PURE_REDUCE_API int PROC_feed_input(const char *input_utf8)
 {
     try
     {
+        if (bridge_state != PURE_REDUCE_RUNNING)
+        {
+            set_error("REDUCE is not running");
+            return 1;
+        }
         input_buffer.clear();
         input_position = 0;
         if (input_utf8 != nullptr)
@@ -306,21 +316,7 @@ extern "C" PURE_REDUCE_API int PROC_make_cons(void)
 {
     try
     {
-        // The procedural API has no direct raw-cons operation. Slot 99 is a
-        // bridge-private temporary: quote both existing stack operands, then
-        // evaluate (cons (quote first) (quote second)). This preserves raw
-        // Lisp objects without exposing LispObject or procstack in the ABI.
-        if (CSL_LISP::PROC_save(99) != 0) return 1;
-        if (CSL_LISP::PROC_make_function_call("quote", 1) != 0)
-        {
-            CSL_LISP::PROC_load(99);
-            return 1;
-        }
-        if (CSL_LISP::PROC_load(99) != 0) return 1;
-        if (CSL_LISP::PROC_make_function_call("quote", 1) != 0) return 1;
-        if (CSL_LISP::PROC_make_function_call("cons", 2) != 0) return 2;
-        if (CSL_LISP::PROC_lisp_eval() != 0) return 2;
-        return 0;
+        return CSL_LISP::PROC_make_raw_cons();
     }
     catch (const std::exception &error)
     {

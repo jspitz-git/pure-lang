@@ -376,9 +376,9 @@ if(_manifest_text MATCHES "[;|]" OR
 endif()
 file(STRINGS "${_manifest}" _manifest_lines)
 list(LENGTH _manifest_lines _manifest_count)
-if(NOT _manifest_count EQUAL 81)
+if(NOT _manifest_count EQUAL 85)
   message(FATAL_ERROR
-    "authoritative manifest must contain exactly 81 payloads: ${_manifest_count}")
+    "authoritative manifest must contain exactly 85 payloads: ${_manifest_count}")
 endif()
 
 set(_expected_paths)
@@ -422,8 +422,12 @@ foreach(_required_path IN ITEMS
     lib/pure/reduce.img
     lib/pure/reduce.pure
     share/doc/pure-reduce/pure-reduce-package-metrics.json
+    share/doc/pure-reduce/WINDOWS.md
     share/doc/pure-reduce/tests/smoke.pure
     share/doc/pure-reduce/tests/lifecycle.pure
+    share/doc/pure-reduce/tests/first-capture.pure
+    share/doc/pure-reduce/tests/first-feed.pure
+    share/doc/pure-reduce/patches/0004-csl-procedural-raw-cons.patch
     "${_installed_inventory_relative}")
   if(NOT _required_path IN_LIST _expected_paths)
     message(FATAL_ERROR
@@ -628,6 +632,17 @@ if(_metrics_error OR NOT _metrics_count EQUAL _manifest_count)
   message(FATAL_ERROR
     "installed metrics count differs from authoritative manifest")
 endif()
+string(JSON _metrics_toolchain ERROR_VARIABLE _metrics_error
+  GET "${_metrics_json}" toolchain_packages)
+if(_metrics_error)
+  message(FATAL_ERROR
+    "installed metrics omit toolchain package provenance")
+endif()
+include("${CMAKE_CURRENT_LIST_DIR}/ToolchainProvenance.cmake")
+pure_reduce_validate_toolchain_provenance_json(
+  "${_metrics_toolchain}"
+  "${_stage}/share/doc/pure-reduce/licenses"
+  _verified_toolchain_records)
 
 set(_forbidden_prefixes "${_build_dir}" "${_stage}")
 if(DEFINED ORIGINAL_BUILD_PREFIX AND
@@ -675,7 +690,13 @@ foreach(_installed IN LISTS _installed_files)
   string(REPLACE "\\" "/" _relative "${_relative}")
   string(TOLOWER "${_relative}" _relative_lower)
   set(_file_msys_needles "${_msys_needles}")
-  if(_relative_lower MATCHES "\\.(dll|img|ttf|pfb|pfa|pfm)$")
+  if(_relative_lower STREQUAL "share/doc/pure-reduce/windows.md")
+    # The installed Windows build guide intentionally documents canonical
+    # CLANG64/MSYS2 commands and C:/msys64 paths. Exact source, build, and
+    # stage prefixes are still scanned above; runtime transcripts below remain
+    # the fail-closed boundary for an accidental runtime dependency.
+    set(_file_msys_needles "")
+  elseif(_relative_lower MATCHES "\\.(dll|img|ttf|pfb|pfa|pfm)$")
     # Toolchain provenance strings in binary debug records are not runtime
     # search paths. Runtime transcripts below remain the MSYS2 boundary; all
     # binary files are still byte-scanned for forbidden package prefixes.
