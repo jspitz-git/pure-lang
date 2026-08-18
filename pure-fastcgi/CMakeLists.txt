@@ -46,6 +46,11 @@ include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/Install.cmake")
 
 include(CTest)
 find_program(LLVM_READOBJ NAMES llvm-readobj REQUIRED)
+find_program(POWERSHELL_EXECUTABLE
+  NAMES powershell.exe
+  HINTS "$ENV{SystemRoot}/System32/WindowsPowerShell/v1.0"
+  NO_DEFAULT_PATH
+  REQUIRED)
 add_custom_target(
   verify-windows-dependencies
   COMMAND "${CMAKE_COMMAND}"
@@ -172,6 +177,7 @@ if(BUILD_TESTING)
       "-DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
       "-DPURE_RUNTIME_ROOT=${PURE_PREFIX}/bin"
       "-DLLVM_READOBJ=${LLVM_READOBJ}"
+      "-DPOWERSHELL_EXECUTABLE=${POWERSHELL_EXECUTABLE}"
       "-DVERIFIER=${CMAKE_CURRENT_SOURCE_DIR}/cmake/VerifyInstalledPackage.cmake"
       -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/package-mutations.cmake")
   set_tests_properties(pure-fastcgi-package-verifier PROPERTIES

@@ -1,6 +1,14 @@
 cmake_minimum_required(VERSION 3.25)
 
-foreach(required IN ITEMS BUILD_DIR STAGE_PREFIX PURE_RUNTIME_ROOT LLVM_READOBJ)
+foreach(required IN ITEMS
+    BUILD_DIR
+    STAGE_PREFIX
+    SOURCE_PREFIX
+    ORIGINAL_BUILD_PREFIX
+    ORIGINAL_STAGE_PREFIX
+    PURE_RUNTIME_ROOT
+    LLVM_READOBJ
+    POWERSHELL_EXECUTABLE)
   if(NOT DEFINED ${required} OR "${${required}}" STREQUAL "")
     message(FATAL_ERROR "VERIFY_INPUT_MISSING: ${required} is required")
   endif()
@@ -9,8 +17,27 @@ if(NOT DEFINED RUN_RUNTIME_TESTS)
   set(RUN_RUNTIME_TESTS OFF)
 endif()
 
-cmake_path(ABSOLUTE_PATH BUILD_DIR NORMALIZE OUTPUT_VARIABLE build_dir)
-cmake_path(ABSOLUTE_PATH STAGE_PREFIX NORMALIZE OUTPUT_VARIABLE stage)
+function(validate_absolute_prefixes variable out_prefixes)
+  set(validated)
+  foreach(prefix IN LISTS ${variable})
+    cmake_path(IS_ABSOLUTE prefix is_absolute)
+    cmake_path(NORMAL_PATH prefix OUTPUT_VARIABLE normalized_prefix)
+    if(NOT is_absolute OR NOT prefix STREQUAL normalized_prefix)
+      message(FATAL_ERROR
+        "PREFIX_INPUT_INVALID: ${variable} must contain normalized absolute paths")
+    endif()
+    list(APPEND validated "${normalized_prefix}")
+  endforeach()
+  set(${out_prefixes} "${validated}" PARENT_SCOPE)
+endfunction()
+
+validate_absolute_prefixes(BUILD_DIR build_prefixes)
+validate_absolute_prefixes(STAGE_PREFIX stage_prefixes)
+validate_absolute_prefixes(SOURCE_PREFIX source_prefixes)
+validate_absolute_prefixes(ORIGINAL_BUILD_PREFIX original_build_prefixes)
+validate_absolute_prefixes(ORIGINAL_STAGE_PREFIX original_stage_prefixes)
+list(GET build_prefixes 0 build_dir)
+list(GET stage_prefixes 0 stage)
 cmake_path(ABSOLUTE_PATH PURE_RUNTIME_ROOT NORMALIZE
   OUTPUT_VARIABLE runtime_root)
 if(NOT IS_DIRECTORY "${stage}")
@@ -27,6 +54,9 @@ if(runtime_beneath_stage OR stage_beneath_runtime)
 endif()
 if(NOT EXISTS "${LLVM_READOBJ}")
   message(FATAL_ERROR "VERIFY_INPUT_MISSING: llvm-readobj does not exist")
+endif()
+if(NOT EXISTS "${POWERSHELL_EXECUTABLE}")
+  message(FATAL_ERROR "VERIFY_INPUT_MISSING: PowerShell does not exist")
 endif()
 
 set(expected_manifest "${build_dir}/PureFastCGIExpected.sha256")
@@ -102,6 +132,12 @@ function(validate_inventory inventory_file out_lines out_paths out_hashes out_si
     list(APPEND hashes "${sha256}")
     list(APPEND sizes "${size}")
   endforeach()
+  set(sorted_paths "${paths}")
+  list(SORT sorted_paths COMPARE STRING CASE SENSITIVE ORDER ASCENDING)
+  if(NOT paths STREQUAL sorted_paths)
+    message(FATAL_ERROR
+      "INVENTORY_ORDER_MISMATCH: paths are not in ordinal order")
+  endif()
   set(${out_lines} "${lines}" PARENT_SCOPE)
   set(${out_paths} "${paths}" PARENT_SCOPE)
   set(${out_hashes} "${hashes}" PARENT_SCOPE)
@@ -182,6 +218,40 @@ if(NOT installed_paths STREQUAL sorted_manifest_paths)
     "staged: ${installed_paths}\nmanifest: ${sorted_manifest_paths}")
 endif()
 
+set(leak_prefixes
+  ${build_prefixes}
+  ${stage_prefixes}
+  ${source_prefixes}
+  ${original_build_prefixes}
+  ${original_stage_prefixes})
+list(REMOVE_DUPLICATES leak_prefixes)
+set(prefix_scanner "${CMAKE_CURRENT_LIST_DIR}/ScanPrefixLeaks.ps1")
+if(NOT EXISTS "${prefix_scanner}")
+  message(FATAL_ERROR "VERIFY_INPUT_MISSING: prefix scanner does not exist")
+endif()
+foreach(prefix IN LISTS leak_prefixes)
+  foreach(installed_file IN LISTS installed_files)
+    execute_process(
+      COMMAND "${POWERSHELL_EXECUTABLE}"
+        -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass
+        -File "${prefix_scanner}"
+        -FilePath "${installed_file}"
+        -Prefix "${prefix}"
+      RESULT_VARIABLE scan_result
+      OUTPUT_VARIABLE scan_output
+      ERROR_VARIABLE scan_error
+      ENCODING UTF-8)
+    if(scan_result EQUAL 42)
+      message(FATAL_ERROR
+        "PACKAGE_PREFIX_LEAK: ${installed_file} contains ${prefix}")
+    elseif(NOT scan_result EQUAL 0)
+      message(FATAL_ERROR
+        "PREFIX_SCAN_FAILED: ${installed_file} (${scan_result})\n"
+        "stdout:\n${scan_output}\nstderr:\n${scan_error}")
+    endif()
+  endforeach()
+endforeach()
+
 list(LENGTH manifest_paths manifest_count)
 math(EXPR manifest_last "${manifest_count} - 1")
 foreach(index RANGE 0 ${manifest_last})
@@ -260,16 +330,24 @@ endforeach()
 
 set(system_dlls
   advapi32.dll
-  bcrypt.dll
-  crypt32.dll
-  gdi32.dll
+  api-ms-win-crt-convert-l1-1-0.dll
+  api-ms-win-crt-environment-l1-1-0.dll
+  api-ms-win-crt-filesystem-l1-1-0.dll
+  api-ms-win-crt-heap-l1-1-0.dll
+  api-ms-win-crt-locale-l1-1-0.dll
+  api-ms-win-crt-math-l1-1-0.dll
+  api-ms-win-crt-multibyte-l1-1-0.dll
+  api-ms-win-crt-private-l1-1-0.dll
+  api-ms-win-crt-process-l1-1-0.dll
+  api-ms-win-crt-runtime-l1-1-0.dll
+  api-ms-win-crt-stdio-l1-1-0.dll
+  api-ms-win-crt-string-l1-1-0.dll
+  api-ms-win-crt-time-l1-1-0.dll
+  api-ms-win-crt-utility-l1-1-0.dll
   kernel32.dll
   ntdll.dll
   ole32.dll
-  oleaut32.dll
-  rpcrt4.dll
   shell32.dll
-  user32.dll
   ws2_32.dll)
 set(pe_queue "${component_pe_paths}")
 set(pe_seen)
@@ -300,8 +378,7 @@ while(pe_queue)
       message(FATAL_ERROR
         "FORBIDDEN_FASTCGI_DLL: ${pe_file} imports ${import_name}")
     endif()
-    if(import_lower MATCHES "^(api-ms-win-|ext-ms-win-).*\\.dll$" OR
-        import_lower IN_LIST system_dlls)
+    if(import_lower IN_LIST system_dlls)
       continue()
     endif()
     list(FIND component_pe_names "${import_lower}" component_index)
@@ -323,32 +400,6 @@ while(pe_queue)
     list(APPEND pe_queue "${resolved_import}")
   endforeach()
 endwhile()
-
-set(leak_prefixes)
-if(DEFINED SOURCE_PREFIX AND NOT "${SOURCE_PREFIX}" STREQUAL "")
-  list(APPEND leak_prefixes ${SOURCE_PREFIX})
-endif()
-foreach(prefix_variable IN ITEMS ORIGINAL_BUILD_PREFIX ORIGINAL_STAGE_PREFIX)
-  if(DEFINED ${prefix_variable} AND NOT "${${prefix_variable}}" STREQUAL "")
-    list(APPEND leak_prefixes "${${prefix_variable}}")
-  endif()
-endforeach()
-foreach(prefix IN LISTS leak_prefixes)
-  cmake_path(ABSOLUTE_PATH prefix NORMALIZE OUTPUT_VARIABLE normalized_prefix)
-  string(REPLACE "\\" "/" normalized_prefix "${normalized_prefix}")
-  string(TOLOWER "${normalized_prefix}" normalized_prefix)
-  foreach(installed_file IN LISTS installed_files)
-    file(STRINGS "${installed_file}" ascii_strings LENGTH_MINIMUM 4)
-    string(JOIN "\n" searchable ${ascii_strings})
-    string(REPLACE "\\" "/" searchable "${searchable}")
-    string(TOLOWER "${searchable}" searchable)
-    string(FIND "${searchable}" "${normalized_prefix}" leak_index)
-    if(NOT leak_index EQUAL -1)
-      message(FATAL_ERROR
-        "PACKAGE_PREFIX_LEAK: ${installed_file} contains ${prefix}")
-    endif()
-  endforeach()
-endforeach()
 
 if(RUN_RUNTIME_TESTS)
   foreach(required IN ITEMS PROTOCOL_HARNESS PROTOCOL_WORKER)
