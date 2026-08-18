@@ -99,8 +99,11 @@ require_text("${metrics_step}" METRICS "clang.exe --version" "cmakeVersion"
   "PURE_BUILD_SECONDS" "FASTCGI_BUILD_SECONDS" "workers: $env:PURE_BUILD_SECONDS / 1"
   "module bytes / stage bytes / staged files" "files.Count -ne 6"
   "inventory SHA-256" "Collections.Generic.Queue[string]"
-  "^Import \\{\\r?\\n\\s{2}Name:"
-  "importMatches.Count -eq 0" "expectedRuntimeImports"
+  "PURE_FASTCGI_IMPORT_PARSER_BEGIN" "function Get-CoffImportNames"
+  "Format: COFF-x86-64" "Import block has multiple Name fields"
+  "truncated Import block" "Import syntax was not fully accounted"
+  "Get-CoffImportNames -Readobj $readobj -Pe $pe"
+  "expectedRuntimeImports"
   "resolvedRuntimeNames" "visited.Count -le 1"
   "recursive PE import closure did not resolve runtime dependencies"
   "Complete fastcgi.dll imports")
@@ -135,8 +138,9 @@ if(NOT MUTATION_MODE)
     "-DORIGINAL_STAGE_PREFIX=$stage"
     "RUN_RUNTIME_TESTS=ON" "files.Count -ne 6" "gmpVersion"
     "inventory SHA-256" "Collections.Generic.Queue[string]"
-    "^Import \\{\\r?\\n\\s{2}Name:"
-    "importMatches.Count -eq 0" "expectedRuntimeImports"
+    "function Get-CoffImportNames" "Import block has multiple Name fields"
+    "truncated Import block" "Import syntax was not fully accounted"
+    "Get-CoffImportNames -Readobj $readobj -Pe $pe" "expectedRuntimeImports"
     "resolvedRuntimeNames" "visited.Count -le 1"
     "[Array]::Sort($relative, [StringComparer]::Ordinal)"
     "2000-01-01T00:00:00+00:00" "firstHash -cne $secondHash"
@@ -166,5 +170,44 @@ if(NOT MUTATION_MODE)
   file(REMOVE "${subject}")
   if(result EQUAL 0)
     message(FATAL_ERROR "CI_CONTRACT_MUTATION: inert cross-job move survived")
+  endif()
+
+  string(FIND "${metrics_step}" "# PURE_FASTCGI_IMPORT_PARSER_BEGIN" parser_begin)
+  string(FIND "${metrics_step}" "# PURE_FASTCGI_IMPORT_PARSER_END" parser_end)
+  if(parser_begin EQUAL -1 OR parser_end EQUAL -1 OR parser_end LESS parser_begin)
+    message(FATAL_ERROR "CI_CONTRACT_IMPORT_PARSER: parser markers are malformed")
+  endif()
+  string(LENGTH "# PURE_FASTCGI_IMPORT_PARSER_END" end_marker_length)
+  math(EXPR parser_length "${parser_end} - ${parser_begin} + ${end_marker_length}")
+  string(SUBSTRING "${metrics_step}" ${parser_begin} ${parser_length} parser_script)
+  set(parser_fixture "${CMAKE_CURRENT_BINARY_DIR}/ci-import-parser-fixture.ps1")
+  file(WRITE "${parser_fixture}" "${parser_script}\n")
+  file(APPEND "${parser_fixture}" [=[
+$header = "File: fixture.dll`r`nFormat: COFF-x86-64`r`nArch: x86_64`r`nAddressSize: 64bit`r`n"
+$zero = @(Get-CoffImportNames -Readobj $header -Pe 'zero.dll')
+if ($zero.Count -ne 0) { throw 'valid zero-import PE was not empty' }
+$valid = $header + "Import {`n  Name: runtime.dll`n  Symbol: Name: not-a-dll (0)`n}`n"
+$names = @(Get-CoffImportNames -Readobj $valid -Pe 'valid.dll')
+if ($names.Count -ne 1 -or $names[0] -cne 'runtime.dll') {
+  throw 'valid Import Name was not parsed exactly'
+}
+foreach ($malformed in @(
+    ($header + "Import {`n  Name: runtime.dll`n"),
+    ($header + "Import {`n  Name: one.dll`n  Name: two.dll`n}`n"),
+    ($header + "Import [`n  Name: runtime.dll`n]`n"))) {
+  $rejected = $false
+  try { $null = @(Get-CoffImportNames -Readobj $malformed -Pe 'transitive.dll') }
+  catch { $rejected = $true }
+  if (-not $rejected) { throw 'malformed transitive import output was accepted' }
+}
+]=])
+  find_program(contract_powershell NAMES pwsh.exe powershell.exe REQUIRED)
+  execute_process(COMMAND "${contract_powershell}" -NoProfile -NonInteractive
+      -ExecutionPolicy Bypass -File "${parser_fixture}"
+    RESULT_VARIABLE parser_result OUTPUT_VARIABLE parser_out ERROR_VARIABLE parser_err)
+  file(REMOVE "${parser_fixture}")
+  if(NOT parser_result EQUAL 0)
+    message(FATAL_ERROR
+      "CI_CONTRACT_IMPORT_PARSER: behavioral fixture failed\n${parser_out}\n${parser_err}")
   endif()
 endif()

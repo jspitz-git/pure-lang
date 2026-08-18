@@ -205,6 +205,59 @@ jobs:
             $key = $pe.Name.ToLowerInvariant()
             if (-not $peByName.ContainsKey($key)) { $peByName[$key] = $pe.FullName }
           }
+          # PURE_FASTCGI_IMPORT_PARSER_BEGIN
+          function Get-CoffImportNames {
+            param(
+              [Parameter(Mandatory)][string]$Readobj,
+              [Parameter(Mandatory)][string]$Pe
+            )
+            foreach ($header in @(
+                '(?m)^File: .+\r?$', '(?m)^Format: COFF-x86-64\r?$',
+                '(?m)^Arch: x86_64\r?$', '(?m)^AddressSize: 64bit\r?$')) {
+              if ($Readobj -notmatch $header) {
+                throw "invalid llvm-readobj header for ${Pe}: $header"
+              }
+            }
+            $names = [Collections.Generic.List[string]]::new()
+            $insideImport = $false
+            $nameCount = 0
+            $pendingName = $null
+            $importSyntaxCount = 0
+            $accountedImportCount = 0
+            foreach ($line in @($Readobj -split '\r?\n')) {
+              if ($line -match '^Import\b') {
+                $importSyntaxCount++
+                if ($line -cne 'Import {' -or $insideImport) {
+                  throw "Import syntax was not fully accounted for in $Pe"
+                }
+                $insideImport = $true
+                $nameCount = 0
+                $pendingName = $null
+                continue
+              }
+              if (-not $insideImport) { continue }
+              if ($line -match '^  Name:\s*(.+)$') {
+                $nameCount++
+                if ($nameCount -gt 1) {
+                  throw "Import block has multiple Name fields in $Pe"
+                }
+                $pendingName = $Matches[1].Trim().ToLowerInvariant()
+              } elseif ($line -ceq '}') {
+                if ($nameCount -ne 1 -or -not $pendingName) {
+                  throw "Import block has no coherent Name field in $Pe"
+                }
+                $names.Add($pendingName) | Out-Null
+                $accountedImportCount++
+                $insideImport = $false
+              }
+            }
+            if ($insideImport) { throw "truncated Import block in $Pe" }
+            if ($accountedImportCount -ne $importSyntaxCount) {
+              throw "Import syntax was not fully accounted for in $Pe"
+            }
+            return $names.ToArray()
+          }
+          # PURE_FASTCGI_IMPORT_PARSER_END
           $queue = [Collections.Generic.Queue[string]]::new()
           $visited = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
           $resolvedRuntimeNames = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
@@ -224,13 +277,8 @@ jobs:
               "runtime/" + [IO.Path]::GetRelativePath("$env:PURE_FASTCGI_PURE_PREFIX/bin", $pe).Replace('\', '/')
             }
             $importSections.Add("===== $relativePe =====`n$readobj")
-            $importMatches = [regex]::Matches(
-              $readobj, '(?ms)^Import \{\r?\n\s{2}Name:\s*([^\r\n]+)\r?\n.*?^\}')
-            if ($pe -eq $module -and $importMatches.Count -eq 0) {
-              throw 'fastcgi.dll imports did not match the expected llvm-readobj Import format'
-            }
-            foreach ($match in $importMatches) {
-              $name = $match.Groups[1].Value.Trim().ToLowerInvariant()
+            $importNames = @(Get-CoffImportNames -Readobj $readobj -Pe $pe)
+            foreach ($name in $importNames) {
               if ($peByName.ContainsKey($name)) {
                 $resolvedRuntimeNames.Add($name) | Out-Null
                 $queue.Enqueue($peByName[$name])
