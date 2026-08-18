@@ -294,6 +294,11 @@ void bonjour_unpublish(bonjour_service_t *service)
   if (service == NULL) return;
   AcquireSRWLockExclusive(&service->lock);
   previous_state = service->state;
+  if (previous_state == BONJOUR_REG_STOPPING ||
+      previous_state == BONJOUR_REG_STOPPED) {
+    ReleaseSRWLockExclusive(&service->lock);
+    return;
+  }
   if (previous_state == BONJOUR_REG_REGISTERED)
     service->shutdown_status = ERROR_IO_PENDING;
   service->state = BONJOUR_REG_STOPPING;

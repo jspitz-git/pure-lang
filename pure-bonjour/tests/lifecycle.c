@@ -205,7 +205,7 @@ static void test_asynchronous_success_updates_effective_name(void)
   assert(fake.callback_after_free == 0);
 }
 
-static void test_deregistration_callback_failure_retains_state(void)
+static void test_repeated_unpublish_after_callback_failure_retains_state(void)
 {
   fake_dns_t fake = fake_dns_pending_registration();
   bonjour_service_t *service;
@@ -218,6 +218,8 @@ static void test_deregistration_callback_failure_retains_state(void)
                      L"Probe._puretodo45._tcp.local");
   fake.deregister_callback_result = ERROR_ACCESS_DENIED;
   bonjour_unpublish(service);
+  assert(fake.free_instance_calls == 0);
+  bonjour_unpublish(service);
   assert(fake.deregister_calls == 1);
   assert(fake.deregister_callback_calls == 1);
   assert(fake.deregister_nonnull_reserved == 0);
@@ -225,7 +227,7 @@ static void test_deregistration_callback_failure_retains_state(void)
   assert(fake.callback_after_free == 0);
 }
 
-static void test_deregistration_dispatch_failure_retains_state(void)
+static void test_repeated_unpublish_after_dispatch_failure_retains_state(void)
 {
   fake_dns_t fake = fake_dns_pending_registration();
   bonjour_service_t *service;
@@ -237,6 +239,8 @@ static void test_deregistration_dispatch_failure_retains_state(void)
   fake_fire_callback(&fake, ERROR_SUCCESS,
                      L"Probe._puretodo45._tcp.local");
   fake.deregister_result = ERROR_ACCESS_DENIED;
+  bonjour_unpublish(service);
+  assert(fake.free_instance_calls == 0);
   bonjour_unpublish(service);
   assert(fake.deregister_calls == 1);
   assert(fake.deregister_callback_calls == 0);
@@ -316,8 +320,8 @@ int main(void)
   assert(interp != NULL);
   test_synchronous_rejection_releases_partial_state();
   test_asynchronous_success_updates_effective_name();
-  test_deregistration_callback_failure_retains_state();
-  test_deregistration_dispatch_failure_retains_state();
+  test_repeated_unpublish_after_callback_failure_retains_state();
+  test_repeated_unpublish_after_dispatch_failure_retains_state();
   test_check_timeout_is_bounded();
   test_pending_registration_is_cancelled_before_free();
   test_callback_completion_during_cancellation_is_safe();
