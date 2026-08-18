@@ -12,10 +12,22 @@ location.
 
 ## Prerequisites
 
-Install CMake 3.25 or newer, Ninja, Clang/LLVM, pkg-config, GMP, MPFR, and a
-matching Pure 0.68 or newer runtime in the MSYS2 CLANG64 environment. The
-examples assume that Pure is installed under `C:/pure-prefix` and that its
-pkg-config file is in `C:/pure-prefix/lib/pkgconfig`.
+Install CMake 3.25 or newer, Ninja, Clang/LLVM, pkg-config, GMP, MPFR, GNU
+`patch`, and a matching Pure 0.68 or newer runtime in the MSYS2 CLANG64
+environment. Install the patch tool from the MSYS2 `patch` package (not a
+Strawberry Perl or other ambient `patch.exe`):
+
+```powershell
+& C:/msys64/usr/bin/pacman.exe -S --needed --noconfirm patch
+if (-not (Test-Path -LiteralPath C:/msys64/usr/bin/patch.exe -PathType Leaf)) {
+  throw 'MSYS2 patch.exe is missing from C:/msys64/usr/bin'
+}
+```
+
+The configure command below deliberately passes the resulting canonical path
+as `-DPATCH_EXECUTABLE=C:/msys64/usr/bin/patch.exe`. The examples assume that
+Pure is installed under `C:/pure-prefix` and that its pkg-config file is in
+`C:/pure-prefix/lib/pkgconfig`.
 
 ## Fetch the pinned source explicitly
 
