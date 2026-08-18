@@ -565,7 +565,9 @@ int wmain(int argc, wchar_t **argv) {
     }
   }
   deadline_ms = fcgi_now_ms() +
-                (scenario == FCGI_SCENARIO_SUCCESS ? 15000 : 4000);
+                (scenario == FCGI_SCENARIO_SUCCESS ? 15000
+                 : scenario == FCGI_SCENARIO_TRUNCATED ? 7000
+                                                       : 4000);
   if (swprintf(pipe_name, sizeof pipe_name / sizeof pipe_name[0],
                L"\\\\.\\pipe\\FastCGI\\pure-fastcgi-%lu-%ld",
                GetCurrentProcessId(), InterlockedIncrement(&pipe_counter)) < 0) {

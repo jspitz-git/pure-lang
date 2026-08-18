@@ -1,7 +1,9 @@
 using fastcgi;
 using namespace fastcgi;
+using system;
 
 main =
+  sleep 1 $$
   fprintf stdout "truncated-sentinel\n" () $$
   set_exit_status 71 $$
   finish $$
