@@ -80,3 +80,26 @@ an available Windows Bonjour implementation.
   - The CLANG64 MinGW Makefiles build completed with strict warnings, and both
     deterministic tests passed. The lifecycle test passed 10 consecutive runs
     in 28.82 seconds with CTest's 10-second per-test timeout enabled.
+- 2026-08-18: Implemented Microsoft DNS-SD browse, resolve, snapshot, removal,
+  and bounded discovery shutdown.
+  - Results are deep-owned and keyed by resolved service FQDN plus the documented
+    `DNS_SERVICE_INSTANCE.dwInterfaceIndex`; identical resolves do not signal a
+    change. Because the version-1 browse callback has no interface field, its
+    resolver uses interface scope 0 and PTR deletion removes every resolved
+    interface entry for the matching FQDN.
+  - Every non-null browse RR list is freed exactly once, and every non-null
+    resolve instance is freed exactly once. IPv4 and IPv6 addresses use
+    `InetNtopA`. The installed Windows SDK declares `wPort` as the same `WORD`
+    used by construction and resolve; the registration fixture observes network
+    order and the resolve regression requires `ntohs(htons(41000)) == 41000` in
+    the Pure snapshot.
+  - Discovery cancellation marks closing under the SRW lock, invokes browse and
+    resolver cancellation without the lock, and waits with a production limit of
+    10 seconds for dispatches, callbacks, and resolver contexts to quiesce.
+    Timeout or cancellation failure emits a diagnostic and retains all
+    callback-visible state; repeated close does not retry or free retained state.
+  - The strict CLANG64 MinGW Makefiles build passed. The two deterministic CTests
+    contain 21 named test functions (10 added for result/discovery behavior) and
+    passed 10 consecutive runs in 30.85 seconds. The DLL exports exactly the
+    seven bridge symbols: `bonjour_avail`, `bonjour_browse`, `bonjour_check`,
+    `bonjour_close`, `bonjour_get`, `bonjour_publish`, and `bonjour_unpublish`.

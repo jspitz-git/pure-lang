@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <wchar.h>
+#include <winsock2.h>
 #include <windows.h>
 
 #include "bonjour_windows.h"
@@ -11,20 +12,42 @@
 typedef struct {
   bonjour_dns_api_t api;
   DNS_SERVICE_INSTANCE instance;
+  DNS_SERVICE_INSTANCE resolved_instance;
+  IP4_ADDRESS resolved_ip4;
+  IP6_ADDRESS resolved_ip6;
   DWORD register_result;
   DWORD cancel_result;
   DWORD deregister_result;
   DWORD deregister_callback_result;
+  DWORD browse_result;
+  DWORD browse_cancel_result;
+  DWORD resolve_result;
+  DWORD resolve_cancel_result;
   int register_calls;
   int cancel_calls;
   int deregister_calls;
   int deregister_callback_calls;
   int deregister_nonnull_reserved;
   int free_instance_calls;
+  int free_resolved_instance_calls;
   int callback_after_free;
   int callback_on_cancel;
+  int browse_calls;
+  int browse_cancel_calls;
+  int resolve_calls;
+  int resolve_cancel_calls;
+  int record_free_calls;
+  int browse_callback_on_cancel;
+  int resolve_callback_on_cancel;
+  int close_on_resolved_free;
   PDNS_SERVICE_REGISTER_COMPLETE callback;
   void *callback_context;
+  PDNS_SERVICE_BROWSE_CALLBACK browse_callback;
+  void *browse_context;
+  PDNS_SERVICE_RESOLVE_COMPLETE resolve_callback;
+  void *resolve_context;
+  PDNS_RECORD last_freed_records;
+  bonjour_browser_t *browser_to_close;
 } fake_dns_t;
 
 static fake_dns_t *active_fake;
@@ -112,8 +135,84 @@ static VOID WINAPI fake_free_instance(PDNS_SERVICE_INSTANCE instance)
   fake_dns_t *fake = active_fake;
 
   assert(fake != NULL);
-  assert(instance == &fake->instance);
-  ++fake->free_instance_calls;
+  if (instance == &fake->instance)
+    ++fake->free_instance_calls;
+  else {
+    assert(instance == &fake->resolved_instance);
+    ++fake->free_resolved_instance_calls;
+    if (fake->close_on_resolved_free)
+      bonjour_close(fake->browser_to_close);
+  }
+}
+
+static DNS_STATUS WINAPI fake_browse(PDNS_SERVICE_BROWSE_REQUEST request,
+                                     PDNS_SERVICE_CANCEL cancel)
+{
+  fake_dns_t *fake = active_fake;
+
+  (void)cancel;
+  assert(fake != NULL);
+  assert(request->Version == DNS_QUERY_REQUEST_VERSION1);
+  assert(request->InterfaceIndex == 0);
+  assert(wcscmp(request->QueryName, L"_puretodo45._tcp.local") == 0);
+  ++fake->browse_calls;
+  fake->browse_callback = request->pBrowseCallback;
+  fake->browse_context = request->pQueryContext;
+  return fake->browse_result;
+}
+
+static DNS_STATUS WINAPI fake_browse_cancel(PDNS_SERVICE_CANCEL cancel)
+{
+  fake_dns_t *fake = active_fake;
+
+  (void)cancel;
+  assert(fake != NULL);
+  ++fake->browse_cancel_calls;
+  if (fake->browse_callback_on_cancel)
+    fake->browse_callback(ERROR_CANCELLED, fake->browse_context, NULL);
+  return fake->browse_cancel_result;
+}
+
+static DNS_STATUS WINAPI fake_resolve(PDNS_SERVICE_RESOLVE_REQUEST request,
+                                      PDNS_SERVICE_CANCEL cancel)
+{
+  fake_dns_t *fake = active_fake;
+
+  (void)cancel;
+  assert(fake != NULL);
+  assert(request->Version == DNS_QUERY_REQUEST_VERSION1);
+  assert(request->InterfaceIndex == 0);
+  assert(wcscmp(request->QueryName,
+                L"Probe._puretodo45._tcp.local") == 0);
+  ++fake->resolve_calls;
+  fake->resolve_callback = request->pResolveCompletionCallback;
+  fake->resolve_context = request->pQueryContext;
+  return fake->resolve_result;
+}
+
+static DNS_STATUS WINAPI fake_resolve_cancel(PDNS_SERVICE_CANCEL cancel)
+{
+  fake_dns_t *fake = active_fake;
+
+  (void)cancel;
+  assert(fake != NULL);
+  ++fake->resolve_cancel_calls;
+  if (fake->resolve_callback_on_cancel)
+    fake->resolve_callback(ERROR_CANCELLED, fake->resolve_context, NULL);
+  return fake->resolve_cancel_result;
+}
+
+static VOID WINAPI fake_record_list_free(PDNS_RECORD records,
+                                         DNS_FREE_TYPE free_type)
+{
+  fake_dns_t *fake = active_fake;
+
+  assert(fake != NULL);
+  assert(records != NULL);
+  assert(free_type == DnsFreeRecordList);
+  assert(records != fake->last_freed_records);
+  fake->last_freed_records = records;
+  ++fake->record_free_calls;
 }
 
 static fake_dns_t fake_dns_pending_registration(void)
@@ -126,9 +225,18 @@ static fake_dns_t fake_dns_pending_registration(void)
   fake.api.deregister_service = fake_deregister;
   fake.api.cancel_registration = fake_cancel;
   fake.api.free_instance = fake_free_instance;
+  fake.api.browse = fake_browse;
+  fake.api.cancel_browse = fake_browse_cancel;
+  fake.api.resolve = fake_resolve;
+  fake.api.cancel_resolve = fake_resolve_cancel;
+  fake.api.free_records = fake_record_list_free;
   fake.register_result = DNS_REQUEST_PENDING;
   fake.deregister_result = DNS_REQUEST_PENDING;
   fake.deregister_callback_result = ERROR_SUCCESS;
+  fake.browse_result = DNS_REQUEST_PENDING;
+  fake.browse_cancel_result = ERROR_SUCCESS;
+  fake.resolve_result = DNS_REQUEST_PENDING;
+  fake.resolve_cancel_result = ERROR_SUCCESS;
   return fake;
 }
 
@@ -167,6 +275,89 @@ static void assert_registration(pure_expr *result, const char *name,
   assert(actual_port == port);
   free(items);
   pure_freenew(result);
+}
+
+static void assert_single_result(pure_expr *result, const char *name,
+                                 const char *address, int port)
+{
+  size_t list_count = 0;
+  size_t tuple_count = 0;
+  pure_expr **list_items = NULL;
+  pure_expr **tuple_items = NULL;
+  const char *actual_name = NULL;
+  const char *actual_type = NULL;
+  const char *actual_domain = NULL;
+  const char *actual_address = NULL;
+  int32_t actual_port = -1;
+
+  assert(result != NULL);
+  assert(pure_is_listv(result, &list_count, &list_items));
+  assert(list_count == 1);
+  assert(pure_is_tuplev(list_items[0], &tuple_count, &tuple_items));
+  assert(tuple_count == 5);
+  assert(pure_is_string(tuple_items[0], &actual_name));
+  assert(pure_is_string(tuple_items[1], &actual_type));
+  assert(pure_is_string(tuple_items[2], &actual_domain));
+  assert(pure_is_string(tuple_items[3], &actual_address));
+  assert(pure_is_int(tuple_items[4], &actual_port));
+  assert(strcmp(actual_name, name) == 0);
+  assert(strcmp(actual_type, "_puretodo45._tcp") == 0);
+  assert(strcmp(actual_domain, "local") == 0);
+  assert(strcmp(actual_address, address) == 0);
+  assert(actual_port == port);
+  free(tuple_items);
+  free(list_items);
+  pure_freenew(result);
+}
+
+static void assert_empty_result(pure_expr *result)
+{
+  size_t count = 0;
+  pure_expr **items = NULL;
+
+  assert(result != NULL);
+  assert(pure_is_listv(result, &count, &items));
+  assert(count == 0);
+  free(items);
+  pure_freenew(result);
+}
+
+static void fake_fire_browse(fake_dns_t *fake, DNS_RECORD *record, int deleted)
+{
+  memset(record, 0, sizeof(*record));
+  record->pName = L"_puretodo45._tcp.local";
+  record->wType = DNS_TYPE_PTR;
+  record->Flags.S.Delete = deleted != 0;
+  record->Data.PTR.pNameHost = L"Probe._puretodo45._tcp.local";
+  fake->last_freed_records = NULL;
+  fake->browse_callback(ERROR_SUCCESS, fake->browse_context, record);
+}
+
+static void fake_fire_resolve_ipv4(fake_dns_t *fake)
+{
+  memset(&fake->resolved_instance, 0, sizeof(fake->resolved_instance));
+  fake->resolved_ip4 = htonl(0x7f000001u);
+  fake->resolved_instance.pszInstanceName =
+      L"Probe._puretodo45._tcp.local";
+  fake->resolved_instance.ip4Address = &fake->resolved_ip4;
+  fake->resolved_instance.wPort = htons(41000);
+  fake->resolved_instance.dwInterfaceIndex = 7;
+  fake->resolve_callback(ERROR_SUCCESS, fake->resolve_context,
+                         &fake->resolved_instance);
+}
+
+static void fake_fire_resolve_ipv6(fake_dns_t *fake)
+{
+  memset(&fake->resolved_instance, 0, sizeof(fake->resolved_instance));
+  memset(&fake->resolved_ip6, 0, sizeof(fake->resolved_ip6));
+  fake->resolved_ip6.IP6Byte[15] = 1;
+  fake->resolved_instance.pszInstanceName =
+      L"Probe._puretodo45._tcp.local";
+  fake->resolved_instance.ip6Address = &fake->resolved_ip6;
+  fake->resolved_instance.wPort = htons(41000);
+  fake->resolved_instance.dwInterfaceIndex = 7;
+  fake->resolve_callback(ERROR_SUCCESS, fake->resolve_context,
+                         &fake->resolved_instance);
 }
 
 static void test_synchronous_rejection_releases_partial_state(void)
@@ -313,6 +504,169 @@ static void test_repeated_null_cleanup_is_a_noop(void)
   assert(fake.free_instance_calls == 0);
 }
 
+static void test_browse_rejection_releases_partial_state(void)
+{
+  fake_dns_t fake = fake_dns_pending_registration();
+
+  fake.browse_result = ERROR_ACCESS_DENIED;
+  use_fake(&fake);
+  assert(bonjour_browse_with_api("_puretodo45._tcp", &fake.api, 25) == NULL);
+  assert(fake.browse_calls == 1);
+  assert(fake.browse_cancel_calls == 0);
+  assert(fake.resolve_calls == 0);
+}
+
+static void test_browse_resolve_snapshot_update_and_removal(void)
+{
+  fake_dns_t fake = fake_dns_pending_registration();
+  bonjour_browser_t *browser;
+  DNS_RECORD add_record;
+  DNS_RECORD pending_duplicate_record;
+  DNS_RECORD duplicate_record;
+  DNS_RECORD ipv6_record;
+  DNS_RECORD remove_record;
+
+  use_fake(&fake);
+  browser = bonjour_browse_with_api("_puretodo45._tcp", &fake.api, 25);
+  assert(browser != NULL);
+  fake_fire_browse(&fake, &add_record, 0);
+  assert(fake.record_free_calls == 1);
+  assert(fake.resolve_calls == 1);
+  fake_fire_browse(&fake, &pending_duplicate_record, 0);
+  assert(fake.record_free_calls == 2);
+  assert(fake.resolve_calls == 1);
+  fake_fire_resolve_ipv4(&fake);
+  assert(fake.free_resolved_instance_calls == 1);
+  assert(bonjour_avail(browser) == 1);
+  assert_single_result(bonjour_get(browser), "Probe", "127.0.0.1", 41000);
+  assert(bonjour_avail(browser) == 0);
+
+  fake_fire_browse(&fake, &duplicate_record, 0);
+  assert(fake.record_free_calls == 3);
+  assert(fake.resolve_calls == 2);
+  fake_fire_resolve_ipv4(&fake);
+  assert(fake.free_resolved_instance_calls == 2);
+  assert(bonjour_avail(browser) == 0);
+
+  fake_fire_browse(&fake, &ipv6_record, 0);
+  assert(fake.record_free_calls == 4);
+  assert(fake.resolve_calls == 3);
+  fake_fire_resolve_ipv6(&fake);
+  assert(fake.free_resolved_instance_calls == 3);
+  assert(bonjour_avail(browser) == 1);
+  assert_single_result(bonjour_get(browser), "Probe", "::1", 41000);
+
+  fake_fire_browse(&fake, &remove_record, 1);
+  assert(fake.record_free_calls == 5);
+  assert(bonjour_avail(browser) == 1);
+  assert_empty_result(bonjour_get(browser));
+  bonjour_close(browser);
+  assert(fake.browse_cancel_calls == 1);
+  assert(fake.resolve_cancel_calls == 0);
+}
+
+static void test_browse_cancel_failure_retains_state(void)
+{
+  fake_dns_t fake = fake_dns_pending_registration();
+  bonjour_browser_t *browser;
+
+  fake.browse_cancel_result = ERROR_ACCESS_DENIED;
+  use_fake(&fake);
+  browser = bonjour_browse_with_api("_puretodo45._tcp", &fake.api, 25);
+  assert(browser != NULL);
+  bonjour_close(browser);
+  bonjour_close(browser);
+  assert(fake.browse_cancel_calls == 1);
+  assert(fake.resolve_cancel_calls == 0);
+}
+
+static void test_removal_while_resolve_pending_cannot_readd_service(void)
+{
+  fake_dns_t fake = fake_dns_pending_registration();
+  bonjour_browser_t *browser;
+  DNS_RECORD add_record;
+  DNS_RECORD remove_record;
+
+  use_fake(&fake);
+  browser = bonjour_browse_with_api("_puretodo45._tcp", &fake.api, 25);
+  assert(browser != NULL);
+  fake_fire_browse(&fake, &add_record, 0);
+  fake_fire_browse(&fake, &remove_record, 1);
+  fake_fire_resolve_ipv4(&fake);
+  assert(bonjour_avail(browser) == 0);
+  assert_empty_result(bonjour_get(browser));
+  bonjour_close(browser);
+}
+
+static void test_pending_resolver_is_cancelled_during_close(void)
+{
+  fake_dns_t fake = fake_dns_pending_registration();
+  bonjour_browser_t *browser;
+  DNS_RECORD add_record;
+
+  fake.resolve_callback_on_cancel = 1;
+  use_fake(&fake);
+  browser = bonjour_browse_with_api("_puretodo45._tcp", &fake.api, 25);
+  assert(browser != NULL);
+  fake_fire_browse(&fake, &add_record, 0);
+  bonjour_close(browser);
+  assert(fake.browse_cancel_calls == 1);
+  assert(fake.resolve_cancel_calls == 1);
+  assert(fake.free_resolved_instance_calls == 0);
+}
+
+static void test_close_during_resolve_callback_retains_until_callback_tail(void)
+{
+  fake_dns_t fake = fake_dns_pending_registration();
+  bonjour_browser_t *browser;
+  DNS_RECORD add_record;
+
+  use_fake(&fake);
+  browser = bonjour_browse_with_api("_puretodo45._tcp", &fake.api, 25);
+  assert(browser != NULL);
+  fake.browser_to_close = browser;
+  fake.close_on_resolved_free = 1;
+  fake_fire_browse(&fake, &add_record, 0);
+  fake_fire_resolve_ipv4(&fake);
+  assert(fake.browse_cancel_calls == 1);
+  assert(fake.free_resolved_instance_calls == 1);
+  bonjour_close(browser);
+  assert(fake.browse_cancel_calls == 1);
+}
+
+static void test_close_allows_synchronous_cancel_callbacks(void)
+{
+  fake_dns_t fake = fake_dns_pending_registration();
+  bonjour_browser_t *browser;
+  DNS_RECORD add_record;
+
+  fake.browse_callback_on_cancel = 1;
+  fake.resolve_callback_on_cancel = 1;
+  use_fake(&fake);
+  browser = bonjour_browse_with_api("_puretodo45._tcp", &fake.api, 25);
+  assert(browser != NULL);
+  fake_fire_browse(&fake, &add_record, 0);
+  bonjour_close(browser);
+  assert(fake.browse_cancel_calls == 1);
+  assert(fake.resolve_cancel_calls == 1);
+}
+
+static void test_no_result_close_is_bounded(void)
+{
+  fake_dns_t fake = fake_dns_pending_registration();
+  bonjour_browser_t *browser;
+  ULONGLONG started;
+
+  use_fake(&fake);
+  browser = bonjour_browse_with_api("_puretodo45._tcp", &fake.api, 25);
+  assert(browser != NULL);
+  started = GetTickCount64();
+  bonjour_close(browser);
+  assert(GetTickCount64() - started < 500);
+  assert(fake.browse_cancel_calls == 1);
+  assert(fake.resolve_cancel_calls == 0);
+}
+
 int main(void)
 {
   pure_interp *interp = pure_create_interp(0, NULL);
@@ -326,6 +680,15 @@ int main(void)
   test_pending_registration_is_cancelled_before_free();
   test_callback_completion_during_cancellation_is_safe();
   test_repeated_null_cleanup_is_a_noop();
+  test_browse_rejection_releases_partial_state();
+  test_browse_resolve_snapshot_update_and_removal();
+  test_removal_while_resolve_pending_cannot_readd_service();
+  test_pending_resolver_is_cancelled_during_close();
+  test_close_during_resolve_callback_retains_until_callback_tail();
+  test_close_allows_synchronous_cancel_callbacks();
+  test_no_result_close_is_bounded();
+  test_browse_cancel_failure_retains_state();
+  bonjour_close(NULL);
   pure_delete_interp(interp);
   puts("pure-bonjour lifecycle tests passed");
   return 0;

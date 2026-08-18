@@ -87,11 +87,62 @@ static void test_status_errors(void)
   assert(bonjour_status_error((DWORD)UINT_MAX) == -INT_MAX);
 }
 
+static void test_results_are_deep_owned_and_keyed_by_interface(void)
+{
+  bonjour_result_set_t set = {0};
+  wchar_t fqdn[] = L"Probe._puretodo45._tcp.local";
+  char name[] = "Probe";
+  char address[] = "127.0.0.1";
+
+  assert(bonjour_results_put(&set, fqdn, 7, name, "_puretodo45._tcp",
+                             "local", address, 41000) == 1);
+  fqdn[0] = L'X';
+  name[0] = 'X';
+  address[0] = '9';
+  assert(set.count == 1);
+  assert(wcscmp(set.head->fqdn, L"Probe._puretodo45._tcp.local") == 0);
+  assert(strcmp(set.head->name, "Probe") == 0);
+  assert(strcmp(set.head->address, "127.0.0.1") == 0);
+
+  assert(bonjour_results_put(&set, L"Probe._puretodo45._tcp.local", 7,
+                             "Probe", "_puretodo45._tcp", "local",
+                             "127.0.0.1", 41000) == 0);
+  assert(bonjour_results_put(&set, L"Probe._puretodo45._tcp.local", 9,
+                             "Probe", "_puretodo45._tcp", "local",
+                             "192.0.2.9", 41000) == 1);
+  assert(set.count == 2);
+  assert(bonjour_results_remove(&set, L"Probe._puretodo45._tcp.local", 8) ==
+         0);
+  assert(bonjour_results_remove(&set, L"Probe._puretodo45._tcp.local", 9) ==
+         1);
+  assert(set.count == 1);
+  bonjour_results_clear(&set);
+  assert(set.head == NULL);
+  assert(set.count == 0);
+}
+
+static void test_resolve_updates_existing_key(void)
+{
+  bonjour_result_set_t set = {0};
+
+  assert(bonjour_results_put(&set, L"Probe._puretodo45._tcp.local", 7,
+                             "Probe", "_puretodo45._tcp", "local",
+                             "127.0.0.1", 41000) == 1);
+  assert(bonjour_results_put(&set, L"Probe._puretodo45._tcp.local", 7,
+                             "Probe", "_puretodo45._tcp", "local", "::1",
+                             41000) == 1);
+  assert(set.count == 1);
+  assert(strcmp(set.head->address, "::1") == 0);
+  bonjour_results_clear(&set);
+}
+
 int main(void)
 {
   test_utf8_round_trips();
   test_names();
   test_status_errors();
+  test_results_are_deep_owned_and_keyed_by_interface();
+  test_resolve_updates_existing_key();
   puts("pure-bonjour unit tests passed");
   return 0;
 }

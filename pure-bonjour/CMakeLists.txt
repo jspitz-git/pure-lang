@@ -16,7 +16,8 @@ add_library(pure-bonjour MODULE bonjour_windows.c)
 set_target_properties(pure-bonjour PROPERTIES OUTPUT_NAME bonjour PREFIX ""
   WINDOWS_EXPORT_ALL_SYMBOLS ON)
 target_compile_features(pure-bonjour PRIVATE c_std_11)
-target_compile_definitions(pure-bonjour PRIVATE _WIN32_WINNT=0x0A00)
+target_compile_definitions(pure-bonjour PRIVATE
+  _WIN32_WINNT=0x0A00 UNICODE _UNICODE)
 target_compile_options(pure-bonjour PRIVATE -Wall -Wextra -Werror)
 target_link_libraries(pure-bonjour PRIVATE PkgConfig::PURE dnsapi ws2_32)
 
@@ -25,7 +26,7 @@ if(BUILD_TESTING)
   add_library(pure-bonjour-test-backend OBJECT bonjour_windows.c)
   target_compile_features(pure-bonjour-test-backend PRIVATE c_std_11)
   target_compile_definitions(pure-bonjour-test-backend PRIVATE
-    _WIN32_WINNT=0x0A00 BONJOUR_WINDOWS_TESTING)
+    _WIN32_WINNT=0x0A00 UNICODE _UNICODE BONJOUR_WINDOWS_TESTING)
   target_compile_options(pure-bonjour-test-backend PRIVATE -Wall -Wextra -Werror)
   target_include_directories(pure-bonjour-test-backend PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR})
@@ -35,7 +36,7 @@ if(BUILD_TESTING)
     $<TARGET_OBJECTS:pure-bonjour-test-backend>)
   target_compile_features(pure-bonjour-unit PRIVATE c_std_11)
   target_compile_definitions(pure-bonjour-unit PRIVATE
-    _WIN32_WINNT=0x0A00 BONJOUR_WINDOWS_TESTING)
+    _WIN32_WINNT=0x0A00 UNICODE _UNICODE BONJOUR_WINDOWS_TESTING)
   target_compile_options(pure-bonjour-unit PRIVATE -Wall -Wextra -Werror -UNDEBUG)
   target_include_directories(pure-bonjour-unit PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
   target_link_libraries(pure-bonjour-unit PRIVATE PkgConfig::PURE dnsapi ws2_32)
@@ -48,7 +49,7 @@ if(BUILD_TESTING)
     $<TARGET_OBJECTS:pure-bonjour-test-backend>)
   target_compile_features(pure-bonjour-lifecycle PRIVATE c_std_11)
   target_compile_definitions(pure-bonjour-lifecycle PRIVATE
-    _WIN32_WINNT=0x0A00 BONJOUR_WINDOWS_TESTING)
+    _WIN32_WINNT=0x0A00 UNICODE _UNICODE BONJOUR_WINDOWS_TESTING)
   target_compile_options(pure-bonjour-lifecycle PRIVATE
     -Wall -Wextra -Werror -UNDEBUG)
   target_include_directories(pure-bonjour-lifecycle PRIVATE
