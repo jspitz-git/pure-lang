@@ -1,0 +1,15 @@
+diff --git a/libfcgi/os_win32.c b/libfcgi/os_win32.c
+--- a/libfcgi/os_win32.c
++++ b/libfcgi/os_win32.c
+@@ -225 +225 @@ static void StdinThread(void * startup)
+-    unsigned long fd;
++    ULONG_PTR fd;
+@@ -1470 +1470 @@ int OS_DoIo(struct timeval *tmo)
+-    unsigned long fd;
++    ULONG_PTR fd;
+@@ -1549 +1549 @@ static int CALLBACK isAddrOKCallback(LPWSABUF  lpCallerId,
+-                                     DWORD     data)
++                                     DWORD_PTR data)
+@@ -1681 +1681 @@ static int OS_FcgiConnect(char *bindPath, int listenQueue)
+-                          (DWORD) webServerAddrs);
++                          (DWORD_PTR) webServerAddrs);

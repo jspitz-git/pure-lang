@@ -8,11 +8,6 @@ extern expr *pure_printf_split(char *format);
 end;
 using namespace __C;
 
-// Force libfcgi to be loaded on Windows.
-#! --if *-mingw32
-using "lib:fcgi";
-#! --endif
-
 using "lib:fastcgi";
 namespace fastcgi;
 

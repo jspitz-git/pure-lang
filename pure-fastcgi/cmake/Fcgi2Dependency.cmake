@@ -6,6 +6,10 @@ set(PURE_FASTCGI_FCGI2_URL
 set(PURE_FASTCGI_FCGI2_ARCHIVE_SIZE "263969")
 set(PURE_FASTCGI_FCGI2_ARCHIVE_SHA256
   "e41ddc3a473b555bdc0cbd80703dcb1f4610c1a7700d3b9d3d0c14a416e1074b")
+set(PURE_FASTCGI_FCGI2_PATCH
+  "${CMAKE_CURRENT_LIST_DIR}/../patches/fcgi2-2.4.7-clang64-types.patch")
+set(PURE_FASTCGI_FCGI2_PATCH_SHA256
+  "d2157e18ae4199780f225a8965adeae5173a0db443b8d7cec16325c0cbf68413")
 
 function(pure_fastcgi_prepare_fcgi2)
   cmake_parse_arguments(PARSE_ARGV 0 arg "" "ARCHIVE;OUT_SOURCE_DIR" "")
@@ -27,5 +31,41 @@ function(pure_fastcgi_prepare_fcgi2)
   file(MAKE_DIRECTORY "${root}")
   file(ARCHIVE_EXTRACT INPUT "${arg_ARCHIVE}" DESTINATION "${root}")
   set(source "${root}/fcgi2-2.4.7")
+  if(NOT EXISTS "${PURE_FASTCGI_FCGI2_PATCH}")
+    message(FATAL_ERROR "fcgi2 Windows patch is missing")
+  endif()
+  file(SHA256 "${PURE_FASTCGI_FCGI2_PATCH}" actual_patch_sha256)
+  if(NOT actual_patch_sha256 STREQUAL PURE_FASTCGI_FCGI2_PATCH_SHA256)
+    message(FATAL_ERROR "fcgi2 Windows patch SHA-256 mismatch")
+  endif()
+  find_program(PATCH_EXECUTABLE NAMES patch REQUIRED)
+  execute_process(
+    COMMAND "${PATCH_EXECUTABLE}" --batch --forward -p1
+      -i "${PURE_FASTCGI_FCGI2_PATCH}"
+    WORKING_DIRECTORY "${source}"
+    RESULT_VARIABLE patch_result
+    OUTPUT_VARIABLE patch_output
+    ERROR_VARIABLE patch_error)
+  if(NOT patch_result EQUAL 0)
+    message(FATAL_ERROR "fcgi2 Windows patch failed: ${patch_output}${patch_error}")
+  endif()
+  file(COPY_FILE "${source}/include/fcgi_config_x86.h"
+    "${source}/include/fcgi_config.h" ONLY_IF_DIFFERENT)
   set(${arg_OUT_SOURCE_DIR} "${source}" PARENT_SCOPE)
+endfunction()
+
+function(pure_fastcgi_add_fcgi2_target)
+  cmake_parse_arguments(PARSE_ARGV 0 arg "" "SOURCE_DIR" "")
+  if(NOT IS_DIRECTORY "${arg_SOURCE_DIR}")
+    message(FATAL_ERROR "SOURCE_DIR must name an existing fcgi2 source directory")
+  endif()
+
+  add_library(fcgi2-static STATIC
+    "${arg_SOURCE_DIR}/libfcgi/fcgi_stdio.c"
+    "${arg_SOURCE_DIR}/libfcgi/fcgiapp.c"
+    "${arg_SOURCE_DIR}/libfcgi/os_win32.c")
+  target_include_directories(fcgi2-static PUBLIC "${arg_SOURCE_DIR}/include")
+  target_compile_definitions(fcgi2-static PRIVATE DLLAPI=)
+  target_compile_features(fcgi2-static PRIVATE c_std_11)
+  target_link_libraries(fcgi2-static PUBLIC ws2_32)
 endfunction()

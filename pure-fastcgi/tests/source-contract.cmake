@@ -5,6 +5,16 @@ if(NOT PURE_FASTCGI_FCGI2_COMMIT STREQUAL
   message(FATAL_ERROR "unexpected fcgi2 commit")
 endif()
 
+set(fcgi2_patch
+  "${SOURCE_DIR}/patches/fcgi2-2.4.7-clang64-types.patch")
+if(NOT EXISTS "${fcgi2_patch}")
+  message(FATAL_ERROR "missing fcgi2 Windows patch")
+endif()
+file(SHA256 "${fcgi2_patch}" fcgi2_patch_sha256)
+if(NOT fcgi2_patch_sha256 STREQUAL PURE_FASTCGI_FCGI2_PATCH_SHA256)
+  message(FATAL_ERROR "fcgi2 Windows patch SHA-256 mismatch")
+endif()
+
 pure_fastcgi_prepare_fcgi2(
   ARCHIVE "${FCGI2_ARCHIVE}"
   OUT_SOURCE_DIR extracted)
@@ -13,6 +23,16 @@ foreach(required IN ITEMS include/fcgi_stdio.h libfcgi/fcgi_stdio.c
     libfcgi/fcgiapp.c libfcgi/os_win32.c LICENSE)
   if(NOT EXISTS "${extracted}/${required}")
     message(FATAL_ERROR "missing extracted fcgi2 input: ${required}")
+  endif()
+endforeach()
+
+file(READ "${extracted}/libfcgi/os_win32.c" patched_os_win32)
+foreach(required_patch IN ITEMS
+    "ULONG_PTR fd;"
+    "DWORD_PTR data"
+    "\\(DWORD_PTR\\) webServerAddrs")
+  if(NOT patched_os_win32 MATCHES "${required_patch}")
+    message(FATAL_ERROR "fcgi2 Windows patch was not applied: ${required_patch}")
   endif()
 endforeach()
 
