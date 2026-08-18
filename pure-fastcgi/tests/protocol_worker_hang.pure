@@ -1,0 +1,8 @@
+using fastcgi;
+using namespace fastcgi;
+using system;
+
+main = sleep 60 if accept >= 0;
+= () otherwise;
+
+main;

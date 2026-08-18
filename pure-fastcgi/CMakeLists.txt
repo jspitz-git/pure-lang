@@ -99,6 +99,22 @@ if(BUILD_TESTING)
     TIMEOUT 20)
 
   add_test(
+    NAME pure-fastcgi-protocol-failures
+    COMMAND "${CMAKE_COMMAND}"
+      "-DHARNESS=$<TARGET_FILE:pure-fastcgi-protocol-harness>"
+      "-DMODULE=$<TARGET_FILE:pure-fastcgi>"
+      "-DMODULE_SOURCE=${CMAKE_CURRENT_SOURCE_DIR}/fastcgi.pure"
+      "-DWORKER=${CMAKE_CURRENT_SOURCE_DIR}/tests/protocol_worker.pure"
+      "-DHANG_WORKER=${CMAKE_CURRENT_SOURCE_DIR}/tests/protocol_worker_hang.pure"
+      "-DPURE_EXECUTABLE=${PURE_FASTCGI_PURE_EXECUTABLE}"
+      "-DPURE_RUNTIME_DIR=${PURE_FASTCGI_PURE_RUNTIME_DIR}"
+      "-DTEST_ROOT=${CMAKE_CURRENT_BINARY_DIR}/protocol-failures"
+      -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/protocol_failures.cmake")
+  set_tests_properties(pure-fastcgi-protocol-failures PROPERTIES
+    LABELS "fastcgi;protocol;failures"
+    TIMEOUT 20)
+
+  add_test(
     NAME pure-fastcgi-source-contract
     COMMAND "${CMAKE_COMMAND}"
       "-DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"

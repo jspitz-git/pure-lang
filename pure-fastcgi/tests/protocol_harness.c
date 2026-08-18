@@ -38,6 +38,12 @@ enum fcgi_drain_result {
   FCGI_DRAIN_SYSTEM_ERROR
 };
 
+enum fcgi_scenario {
+  FCGI_SCENARIO_SUCCESS,
+  FCGI_SCENARIO_TRUNCATED,
+  FCGI_SCENARIO_TIMEOUT
+};
+
 struct fcgi_record {
   uint8_t type;
   uint16_t request_id;
@@ -433,10 +439,31 @@ static int fcgi_wait_process(HANDLE process, uint64_t deadline_ms,
          GetExitCodeProcess(process, exit_code) && *exit_code != STILL_ACTIVE;
 }
 
+static void fcgi_write_cleanup_report(const wchar_t *path, DWORD child_pid,
+                                      int child_exited, int pipe_closed,
+                                      int owned_handles_closed) {
+  FILE *report;
+
+  if (path == NULL) {
+    return;
+  }
+  report = _wfopen(path, L"wb");
+  if (report == NULL) {
+    fwprintf(stderr, L"could not write cleanup report: %ls\n", path);
+    return;
+  }
+  fprintf(report,
+          "child_pid=%lu\nchild_exited=%d\npipe_closed=%d\n"
+          "owned_handles_closed=%d\n",
+          (unsigned long)child_pid, child_exited, pipe_closed,
+          owned_handles_closed);
+  fclose(report);
+}
+
 int wmain(int argc, wchar_t **argv) {
   static volatile LONG pipe_counter;
   const uint16_t request_id = 1;
-  const uint64_t deadline_ms = fcgi_now_ms() + 15000;
+  uint64_t deadline_ms;
   const char request_method[] = "POST";
   const char query_string[] = "value%20with%20spaces";
   const char content_length[] = "12";
@@ -449,6 +476,7 @@ int wmain(int argc, wchar_t **argv) {
   wchar_t *command_line = NULL;
   HANDLE server = INVALID_HANDLE_VALUE;
   HANDLE client = INVALID_HANDLE_VALUE;
+  HANDLE job = NULL;
   HANDLE attribute_handle = INVALID_HANDLE_VALUE;
   LPPROC_THREAD_ATTRIBUTE_LIST attributes = NULL;
   int attributes_initialized = 0;
@@ -464,16 +492,44 @@ int wmain(int argc, wchar_t **argv) {
   size_t stderr_len = 0;
   struct fcgi_response_state response_state = {0};
   DWORD process_exit = STILL_ACTIVE;
+  DWORD child_pid = 0;
+  int child_exited = 0;
+  int pipe_closed = 0;
+  int owned_handles_closed = 1;
   int process_started = 0;
+  enum fcgi_scenario scenario = FCGI_SCENARIO_SUCCESS;
+  const wchar_t *cleanup_report_path = NULL;
   int result = 1;
 
   memset(&startup, 0, sizeof startup);
   memset(&process, 0, sizeof process);
   memset(&security, 0, sizeof security);
-  if (argc != 4) {
-    fprintf(stderr, "usage: protocol-harness PURE MODULE-DIR WORKER\n");
+  if (argc != 4 && argc != 8) {
+    fprintf(stderr,
+            "usage: protocol-harness PURE MODULE-DIR WORKER "
+            "[--scenario success|truncated|timeout --cleanup-report PATH]\n");
     goto cleanup;
   }
+  if (argc == 8) {
+    if (wcscmp(argv[4], L"--scenario") != 0 ||
+        wcscmp(argv[6], L"--cleanup-report") != 0) {
+      fprintf(stderr, "invalid protocol-harness options\n");
+      goto cleanup;
+    }
+    cleanup_report_path = argv[7];
+    if (wcscmp(argv[5], L"success") == 0) {
+      scenario = FCGI_SCENARIO_SUCCESS;
+    } else if (wcscmp(argv[5], L"truncated") == 0) {
+      scenario = FCGI_SCENARIO_TRUNCATED;
+    } else if (wcscmp(argv[5], L"timeout") == 0) {
+      scenario = FCGI_SCENARIO_TIMEOUT;
+    } else {
+      fprintf(stderr, "unknown protocol-harness scenario\n");
+      goto cleanup;
+    }
+  }
+  deadline_ms = fcgi_now_ms() +
+                (scenario == FCGI_SCENARIO_TIMEOUT ? 4000 : 15000);
   if (swprintf(pipe_name, sizeof pipe_name / sizeof pipe_name[0],
                L"\\\\.\\pipe\\FastCGI\\pure-fastcgi-%lu-%ld",
                GetCurrentProcessId(), InterlockedIncrement(&pipe_counter)) < 0) {
@@ -488,6 +544,19 @@ int wmain(int argc, wchar_t **argv) {
   if (server == INVALID_HANDLE_VALUE) {
     fprintf(stderr, "CreateNamedPipeW failed: %lu\n", GetLastError());
     goto cleanup;
+  }
+
+  {
+    JOBOBJECT_EXTENDED_LIMIT_INFORMATION job_info;
+    memset(&job_info, 0, sizeof job_info);
+    job_info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+    job = CreateJobObjectW(NULL, NULL);
+    if (job == NULL ||
+        !SetInformationJobObject(job, JobObjectExtendedLimitInformation,
+                                 &job_info, sizeof job_info)) {
+      fprintf(stderr, "job-object setup failed: %lu\n", GetLastError());
+      goto cleanup;
+    }
   }
 
   command_line = fcgi_command_line(argv[1], argv[2], argv[3]);
@@ -530,10 +599,19 @@ int wmain(int argc, wchar_t **argv) {
     goto cleanup;
   }
   process_started = 1;
-  CloseHandle(process.hThread);
-  process.hThread = NULL;
-  CloseHandle(server);
+  child_pid = process.dwProcessId;
+  if (!AssignProcessToJobObject(job, process.hProcess)) {
+    fprintf(stderr, "AssignProcessToJobObject failed: %lu\n", GetLastError());
+    goto cleanup;
+  }
+  if (!CloseHandle(server)) {
+    fprintf(stderr, "could not close the named-pipe server: %lu\n",
+            GetLastError());
+    owned_handles_closed = 0;
+    goto cleanup;
+  }
   server = INVALID_HANDLE_VALUE;
+  pipe_closed = 1;
 
   client = CreateFileW(pipe_name, GENERIC_READ | GENERIC_WRITE, 0, NULL,
                        OPEN_EXISTING, FILE_FLAG_OVERLAPPED, NULL);
@@ -541,6 +619,7 @@ int wmain(int argc, wchar_t **argv) {
     fprintf(stderr, "CreateFileW failed: %lu\n", GetLastError());
     goto cleanup;
   }
+  pipe_closed = 0;
 
 #define ADD_PARAM(name_literal, value, value_len)                              \
   do {                                                                         \
@@ -558,6 +637,31 @@ int wmain(int argc, wchar_t **argv) {
   ADD_PARAM("QUERY_STRING", query_string, sizeof query_string - 1);
   ADD_PARAM("CONTENT_LENGTH", content_length, sizeof content_length - 1);
 #undef ADD_PARAM
+
+  if (scenario == FCGI_SCENARIO_TRUNCATED) {
+    const unsigned char partial_params[] = {FCGI_VERSION_1, FCGI_PARAMS, 0,
+                                            request_id};
+    if (fcgi_write_record(client, FCGI_BEGIN_REQUEST, request_id,
+                          (const unsigned char[]){0, FCGI_RESPONDER,
+                                                  FCGI_KEEP_CONN, 0, 0, 0, 0,
+                                                  0},
+                          8, deadline_ms) != FCGI_IO_OK ||
+        fcgi_transfer(client, (void *)partial_params, sizeof partial_params,
+                      deadline_ms, 1) != FCGI_IO_OK) {
+      fprintf(stderr, "could not send truncated PARAMS\n");
+      goto cleanup;
+    }
+    CancelIoEx(client, NULL);
+    if (!CloseHandle(client)) {
+      fprintf(stderr, "could not close the named-pipe client: %lu\n",
+              GetLastError());
+      owned_handles_closed = 0;
+    }
+    client = INVALID_HANDLE_VALUE;
+    pipe_closed = owned_handles_closed;
+    fprintf(stderr, "protocol error while reading PARAMS\n");
+    goto cleanup;
+  }
 
   {
     /* Let the one-shot worker close the inherited server handle after the
@@ -592,11 +696,14 @@ int wmain(int argc, wchar_t **argv) {
       DWORD diagnostic_exit = STILL_ACTIVE;
       stdout_data[stdout_len] = 0;
       stderr_data[stderr_len] = 0;
-      WaitForSingleObject(process.hProcess, 2000);
       GetExitCodeProcess(process.hProcess, &diagnostic_exit);
-      fprintf(stderr,
-              "could not read the FastCGI response: %d (Win32 %lu, child %lu)\n",
-              read_result, read_error, diagnostic_exit);
+      if (read_result == FCGI_IO_TIMEOUT) {
+        fprintf(stderr, "deadline expired while waiting for END_REQUEST\n");
+      } else {
+        fprintf(stderr,
+                "could not read the FastCGI response: %d (Win32 %lu, child %lu)\n",
+                read_result, read_error, diagnostic_exit);
+      }
       fprintf(stderr, "stdout before read failure (%lu): %s\n",
               (unsigned long)stdout_len, stdout_data);
       fprintf(stderr, "stderr before read failure (%lu): %s\n",
@@ -693,28 +800,63 @@ int wmain(int argc, wchar_t **argv) {
 
 cleanup:
   if (client != INVALID_HANDLE_VALUE) {
-    CloseHandle(client);
+    CancelIoEx(client, NULL);
+    if (!CloseHandle(client)) {
+      owned_handles_closed = 0;
+      pipe_closed = 0;
+    } else {
+      pipe_closed = 1;
+    }
+    client = INVALID_HANDLE_VALUE;
   }
   if (server != INVALID_HANDLE_VALUE) {
-    CloseHandle(server);
+    CancelIoEx(server, NULL);
+    if (!CloseHandle(server)) {
+      owned_handles_closed = 0;
+      pipe_closed = 0;
+    } else {
+      pipe_closed = 1;
+    }
+    server = INVALID_HANDLE_VALUE;
   }
   if (process_started && process.hProcess != NULL) {
-    if (WaitForSingleObject(process.hProcess, 0) == WAIT_TIMEOUT) {
-      TerminateProcess(process.hProcess, 1);
+    DWORD wait_result = WaitForSingleObject(process.hProcess, 2000);
+    if (wait_result == WAIT_TIMEOUT) {
+      TerminateProcess(process.hProcess, 124);
       WaitForSingleObject(process.hProcess, 2000);
     }
-    CloseHandle(process.hProcess);
+    child_exited = WaitForSingleObject(process.hProcess, 0) == WAIT_OBJECT_0;
   }
   if (process.hThread != NULL) {
-    CloseHandle(process.hThread);
+    if (!CloseHandle(process.hThread)) {
+      owned_handles_closed = 0;
+    }
+    process.hThread = NULL;
+  }
+  if (process.hProcess != NULL) {
+    if (!CloseHandle(process.hProcess)) {
+      owned_handles_closed = 0;
+    }
+    process.hProcess = NULL;
+  }
+  if (job != NULL) {
+    if (!CloseHandle(job)) {
+      owned_handles_closed = 0;
+    }
+    job = NULL;
   }
   if (attributes != NULL) {
     if (attributes_initialized) {
       DeleteProcThreadAttributeList(attributes);
     }
-    HeapFree(GetProcessHeap(), 0, attributes);
+    if (!HeapFree(GetProcessHeap(), 0, attributes)) {
+      owned_handles_closed = 0;
+    }
+    attributes = NULL;
   }
   free(command_line);
+  fcgi_write_cleanup_report(cleanup_report_path, child_pid, child_exited,
+                            pipe_closed, owned_handles_closed);
   return result;
 }
 #endif
