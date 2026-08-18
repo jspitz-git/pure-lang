@@ -236,7 +236,14 @@ jobs:
             $expectName = $false
             $importSyntaxCount = 0
             $accountedImportCount = 0
+            $preambleLinesRemaining = 4
             foreach ($line in @($Readobj -split '\r?\n')) {
+              if (-not $insideImport -and $preambleLinesRemaining -gt 0) {
+                if ($line -ceq '') { continue }
+                $preambleLinesRemaining--
+                continue
+              }
+              if (-not $insideImport -and $line -ceq '') { continue }
               if ($line -match '^Import\b') {
                 $importSyntaxCount++
                 if ($line -cne 'Import {' -or $insideImport) {
@@ -248,7 +255,9 @@ jobs:
                 $expectName = $true
                 continue
               }
-              if (-not $insideImport) { continue }
+              if (-not $insideImport) {
+                throw "unrecognized top-level COFF import output in $Pe"
+              }
               if ($expectName) {
                 if ($line -notmatch '^  Name:\s*(\S.*)$') {
                   throw "Import Name must be the first inner line in $Pe"

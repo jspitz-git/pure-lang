@@ -103,7 +103,7 @@ require_text("${metrics_step}" METRICS "clang.exe --version" "cmakeVersion"
   "nonEmptyLines.Count -lt 4" "duplicate or misplaced PE header"
   "PE headers are not in the required order"
   "Import Name must be the first inner line"
-  "unrecognized Import field"
+  "unrecognized Import field" "unrecognized top-level COFF import output"
   "Import block has multiple Name fields"
   "truncated Import block" "Import syntax was not fully accounted"
   "Get-CoffImportNames -Readobj $readobj -Pe $pe"
@@ -146,6 +146,7 @@ if(NOT MUTATION_MODE)
     "function Get-CoffImportNames" "duplicate or misplaced PE header"
     "PE headers are not in the required order"
     "Import Name must be the first inner line" "unrecognized Import field"
+    "unrecognized top-level COFF import output"
     "Import block has multiple Name fields"
     "truncated Import block" "Import syntax was not fully accounted"
     "Get-CoffImportNames -Readobj $readobj -Pe $pe" "expectedRuntimeImports"
@@ -207,7 +208,9 @@ foreach ($malformed in @(
     ($header + "Import [`n  Name: runtime.dll`n]`n"),
     ($header + "Format: COFF-x86-64`r`n"),
     ("File: fixture.dll`r`nArch: x86_64`r`nFormat: COFF-x86-64`r`nAddressSize: 64bit`r`n"),
-    ($header + "Import {`n  Symbol: before-name (0)`n  Name: late.dll`n}`n"))) {
+    ($header + "Import {`n  Symbol: before-name (0)`n  Name: late.dll`n}`n"),
+    ($header + " Import {`n  Name: hidden.dll`n}`n"),
+    ($header + "DelayImport {`n  Name: hidden.dll`n}`n"))) {
   $rejected = $false
   try { $null = @(Get-CoffImportNames -Readobj $malformed -Pe 'transitive.dll') }
   catch { $rejected = $true }
