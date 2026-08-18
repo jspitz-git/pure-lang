@@ -38,3 +38,30 @@ an available Windows Bonjour implementation.
 ## Progress Log
 
 - 2026-07-25: Created as an optional networking Windows package investigation.
+- 2026-08-18: Added the Windows-only CMake module target, private UTF/name/status
+  helpers, and deterministic native unit-test target for the Microsoft DNS-SD backend.
+  - Validation:
+    - `C:\msys64\clang64\bin\cmake.exe --version` reported 4.4.0;
+      `clang.exe --version` reported 22.1.8; `ninja.exe --version` reported
+      1.13.2; and `pkg-config.exe --version` reported 3.0.4.
+    - With `PKG_CONFIG_PATH=C:\pure-lang\pure\build\windows-clang64-prefix\lib\pkgconfig`,
+      `C:\msys64\clang64\bin\pkg-config.exe --modversion pure` reported 0.68.
+    - `clang.exe -std=c11 -Wall -Wextra -Werror -D_WIN32_WINNT=0x0A00
+      -DBONJOUR_WINDOWS_TESTING -Ipure-bonjour -fsyntax-only
+      pure-bonjour/tests/unit.c pure-bonjour/bonjour_windows.c` passed without
+      diagnostics.
+    - `cmake.exe -S pure-bonjour -B build/pure-bonjour -G "MinGW Makefiles"
+      -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=C:/msys64/clang64/bin/clang.exe
+      -DCMAKE_MAKE_PROGRAM=C:/msys64/clang64/bin/mingw32-make.exe
+      -DPKG_CONFIG_EXECUTABLE=C:/msys64/clang64/bin/pkg-config.exe`, followed by
+      `cmake.exe --build build/pure-bonjour --verbose` and
+      `ctest.exe --test-dir build/pure-bonjour --output-on-failure`, passed:
+      `1/1` deterministic tests passed without warnings.
+    - `llvm-readobj.exe --file-headers --coff-imports --coff-exports
+      build/pure-bonjour/bonjour.dll` reported PE32+ x86-64. Its initial imports
+      are `KERNEL32.dll` and UCRT API-set DLLs; it has no exports. This is
+      expected before the later native bridge functions reference Pure/DNS-SD
+      symbols; the private helpers remain unexported.
+    - The requested Ninja-generator configuration still stalls after compiling
+      CMake's ABI object and before the link/archive child process. The CLANG64
+      MinGW Makefiles generator is the validated local workaround.
