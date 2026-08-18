@@ -408,6 +408,7 @@ set(system_dlls
   ws2_32.dll)
 set(pe_queue "${component_pe_paths}")
 set(pe_seen)
+include("${CMAKE_CURRENT_LIST_DIR}/ParseCoffImports.cmake")
 while(pe_queue)
   list(POP_FRONT pe_queue pe_file)
   cmake_path(NORMAL_PATH pe_file OUTPUT_VARIABLE normalized_pe)
@@ -426,10 +427,14 @@ while(pe_queue)
     message(FATAL_ERROR
       "PE_PARSE_FAILED: llvm-readobj rejected ${pe_file}: ${read_error}")
   endif()
-  string(REGEX MATCHALL "Name: [^\r\n]+" import_lines "${read_output}")
-  foreach(import_line IN LISTS import_lines)
-    string(REGEX REPLACE "^Name: *" "" import_name "${import_line}")
-    string(STRIP "${import_name}" import_name)
+  pure_fastcgi_parse_coff_imports(
+    "${read_output}" import_names import_parse_error)
+  if(NOT import_parse_error STREQUAL "")
+    message(FATAL_ERROR
+      "PE_PARSE_FAILED: malformed llvm-readobj output for ${pe_file}: "
+      "${import_parse_error}")
+  endif()
+  foreach(import_name IN LISTS import_names)
     string(TOLOWER "${import_name}" import_lower)
     if(import_lower MATCHES "^libfcgi.*\\.dll$")
       message(FATAL_ERROR

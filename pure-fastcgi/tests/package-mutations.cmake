@@ -177,6 +177,18 @@ function(write_fake_readobj output_file mode import_name)
   if(mode STREQUAL "failure")
     file(WRITE "${output_file}"
       "@echo off\r\necho synthetic parser failure 1>&2\r\nexit /b 7\r\n")
+  elseif(mode STREQUAL "empty")
+    file(WRITE "${output_file}" "@echo off\r\nexit /b 0\r\n")
+  elseif(mode STREQUAL "malformed")
+    file(WRITE "${output_file}"
+      "@echo off\r\n"
+      "echo File: %~2\r\n"
+      "echo Format: COFF-x86-64\r\n"
+      "echo Arch: x86_64\r\n"
+      "echo AddressSize: 64bit\r\n"
+      "echo Import {\r\n"
+      "echo   Symbol: truncated (0)\r\n"
+      "exit /b 0\r\n")
   elseif(mode STREQUAL "recursive-undeclared")
     file(WRITE "${output_file}"
       "@echo off\r\n"
@@ -185,6 +197,8 @@ function(write_fake_readobj output_file mode import_name)
       "if /I \"%~nx2\"==\"libgmp-10.dll\" set dependency=evil-runtime.dll\r\n"
       "echo File: %~2\r\n"
       "echo Format: COFF-x86-64\r\n"
+      "echo Arch: x86_64\r\n"
+      "echo AddressSize: 64bit\r\n"
       "if defined dependency (\r\n"
       "  echo Import {\r\n"
       "  echo   Name: %dependency%\r\n"
@@ -196,6 +210,8 @@ function(write_fake_readobj output_file mode import_name)
       "@echo off\r\n"
       "echo File: %~2\r\n"
       "echo Format: COFF-x86-64\r\n"
+      "echo Arch: x86_64\r\n"
+      "echo AddressSize: 64bit\r\n"
       "echo Import {\r\n"
       "echo   Name: ${import_name}\r\n"
       "echo }\r\n"
@@ -436,6 +452,18 @@ run_mocked_pe_case(
   "parser-failure" "${fake_parser_failure}" "${runtime_root}"
   "PE_PARSE_FAILED")
 
+set(fake_empty_output "${stage}-fake-empty-output-readobj.cmd")
+write_fake_readobj("${fake_empty_output}" "empty" "")
+run_mocked_pe_case(
+  "empty-parser-output" "${fake_empty_output}" "${runtime_root}"
+  "PE_PARSE_FAILED")
+
+set(fake_malformed_output "${stage}-fake-malformed-output-readobj.cmd")
+write_fake_readobj("${fake_malformed_output}" "malformed" "")
+run_mocked_pe_case(
+  "malformed-parser-output" "${fake_malformed_output}" "${runtime_root}"
+  "PE_PARSE_FAILED")
+
 set(fake_recursive "${stage}-fake-recursive-readobj.cmd")
 write_fake_readobj("${fake_recursive}" "recursive-undeclared" "")
 run_mocked_pe_case(
@@ -488,6 +516,8 @@ file(REMOVE_RECURSE
   "${fake_bogus_api}"
   "${fake_unreviewed_system}"
   "${fake_parser_failure}"
+  "${fake_empty_output}"
+  "${fake_malformed_output}"
   "${fake_recursive}"
   "${fake_missing_runtime}"
   "${empty_runtime_root}")
