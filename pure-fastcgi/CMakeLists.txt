@@ -186,11 +186,21 @@ if(BUILD_TESTING)
     RUN_SERIAL TRUE
     TIMEOUT 180)
 
+  file(REAL_PATH "${CMAKE_CURRENT_BINARY_DIR}"
+    pure_fastcgi_test_build_identity)
+  string(TOLOWER "${pure_fastcgi_test_build_identity}"
+    pure_fastcgi_test_build_identity)
+  string(SHA256 pure_fastcgi_test_build_hash
+    "${pure_fastcgi_test_build_identity}")
+  string(SUBSTRING "${pure_fastcgi_test_build_hash}" 0 20
+    pure_fastcgi_test_build_token)
+  set(pure_fastcgi_relocation_stage_base "$ENV{TEMP}")
   add_test(
     NAME pure-fastcgi-relocation-ownership
     COMMAND "${CMAKE_COMMAND}"
       "-DBUILD_DIR=${CMAKE_CURRENT_BINARY_DIR}"
-      "-DSTAGE_PREFIX=$ENV{TEMP}/PureFastCGI relocation ownership test"
+      "-DSTAGE_BASE=${pure_fastcgi_relocation_stage_base}"
+      "-DSTAGE_PREFIX=${pure_fastcgi_relocation_stage_base}/PureFastCGI-relocation-${pure_fastcgi_test_build_token}"
       "-DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
       "-DPURE_RUNTIME_ROOT=${PURE_PREFIX}/bin"
       "-DLLVM_READOBJ=${LLVM_READOBJ}"

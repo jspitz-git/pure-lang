@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.25)
 
-foreach(required IN ITEMS BUILD_DIR STAGE_PREFIX SOURCE_DIR PURE_RUNTIME_ROOT
+foreach(required IN ITEMS BUILD_DIR STAGE_BASE STAGE_PREFIX SOURCE_DIR PURE_RUNTIME_ROOT
     LLVM_READOBJ POWERSHELL_EXECUTABLE PROTOCOL_HARNESS PROTOCOL_WORKER
     VERIFY_SCRIPT)
   if(NOT DEFINED ${required} OR "${${required}}" STREQUAL "")
@@ -9,7 +9,34 @@ foreach(required IN ITEMS BUILD_DIR STAGE_PREFIX SOURCE_DIR PURE_RUNTIME_ROOT
 endforeach()
 
 cmake_path(ABSOLUTE_PATH BUILD_DIR NORMALIZE OUTPUT_VARIABLE build_dir)
+cmake_path(ABSOLUTE_PATH STAGE_BASE NORMALIZE OUTPUT_VARIABLE stage_base)
 cmake_path(ABSOLUTE_PATH STAGE_PREFIX NORMALIZE OUTPUT_VARIABLE test_root)
+file(REAL_PATH "${build_dir}" canonical_build_identity)
+string(TOLOWER "${canonical_build_identity}" canonical_build_identity)
+string(SHA256 build_identity_hash "${canonical_build_identity}")
+string(SUBSTRING "${build_identity_hash}" 0 20 build_identity_token)
+string(TOLOWER "${build_dir}-independent-checkout" other_build_identity)
+string(SHA256 other_build_identity_hash "${other_build_identity}")
+string(SUBSTRING "${other_build_identity_hash}" 0 20 other_build_token)
+if(build_identity_token STREQUAL other_build_token)
+  message(FATAL_ERROR "independent build roots derived a colliding token")
+endif()
+set(other_test_root
+  "${stage_base}/PureFastCGI-relocation-${other_build_token}")
+if(test_root STREQUAL other_test_root)
+  message(FATAL_ERROR "independent BUILD_DIR values derived the same root")
+endif()
+get_filename_component(test_root_name "${test_root}" NAME)
+if(NOT test_root_name STREQUAL
+    "PureFastCGI-relocation-${build_identity_token}")
+  message(FATAL_ERROR
+    "relocation root is not owned by this canonical BUILD_DIR: ${test_root}")
+endif()
+cmake_path(IS_PREFIX stage_base "${test_root}" NORMALIZE
+  test_root_beneath_stage_base)
+if(NOT test_root_beneath_stage_base OR test_root STREQUAL stage_base)
+  message(FATAL_ERROR "relocation root escaped its dedicated stage base")
+endif()
 set(stage "${test_root}/stage with spaces")
 set(relocated "${test_root}/relocated 日本語 PureFastCGI")
 file(REMOVE_RECURSE "${test_root}")
@@ -237,6 +264,43 @@ set(adversarial_stage "${test_root}/adversarial overlay")
 if(NOT EXISTS "${installed_forgery_file}")
   message(FATAL_ERROR
     "installed inventory forgery deleted an unrelated sentinel")
+endif()
+
+set(timeout_helper "${test_root}/runtime-timeout-helper.cmd")
+file(WRITE "${timeout_helper}"
+  "@echo off\r\n"
+  ":pure_fastcgi_timeout_loop\r\n"
+  "goto pure_fastcgi_timeout_loop\r\n")
+execute_process(
+  COMMAND "${CMAKE_COMMAND}"
+    "-DBUILD_DIR=${build_dir}"
+    "-DSTAGE_PREFIX=${relocated}"
+    "-DSOURCE_PREFIX=${SOURCE_DIR}"
+    "-DORIGINAL_BUILD_PREFIX=${build_dir}"
+    "-DORIGINAL_STAGE_PREFIX=${stage}"
+    "-DPURE_RUNTIME_ROOT=${PURE_RUNTIME_ROOT}"
+    "-DLLVM_READOBJ=${LLVM_READOBJ}"
+    "-DPOWERSHELL_EXECUTABLE=${POWERSHELL_EXECUTABLE}"
+    "-DPROTOCOL_HARNESS=${timeout_helper}"
+    "-DPROTOCOL_WORKER=${PROTOCOL_WORKER}"
+    -DRUNTIME_TIMEOUT_SECONDS=0.2
+    -DRUN_RUNTIME_TESTS=ON
+    -P "${VERIFY_SCRIPT}"
+  RESULT_VARIABLE timeout_probe_result
+  OUTPUT_VARIABLE timeout_probe_output
+  ERROR_VARIABLE timeout_probe_error
+  ENCODING UTF-8)
+set(timeout_probe_log "${timeout_probe_output}\n${timeout_probe_error}")
+if(timeout_probe_result EQUAL 0 OR
+    NOT timeout_probe_log MATCHES
+      "RUNTIME_SMOKE_TIMEOUT: deadline expired;[ \r\n]*alias=([^\r\n]+)")
+  message(FATAL_ERROR
+    "runtime timeout did not fail with its stable category\n${timeout_probe_log}")
+endif()
+set(timeout_alias "${CMAKE_MATCH_1}")
+string(STRIP "${timeout_alias}" timeout_alias)
+if(EXISTS "${timeout_alias}")
+  message(FATAL_ERROR "runtime timeout leaked its alias: ${timeout_alias}")
 endif()
 
 message(STATUS "PureFastCGI relocation and ownership passed")

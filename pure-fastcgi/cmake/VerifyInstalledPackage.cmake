@@ -16,6 +16,15 @@ endforeach()
 if(NOT DEFINED RUN_RUNTIME_TESTS)
   set(RUN_RUNTIME_TESTS OFF)
 endif()
+if(NOT DEFINED RUNTIME_TIMEOUT_SECONDS)
+  set(RUNTIME_TIMEOUT_SECONDS 18)
+endif()
+if(NOT RUNTIME_TIMEOUT_SECONDS MATCHES "^[0-9]+([.][0-9]+)?$" OR
+    RUNTIME_TIMEOUT_SECONDS LESS_EQUAL 0 OR
+    RUNTIME_TIMEOUT_SECONDS GREATER 18)
+  message(FATAL_ERROR
+    "RUNTIME_TIMEOUT_INVALID: expected a number greater than 0 and at most 18")
+endif()
 
 function(validate_absolute_prefixes variable out_prefixes)
   set(validated)
@@ -493,6 +502,7 @@ if(RUN_RUNTIME_TESTS)
     RESULT_VARIABLE smoke_result
     OUTPUT_VARIABLE smoke_output
     ERROR_VARIABLE smoke_error
+    TIMEOUT "${RUNTIME_TIMEOUT_SECONDS}"
     ENCODING UTF-8)
   file(REMOVE "${relocated_worker}")
   execute_process(
@@ -508,6 +518,12 @@ if(RUN_RUNTIME_TESTS)
     message(FATAL_ERROR
       "RUNTIME_ALIAS_FAILED: could not remove relocation junction\n"
       "${alias_remove_error}")
+  endif()
+  string(TOLOWER "${smoke_result}" smoke_result_lower)
+  if(smoke_result_lower MATCHES "timeout")
+    message(FATAL_ERROR
+      "RUNTIME_SMOKE_TIMEOUT: deadline expired; alias=${runtime_alias}\n"
+      "stdout:\n${smoke_output}\nstderr:\n${smoke_error}")
   endif()
   if(NOT smoke_result EQUAL 0)
     message(FATAL_ERROR
