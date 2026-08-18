@@ -211,17 +211,29 @@ jobs:
               [Parameter(Mandatory)][string]$Readobj,
               [Parameter(Mandatory)][string]$Pe
             )
-            foreach ($header in @(
-                '(?m)^File: .+\r?$', '(?m)^Format: COFF-x86-64\r?$',
-                '(?m)^Arch: x86_64\r?$', '(?m)^AddressSize: 64bit\r?$')) {
-              if ($Readobj -notmatch $header) {
-                throw "invalid llvm-readobj header for ${Pe}: $header"
+            $lines = @($Readobj -split '\r?\n')
+            $nonEmptyLines = @($lines | Where-Object { $_ -cne '' })
+            if ($nonEmptyLines.Count -lt 4) {
+              throw "PE headers are not in the required order for $Pe"
+            }
+            $headerPatterns = @(
+              '^File: .+$', '^Format: COFF-x86-64$',
+              '^Arch: x86_64$', '^AddressSize: 64bit$'
+            )
+            for ($headerIndex = 0; $headerIndex -lt $headerPatterns.Count; $headerIndex++) {
+              if ($nonEmptyLines[$headerIndex] -notmatch $headerPatterns[$headerIndex]) {
+                throw "PE headers are not in the required order for $Pe"
+              }
+              $headerPattern = '(?m)' + $headerPatterns[$headerIndex].Replace('$', '\r?$')
+              if ([regex]::Matches($Readobj, $headerPattern).Count -ne 1) {
+                throw "duplicate or misplaced PE header in $Pe"
               }
             }
             $names = [Collections.Generic.List[string]]::new()
             $insideImport = $false
             $nameCount = 0
             $pendingName = $null
+            $expectName = $false
             $importSyntaxCount = 0
             $accountedImportCount = 0
             foreach ($line in @($Readobj -split '\r?\n')) {
@@ -233,9 +245,19 @@ jobs:
                 $insideImport = $true
                 $nameCount = 0
                 $pendingName = $null
+                $expectName = $true
                 continue
               }
               if (-not $insideImport) { continue }
+              if ($expectName) {
+                if ($line -notmatch '^  Name:\s*(\S.*)$') {
+                  throw "Import Name must be the first inner line in $Pe"
+                }
+                $nameCount = 1
+                $pendingName = $Matches[1].Trim().ToLowerInvariant()
+                $expectName = $false
+                continue
+              }
               if ($line -match '^  Name:\s*(.+)$') {
                 $nameCount++
                 if ($nameCount -gt 1) {
@@ -249,6 +271,8 @@ jobs:
                 $names.Add($pendingName) | Out-Null
                 $accountedImportCount++
                 $insideImport = $false
+              } elseif ($line -notmatch '^  (ImportLookupTableRVA|ImportAddressTableRVA|Symbol): .+$') {
+                throw "unrecognized Import field in $Pe"
               }
             }
             if ($insideImport) { throw "truncated Import block in $Pe" }
@@ -268,7 +292,7 @@ jobs:
             $pe = $queue.Dequeue()
             if (-not $visited.Add($pe)) { continue }
             $readobj = & $env:LLVM_READOBJ_EXE --coff-imports $pe | Out-String
-            if ($LASTEXITCODE -ne 0 -or $readobj -notmatch 'Import') {
+            if ($LASTEXITCODE -ne 0) {
               throw "PE import enumeration failed closed for $pe"
             }
             $relativePe = if ($pe.StartsWith($env:PURE_FASTCGI_STAGE, [StringComparison]::OrdinalIgnoreCase)) {

@@ -100,7 +100,11 @@ require_text("${metrics_step}" METRICS "clang.exe --version" "cmakeVersion"
   "module bytes / stage bytes / staged files" "files.Count -ne 6"
   "inventory SHA-256" "Collections.Generic.Queue[string]"
   "PURE_FASTCGI_IMPORT_PARSER_BEGIN" "function Get-CoffImportNames"
-  "Format: COFF-x86-64" "Import block has multiple Name fields"
+  "nonEmptyLines.Count -lt 4" "duplicate or misplaced PE header"
+  "PE headers are not in the required order"
+  "Import Name must be the first inner line"
+  "unrecognized Import field"
+  "Import block has multiple Name fields"
   "truncated Import block" "Import syntax was not fully accounted"
   "Get-CoffImportNames -Readobj $readobj -Pe $pe"
   "expectedRuntimeImports"
@@ -108,6 +112,7 @@ require_text("${metrics_step}" METRICS "clang.exe --version" "cmakeVersion"
   "recursive PE import closure did not resolve runtime dependencies"
   "Complete fastcgi.dll imports")
 reject_text("${metrics_step}" METRICS "DLLName:")
+reject_text("${metrics_step}" METRICS "readobj -notmatch 'Import'")
 extract_step("Create the deterministic PureFastCGI ZIP twice" zip_step)
 require_text("${zip_step}" ZIP "windows-pure-fastcgi-first.zip"
   "windows-pure-fastcgi-second.zip" "[Array]::Sort($relative, [StringComparer]::Ordinal)"
@@ -138,7 +143,10 @@ if(NOT MUTATION_MODE)
     "-DORIGINAL_STAGE_PREFIX=$stage"
     "RUN_RUNTIME_TESTS=ON" "files.Count -ne 6" "gmpVersion"
     "inventory SHA-256" "Collections.Generic.Queue[string]"
-    "function Get-CoffImportNames" "Import block has multiple Name fields"
+    "function Get-CoffImportNames" "duplicate or misplaced PE header"
+    "PE headers are not in the required order"
+    "Import Name must be the first inner line" "unrecognized Import field"
+    "Import block has multiple Name fields"
     "truncated Import block" "Import syntax was not fully accounted"
     "Get-CoffImportNames -Readobj $readobj -Pe $pe" "expectedRuntimeImports"
     "resolvedRuntimeNames" "visited.Count -le 1"
@@ -184,9 +192,11 @@ if(NOT MUTATION_MODE)
   file(WRITE "${parser_fixture}" "${parser_script}\n")
   file(APPEND "${parser_fixture}" [=[
 $header = "File: fixture.dll`r`nFormat: COFF-x86-64`r`nArch: x86_64`r`nAddressSize: 64bit`r`n"
-$zero = @(Get-CoffImportNames -Readobj $header -Pe 'zero.dll')
-if ($zero.Count -ne 0) { throw 'valid zero-import PE was not empty' }
-$valid = $header + "Import {`n  Name: runtime.dll`n  Symbol: Name: not-a-dll (0)`n}`n"
+$callerExitCode = 0
+if ($callerExitCode -ne 0) { throw 'caller readobj failed' }
+$zero = @(Get-CoffImportNames -Readobj $header -Pe 'transitive-zero.dll')
+if ($zero.Count -ne 0) { throw 'caller-equivalent valid transitive zero-import PE was not empty' }
+$valid = $header + "Import {`n  Name: runtime.dll`n  ImportLookupTableRVA: 0x1`n  ImportAddressTableRVA: 0x2`n  Symbol: Name: not-a-dll (0)`n}`n"
 $names = @(Get-CoffImportNames -Readobj $valid -Pe 'valid.dll')
 if ($names.Count -ne 1 -or $names[0] -cne 'runtime.dll') {
   throw 'valid Import Name was not parsed exactly'
@@ -194,7 +204,10 @@ if ($names.Count -ne 1 -or $names[0] -cne 'runtime.dll') {
 foreach ($malformed in @(
     ($header + "Import {`n  Name: runtime.dll`n"),
     ($header + "Import {`n  Name: one.dll`n  Name: two.dll`n}`n"),
-    ($header + "Import [`n  Name: runtime.dll`n]`n"))) {
+    ($header + "Import [`n  Name: runtime.dll`n]`n"),
+    ($header + "Format: COFF-x86-64`r`n"),
+    ("File: fixture.dll`r`nArch: x86_64`r`nFormat: COFF-x86-64`r`nAddressSize: 64bit`r`n"),
+    ($header + "Import {`n  Symbol: before-name (0)`n  Name: late.dll`n}`n"))) {
   $rejected = $false
   try { $null = @(Get-CoffImportNames -Readobj $malformed -Pe 'transitive.dll') }
   catch { $rejected = $true }
