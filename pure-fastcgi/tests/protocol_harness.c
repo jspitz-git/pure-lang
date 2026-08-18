@@ -37,6 +37,12 @@ struct fcgi_record {
   unsigned char content[UINT16_MAX];
 };
 
+struct fcgi_response_state {
+  int terminal;
+  int end_request_count;
+  int trailing_record_count;
+};
+
 static size_t fcgi_encode_record(unsigned char *out, size_t capacity,
                                  uint8_t version, uint8_t type,
                                  uint16_t request_id, const void *content,
@@ -56,6 +62,10 @@ static enum fcgi_io_result fcgi_write_record(HANDLE pipe, uint8_t type,
 static enum fcgi_io_result fcgi_read_record(HANDLE pipe,
                                             struct fcgi_record *record,
                                             uint64_t deadline_ms);
+static enum fcgi_io_result fcgi_track_response_record(
+    struct fcgi_response_state *state, const struct fcgi_record *record);
+static enum fcgi_io_result fcgi_drain_after_terminal(
+    HANDLE pipe, struct fcgi_response_state *state, uint64_t deadline_ms);
 
 static uint64_t fcgi_now_ms(void) { return GetTickCount64(); }
 
@@ -227,6 +237,25 @@ static enum fcgi_io_result fcgi_decode_record(const unsigned char *input,
   return FCGI_IO_OK;
 }
 
+static enum fcgi_io_result fcgi_track_response_record(
+    struct fcgi_response_state *state, const struct fcgi_record *record) {
+  if (state == NULL || record == NULL) {
+    return FCGI_IO_PROTOCOL;
+  }
+  if (state->terminal) {
+    ++state->trailing_record_count;
+    if (record->type == FCGI_END_REQUEST) {
+      ++state->end_request_count;
+    }
+    return FCGI_IO_PROTOCOL;
+  }
+  if (record->type == FCGI_END_REQUEST) {
+    state->terminal = 1;
+    ++state->end_request_count;
+  }
+  return FCGI_IO_OK;
+}
+
 static enum fcgi_io_result fcgi_write_record(HANDLE pipe, uint8_t type,
                                              uint16_t request_id,
                                              const void *content,
@@ -277,6 +306,29 @@ static enum fcgi_io_result fcgi_read_record(HANDLE pipe,
   }
   free(encoded);
   return result;
+}
+
+static enum fcgi_io_result fcgi_drain_after_terminal(
+    HANDLE pipe, struct fcgi_response_state *state, uint64_t deadline_ms) {
+  enum fcgi_io_result drain_result = FCGI_IO_OK;
+
+  if (state == NULL || !state->terminal) {
+    return FCGI_IO_PROTOCOL;
+  }
+  for (;;) {
+    struct fcgi_record record;
+    enum fcgi_io_result read_result =
+        fcgi_read_record(pipe, &record, deadline_ms);
+    if (read_result == FCGI_IO_EOF) {
+      return drain_result;
+    }
+    if (read_result != FCGI_IO_OK) {
+      return read_result;
+    }
+    if (fcgi_track_response_record(state, &record) != FCGI_IO_OK) {
+      drain_result = FCGI_IO_PROTOCOL;
+    }
+  }
 }
 
 #ifndef PURE_FASTCGI_CODEC_TEST
@@ -389,7 +441,7 @@ int wmain(int argc, wchar_t **argv) {
   unsigned char stderr_data[65537];
   size_t stdout_len = 0;
   size_t stderr_len = 0;
-  int end_request_count = 0;
+  struct fcgi_response_state response_state = {0};
   DWORD process_exit = STILL_ACTIVE;
   int process_started = 0;
   int result = 1;
@@ -530,6 +582,10 @@ int wmain(int argc, wchar_t **argv) {
               (unsigned long)stderr_len, stderr_data);
       goto cleanup;
     }
+    if (fcgi_track_response_record(&response_state, &record) != FCGI_IO_OK) {
+      fprintf(stderr, "invalid FastCGI response state\n");
+      goto cleanup;
+    }
     if (record.type == FCGI_STDOUT) {
       if (!fcgi_append(stdout_data, &stdout_len, 65536, record.content,
                        record.content_len)) {
@@ -544,7 +600,6 @@ int wmain(int argc, wchar_t **argv) {
       }
     } else if (record.type == FCGI_END_REQUEST) {
       uint32_t application_status;
-      ++end_request_count;
       if (record.content_len != 8) {
         fprintf(stderr, "invalid END_REQUEST length\n");
         goto cleanup;
@@ -565,6 +620,22 @@ int wmain(int argc, wchar_t **argv) {
                 (unsigned long)stderr_len, stderr_data);
         goto cleanup;
       }
+      if (!fcgi_wait_process(process.hProcess, deadline_ms, &process_exit) ||
+          process_exit != 0) {
+        fprintf(stderr, "Pure worker did not exit normally: %lu\n",
+                process_exit);
+        goto cleanup;
+      }
+      {
+        enum fcgi_io_result drain_result = fcgi_drain_after_terminal(
+            client, &response_state, deadline_ms);
+        if (drain_result != FCGI_IO_OK &&
+            drain_result != FCGI_IO_PROTOCOL) {
+          fprintf(stderr, "could not drain the FastCGI response: %d\n",
+                  drain_result);
+          goto cleanup;
+        }
+      }
       break;
     } else {
       fprintf(stderr, "unexpected FastCGI record type: %u\n", record.type);
@@ -574,9 +645,17 @@ int wmain(int argc, wchar_t **argv) {
 
   stdout_data[stdout_len] = 0;
   stderr_data[stderr_len] = 0;
-  if (end_request_count != 1) {
+  if (response_state.trailing_record_count != 0) {
+    fprintf(stderr,
+            "received %d FastCGI record(s) after END_REQUEST "
+            "(%d END_REQUEST records total)\n",
+            response_state.trailing_record_count,
+            response_state.end_request_count);
+    goto cleanup;
+  }
+  if (response_state.end_request_count != 1) {
     fprintf(stderr, "expected one END_REQUEST, received %d\n",
-            end_request_count);
+            response_state.end_request_count);
     goto cleanup;
   }
   if (stdout_len != sizeof expected_stdout - 1 ||
@@ -589,12 +668,6 @@ int wmain(int argc, wchar_t **argv) {
     fprintf(stderr, "unexpected FastCGI stderr:\n%s\n", stderr_data);
     goto cleanup;
   }
-  if (!fcgi_wait_process(process.hProcess, deadline_ms, &process_exit) ||
-      process_exit != 0) {
-    fprintf(stderr, "Pure worker did not exit normally: %lu\n", process_exit);
-    goto cleanup;
-  }
-
   puts("pure-fastcgi protocol smoke passed");
   result = 0;
 

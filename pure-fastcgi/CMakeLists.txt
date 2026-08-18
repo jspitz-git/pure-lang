@@ -65,6 +65,22 @@ if(BUILD_TESTING)
     LABELS "fastcgi;protocol;codec"
     TIMEOUT 20)
 
+  add_executable(pure-fastcgi-protocol-codec-ndebug-test
+    tests/protocol_codec_test.c)
+  target_compile_features(pure-fastcgi-protocol-codec-ndebug-test
+    PRIVATE c_std_11)
+  target_compile_definitions(pure-fastcgi-protocol-codec-ndebug-test PRIVATE
+    NDEBUG
+    PURE_FASTCGI_NDEBUG_PROBE)
+  add_test(
+    NAME pure-fastcgi-protocol-codec-ndebug
+    COMMAND "${CMAKE_COMMAND}"
+      "-DPROGRAM=$<TARGET_FILE:pure-fastcgi-protocol-codec-ndebug-test>"
+      -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunNdebugCodecTest.cmake")
+  set_tests_properties(pure-fastcgi-protocol-codec-ndebug PROPERTIES
+    LABELS "fastcgi;protocol;codec"
+    TIMEOUT 20)
+
   set(PURE_FASTCGI_PURE_EXECUTABLE "${PURE_PREFIX}/bin/pure.exe")
   set(PURE_FASTCGI_PURE_RUNTIME_DIR "${PURE_PREFIX}/bin")
   add_test(
