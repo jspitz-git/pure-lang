@@ -18,7 +18,7 @@ an available Windows Bonjour implementation.
 
 1. [ ] Resolve SDK availability, licensing, and redistribution terms.
 2. [ ] Build the module against the selected Windows implementation.
-3. [ ] Add bounded loopback registration and discovery tests.
+3. [x] Add bounded loopback registration and discovery tests.
 4. [ ] Decide whether to bundle, externally detect, or defer the package.
 
 ## Guardrails
@@ -110,3 +110,36 @@ an available Windows Bonjour implementation.
     allowing remove/re-add. The Microsoft port `WORD` is now passed and read in
     host order. The expanded 25-function deterministic suite passed 10 consecutive
     runs in 23.69 seconds, and the exact seven-export audit remained unchanged.
+- 2026-08-19: Added a bounded real-Pure registration/discovery/removal test for
+  the Microsoft DNS-SD backend.
+  - Windows DNS-SD has local-link mDNS but no Apple-style local-only interface
+    constant. The test therefore browses `<type>.local` on interface scope 0 and
+    advertises one process/time-unique ephemeral `.local` record. It uses no
+    public endpoint and accepts the nonempty address returned by the local
+    resolver; observed addresses included `172.30.128.1` and `192.168.50.248`.
+  - The runner asks a loopback `TcpListener` bound to port 0 for an OS-selected
+    ephemeral port, closes the listener, and passes that literal port to Pure.
+    Both `check` and the independently resolved browse snapshot must report the
+    exact same value, directly validating Microsoft's host-order `wPort` contract.
+  - Real Windows callbacks exposed three API-contract corrections, each preceded
+    by a deterministic fake regression: registration now supplies a nonempty
+    `<computer>.local` host name, a PTR with TTL zero removes the service even
+    when the version-1 callback omits its delete flag, and every non-null
+    registration callback instance is freed inside callback quiescence.
+  - The smoke runner stages only `bonjour.pure` and `bonjour.dll` in a unique
+    temporary `PURELIB`, explicitly loads Pure's standard prelude, sanitizes
+    `PATH` to exclude MSYS2, bounds the child at 25 seconds and CTest at 30
+    seconds, and removes the temporary directory on success and handled failure.
+    The local firewall and multicast policy permitted discovery; no policy-denial
+    caveat was observed, and no Pure process remained after verification.
+  - Validation:
+    - The first clean `pure-bonjour-loopback` run passed in 4.45 seconds and
+      emitted exactly `PURE_BONJOUR_LOOPBACK_OK` after explicit service removal
+      and browser cleanup.
+    - `ctest.exe --test-dir build/pure-bonjour -R
+      "^pure-bonjour-loopback$" --repeat until-fail:5 --output-on-failure`
+      passed five runs in 22.91 seconds (individual runs 4.47-4.66 seconds).
+    - `ctest.exe --test-dir build/pure-bonjour -R
+      "^pure-bonjour-(unit|lifecycle|loopback)$" --output-on-failure` passed all
+      three tests in 7.54 seconds. The deterministic suites now contain 30 named
+      test functions.

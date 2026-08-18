@@ -60,4 +60,18 @@ if(BUILD_TESTING)
   set_tests_properties(pure-bonjour-lifecycle PROPERTIES
     LABELS "bonjour;lifecycle" TIMEOUT 10 ENVIRONMENT_MODIFICATION
     "PATH=path_list_prepend:${PURE_PREFIX}/bin")
+
+  set(PURE_EXECUTABLE "${PURE_PREFIX}/bin/pure.exe")
+  if(EXISTS "${PURE_EXECUTABLE}")
+    add_test(NAME pure-bonjour-loopback
+      COMMAND "${CMAKE_COMMAND}"
+        "-DPURE_EXECUTABLE=${PURE_EXECUTABLE}"
+        "-DMODULE_PATH=$<TARGET_FILE:pure-bonjour>"
+        "-DWRAPPER_PATH=${CMAKE_CURRENT_SOURCE_DIR}/bonjour.pure"
+        "-DSMOKE_SCRIPT=${CMAKE_CURRENT_SOURCE_DIR}/tests/smoke.pure"
+        "-DSMOKE_ROOT=${CMAKE_CURRENT_BINARY_DIR}"
+        -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunSmokeTest.cmake")
+    set_tests_properties(pure-bonjour-loopback PROPERTIES
+      LABELS "bonjour;dnssd;integration" TIMEOUT 30)
+  endif()
 endif()

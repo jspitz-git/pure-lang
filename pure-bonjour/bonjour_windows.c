@@ -134,6 +134,28 @@ static char *bonjour_string_duplicate(const char *text)
   return copy;
 }
 
+static wchar_t *bonjour_local_hostname(void)
+{
+  static const wchar_t suffix[] = L".local";
+  wchar_t label[DNS_MAX_NAME_BUFFER_LENGTH];
+  DWORD capacity = DNS_MAX_NAME_BUFFER_LENGTH;
+  size_t label_length;
+  wchar_t *hostname;
+
+  if (!GetComputerNameExW(ComputerNameDnsHostname, label, &capacity) ||
+      capacity == 0)
+    return NULL;
+  label_length = wcslen(label);
+  if (label_length > DNS_MAX_NAME_LENGTH - (sizeof(suffix) / sizeof(*suffix)))
+    return NULL;
+  hostname = malloc((label_length + sizeof(suffix) / sizeof(*suffix)) *
+                    sizeof(*hostname));
+  if (hostname == NULL) return NULL;
+  memcpy(hostname, label, label_length * sizeof(*hostname));
+  memcpy(hostname + label_length, suffix, sizeof(suffix));
+  return hostname;
+}
+
 static int bonjour_fqdn_equal(const wchar_t *left, const wchar_t *right)
 {
   if (left == NULL || right == NULL) return 0;
@@ -180,14 +202,18 @@ static void WINAPI bonjour_register_complete(DWORD status, void *context,
     service->shutdown_status = status;
   }
   SetEvent(service->completion);
-  --service->callbacks;
-  if (service->callbacks == 0)
-    WakeAllConditionVariable(&service->callbacks_done);
   ReleaseSRWLockExclusive(&service->lock);
 
   free(effective_name);
   free(effective_type);
   free(effective_domain);
+  if (instance != NULL) service->api->free_instance(instance);
+
+  AcquireSRWLockExclusive(&service->lock);
+  --service->callbacks;
+  if (service->callbacks == 0)
+    WakeAllConditionVariable(&service->callbacks_done);
+  ReleaseSRWLockExclusive(&service->lock);
 }
 
 static void bonjour_release_service(bonjour_service_t *service)
@@ -206,6 +232,7 @@ static bonjour_service_t *bonjour_publish_using_api(
   DNS_SERVICE_REGISTER_REQUEST request;
   bonjour_service_t *service;
   wchar_t *fqdn;
+  wchar_t *hostname;
   DWORD status;
 
   if (api == NULL || api->construct_instance == NULL ||
@@ -215,10 +242,16 @@ static bonjour_service_t *bonjour_publish_using_api(
     return NULL;
   fqdn = bonjour_make_instance_fqdn(name, type);
   if (fqdn == NULL) return NULL;
+  hostname = bonjour_local_hostname();
+  if (hostname == NULL) {
+    free(fqdn);
+    return NULL;
+  }
 
   service = calloc(1, sizeof(*service));
   if (service == NULL) {
     free(fqdn);
+    free(hostname);
     return NULL;
   }
   InitializeSRWLock(&service->lock);
@@ -238,13 +271,15 @@ static bonjour_service_t *bonjour_publish_using_api(
     free(service->type);
     free(service);
     free(fqdn);
+    free(hostname);
     return NULL;
   }
 
   service->instance = api->construct_instance(
-      fqdn, NULL, NULL, NULL, (WORD)port, 0, 0, 0,
+      fqdn, hostname, NULL, NULL, (WORD)port, 0, 0, 0,
       NULL, NULL);
   free(fqdn);
+  free(hostname);
   if (service->instance == NULL) {
     CloseHandle(service->completion);
     free(service->name);
@@ -759,7 +794,6 @@ static void WINAPI bonjour_resolve_complete(DWORD status, void *context,
       port = instance->wPort;
     }
   }
-
   AcquireSRWLockExclusive(&browser->lock);
   if (valid && !browser->closing &&
       bonjour_name_is_current_locked(browser, resolver->fqdn,
@@ -852,7 +886,6 @@ static void bonjour_start_resolver(bonjour_browser_t *browser,
   request.pResolveCompletionCallback = bonjour_resolve_complete;
   request.pQueryContext = resolver;
   status = browser->api->resolve(&request, &resolver->cancel);
-
   AcquireSRWLockExclusive(&browser->lock);
   resolver->dispatching = 0;
   --browser->dispatches;
@@ -896,7 +929,7 @@ static void WINAPI bonjour_browse_complete(DWORD status, void *context,
           !bonjour_fqdn_equal(record->pName, browser->type_fqdn))
         continue;
       target = record->Data.PTR.pNameHost;
-      if (record->Flags.S.Delete) {
+      if (record->Flags.S.Delete || record->dwTtl == 0) {
         int delete_status;
 
         AcquireSRWLockExclusive(&browser->lock);
