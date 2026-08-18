@@ -287,8 +287,8 @@ jobs:
                 $fields[1] -cne $record.version) {
               throw "live/package version mismatch for ${package}: $query vs $($record.version)"
             }
-            $input = Join-Path 'C:/msys64/clang64' `
-              $record.link_input.path.Replace('/', [IO.Path]::DirectorySeparatorChar)
+            $input = (Join-Path 'C:/msys64/clang64' `
+              $record.link_input.path).Replace('\', '/')
             if (-not (Test-Path -LiteralPath $input -PathType Leaf)) {
               throw "recorded toolchain input is missing: $input"
             }
@@ -300,8 +300,8 @@ jobs:
               throw "live link-input provenance mismatch for $package"
             }
             foreach ($notice in @($record.notices)) {
-              $systemNotice = Join-Path 'C:/msys64/clang64' `
-                $notice.system_path.Replace('/', [IO.Path]::DirectorySeparatorChar)
+              $systemNotice = (Join-Path 'C:/msys64/clang64' `
+                $notice.system_path).Replace('\', '/')
               $vendoredNotice = Join-Path $env:PURE_REDUCE_STAGE `
                 "share/doc/pure-reduce/licenses/$($notice.vendored_path)"
               $noticeOwner = (& C:/msys64/usr/bin/pacman.exe -Qqo $systemNotice).Trim()
