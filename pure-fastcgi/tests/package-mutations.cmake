@@ -386,6 +386,55 @@ run_rejected_case(
   "utf16-prefix-leak" "${case_build}" "${case_stage}"
   "PACKAGE_PREFIX_LEAK")
 
+clone_case("odd-utf16-prefix-leak" case_build case_stage)
+set(odd_utf16_module "${case_stage}/lib/pure/fastcgi.dll")
+file(SIZE "${odd_utf16_module}" odd_utf16_size)
+math(EXPR odd_utf16_initial_parity "${odd_utf16_size} % 2")
+if(odd_utf16_initial_parity EQUAL 1)
+  append_encoded_text("${odd_utf16_module}" "P" "ASCII")
+endif()
+file(SIZE "${odd_utf16_module}" odd_utf16_aligned_size)
+math(EXPR odd_utf16_aligned_parity "${odd_utf16_aligned_size} % 2")
+if(NOT odd_utf16_aligned_parity EQUAL 0)
+  message(FATAL_ERROR "odd UTF-16 fixture failed to reach an even boundary")
+endif()
+# This explicit one-byte marker makes the following UTF-16LE sequence start
+# at an odd absolute file offset. The scanner must therefore use its offset-1
+# decoder to detect it.
+append_encoded_text("${odd_utf16_module}" "Q" "ASCII")
+file(SIZE "${odd_utf16_module}" odd_utf16_start)
+math(EXPR odd_utf16_start_parity "${odd_utf16_start} % 2")
+if(NOT odd_utf16_start_parity EQUAL 1)
+  message(FATAL_ERROR "UTF-16LE test sequence is not odd-byte aligned")
+endif()
+append_encoded_text("${odd_utf16_module}" "${case_stage}" "UTF16LE")
+run_rejected_case(
+  "odd-utf16-prefix-leak" "${case_build}" "${case_stage}"
+  "PACKAGE_PREFIX_LEAK")
+
+clone_case("case-folded-prefix-leak" case_build case_stage)
+string(TOUPPER "${case_build}" case_folded_build_prefix)
+if(case_folded_build_prefix STREQUAL case_build)
+  message(FATAL_ERROR "case-folded prefix fixture did not change case")
+endif()
+append_encoded_text(
+  "${case_stage}/lib/pure/fastcgi.dll"
+  "${case_folded_build_prefix}" "ASCII")
+run_rejected_case(
+  "case-folded-prefix-leak" "${case_build}" "${case_stage}"
+  "PACKAGE_PREFIX_LEAK")
+
+clone_case("backslash-prefix-leak" case_build case_stage)
+string(REPLACE "/" "\\" backslash_stage_prefix "${case_stage}")
+if(backslash_stage_prefix STREQUAL case_stage)
+  message(FATAL_ERROR "backslash prefix fixture did not change separators")
+endif()
+append_encoded_text(
+  "${case_stage}/lib/pure/fastcgi.dll" "${backslash_stage_prefix}" "ASCII")
+run_rejected_case(
+  "backslash-prefix-leak" "${case_build}" "${case_stage}"
+  "PACKAGE_PREFIX_LEAK")
+
 set(fake_bogus_api "${stage}-fake-bogus-api-readobj.cmd")
 write_fake_readobj(
   "${fake_bogus_api}" "import" "api-ms-win-crt-bogus-l9-9-9.dll")
@@ -448,6 +497,12 @@ file(REMOVE_RECURSE
   "${stage}-mutation-ascii-prefix-leak"
   "${stage}-oracles-utf16-prefix-leak"
   "${stage}-mutation-utf16-prefix-leak"
+  "${stage}-oracles-odd-utf16-prefix-leak"
+  "${stage}-mutation-odd-utf16-prefix-leak"
+  "${stage}-oracles-case-folded-prefix-leak"
+  "${stage}-mutation-case-folded-prefix-leak"
+  "${stage}-oracles-backslash-prefix-leak"
+  "${stage}-mutation-backslash-prefix-leak"
   "${fake_bogus_api}"
   "${fake_unreviewed_system}"
   "${fake_parser_failure}"
