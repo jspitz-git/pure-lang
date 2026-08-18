@@ -185,4 +185,22 @@ if(BUILD_TESTING)
     LABELS "fastcgi;package;windows"
     RUN_SERIAL TRUE
     TIMEOUT 180)
+
+  add_test(
+    NAME pure-fastcgi-relocation-ownership
+    COMMAND "${CMAKE_COMMAND}"
+      "-DBUILD_DIR=${CMAKE_CURRENT_BINARY_DIR}"
+      "-DSTAGE_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/PureFastCGI relocation test"
+      "-DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
+      "-DPURE_RUNTIME_ROOT=${PURE_PREFIX}/bin"
+      "-DLLVM_READOBJ=${LLVM_READOBJ}"
+      "-DPOWERSHELL_EXECUTABLE=${POWERSHELL_EXECUTABLE}"
+      "-DPROTOCOL_HARNESS=$<TARGET_FILE:pure-fastcgi-protocol-harness>"
+      "-DPROTOCOL_WORKER=${CMAKE_CURRENT_SOURCE_DIR}/tests/protocol_worker.pure"
+      "-DVERIFY_SCRIPT=${CMAKE_CURRENT_SOURCE_DIR}/cmake/VerifyInstalledPackage.cmake"
+      -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/relocation-ownership.cmake")
+  set_tests_properties(pure-fastcgi-relocation-ownership PROPERTIES
+    LABELS "fastcgi;package;relocation;ownership;windows"
+    RUN_SERIAL TRUE
+    TIMEOUT 180)
 endif()

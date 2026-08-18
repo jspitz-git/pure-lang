@@ -203,6 +203,34 @@ foreach(line IN LISTS manifest_lines)
   list(APPEND manifest_hashes "${sha256}")
 endforeach()
 
+if(REMOVE_OWNED)
+  foreach(relative IN LISTS manifest_paths)
+    set(owned_file "${stage}/${relative}")
+    cmake_path(NORMAL_PATH owned_file OUTPUT_VARIABLE normalized_owned_file)
+    cmake_path(IS_PREFIX stage "${normalized_owned_file}" NORMALIZE
+      owned_file_beneath_stage)
+    if(NOT owned_file_beneath_stage OR normalized_owned_file STREQUAL stage)
+      message(FATAL_ERROR "REMOVAL_PATH_ESCAPE: ${relative}")
+    endif()
+    if(EXISTS "${normalized_owned_file}" AND
+        NOT IS_DIRECTORY "${normalized_owned_file}")
+      file(REMOVE "${normalized_owned_file}")
+    endif()
+  endforeach()
+
+  # Only the component-specific documentation directory is exclusively owned.
+  # Shared ancestors (lib, lib/pure, share, and share/doc) are never removed.
+  set(owned_doc_dir "${stage}/share/doc/pure-fastcgi")
+  if(IS_DIRECTORY "${owned_doc_dir}")
+    file(GLOB owned_doc_entries LIST_DIRECTORIES TRUE "${owned_doc_dir}/*")
+    if(NOT owned_doc_entries)
+      file(REMOVE "${owned_doc_dir}")
+    endif()
+  endif()
+  message(STATUS "Removed manifest-owned PureFastCGI files")
+  return()
+endif()
+
 set(installed_paths)
 foreach(installed_file IN LISTS installed_files)
   file(RELATIVE_PATH relative "${stage}" "${installed_file}")
