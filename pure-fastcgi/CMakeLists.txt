@@ -49,6 +49,39 @@ add_custom_target(
   VERBATIM)
 
 if(BUILD_TESTING)
+  add_executable(pure-fastcgi-protocol-harness
+    tests/protocol_harness.c)
+  target_compile_features(pure-fastcgi-protocol-harness PRIVATE c_std_11)
+  target_link_options(pure-fastcgi-protocol-harness PRIVATE -municode)
+  add_dependencies(pure-fastcgi-protocol-harness pure-fastcgi)
+
+  add_executable(pure-fastcgi-protocol-codec-test
+    tests/protocol_codec_test.c)
+  target_compile_features(pure-fastcgi-protocol-codec-test PRIVATE c_std_11)
+  add_test(
+    NAME pure-fastcgi-protocol-codec
+    COMMAND pure-fastcgi-protocol-codec-test)
+  set_tests_properties(pure-fastcgi-protocol-codec PROPERTIES
+    LABELS "fastcgi;protocol;codec"
+    TIMEOUT 20)
+
+  set(PURE_FASTCGI_PURE_EXECUTABLE "${PURE_PREFIX}/bin/pure.exe")
+  set(PURE_FASTCGI_PURE_RUNTIME_DIR "${PURE_PREFIX}/bin")
+  add_test(
+    NAME pure-fastcgi-protocol-smoke
+    COMMAND "${CMAKE_COMMAND}"
+      "-DHARNESS=$<TARGET_FILE:pure-fastcgi-protocol-harness>"
+      "-DMODULE=$<TARGET_FILE:pure-fastcgi>"
+      "-DMODULE_SOURCE=${CMAKE_CURRENT_SOURCE_DIR}/fastcgi.pure"
+      "-DWORKER=${CMAKE_CURRENT_SOURCE_DIR}/tests/protocol_worker.pure"
+      "-DPURE_EXECUTABLE=${PURE_FASTCGI_PURE_EXECUTABLE}"
+      "-DPURE_RUNTIME_DIR=${PURE_FASTCGI_PURE_RUNTIME_DIR}"
+      "-DTEST_ROOT=${CMAKE_CURRENT_BINARY_DIR}/protocol-smoke"
+      -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunProtocolTest.cmake")
+  set_tests_properties(pure-fastcgi-protocol-smoke PROPERTIES
+    LABELS "fastcgi;protocol;smoke"
+    TIMEOUT 20)
+
   add_test(
     NAME pure-fastcgi-source-contract
     COMMAND "${CMAKE_COMMAND}"

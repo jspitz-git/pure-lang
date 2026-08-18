@@ -1,6 +1,7 @@
 
 #include <pure/runtime.h>
 #include <fcgi_stdio.h>
+#include <stdlib.h>
 
 extern FILE *fastcgi_to_file(FCGI_FILE *fp)
 {
@@ -13,6 +14,13 @@ extern void fastcgi_defs(void)
   pure_let(pure_sym("fastcgi::stdin"), pure_tag(ty, pure_pointer(stdin)));
   pure_let(pure_sym("fastcgi::stdout"), pure_tag(ty, pure_pointer(stdout)));
   pure_let(pure_sym("fastcgi::stderr"), pure_tag(ty, pure_pointer(stderr)));
+}
+
+/* On Windows fcgi2 replaces the CRT environ pointer inside this DLL. Keep
+   getenv in the same module so request PARAMS are read from that environment. */
+extern char *fastcgi_getenv(const char *name)
+{
+  return getenv(name);
 }
 
 extern int fastcgi_fprintf(FILE *fp, const char *format)

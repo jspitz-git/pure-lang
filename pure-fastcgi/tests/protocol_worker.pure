@@ -1,0 +1,16 @@
+using fastcgi;
+using namespace fastcgi;
+
+main =
+  fprintf stdout "Status: 201 Created\r\nContent-Type: text/plain\r\n\r\nmethod=%s;query=%s;body=%s\n"
+    (getenv "REQUEST_METHOD", getenv "QUERY_STRING", body) $$
+  fprintf stderr "pure-fastcgi-stderr-marker\n" () $$
+  set_exit_status 23 $$
+  finish $$
+  finish
+when
+  body = fget stdin;
+end if accept >= 0;
+= () otherwise;
+
+main;
