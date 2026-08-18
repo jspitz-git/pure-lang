@@ -44,6 +44,12 @@ enum fcgi_scenario {
   FCGI_SCENARIO_TIMEOUT
 };
 
+#define FCGI_PROCESS_CREATION_FLAGS                                           \
+  (EXTENDED_STARTUPINFO_PRESENT | CREATE_NO_WINDOW | CREATE_SUSPENDED)
+
+_Static_assert((FCGI_PROCESS_CREATION_FLAGS & CREATE_SUSPENDED) != 0,
+               "FastCGI workers must be assigned to their job before running");
+
 struct fcgi_record {
   uint8_t type;
   uint16_t request_id;
@@ -439,9 +445,38 @@ static int fcgi_wait_process(HANDLE process, uint64_t deadline_ms,
          GetExitCodeProcess(process, exit_code) && *exit_code != STILL_ACTIVE;
 }
 
+static HANDLE fcgi_open_pipe_client(const wchar_t *pipe_name,
+                                    uint64_t deadline_ms) {
+  for (;;) {
+    HANDLE client = CreateFileW(pipe_name, GENERIC_READ | GENERIC_WRITE, 0,
+                                NULL, OPEN_EXISTING, FILE_FLAG_OVERLAPPED,
+                                NULL);
+    DWORD error;
+    uint64_t now;
+    DWORD wait_ms;
+
+    if (client != INVALID_HANDLE_VALUE) {
+      return client;
+    }
+    error = GetLastError();
+    if (error != ERROR_PIPE_BUSY && error != ERROR_FILE_NOT_FOUND &&
+        error != ERROR_NO_DATA) {
+      return INVALID_HANDLE_VALUE;
+    }
+    now = fcgi_now_ms();
+    if (now >= deadline_ms) {
+      SetLastError(ERROR_SEM_TIMEOUT);
+      return INVALID_HANDLE_VALUE;
+    }
+    wait_ms = deadline_ms - now > 50 ? 50 : (DWORD)(deadline_ms - now);
+    WaitNamedPipeW(pipe_name, wait_ms);
+  }
+}
+
 static void fcgi_write_cleanup_report(const wchar_t *path, DWORD child_pid,
                                       int child_exited, int pipe_closed,
-                                      int owned_handles_closed) {
+                                      int owned_handles_closed,
+                                      uint64_t elapsed_ms) {
   FILE *report;
 
   if (path == NULL) {
@@ -454,15 +489,16 @@ static void fcgi_write_cleanup_report(const wchar_t *path, DWORD child_pid,
   }
   fprintf(report,
           "child_pid=%lu\nchild_exited=%d\npipe_closed=%d\n"
-          "owned_handles_closed=%d\n",
+          "owned_handles_closed=%d\nelapsed_ms=%llu\n",
           (unsigned long)child_pid, child_exited, pipe_closed,
-          owned_handles_closed);
+          owned_handles_closed, (unsigned long long)elapsed_ms);
   fclose(report);
 }
 
 int wmain(int argc, wchar_t **argv) {
   static volatile LONG pipe_counter;
   const uint16_t request_id = 1;
+  const uint64_t started_ms = fcgi_now_ms();
   uint64_t deadline_ms;
   const char request_method[] = "POST";
   const char query_string[] = "value%20with%20spaces";
@@ -529,7 +565,7 @@ int wmain(int argc, wchar_t **argv) {
     }
   }
   deadline_ms = fcgi_now_ms() +
-                (scenario == FCGI_SCENARIO_TIMEOUT ? 4000 : 15000);
+                (scenario == FCGI_SCENARIO_SUCCESS ? 15000 : 4000);
   if (swprintf(pipe_name, sizeof pipe_name / sizeof pipe_name[0],
                L"\\\\.\\pipe\\FastCGI\\pure-fastcgi-%lu-%ld",
                GetCurrentProcessId(), InterlockedIncrement(&pipe_counter)) < 0) {
@@ -593,8 +629,8 @@ int wmain(int argc, wchar_t **argv) {
   startup.StartupInfo.hStdError = INVALID_HANDLE_VALUE;
   startup.lpAttributeList = attributes;
   if (!CreateProcessW(argv[1], command_line, NULL, NULL, TRUE,
-                      EXTENDED_STARTUPINFO_PRESENT | CREATE_NO_WINDOW, NULL,
-                      NULL, &startup.StartupInfo, &process)) {
+                      FCGI_PROCESS_CREATION_FLAGS, NULL, NULL,
+                      &startup.StartupInfo, &process)) {
     fprintf(stderr, "CreateProcessW failed: %lu\n", GetLastError());
     goto cleanup;
   }
@@ -604,22 +640,25 @@ int wmain(int argc, wchar_t **argv) {
     fprintf(stderr, "AssignProcessToJobObject failed: %lu\n", GetLastError());
     goto cleanup;
   }
-  if (!CloseHandle(server)) {
-    fprintf(stderr, "could not close the named-pipe server: %lu\n",
-            GetLastError());
-    owned_handles_closed = 0;
-    goto cleanup;
-  }
-  server = INVALID_HANDLE_VALUE;
-  pipe_closed = 1;
-
-  client = CreateFileW(pipe_name, GENERIC_READ | GENERIC_WRITE, 0, NULL,
-                       OPEN_EXISTING, FILE_FLAG_OVERLAPPED, NULL);
+  client = fcgi_open_pipe_client(pipe_name, deadline_ms);
   if (client == INVALID_HANDLE_VALUE) {
     fprintf(stderr, "CreateFileW failed: %lu\n", GetLastError());
     goto cleanup;
   }
   pipe_closed = 0;
+  if (scenario != FCGI_SCENARIO_TRUNCATED) {
+    if (!CloseHandle(server)) {
+      fprintf(stderr, "could not close the named-pipe server: %lu\n",
+              GetLastError());
+      owned_handles_closed = 0;
+      goto cleanup;
+    }
+    server = INVALID_HANDLE_VALUE;
+  }
+  if (ResumeThread(process.hThread) == (DWORD)-1) {
+    fprintf(stderr, "ResumeThread failed: %lu\n", GetLastError());
+    goto cleanup;
+  }
 
 #define ADD_PARAM(name_literal, value, value_len)                              \
   do {                                                                         \
@@ -641,6 +680,11 @@ int wmain(int argc, wchar_t **argv) {
   if (scenario == FCGI_SCENARIO_TRUNCATED) {
     const unsigned char partial_params[] = {FCGI_VERSION_1, FCGI_PARAMS, 0,
                                             request_id};
+    const char sentinel_name[] = "TRUNCATED_SENTINEL";
+    const char sentinel_value[] = "1";
+    const char expected_sentinel_stdout[] = "truncated-sentinel\n";
+    unsigned char sentinel_params[64];
+    size_t sentinel_params_len;
     if (fcgi_write_record(client, FCGI_BEGIN_REQUEST, request_id,
                           (const unsigned char[]){0, FCGI_RESPONDER,
                                                   FCGI_KEEP_CONN, 0, 0, 0, 0,
@@ -656,9 +700,124 @@ int wmain(int argc, wchar_t **argv) {
       fprintf(stderr, "could not close the named-pipe client: %lu\n",
               GetLastError());
       owned_handles_closed = 0;
+      client = INVALID_HANDLE_VALUE;
+      pipe_closed = 0;
+      goto cleanup;
     }
     client = INVALID_HANDLE_VALUE;
-    pipe_closed = owned_handles_closed;
+    pipe_closed = 0;
+    if (!DisconnectNamedPipe(server)) {
+      fprintf(stderr, "could not reset the truncated named pipe: %lu\n",
+              GetLastError());
+      goto cleanup;
+    }
+    if (!CloseHandle(server)) {
+      fprintf(stderr, "could not close the named-pipe server: %lu\n",
+              GetLastError());
+      owned_handles_closed = 0;
+      goto cleanup;
+    }
+    server = INVALID_HANDLE_VALUE;
+    pipe_closed = 1;
+    if (response_state.end_request_count != 0) {
+      fprintf(stderr, "unexpected END_REQUEST after truncated PARAMS\n");
+      goto cleanup;
+    }
+    client = fcgi_open_pipe_client(pipe_name, deadline_ms);
+    if (client == INVALID_HANDLE_VALUE) {
+      fprintf(stderr, "could not reconnect after truncated PARAMS: %lu\n",
+              GetLastError());
+      goto cleanup;
+    }
+    pipe_closed = 0;
+    sentinel_params_len = fcgi_write_name_value(
+        sentinel_params, sizeof sentinel_params, sentinel_name,
+        sizeof sentinel_name - 1, sentinel_value, sizeof sentinel_value - 1);
+    if (sentinel_params_len == 0 ||
+        fcgi_write_record(client, FCGI_BEGIN_REQUEST, request_id,
+                          (const unsigned char[]){0, FCGI_RESPONDER,
+                                                  FCGI_KEEP_CONN, 0, 0, 0, 0,
+                                                  0},
+                          8, deadline_ms) != FCGI_IO_OK ||
+        fcgi_write_record(client, FCGI_PARAMS, request_id, sentinel_params,
+                          (uint16_t)sentinel_params_len, deadline_ms) !=
+            FCGI_IO_OK ||
+        fcgi_write_record(client, FCGI_PARAMS, request_id, NULL, 0,
+                          deadline_ms) != FCGI_IO_OK ||
+        fcgi_write_record(client, FCGI_STDIN, request_id, NULL, 0,
+                          deadline_ms) != FCGI_IO_OK) {
+      fprintf(stderr, "could not send truncated-request sentinel\n");
+      goto cleanup;
+    }
+    for (;;) {
+      struct fcgi_record record;
+      enum fcgi_io_result read_result =
+          fcgi_read_record(client, &record, deadline_ms);
+      if (read_result != FCGI_IO_OK) {
+        fprintf(stderr, "could not read truncated-request sentinel response: %d\n",
+                (int)read_result);
+        goto cleanup;
+      }
+      if (fcgi_track_response_record(&response_state, &record) != FCGI_IO_OK) {
+        fprintf(stderr, "invalid truncated-request sentinel response state\n");
+        goto cleanup;
+      }
+      if (record.type == FCGI_STDOUT) {
+        if (!fcgi_append(stdout_data, &stdout_len, 65536, record.content,
+                         record.content_len)) {
+          fprintf(stderr, "truncated-request sentinel stdout exceeded 64 KiB\n");
+          goto cleanup;
+        }
+      } else if (record.type == FCGI_STDERR) {
+        if (!fcgi_append(stderr_data, &stderr_len, 65536, record.content,
+                         record.content_len)) {
+          fprintf(stderr, "truncated-request sentinel stderr exceeded 64 KiB\n");
+          goto cleanup;
+        }
+      } else if (record.type == FCGI_END_REQUEST) {
+        uint32_t application_status;
+        if (record.content_len != 8) {
+          fprintf(stderr, "invalid truncated sentinel END_REQUEST length\n");
+          goto cleanup;
+        }
+        application_status = ((uint32_t)record.content[0] << 24) |
+                             ((uint32_t)record.content[1] << 16) |
+                             ((uint32_t)record.content[2] << 8) |
+                             record.content[3];
+        if (application_status != 71 ||
+            record.content[4] != FCGI_REQUEST_COMPLETE) {
+          fprintf(stderr, "unexpected truncated sentinel status: %lu/%u\n",
+                  (unsigned long)application_status, record.content[4]);
+          goto cleanup;
+        }
+        if (!fcgi_wait_process(process.hProcess, deadline_ms, &process_exit) ||
+            process_exit != 0) {
+          fprintf(stderr, "truncated sentinel worker did not exit normally: %lu\n",
+                  (unsigned long)process_exit);
+          goto cleanup;
+        }
+        if (fcgi_drain_after_terminal(client, &response_state, deadline_ms) !=
+            FCGI_DRAIN_CLEAN_EOF) {
+          fprintf(stderr, "truncated sentinel response did not end at clean EOF\n");
+          goto cleanup;
+        }
+        break;
+      } else {
+        fprintf(stderr, "unexpected truncated sentinel record type: %u\n",
+                record.type);
+        goto cleanup;
+      }
+    }
+    stdout_data[stdout_len] = 0;
+    stderr_data[stderr_len] = 0;
+    if (response_state.end_request_count != 1 ||
+        stdout_len != sizeof expected_sentinel_stdout - 1 ||
+        memcmp(stdout_data, expected_sentinel_stdout,
+               sizeof expected_sentinel_stdout - 1) != 0 ||
+        stderr_len != 0) {
+      fprintf(stderr, "invalid truncated-request sentinel response\n");
+      goto cleanup;
+    }
     fprintf(stderr, "protocol error while reading PARAMS\n");
     goto cleanup;
   }
@@ -856,7 +1015,8 @@ cleanup:
   }
   free(command_line);
   fcgi_write_cleanup_report(cleanup_report_path, child_pid, child_exited,
-                            pipe_closed, owned_handles_closed);
+                            pipe_closed, owned_handles_closed,
+                            fcgi_now_ms() - started_ms);
   return result;
 }
 #endif

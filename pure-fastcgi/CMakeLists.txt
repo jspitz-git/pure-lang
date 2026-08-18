@@ -105,6 +105,8 @@ if(BUILD_TESTING)
       "-DMODULE=$<TARGET_FILE:pure-fastcgi>"
       "-DMODULE_SOURCE=${CMAKE_CURRENT_SOURCE_DIR}/fastcgi.pure"
       "-DWORKER=${CMAKE_CURRENT_SOURCE_DIR}/tests/protocol_worker.pure"
+      "-DTRUNCATED_WORKER=${CMAKE_CURRENT_SOURCE_DIR}/tests/protocol_worker_truncated.pure"
+      "-DTRUNCATED_WRONG_WORKER=${CMAKE_CURRENT_SOURCE_DIR}/tests/protocol_worker_truncated_wrong.pure"
       "-DHANG_WORKER=${CMAKE_CURRENT_SOURCE_DIR}/tests/protocol_worker_hang.pure"
       "-DPURE_EXECUTABLE=${PURE_FASTCGI_PURE_EXECUTABLE}"
       "-DPURE_RUNTIME_DIR=${PURE_FASTCGI_PURE_RUNTIME_DIR}"
@@ -112,7 +114,7 @@ if(BUILD_TESTING)
       -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/protocol_failures.cmake")
   set_tests_properties(pure-fastcgi-protocol-failures PROPERTIES
     LABELS "fastcgi;protocol;failures"
-    TIMEOUT 20)
+    TIMEOUT 30)
 
   add_test(
     NAME pure-fastcgi-source-contract
