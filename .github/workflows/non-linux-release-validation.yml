@@ -10,6 +10,7 @@ on:
       - "pure/**"
       - "pure-faust/**"
       - "pure-reduce/**"
+      - "pure-fastcgi/**"
       - ".github/workflows/non-linux-release-validation.yml"
   pull_request:
     branches:
@@ -18,6 +19,7 @@ on:
       - "pure/**"
       - "pure-faust/**"
       - "pure-reduce/**"
+      - "pure-fastcgi/**"
       - ".github/workflows/non-linux-release-validation.yml"
 
 concurrency:
@@ -32,6 +34,271 @@ defaults:
     working-directory: pure
 
 jobs:
+  windows-pure-fastcgi:
+    name: Windows PureFastCGI package
+    runs-on: windows-2025
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: pwsh
+        working-directory: source with spaces
+    env:
+      CMAKE_EXE: C:/msys64/clang64/bin/cmake.exe
+      CTEST_EXE: C:/msys64/clang64/bin/ctest.exe
+      LLVM_READOBJ_EXE: C:/msys64/clang64/bin/llvm-readobj.exe
+      FCGI2_URL: https://github.com/FastCGI-Archives/fcgi2/archive/refs/tags/2.4.7.tar.gz
+      FCGI2_RELEASE: 2.4.7
+      FCGI2_COMMIT: 47f2c03b7771f0ef61d887734ef91e6fa747f837
+      FCGI2_SIZE: 263969
+      FCGI2_SHA256: e41ddc3a473b555bdc0cbd80703dcb1f4610c1a7700d3b9d3d0c14a416e1074b
+
+    steps:
+      - name: Check out source in a path containing spaces
+        uses: actions/checkout@v4
+        with:
+          path: source with spaces
+
+      - name: Install the CLANG64 PureFastCGI prerequisites
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: CLANG64
+          update: true
+          release: false
+          install: >-
+            autoconf-wrapper
+            automake-wrapper
+            libtool
+            make
+            bison
+            flex
+            mingw-w64-clang-x86_64-clang
+            mingw-w64-clang-x86_64-llvm
+            mingw-w64-clang-x86_64-cmake
+            mingw-w64-clang-x86_64-ninja
+            mingw-w64-clang-x86_64-pkgconf
+            mingw-w64-clang-x86_64-gmp
+            mingw-w64-clang-x86_64-mpfr
+            mingw-w64-clang-x86_64-readline
+            mingw-w64-clang-x86_64-pcre
+            mingw-w64-clang-x86_64-libiconv
+            mingw-w64-clang-x86_64-zlib
+            mingw-w64-clang-x86_64-ncurses
+
+      - name: Build and install the matching Windows Pure runtime
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $repo = (Get-Location).Path
+          $pureBuild = Join-Path $repo 'build/windows PureFastCGI pure build'
+          $purePrefix = Join-Path $repo 'build/windows PureFastCGI pure prefix'
+          $started = [Diagnostics.Stopwatch]::StartNew()
+          & $env:CMAKE_EXE -S pure -B $pureBuild -G Ninja `
+            -DCMAKE_BUILD_TYPE=Release `
+            -DCMAKE_C_COMPILER=C:/msys64/clang64/bin/clang.exe `
+            -DCMAKE_CXX_COMPILER=C:/msys64/clang64/bin/clang++.exe `
+            -DLLVM_DIR=C:/msys64/clang64/lib/cmake/llvm `
+            "-DCMAKE_INSTALL_PREFIX=$purePrefix" `
+            -DPURE_STRICT_TOOLCHAIN=ON
+          if ($LASTEXITCODE -ne 0) { throw 'Pure configure failed' }
+          & $env:CMAKE_EXE --build $pureBuild --parallel 1
+          if ($LASTEXITCODE -ne 0) { throw 'Pure build failed' }
+          & $env:CMAKE_EXE --install $pureBuild
+          if ($LASTEXITCODE -ne 0) { throw 'Pure install failed' }
+          $started.Stop()
+          "PURE_FASTCGI_PURE_PREFIX=$($purePrefix.Replace('\', '/'))" |
+            Out-File $env:GITHUB_ENV -Encoding utf8 -Append
+          "PURE_BUILD_SECONDS=$([math]::Round($started.Elapsed.TotalSeconds, 3))" |
+            Out-File $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Explicitly fetch and verify pinned fcgi2
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $repo = (Get-Location).Path
+          $archive = Join-Path (Get-Location).Path 'build/deps/fcgi2-2.4.7.tar.gz'
+          New-Item -ItemType Directory -Path (Split-Path $archive) -Force | Out-Null
+          $fetchDriver = Join-Path (Split-Path $archive) 'fetch-fcgi2.cmake'
+          $includePath = (Join-Path $repo 'pure-fastcgi/cmake/FetchFcgi2.cmake').Replace('\', '/')
+          $archivePath = $archive.Replace('\', '/')
+          @"
+          include("$includePath")
+          pure_fastcgi_fetch_fcgi2(OUTPUT "$archivePath")
+          "@ | Set-Content -LiteralPath $fetchDriver -Encoding utf8
+          & $env:CMAKE_EXE -P $fetchDriver
+          if ($LASTEXITCODE -ne 0) { throw 'explicit fcgi2 fetch failed' }
+          $item = Get-Item -LiteralPath $archive
+          $hash = (Get-FileHash $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($item.Length -ne [int64]$env:FCGI2_SIZE -or $hash -cne $env:FCGI2_SHA256) {
+            throw "fcgi2 archive identity mismatch: $($item.Length), $hash"
+          }
+          "PURE_FASTCGI_ARCHIVE=$($archive.Replace('\', '/'))" |
+            Out-File $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Configure and build PureFastCGI with CLANG64
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $repo = (Get-Location).Path
+          $build = Join-Path $repo 'build/windows PureFastCGI release'
+          $env:PKG_CONFIG_PATH = "$env:PURE_FASTCGI_PURE_PREFIX/lib/pkgconfig;C:/msys64/clang64/lib/pkgconfig"
+          $started = [Diagnostics.Stopwatch]::StartNew()
+          & $env:CMAKE_EXE -S pure-fastcgi -B $build -G Ninja `
+            -DCMAKE_BUILD_TYPE=Release `
+            -DCMAKE_C_COMPILER=C:/msys64/clang64/bin/clang.exe `
+            "-DPURE_FASTCGI_FCGI2_ARCHIVE=$env:PURE_FASTCGI_ARCHIVE" `
+            "-DPURE_FASTCGI_PURE_EXECUTABLE=$env:PURE_FASTCGI_PURE_PREFIX/bin/pure.exe" `
+            "-DPURE_FASTCGI_PURE_RUNTIME_DIR=$env:PURE_FASTCGI_PURE_PREFIX/bin" `
+            -DBUILD_TESTING=ON
+          if ($LASTEXITCODE -ne 0) { throw 'PureFastCGI configure failed' }
+          & $env:CMAKE_EXE --build $build --parallel 1
+          if ($LASTEXITCODE -ne 0) { throw 'PureFastCGI build failed' }
+          $started.Stop()
+          "PURE_FASTCGI_BUILD=$($build.Replace('\', '/'))" |
+            Out-File $env:GITHUB_ENV -Encoding utf8 -Append
+          "FASTCGI_BUILD_SECONDS=$([math]::Round($started.Elapsed.TotalSeconds, 3))" |
+            Out-File $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Run the complete PureFastCGI CTest label
+        run: |
+          $ErrorActionPreference = 'Stop'
+          & C:/msys64/clang64/bin/ctest.exe --test-dir $env:PURE_FASTCGI_BUILD `
+            -L fastcgi --output-on-failure --no-tests=error
+          if ($LASTEXITCODE -ne 0) { throw 'PureFastCGI CTest failed' }
+
+      - name: Install only PureFastCGI and verify sanitized runtime
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $stage = Join-Path (Get-Location).Path 'build/staged PureFastCGI package'
+          & $env:CMAKE_EXE --install $env:PURE_FASTCGI_BUILD `
+            --prefix $stage --component PureFastCGI
+          if ($LASTEXITCODE -ne 0) { throw 'PureFastCGI component install failed' }
+          $env:PATH = "$stage/lib/pure;$env:PURE_FASTCGI_PURE_PREFIX/bin;$env:SystemRoot/System32/WindowsPowerShell/v1.0;$env:SystemRoot/System32;$env:SystemRoot"
+          Remove-Item Env:PURELIB -ErrorAction SilentlyContinue
+          & $env:CMAKE_EXE `
+            "-DBUILD_DIR=$env:PURE_FASTCGI_BUILD" `
+            "-DSTAGE_PREFIX=$stage" `
+            "-DSOURCE_DIR=$((Join-Path (Get-Location).Path 'pure-fastcgi'))" `
+            "-DPURE_RUNTIME_ROOT=$env:PURE_FASTCGI_PURE_PREFIX/bin" `
+            "-DLLVM_READOBJ=$env:LLVM_READOBJ_EXE" `
+            "-DPOWERSHELL_EXECUTABLE=$env:SystemRoot/System32/WindowsPowerShell/v1.0/powershell.exe" `
+            "-DPROTOCOL_HARNESS=$env:PURE_FASTCGI_BUILD/pure-fastcgi-protocol-harness.exe" `
+            "-DPROTOCOL_WORKER=$((Join-Path (Get-Location).Path 'pure-fastcgi/tests/protocol_worker.pure'))" `
+            -DRUN_RUNTIME_TESTS=ON `
+            -P pure-fastcgi/cmake/VerifyInstalledPackage.cmake
+          if ($LASTEXITCODE -ne 0) { throw 'installed PureFastCGI verification failed' }
+          "PURE_FASTCGI_STAGE=$($stage.Replace('\', '/'))" |
+            Out-File $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Record fail-closed package metrics and recursive PE imports
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $module = Join-Path $env:PURE_FASTCGI_STAGE 'lib/pure/fastcgi.dll'
+          $inventory = Join-Path $env:PURE_FASTCGI_STAGE 'share/doc/pure-fastcgi/PureFastCGIInventory.tsv'
+          $files = @(Get-ChildItem -LiteralPath $env:PURE_FASTCGI_STAGE -File -Recurse)
+          if ($files.Count -ne 6) { throw "unexpected staged file count: $($files.Count)" }
+          $moduleBytes = (Get-Item -LiteralPath $module).Length
+          $stageBytes = ($files | Measure-Object Length -Sum).Sum
+          if ($moduleBytes -le 0 -or $stageBytes -lt $moduleBytes) { throw 'invalid package sizes' }
+          $inventoryHash = (Get-FileHash $inventory -Algorithm SHA256).Hash.ToLowerInvariant()
+          $peFiles = @(Get-ChildItem -LiteralPath $env:PURE_FASTCGI_STAGE -File -Recurse -Include *.dll,*.exe) +
+            @(Get-ChildItem -LiteralPath "$env:PURE_FASTCGI_PURE_PREFIX/bin" -File -Recurse -Include *.dll,*.exe)
+          $peByName = @{}
+          foreach ($pe in $peFiles) {
+            $key = $pe.Name.ToLowerInvariant()
+            if (-not $peByName.ContainsKey($key)) { $peByName[$key] = $pe.FullName }
+          }
+          $queue = [Collections.Generic.Queue[string]]::new()
+          $visited = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+          $queue.Enqueue($module)
+          $importSections = [Collections.Generic.List[string]]::new()
+          while ($queue.Count -gt 0) {
+            $pe = $queue.Dequeue()
+            if (-not $visited.Add($pe)) { continue }
+            $readobj = & $env:LLVM_READOBJ_EXE --coff-imports $pe | Out-String
+            if ($LASTEXITCODE -ne 0 -or $readobj -notmatch 'Import') {
+              throw "PE import enumeration failed closed for $pe"
+            }
+            $relativePe = if ($pe.StartsWith($env:PURE_FASTCGI_STAGE, [StringComparison]::OrdinalIgnoreCase)) {
+              [IO.Path]::GetRelativePath($env:PURE_FASTCGI_STAGE, $pe).Replace('\', '/')
+            } else {
+              "runtime/" + [IO.Path]::GetRelativePath("$env:PURE_FASTCGI_PURE_PREFIX/bin", $pe).Replace('\', '/')
+            }
+            $importSections.Add("===== $relativePe =====`n$readobj")
+            foreach ($match in [regex]::Matches($readobj, 'DLLName:\s*([^\r\n]+)', 'IgnoreCase')) {
+              $name = $match.Groups[1].Value.Trim().ToLowerInvariant()
+              if ($peByName.ContainsKey($name)) { $queue.Enqueue($peByName[$name]) }
+            }
+          }
+          if ($visited.Count -lt 1) { throw 'recursive PE import closure is empty' }
+          $imports = $importSections -join "`n"
+          $compiler = (& C:/msys64/clang64/bin/clang.exe --version | Select-Object -First 1)
+          $cmakeVersion = (& $env:CMAKE_EXE --version | Select-Object -First 1)
+          $ninjaVersion = (& C:/msys64/clang64/bin/ninja.exe --version).Trim()
+          $pkgconfVersion = (& C:/msys64/clang64/bin/pkgconf.exe --version).Trim()
+          $gmpVersion = (& C:/msys64/clang64/bin/pkgconf.exe --modversion gmp).Trim()
+          $mpfrVersion = (& C:/msys64/clang64/bin/pkgconf.exe --modversion mpfr).Trim()
+          if (@($compiler,$cmakeVersion,$ninjaVersion,$pkgconfVersion,$gmpVersion,$mpfrVersion,$inventoryHash) -contains '') { throw 'missing metric' }
+          @"
+          ### Windows PureFastCGI package
+
+          - fcgi2 URL: $env:FCGI2_URL
+          - release / commit: $env:FCGI2_RELEASE / ``$env:FCGI2_COMMIT``
+          - archive bytes / SHA-256: $env:FCGI2_SIZE / ``$env:FCGI2_SHA256``
+          - compiler: $compiler
+          - CMake / Ninja / pkg-config: $cmakeVersion / $ninjaVersion / $pkgconfVersion
+          - GMP / MPFR: $gmpVersion / $mpfrVersion
+          - Pure build seconds / workers: $env:PURE_BUILD_SECONDS / 1
+          - PureFastCGI build seconds / workers: $env:FASTCGI_BUILD_SECONDS / 1
+          - module bytes / stage bytes / staged files: $moduleBytes / $stageBytes / $($files.Count)
+          - inventory SHA-256: ``$inventoryHash``
+
+          Complete fastcgi.dll imports:
+
+          ``````text
+          $imports
+          ``````
+          "@ | Out-File $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
+
+      - name: Create the deterministic PureFastCGI ZIP twice
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $artifactDir = Join-Path (Get-Location).Path 'build/pure-fastcgi-artifacts'
+          New-Item -ItemType Directory -Path $artifactDir -Force | Out-Null
+          $first = Join-Path $artifactDir 'windows-pure-fastcgi-first.zip'
+          $second = Join-Path $artifactDir 'windows-pure-fastcgi-second.zip'
+          $archive = Join-Path $artifactDir 'windows-pure-fastcgi.zip'
+          function New-DeterministicZip([string]$destination) {
+            [string[]]$relative = Get-ChildItem -LiteralPath $env:PURE_FASTCGI_STAGE -File -Recurse | ForEach-Object {
+              [IO.Path]::GetRelativePath($env:PURE_FASTCGI_STAGE, $_.FullName).Replace('\', '/')
+            }
+            [Array]::Sort($relative, [StringComparer]::Ordinal)
+            Add-Type -AssemblyName System.IO.Compression
+            $stream = [IO.File]::Open($destination, [IO.FileMode]::Create, [IO.FileAccess]::Write, [IO.FileShare]::None)
+            $zip = [IO.Compression.ZipArchive]::new($stream, [IO.Compression.ZipArchiveMode]::Create, $false)
+            try {
+              foreach ($path in $relative) {
+                $entry = $zip.CreateEntry($path, [IO.Compression.CompressionLevel]::Optimal)
+                $entry.LastWriteTime = [DateTimeOffset]'2000-01-01T00:00:00+00:00'
+                $input = [IO.File]::OpenRead((Join-Path $env:PURE_FASTCGI_STAGE $path.Replace('/', [IO.Path]::DirectorySeparatorChar)))
+                $output = $entry.Open()
+                try { $input.CopyTo($output) } finally { $output.Dispose(); $input.Dispose() }
+              }
+            } finally { $zip.Dispose(); $stream.Dispose() }
+          }
+          New-DeterministicZip $first
+          New-DeterministicZip $second
+          $firstHash = (Get-FileHash $first -Algorithm SHA256).Hash.ToLowerInvariant()
+          $secondHash = (Get-FileHash $second -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($firstHash -cne $secondHash) { throw "deterministic ZIP hashes differ: $firstHash vs $secondHash" }
+          Copy-Item -LiteralPath $first -Destination $archive
+          $archiveBytes = (Get-Item $archive).Length
+          "- deterministic ZIP bytes / SHA-256: $archiveBytes / ``$firstHash``" |
+            Out-File $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
+
+      - name: Upload the PureFastCGI package
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-pure-fastcgi
+          path: source with spaces/build/pure-fastcgi-artifacts/windows-pure-fastcgi.zip
+          if-no-files-found: error
+
   windows-pure-reduce:
     name: Windows PureReduce package
     runs-on: windows-2025

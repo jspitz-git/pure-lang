@@ -62,6 +62,15 @@ add_custom_target(
   VERBATIM)
 
 if(BUILD_TESTING)
+  add_test(
+    NAME pure-fastcgi-ci-contract
+    COMMAND "${CMAKE_COMMAND}"
+      "-DWORKFLOW=${CMAKE_CURRENT_SOURCE_DIR}/../.github/workflows/non-linux-release-validation.yml"
+      -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/ci-contract.cmake")
+  set_tests_properties(pure-fastcgi-ci-contract PROPERTIES
+    LABELS "fastcgi;ci;contract"
+    TIMEOUT 20)
+
   add_executable(pure-fastcgi-protocol-harness
     tests/protocol_harness.c)
   target_compile_features(pure-fastcgi-protocol-harness PRIVATE c_std_11)

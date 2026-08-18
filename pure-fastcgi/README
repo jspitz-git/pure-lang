@@ -29,6 +29,22 @@ Copyright (c) 2009 by Albert Graef. pure-fastcgi is distributed under a
 Installation
 ============
 
+Windows
+-------
+
+On 64-bit Windows, the CMake build provides the optional ``PureFastCGI``
+component for the MSYS2 CLANG64 Pure distribution. It statically embeds the
+pinned fcgi2 implementation, so users do not install a separate FastCGI DLL.
+See ``WINDOWS.md`` for reproducible fetch, build, test, staging, and installed
+verification commands.
+
+The Windows component does not install or configure IIS, Apache, nginx, or
+another web server. Deployment must provide a compatible FastCGI listener;
+the included named-pipe harness is for bounded protocol validation only.
+
+Other systems
+-------------
+
 Besides Pure, you'll need to have the FastCGI_ library installed to compile
 this module. Also, to run FastCGI scripts, your web server must be configured
 accordingly; see the documentation of FastCGI and your web server for details.
