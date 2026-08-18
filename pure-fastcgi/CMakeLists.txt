@@ -178,6 +178,7 @@ if(BUILD_TESTING)
       "-DPURE_RUNTIME_ROOT=${PURE_PREFIX}/bin"
       "-DLLVM_READOBJ=${LLVM_READOBJ}"
       "-DPOWERSHELL_EXECUTABLE=${POWERSHELL_EXECUTABLE}"
+      "-DAPPEND_TEXT_HELPER=${CMAKE_CURRENT_SOURCE_DIR}/tests/AppendEncodedText.ps1"
       "-DVERIFIER=${CMAKE_CURRENT_SOURCE_DIR}/cmake/VerifyInstalledPackage.cmake"
       -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/package-mutations.cmake")
   set_tests_properties(pure-fastcgi-package-verifier PROPERTIES

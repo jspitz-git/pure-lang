@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.25)
 
 foreach(required IN ITEMS
     BUILD_DIR STAGE_PREFIX SOURCE_DIR PURE_RUNTIME_ROOT LLVM_READOBJ
-    POWERSHELL_EXECUTABLE VERIFIER)
+    POWERSHELL_EXECUTABLE APPEND_TEXT_HELPER VERIFIER)
   if(NOT DEFINED ${required} OR "${${required}}" STREQUAL "")
     message(FATAL_ERROR "${required} is required")
   endif()
@@ -16,31 +16,13 @@ set(build_dir "${normalized_BUILD_DIR}")
 set(source_dir "${normalized_SOURCE_DIR}")
 set(runtime_root "${normalized_PURE_RUNTIME_ROOT}")
 cmake_path(ABSOLUTE_PATH STAGE_PREFIX NORMALIZE OUTPUT_VARIABLE stage)
-set(append_text_helper "${stage}-append-encoded-text.ps1")
-file(WRITE "${append_text_helper}" [=[
-param(
-  [Parameter(Mandatory = $true)][string]$FilePath,
-  [Parameter(Mandatory = $true)][string]$Text,
-  [Parameter(Mandatory = $true)]
-  [ValidateSet('ASCII', 'UTF16LE')][string]$Encoding
-)
-$codec = if ($Encoding -eq 'ASCII') {
-  [System.Text.Encoding]::ASCII
-} else {
-  [System.Text.Encoding]::Unicode
-}
-$bytes = $codec.GetBytes($Text)
-$stream = [System.IO.File]::Open(
-  $FilePath,
-  [System.IO.FileMode]::Append,
-  [System.IO.FileAccess]::Write,
-  [System.IO.FileShare]::Read)
-try {
-  $stream.Write($bytes, 0, $bytes.Length)
-} finally {
-  $stream.Dispose()
-}
-]=])
+cmake_path(ABSOLUTE_PATH APPEND_TEXT_HELPER NORMALIZE
+  OUTPUT_VARIABLE append_text_helper)
+if(NOT EXISTS "${append_text_helper}" OR IS_DIRECTORY "${append_text_helper}")
+  message(FATAL_ERROR
+    "APPEND_TEXT_HELPER must name an existing source-tracked script: "
+    "${append_text_helper}")
+endif()
 
 execute_process(
   COMMAND "${CMAKE_COMMAND}" --build "${build_dir}"
@@ -508,5 +490,4 @@ file(REMOVE_RECURSE
   "${fake_parser_failure}"
   "${fake_recursive}"
   "${fake_missing_runtime}"
-  "${empty_runtime_root}"
-  "${append_text_helper}")
+  "${empty_runtime_root}")
