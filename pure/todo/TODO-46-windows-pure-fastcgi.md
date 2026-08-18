@@ -45,27 +45,24 @@ with SHA-256
 
 ## Shipping Evidence
 
-- Validated commit: `9a18ba773d84a48db3ce34378ea6d905e20dcf13`.
+- Validated commit: `b94368ba81571b2ffc6bf614e0475049c1377228`.
 - Clean workflow run:
-  https://github.com/jspitz-git/pure-lang/actions/runs/32164621545
+  https://github.com/jspitz-git/pure-lang/actions/runs/32177457979
 - Required job (`Windows PureFastCGI package`):
-  https://github.com/jspitz-git/pure-lang/actions/runs/32164621545/job/95801413633
+  https://github.com/jspitz-git/pure-lang/actions/runs/32177457979/job/95842552076
 - Uploaded artifact (`windows-pure-fastcgi`):
-  https://github.com/jspitz-git/pure-lang/actions/runs/32164621545/artifacts/9335160401
-- Clean-runner FastCGI tests: 12/12 passed in 109.90 seconds.
-- Pure build: 132.312 seconds with one worker; PureFastCGI build: 5.908
-  seconds with one worker.
-- Staged package: 6 files, 111891 bytes; `fastcgi.dll`: 94208 bytes.
+  https://github.com/jspitz-git/pure-lang/actions/runs/32177457979/artifacts/9339731766
+- Clean-runner FastCGI tests: 12/12 passed in 106.49 seconds.
+- Staged package: 6 files, 112403 bytes; `fastcgi.dll`: 94720 bytes.
 - Inventory SHA-256:
-  `70ff8167791066a34315c4d0f9405d4edff0435a911ea67714c692fa3ca5ea23`.
-- Deterministic inner ZIP: 46874 bytes, SHA-256
-  `7c57ddf5c8263b33b3f41383dbe0fb7df0defcd461726b33d7b0df256403e91e`.
-- GitHub artifact wrapper: 46611 bytes, SHA-256
-  `4a3b62d4de250d2488c5ac675699057bbd060559af5195c0a3de5198c169601a`.
+  `ed27b9188db2a64ecc58934ab9ac985fe999f6f1019bb460fe61732643dcdc3c`.
+- Deterministic inner ZIP: 47046 bytes, SHA-256
+  `df890dc3a793aa0a8534eb94b2c95271bd139750707b3e03fe78a8d4790b5608`.
+- GitHub artifact wrapper: 46783 bytes.
 - Independent download verification safely extracted the ZIP into a fresh path
-  containing spaces, reconstructed the six-file hash oracle, and verified 6
-  exact files, 5 inventory rows, 11 recursive PE files, and the real protocol
-  smoke with no MSYS2 directory on the runtime `PATH`.
+  containing spaces and Unicode and verified 6 exact files and all 5 inventory
+  hashes and sizes. The clean job independently verified 11 recursive PE files
+  and the real protocol smoke with no MSYS2 directory on the runtime `PATH`.
 
 ## Progress Log
 
