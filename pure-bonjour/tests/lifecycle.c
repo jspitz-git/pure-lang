@@ -646,6 +646,74 @@ static void test_removal_while_resolve_pending_cannot_readd_service(void)
   bonjour_close(browser);
 }
 
+static void test_unknown_deletes_do_not_grow_name_state(void)
+{
+  fake_dns_t fake = fake_dns_pending_registration();
+  bonjour_browser_t *browser;
+  DNS_RECORD records[64];
+  wchar_t targets[64][96];
+  size_t index;
+
+  use_fake(&fake);
+  browser = bonjour_browse_with_api("_puretodo45._tcp", &fake.api, 25);
+  assert(browser != NULL);
+  assert(bonjour_browser_name_state_count(browser) == 0);
+  for (index = 0; index < 64; ++index) {
+    assert(swprintf(targets[index], 96,
+                    L"Unknown-%zu._puretodo45._tcp.local", index) > 0);
+    fake_fire_browse_target(&fake, &records[index], 1, targets[index]);
+  }
+  assert(fake.resolve_calls == 0);
+  assert(bonjour_browser_name_state_count(browser) == 0);
+  bonjour_close(browser);
+}
+
+static void test_tombstone_is_pruned_after_old_resolver_completion(void)
+{
+  fake_dns_t fake = fake_dns_pending_registration();
+  bonjour_browser_t *browser;
+  DNS_RECORD add_record;
+  DNS_RECORD remove_record;
+
+  use_fake(&fake);
+  browser = bonjour_browse_with_api("_puretodo45._tcp", &fake.api, 25);
+  assert(browser != NULL);
+  fake_fire_browse(&fake, &add_record, 0);
+  assert(bonjour_browser_name_state_count(browser) == 1);
+  fake_fire_browse_target(&fake, &remove_record, 1,
+                          L"pROBE._PURETODO45._TCP.LOCAL");
+  assert(bonjour_browser_name_state_count(browser) == 1);
+  fake_fire_resolve_ipv4(&fake);
+  assert(bonjour_avail(browser) == 0);
+  assert(bonjour_browser_name_state_count(browser) == 0);
+  bonjour_close(browser);
+}
+
+static void test_completed_and_cancelled_churn_reclaims_name_state(void)
+{
+  fake_dns_t fake = fake_dns_pending_registration();
+  bonjour_browser_t *browser;
+  DNS_RECORD add_records[6];
+  DNS_RECORD remove_records[6];
+  int index;
+
+  use_fake(&fake);
+  browser = bonjour_browse_with_api("_puretodo45._tcp", &fake.api, 25);
+  assert(browser != NULL);
+  for (index = 0; index < 6; ++index) {
+    fake_fire_browse(&fake, &add_records[index], 0);
+    if (index < 3)
+      fake_fire_resolve_ipv4_at(&fake, index, 0x7f000001u + (DWORD)index);
+    fake_fire_browse(&fake, &remove_records[index], 1);
+    if (index >= 3)
+      fake.resolve_callbacks[index](ERROR_CANCELLED,
+                                    fake.resolve_contexts[index], NULL);
+    assert(bonjour_browser_name_state_count(browser) == 0);
+  }
+  assert(fake.resolve_calls == 6);
+  bonjour_close(browser);
+}
+
 static void test_delete_before_resolver_link_invalidates_add_generation(void)
 {
   fake_dns_t fake = fake_dns_pending_registration();
@@ -684,6 +752,10 @@ static void test_remove_readd_ignores_late_old_generation_completion(void)
   fake_fire_resolve_ipv4_at(&fake, 1, 0x7f000002u);
   fake_fire_resolve_ipv4_at(&fake, 0, 0x7f000001u);
   assert_single_result(bonjour_get(browser), "Probe", "127.0.0.2", 41000);
+  assert(bonjour_browser_name_state_count(browser) == 1);
+  fake_fire_browse_target(&fake, &remove_record, 1,
+                          L"PROBE._PURETODO45._TCP.LOCAL");
+  assert(bonjour_browser_name_state_count(browser) == 0);
   bonjour_close(browser);
 }
 
@@ -792,6 +864,9 @@ int main(void)
   test_browse_rejection_releases_partial_state();
   test_browse_resolve_snapshot_update_and_removal();
   test_removal_while_resolve_pending_cannot_readd_service();
+  test_unknown_deletes_do_not_grow_name_state();
+  test_tombstone_is_pruned_after_old_resolver_completion();
+  test_completed_and_cancelled_churn_reclaims_name_state();
   test_delete_before_resolver_link_invalidates_add_generation();
   test_remove_readd_ignores_late_old_generation_completion();
   test_pending_resolver_is_cancelled_during_close();

@@ -92,6 +92,8 @@ BONJOUR_WINDOWS_PRIVATE bonjour_service_t *bonjour_publish_with_api(
     DWORD wait_ms);
 BONJOUR_WINDOWS_PRIVATE bonjour_browser_t *bonjour_browse_with_api(
     const char *type, const bonjour_dns_api_t *api, DWORD wait_ms);
+BONJOUR_WINDOWS_PRIVATE size_t bonjour_browser_name_state_count(
+    bonjour_browser_t *browser);
 #endif
 
 #endif

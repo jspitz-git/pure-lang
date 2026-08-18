@@ -583,6 +583,16 @@ static int bonjour_results_remove_fqdn(bonjour_result_set_t *set,
   return changed;
 }
 
+static int bonjour_results_contain_fqdn(const bonjour_result_set_t *set,
+                                        const wchar_t *fqdn)
+{
+  const bonjour_result_t *result;
+
+  for (result = set->head; result != NULL; result = result->next)
+    if (bonjour_fqdn_equal(result->fqdn, fqdn)) return 1;
+  return 0;
+}
+
 static bonjour_name_state_t *bonjour_name_find_locked(
     bonjour_browser_t *browser, const wchar_t *fqdn)
 {
@@ -630,9 +640,10 @@ static int bonjour_name_add_locked(bonjour_browser_t *browser,
 static int bonjour_name_delete_locked(bonjour_browser_t *browser,
                                       const wchar_t *fqdn)
 {
-  bonjour_name_state_t *state = bonjour_name_get_locked(browser, fqdn);
+  bonjour_name_state_t *state = bonjour_name_find_locked(browser, fqdn);
 
-  if (state == NULL || state->generation == UINT64_MAX) return 0;
+  if (state == NULL) return 0;
+  if (state->generation == UINT64_MAX) return -1;
   ++state->generation;
   state->present = 0;
   return 1;
@@ -645,6 +656,37 @@ static int bonjour_name_is_current_locked(bonjour_browser_t *browser,
   bonjour_name_state_t *state = bonjour_name_find_locked(browser, fqdn);
 
   return state != NULL && state->present && state->generation == generation;
+}
+
+static int bonjour_resolvers_contain_fqdn_locked(
+    const bonjour_browser_t *browser, const wchar_t *fqdn)
+{
+  const bonjour_resolver_t *resolver;
+
+  for (resolver = browser->resolvers; resolver != NULL; resolver = resolver->next)
+    if (bonjour_fqdn_equal(resolver->fqdn, fqdn)) return 1;
+  for (resolver = browser->retired; resolver != NULL;
+       resolver = resolver->retired_next)
+    if (bonjour_fqdn_equal(resolver->fqdn, fqdn)) return 1;
+  return 0;
+}
+
+static void bonjour_name_prune_locked(bonjour_browser_t *browser,
+                                      const wchar_t *fqdn)
+{
+  bonjour_name_state_t **link;
+  bonjour_name_state_t *state;
+
+  for (link = &browser->names; *link != NULL; link = &(*link)->next)
+    if (bonjour_fqdn_equal((*link)->fqdn, fqdn)) break;
+  state = *link;
+  if (state == NULL || state->present ||
+      bonjour_results_contain_fqdn(&browser->results, state->fqdn) ||
+      bonjour_resolvers_contain_fqdn_locked(browser, state->fqdn))
+    return;
+  *link = state->next;
+  free(state->fqdn);
+  free(state);
 }
 
 static void bonjour_names_clear(bonjour_browser_t *browser)
@@ -739,6 +781,7 @@ static void WINAPI bonjour_resolve_complete(DWORD status, void *context,
       detached = 0;
     }
   }
+  bonjour_name_prune_locked(browser, resolver->fqdn);
   ReleaseSRWLockExclusive(&browser->lock);
 
   if (instance != NULL) browser->api->free_instance(instance);
@@ -822,6 +865,7 @@ static void bonjour_start_resolver(bonjour_browser_t *browser,
       free_resolver = 0;
     }
   }
+  bonjour_name_prune_locked(browser, resolver->fqdn);
   bonjour_browser_wake_locked(browser);
   ReleaseSRWLockExclusive(&browser->lock);
   if (free_resolver) bonjour_resolver_free(resolver);
@@ -853,12 +897,16 @@ static void WINAPI bonjour_browse_complete(DWORD status, void *context,
         continue;
       target = record->Data.PTR.pNameHost;
       if (record->Flags.S.Delete) {
+        int delete_status;
+
         AcquireSRWLockExclusive(&browser->lock);
-        if (!bonjour_name_delete_locked(browser, target) &&
+        delete_status = bonjour_name_delete_locked(browser, target);
+        if (delete_status < 0 &&
             browser->status == ERROR_SUCCESS)
           browser->status = ERROR_NOT_ENOUGH_MEMORY;
         if (bonjour_results_remove_fqdn(&browser->results, target))
           browser->avail = 1;
+        bonjour_name_prune_locked(browser, target);
         ReleaseSRWLockExclusive(&browser->lock);
       } else {
         uint64_t generation = 0;
@@ -934,6 +982,19 @@ BONJOUR_WINDOWS_PRIVATE bonjour_browser_t *bonjour_browse_with_api(
     const char *type, const bonjour_dns_api_t *api, DWORD wait_ms)
 {
   return bonjour_browse_using_api(type, api, wait_ms);
+}
+
+BONJOUR_WINDOWS_PRIVATE size_t bonjour_browser_name_state_count(
+    bonjour_browser_t *browser)
+{
+  bonjour_name_state_t *state;
+  size_t count = 0;
+
+  if (browser == NULL) return 0;
+  AcquireSRWLockShared(&browser->lock);
+  for (state = browser->names; state != NULL; state = state->next) ++count;
+  ReleaseSRWLockShared(&browser->lock);
+  return count;
 }
 #endif
 
