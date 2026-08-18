@@ -53,6 +53,22 @@ if(NOT relocated_result EQUAL 0)
     "relocated PureFastCGI verification failed (${relocated_result})\n"
     "stdout:\n${relocated_output}\nstderr:\n${relocated_error}")
 endif()
+string(REPLACE "\\" "/" relocated_module_dir "${relocated}/lib/pure")
+if(NOT relocated_output MATCHES
+      "RUNTIME_MODULE_DIR=${relocated_module_dir}([\r\n]|$)")
+  message(FATAL_ERROR
+    "relocated runtime did not prove direct payload lookup\n${relocated_output}")
+endif()
+string(REPLACE "\\" "/" original_module
+  "${build_dir}/fastcgi.dll")
+string(REPLACE "\\" "/" original_source "${SOURCE_DIR}")
+if(relocated_output MATCHES "${original_module}" OR
+     relocated_output MATCHES "${original_source}" OR
+     relocated_output MATCHES "[Cc]:/msys64")
+  message(FATAL_ERROR
+    "relocated runtime trace contains an original build/source/MSYS path\n"
+    "${relocated_output}")
+endif()
 
 file(WRITE "${stage}/unrelated-sentinel.txt" "keep\n")
 file(WRITE "${stage}/lib/pure/unrelated-module.pure" "keep-module\n")
@@ -115,6 +131,112 @@ endforeach()
 if(NOT IS_DIRECTORY "${stage}/lib/pure" OR
     NOT IS_DIRECTORY "${stage}/share/doc")
   message(FATAL_ERROR "shared package directories were removed")
+endif()
+if(IS_DIRECTORY "${stage}/share/doc/pure-fastcgi")
+  message(FATAL_ERROR "empty component documentation directory remains")
+endif()
+
+set(adversarial_stage "${test_root}/adversarial overlay")
+  set(adversarial_oracles "${test_root}/adversarial oracles")
+  execute_process(
+    COMMAND "${CMAKE_COMMAND}" --install "${build_dir}"
+      --prefix "${adversarial_stage}" --component PureFastCGI
+    RESULT_VARIABLE adversarial_install_result)
+  if(NOT adversarial_install_result EQUAL 0)
+    message(FATAL_ERROR "adversarial component install failed")
+  endif()
+  file(MAKE_DIRECTORY "${adversarial_oracles}")
+  file(COPY
+    "${build_dir}/PureFastCGIExpected.sha256"
+    "${build_dir}/PureFastCGIInventory.tsv"
+    DESTINATION "${adversarial_oracles}")
+  set(adversarial_relative "unrelated-adversarial-sentinel.txt")
+  set(adversarial_file "${adversarial_stage}/${adversarial_relative}")
+  file(WRITE "${adversarial_file}" "adversarial-keep\n")
+  file(SHA256 "${adversarial_file}" adversarial_sha)
+  file(SIZE "${adversarial_file}" adversarial_size)
+  string(TOLOWER "${adversarial_sha}" adversarial_sha)
+  file(APPEND "${adversarial_oracles}/PureFastCGIExpected.sha256"
+    "${adversarial_sha}  ${adversarial_relative}\n")
+  execute_process(
+    COMMAND "${CMAKE_COMMAND}"
+      "-DBUILD_DIR=${adversarial_oracles}"
+      "-DSTAGE_PREFIX=${adversarial_stage}"
+      "-DSOURCE_PREFIX=${SOURCE_DIR}"
+      "-DORIGINAL_BUILD_PREFIX=${build_dir}"
+      "-DORIGINAL_STAGE_PREFIX=${stage}"
+      "-DPURE_RUNTIME_ROOT=${PURE_RUNTIME_ROOT}"
+      "-DLLVM_READOBJ=${LLVM_READOBJ}"
+      "-DPOWERSHELL_EXECUTABLE=${POWERSHELL_EXECUTABLE}"
+      -DREMOVE_OWNED=ON
+      -P "${VERIFY_SCRIPT}"
+    RESULT_VARIABLE adversarial_result
+    OUTPUT_VARIABLE adversarial_output
+    ERROR_VARIABLE adversarial_error
+    ENCODING UTF-8)
+  if(adversarial_result EQUAL 0 OR
+      NOT "${adversarial_output}\n${adversarial_error}" MATCHES
+        "INVENTORY_FILE_SET_MISMATCH")
+    message(FATAL_ERROR
+      "subject-only ownership forgery was not rejected\n"
+      "${adversarial_output}\n${adversarial_error}")
+  endif()
+  if(NOT EXISTS "${adversarial_file}")
+    message(FATAL_ERROR
+      "subject-only manifest entry deleted an unrelated sentinel")
+  endif()
+
+  set(installed_forgery_stage "${test_root}/installed inventory forgery")
+  set(installed_forgery_oracles "${test_root}/installed inventory oracles")
+  execute_process(
+    COMMAND "${CMAKE_COMMAND}" --install "${build_dir}"
+      --prefix "${installed_forgery_stage}" --component PureFastCGI
+    RESULT_VARIABLE installed_forgery_install_result)
+  if(NOT installed_forgery_install_result EQUAL 0)
+    message(FATAL_ERROR "installed-inventory forgery install failed")
+  endif()
+  file(MAKE_DIRECTORY "${installed_forgery_oracles}")
+  file(COPY
+    "${build_dir}/PureFastCGIExpected.sha256"
+    "${build_dir}/PureFastCGIInventory.tsv"
+    DESTINATION "${installed_forgery_oracles}")
+  set(installed_forgery_relative "unrelated-installed-inventory-sentinel.txt")
+  set(installed_forgery_file
+    "${installed_forgery_stage}/${installed_forgery_relative}")
+  file(WRITE "${installed_forgery_file}" "installed-inventory-keep\n")
+  file(SHA256 "${installed_forgery_file}" installed_forgery_sha)
+  file(SIZE "${installed_forgery_file}" installed_forgery_size)
+  string(TOLOWER "${installed_forgery_sha}" installed_forgery_sha)
+  file(APPEND
+    "${installed_forgery_stage}/share/doc/pure-fastcgi/PureFastCGIInventory.tsv"
+    "${installed_forgery_relative}\tforged sentinel\tstage subject\t0\t"
+    "${installed_forgery_sha}\t${installed_forgery_size}\n")
+  execute_process(
+    COMMAND "${CMAKE_COMMAND}"
+      "-DBUILD_DIR=${installed_forgery_oracles}"
+      "-DSTAGE_PREFIX=${installed_forgery_stage}"
+      "-DSOURCE_PREFIX=${SOURCE_DIR}"
+      "-DORIGINAL_BUILD_PREFIX=${build_dir}"
+      "-DORIGINAL_STAGE_PREFIX=${stage}"
+      "-DPURE_RUNTIME_ROOT=${PURE_RUNTIME_ROOT}"
+      "-DLLVM_READOBJ=${LLVM_READOBJ}"
+      "-DPOWERSHELL_EXECUTABLE=${POWERSHELL_EXECUTABLE}"
+      -DREMOVE_OWNED=ON
+      -P "${VERIFY_SCRIPT}"
+    RESULT_VARIABLE installed_forgery_result
+    OUTPUT_VARIABLE installed_forgery_output
+    ERROR_VARIABLE installed_forgery_error
+    ENCODING UTF-8)
+  if(installed_forgery_result EQUAL 0 OR
+      NOT "${installed_forgery_output}\n${installed_forgery_error}" MATCHES
+        "INVENTORY_ORACLE_MISMATCH")
+    message(FATAL_ERROR
+      "subject-only installed inventory forgery was not rejected\n"
+      "${installed_forgery_output}\n${installed_forgery_error}")
+  endif()
+if(NOT EXISTS "${installed_forgery_file}")
+  message(FATAL_ERROR
+    "installed inventory forgery deleted an unrelated sentinel")
 endif()
 
 message(STATUS "PureFastCGI relocation and ownership passed")

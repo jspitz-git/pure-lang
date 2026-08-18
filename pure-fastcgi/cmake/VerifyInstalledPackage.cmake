@@ -203,8 +203,24 @@ foreach(line IN LISTS manifest_lines)
   list(APPEND manifest_hashes "${sha256}")
 endforeach()
 
+set(payload_manifest_paths "${manifest_paths}")
+list(REMOVE_ITEM payload_manifest_paths
+  "share/doc/pure-fastcgi/PureFastCGIInventory.tsv")
+set(sorted_inventory_paths "${inventory_paths}")
+list(SORT payload_manifest_paths COMPARE STRING CASE SENSITIVE ORDER ASCENDING)
+list(SORT sorted_inventory_paths COMPARE STRING CASE SENSITIVE ORDER ASCENDING)
+if(NOT payload_manifest_paths STREQUAL sorted_inventory_paths)
+  message(FATAL_ERROR
+    "INVENTORY_FILE_SET_MISMATCH: authoritative inventory and manifest differ")
+endif()
+
 if(REMOVE_OWNED)
-  foreach(relative IN LISTS manifest_paths)
+  # Only the authoritative external inventory determines payload ownership.
+  # The installed inventory file itself is a fixed component metadata path;
+  # neither the external SHA manifest nor staged inventory can add ownership.
+  set(owned_paths ${inventory_paths}
+    "share/doc/pure-fastcgi/PureFastCGIInventory.tsv")
+  foreach(relative IN LISTS owned_paths)
     set(owned_file "${stage}/${relative}")
     cmake_path(NORMAL_PATH owned_file OUTPUT_VARIABLE normalized_owned_file)
     cmake_path(IS_PREFIX stage "${normalized_owned_file}" NORMALIZE
@@ -224,10 +240,25 @@ if(REMOVE_OWNED)
   if(IS_DIRECTORY "${owned_doc_dir}")
     file(GLOB owned_doc_entries LIST_DIRECTORIES TRUE "${owned_doc_dir}/*")
     if(NOT owned_doc_entries)
-      file(REMOVE "${owned_doc_dir}")
+      set(ENV{PURE_FASTCGI_REMOVE_DIRECTORY} "${owned_doc_dir}")
+      execute_process(
+        COMMAND "${POWERSHELL_EXECUTABLE}"
+          -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass
+          -Command
+            "[IO.Directory]::Delete(\$env:PURE_FASTCGI_REMOVE_DIRECTORY,\$false)"
+        RESULT_VARIABLE remove_dir_result
+        OUTPUT_VARIABLE remove_dir_output
+        ERROR_VARIABLE remove_dir_error
+        ENCODING UTF-8)
+      unset(ENV{PURE_FASTCGI_REMOVE_DIRECTORY})
+      if(NOT remove_dir_result EQUAL 0 OR IS_DIRECTORY "${owned_doc_dir}")
+        message(FATAL_ERROR
+          "OWNED_DIRECTORY_REMOVE_FAILED: ${owned_doc_dir}\n"
+          "stdout:\n${remove_dir_output}\nstderr:\n${remove_dir_error}")
+      endif()
     endif()
   endif()
-  message(STATUS "Removed manifest-owned PureFastCGI files")
+  message(STATUS "Removed inventory-owned PureFastCGI files")
   return()
 endif()
 
@@ -291,17 +322,6 @@ foreach(index RANGE 0 ${manifest_last})
     message(FATAL_ERROR "PACKAGE_HASH_MISMATCH: ${relative}")
   endif()
 endforeach()
-
-set(payload_inventory_paths "${manifest_paths}")
-list(REMOVE_ITEM payload_inventory_paths
-  "share/doc/pure-fastcgi/PureFastCGIInventory.tsv")
-set(sorted_inventory_paths "${inventory_paths}")
-list(SORT payload_inventory_paths COMPARE STRING CASE SENSITIVE ORDER ASCENDING)
-list(SORT sorted_inventory_paths COMPARE STRING CASE SENSITIVE ORDER ASCENDING)
-if(NOT payload_inventory_paths STREQUAL sorted_inventory_paths)
-  message(FATAL_ERROR
-    "INVENTORY_FILE_SET_MISMATCH: inventory does not describe every payload")
-endif()
 
 list(LENGTH inventory_paths inventory_count)
 math(EXPR inventory_last "${inventory_count} - 1")
@@ -435,27 +455,73 @@ if(RUN_RUNTIME_TESTS)
       message(FATAL_ERROR "VERIFY_INPUT_MISSING: ${required} is required")
     endif()
   endforeach()
-  set(runtime_test_root "${build_dir}/PureFastCGI installed protocol smoke")
+  set(relocated_module_dir "${stage}/lib/pure")
+  get_filename_component(worker_name "${PROTOCOL_WORKER}" NAME)
+  set(relocated_worker "${relocated_module_dir}/${worker_name}")
+  file(COPY_FILE "${PROTOCOL_WORKER}" "${relocated_worker}")
+  string(RANDOM LENGTH 16 ALPHABET 0123456789abcdef runtime_alias_id)
+  set(runtime_alias "$ENV{TEMP}/PureFastCGI-relocation-${runtime_alias_id}")
+  set(ENV{PURE_FASTCGI_RUNTIME_ALIAS} "${runtime_alias}")
+  set(ENV{PURE_FASTCGI_RUNTIME_TARGET} "${relocated_module_dir}")
   execute_process(
-    COMMAND "${CMAKE_COMMAND}"
-      "-DHARNESS=${PROTOCOL_HARNESS}"
-      "-DMODULE=${stage}/lib/pure/fastcgi.dll"
-      "-DMODULE_SOURCE=${stage}/lib/pure/fastcgi.pure"
-      "-DWORKER=${PROTOCOL_WORKER}"
-      "-DPURE_EXECUTABLE=${runtime_root}/pure.exe"
-      "-DPURE_RUNTIME_DIR=${runtime_root}"
-      "-DTEST_ROOT=${runtime_test_root}"
-      -P "${CMAKE_CURRENT_LIST_DIR}/RunProtocolTest.cmake"
+    COMMAND "${POWERSHELL_EXECUTABLE}"
+      -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass
+      -Command
+        "New-Item -ItemType Junction -Path \$env:PURE_FASTCGI_RUNTIME_ALIAS -Target \$env:PURE_FASTCGI_RUNTIME_TARGET -ErrorAction Stop | Out-Null"
+    RESULT_VARIABLE alias_result
+    OUTPUT_VARIABLE alias_output
+    ERROR_VARIABLE alias_error
+    ENCODING UTF-8)
+  unset(ENV{PURE_FASTCGI_RUNTIME_TARGET})
+  if(NOT alias_result EQUAL 0 OR NOT IS_DIRECTORY "${runtime_alias}")
+    file(REMOVE "${relocated_worker}")
+    message(FATAL_ERROR
+      "RUNTIME_ALIAS_FAILED: could not create relocation junction\n"
+      "stdout:\n${alias_output}\nstderr:\n${alias_error}")
+  endif()
+  file(REAL_PATH "${runtime_alias}" runtime_alias_target)
+  file(REAL_PATH "${relocated_module_dir}" relocated_module_real)
+  if(NOT runtime_alias_target STREQUAL relocated_module_real)
+    message(FATAL_ERROR "RUNTIME_ALIAS_FAILED: junction target mismatch")
+  endif()
+  set(ENV{PATH}
+    "${runtime_alias};${runtime_root};$ENV{SystemRoot}\\System32;$ENV{SystemRoot};$ENV{SystemRoot}\\System32\\Wbem")
+  unset(ENV{PURELIB})
+  execute_process(
+    COMMAND "${PROTOCOL_HARNESS}" "${runtime_root}/pure.exe"
+      "${runtime_alias}" "${runtime_alias}/${worker_name}"
     RESULT_VARIABLE smoke_result
     OUTPUT_VARIABLE smoke_output
     ERROR_VARIABLE smoke_error
     ENCODING UTF-8)
-  file(REMOVE_RECURSE "${runtime_test_root}")
+  file(REMOVE "${relocated_worker}")
+  execute_process(
+    COMMAND "${POWERSHELL_EXECUTABLE}"
+      -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass
+      -Command
+        "[IO.Directory]::Delete(\$env:PURE_FASTCGI_RUNTIME_ALIAS,\$false)"
+    RESULT_VARIABLE alias_remove_result
+    ERROR_VARIABLE alias_remove_error
+    ENCODING UTF-8)
+  unset(ENV{PURE_FASTCGI_RUNTIME_ALIAS})
+  if(NOT alias_remove_result EQUAL 0 OR EXISTS "${runtime_alias}")
+    message(FATAL_ERROR
+      "RUNTIME_ALIAS_FAILED: could not remove relocation junction\n"
+      "${alias_remove_error}")
+  endif()
   if(NOT smoke_result EQUAL 0)
     message(FATAL_ERROR
       "RUNTIME_SMOKE_FAILED: ${smoke_result}\n"
       "stdout:\n${smoke_output}\nstderr:\n${smoke_error}")
   endif()
+  if(NOT smoke_output MATCHES "pure-fastcgi protocol smoke passed")
+    message(FATAL_ERROR
+      "RUNTIME_SMOKE_FAILED: success marker missing\n"
+      "stdout:\n${smoke_output}\nstderr:\n${smoke_error}")
+  endif()
+  string(REPLACE "\\" "/" relocated_module_dir_display
+    "${relocated_module_dir}")
+  message(STATUS "RUNTIME_MODULE_DIR=${relocated_module_dir_display}")
 endif()
 
 list(LENGTH pe_seen pe_count)

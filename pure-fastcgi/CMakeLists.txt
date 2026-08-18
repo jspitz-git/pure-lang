@@ -190,7 +190,7 @@ if(BUILD_TESTING)
     NAME pure-fastcgi-relocation-ownership
     COMMAND "${CMAKE_COMMAND}"
       "-DBUILD_DIR=${CMAKE_CURRENT_BINARY_DIR}"
-      "-DSTAGE_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/PureFastCGI relocation test"
+      "-DSTAGE_PREFIX=$ENV{TEMP}/PureFastCGI relocation ownership test"
       "-DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
       "-DPURE_RUNTIME_ROOT=${PURE_PREFIX}/bin"
       "-DLLVM_READOBJ=${LLVM_READOBJ}"
