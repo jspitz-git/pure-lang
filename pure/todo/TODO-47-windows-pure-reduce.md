@@ -1,6 +1,6 @@
 # TODO-47 - Windows pure-reduce Package
 
-Status: Open
+Status: Closed
 Branch: todo/47-windows-pure-reduce
 
 ## Purpose
@@ -34,7 +34,6 @@ Determine a reproducible Windows build and packaging model for the large
 
 ## Open Questions
 
-- Clean-runner evidence from the new GitHub Actions job is still pending.
 - TODO-49 must consume `PureReduce` only as a separate optional installer
   component or downloadable artifact; it must not enter the default frontend
   installation.
@@ -43,7 +42,7 @@ Determine a reproducible Windows build and packaging model for the large
 
 Ship PureReduce as the separately selected CMake component `PureReduce` and as
 the CI artifact `windows-pure-reduce.zip`. The component is excluded from the
-default install. Its current 80-file closure contains the Pure module, embedded
+default install. Its current 81-file closure contains the Pure module, embedded
 CSL runtime and image, runtime data, tests, inventory, metrics, patches and
 license notices; it contains no full REDUCE frontend, `reduce.exe`, source
 tree, development archive, MSYS2 tool, or non-system runtime DLL.
@@ -87,34 +86,56 @@ The local ZIP writer consumed the verified file set in ordinal relative-path
 order, assigned every ZIP entry the fixed timestamp
 `2000-01-01T00:00:00+00:00`, and did not modify staged payload metadata. Two
 independent archive creations produced the same byte count and SHA-256 above.
-This proves deterministic packaging for the measured local payload; Task 8
-must still record the separately built clean-runner payload and digest.
+This proves deterministic packaging for that historical local payload; the
+separately built clean-runner payload and digest are recorded below.
 
-### Pending clean-runner evidence
+### Verified clean-runner evidence
 
-The `windows-pure-reduce` job in
-`.github/workflows/non-linux-release-validation.yml` performs a fresh exact-pin
-fetch into a path with spaces, builds Pure and the complete headless CSL
-closure with MSYS2 CLANG64, runs `ctest -L reduce`, installs and verifies only
-`PureReduce`, creates `windows-pure-reduce.zip`, prints its inner SHA-256 and
-uploads it with `actions/upload-artifact@v4`.
+The required Windows PureReduce job passed from implementation commit
+`7c0b064c56d0f8186ef86903917a03b3e5ba0b43` on 2026-08-18:
 
-Until Task 8 records a successful clean run, the following values and links
-remain deliberately unset:
+- workflow run: [32080639311](https://github.com/jspitz-git/pure-lang/actions/runs/32080639311);
+- Windows job: [95542811896](https://github.com/jspitz-git/pure-lang/actions/runs/32080639311/job/95542811896), `success` in 2,548 seconds;
+- artifact: `windows-pure-reduce`, ID `9305888161`, [immutable artifact API URL](https://api.github.com/repos/jspitz-git/pure-lang/actions/artifacts/9305888161/zip);
+- exact REDUCE fetch: 392,134,513 bytes;
+- canonical source: 1,228,233,321 bytes;
+- upstream build tree: 1,446,291,042 bytes;
+- upstream build: 1,715 seconds with one worker;
+- selected CSL closure: 106 objects, 2 resources and 48 fonts;
+- installed package: 81 files and 15,135,198 bytes;
+- authoritative 81-entry inventory: 21,077 bytes, SHA-256
+  `117baf6dc6253e2249f18d00a183167b4c093409f4b54c74b4f20620d11e1945`;
+- embedded 80-entry ownership inventory: 20,822 bytes, SHA-256
+  `a89ef6e7b70086dd674c6b801f98b147b30fc45f5d1fcda5481659c6709ae058`;
+- deterministic inner ZIP: 9,344,138 bytes, SHA-256
+  `7227839b2f1d98be16bc6bafe292a25393daad4af3bdb487c80f6455f07e954a`;
+- uploaded artifact wrapper: 9,333,027 bytes, SHA-256 / upload digest
+  `23ea055b92e4cfefe5e3d0b9591e00569f18ce5df977e053767df6f4aba08a7d`;
+- complete `reduce`-label suite: 23/23 tests in 373.52 seconds;
+- installed component verifier: 81 files, success.
 
-- clean-runner fetch/source/build/stage/archive byte measurements;
-- clean-runner elapsed time and confirmed runner worker count;
-- clean-runner inner ZIP SHA-256;
-- `actions/upload-artifact` artifact digest;
-- workflow run and artifact URLs.
+The workflow's aggregate conclusion is `failure` because both unrelated
+Windows pure-faust matrix jobs failed. The required `Windows PureReduce
+package` job itself and each of its 12 build, test, verification and upload
+steps succeeded; the aggregate result is not described as green.
 
-No URL, digest, or successful clean-runner claim is inferred from local
-evidence. Status remains **Open** until Task 8 captures those results.
+The downloaded artifact wrapper matched the GitHub upload digest, and its sole
+inner ZIP matched the workflow transcript. The inner ZIP was extracted afresh
+under
+`C:\Users\jiris\AppData\Local\Temp\PR artifact 32080639311 short 8e5d\package with spaces`.
+With `PATH` limited to that module directory, a matching temporary Pure runtime
+directory, and Windows system directories (`MSYS2` absent), the installed smoke
+and lifecycle drivers both exited 0. The independent structural installed
+verifier then accepted the unchanged 81-file package and exact manifest.
 
 ## Progress Log
 
 - 2026-07-25: Created as a large optional Windows package investigation.
 - 2026-08-17: Completed the exact-pin local Windows implementation and chose
   the separate optional `PureReduce` component/artifact model. Added build,
-  package, relocation, lifecycle, inventory and licensing evidence. Clean
-  GitHub-hosted runner evidence remains pending Task 8.
+  package, relocation, lifecycle, inventory and licensing evidence.
+- 2026-08-18: The clean Windows PureReduce job passed all 23 tests, installed
+  verification and artifact upload. Independently downloaded and hash-checked
+  the artifact, extracted it into a new path containing spaces, and passed its
+  smoke, lifecycle and installed-package verification without MSYS2 on
+  `PATH`. Closed TODO-47 with the separate-component decision unchanged.
