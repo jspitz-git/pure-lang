@@ -2,6 +2,21 @@ cmake_minimum_required(VERSION 3.25)
 
 set(pure_bonjour_system_dlls
   advapi32.dll
+  # API-set contracts observed in the supported staged Pure runtime closure.
+  api-ms-win-crt-convert-l1-1-0.dll
+  api-ms-win-crt-environment-l1-1-0.dll
+  api-ms-win-crt-filesystem-l1-1-0.dll
+  api-ms-win-crt-heap-l1-1-0.dll
+  api-ms-win-crt-locale-l1-1-0.dll
+  api-ms-win-crt-math-l1-1-0.dll
+  api-ms-win-crt-multibyte-l1-1-0.dll
+  api-ms-win-crt-private-l1-1-0.dll
+  api-ms-win-crt-process-l1-1-0.dll
+  api-ms-win-crt-runtime-l1-1-0.dll
+  api-ms-win-crt-stdio-l1-1-0.dll
+  api-ms-win-crt-string-l1-1-0.dll
+  api-ms-win-crt-time-l1-1-0.dll
+  api-ms-win-crt-utility-l1-1-0.dll
   bcrypt.dll
   cfgmgr32.dll
   comdlg32.dll
@@ -47,8 +62,7 @@ endfunction()
 
 function(pure_bonjour_is_system_dll import_name output_variable)
   string(TOLOWER "${import_name}" import_lower)
-  if(import_lower IN_LIST pure_bonjour_system_dlls OR
-      import_lower MATCHES "^(api|ext)-ms-win-[a-z0-9-]+\\.dll$")
+  if(import_lower IN_LIST pure_bonjour_system_dlls)
     set(${output_variable} TRUE PARENT_SCOPE)
   else()
     set(${output_variable} FALSE PARENT_SCOPE)
@@ -64,6 +78,67 @@ function(pure_bonjour_check_forbidden import_name owner)
     pure_bonjour_fail(IMPORT_FORBIDDEN
       "${owner} imports forbidden Apple/MSYS2 runtime ${import_name}")
   endif()
+endfunction()
+
+function(pure_bonjour_canonicalize_runtime_candidate canonical_root candidate
+    output_path)
+  if(NOT EXISTS "${candidate}" OR IS_DIRECTORY "${candidate}")
+    pure_bonjour_fail(IMPORT_PATH_MISSING
+      "runtime candidate does not exist: ${candidate}")
+  endif()
+  file(REAL_PATH "${candidate}" canonical_candidate)
+  if(NOT EXISTS "${canonical_candidate}" OR IS_DIRECTORY "${canonical_candidate}")
+    pure_bonjour_fail(IMPORT_PATH_MISSING
+      "canonical runtime candidate does not exist: ${candidate}")
+  endif()
+  cmake_path(IS_PREFIX canonical_root "${canonical_candidate}" NORMALIZE
+    is_inside_canonical_root)
+  if(NOT is_inside_canonical_root)
+    pure_bonjour_fail(IMPORT_PATH_OUTSIDE
+      "runtime candidate escapes canonical PURE_PREFIX/bin: "
+      "${candidate} -> ${canonical_candidate}")
+  endif()
+  set(${output_path} "${canonical_candidate}" PARENT_SCOPE)
+endfunction()
+
+function(pure_bonjour_build_runtime_map root candidates output_root output_names
+    output_paths)
+  if(NOT EXISTS "${root}" OR NOT IS_DIRECTORY "${root}")
+    pure_bonjour_fail(IMPORT_PATH_MISSING
+      "Pure runtime directory does not exist: ${root}")
+  endif()
+  file(REAL_PATH "${root}" canonical_root)
+  if(NOT EXISTS "${canonical_root}" OR NOT IS_DIRECTORY "${canonical_root}")
+    pure_bonjour_fail(IMPORT_PATH_MISSING
+      "canonical Pure runtime directory does not exist: ${root}")
+  endif()
+
+  set(runtime_names)
+  set(canonical_runtime_paths)
+  set(canonical_runtime_identities)
+  foreach(candidate IN LISTS candidates)
+    get_filename_component(runtime_name "${candidate}" NAME)
+    string(TOLOWER "${runtime_name}" runtime_lower)
+    if(runtime_lower IN_LIST runtime_names)
+      pure_bonjour_fail(IMPORT_PATH_AMBIGUOUS
+        "duplicate case-folded runtime path for ${runtime_name}")
+    endif()
+
+    pure_bonjour_canonicalize_runtime_candidate(
+      "${canonical_root}" "${candidate}" canonical_candidate)
+    string(TOLOWER "${canonical_candidate}" canonical_identity)
+    if(canonical_identity IN_LIST canonical_runtime_identities)
+      pure_bonjour_fail(IMPORT_PATH_AMBIGUOUS
+        "multiple runtime names resolve to ${canonical_candidate}")
+    endif()
+    list(APPEND runtime_names "${runtime_lower}")
+    list(APPEND canonical_runtime_paths "${canonical_candidate}")
+    list(APPEND canonical_runtime_identities "${canonical_identity}")
+  endforeach()
+
+  set(${output_root} "${canonical_root}" PARENT_SCOPE)
+  set(${output_names} "${runtime_names}" PARENT_SCOPE)
+  set(${output_paths} "${canonical_runtime_paths}" PARENT_SCOPE)
 endfunction()
 
 function(pure_bonjour_parse_import_listing listing_file expected_owner
@@ -216,6 +291,20 @@ if(DEFINED PURE_BONJOUR_IMPORT_FIXTURE_ONLY)
   return()
 endif()
 
+if(DEFINED PURE_BONJOUR_RUNTIME_MAP_FIXTURE_ONLY)
+  foreach(required IN ITEMS PURE_RUNTIME_ROOT RUNTIME_CANDIDATES)
+    if(NOT DEFINED ${required} OR "${${required}}" STREQUAL "")
+      pure_bonjour_fail(VERIFY_INPUT_MISSING "${required} is required")
+    endif()
+  endforeach()
+  pure_bonjour_build_runtime_map(
+    "${PURE_RUNTIME_ROOT}" "${RUNTIME_CANDIDATES}"
+    fixture_canonical_root fixture_runtime_names fixture_runtime_paths)
+  message(STATUS
+    "PureBonjour synthetic runtime map accepted beneath ${fixture_canonical_root}")
+  return()
+endif()
+
 foreach(required IN ITEMS LLVM_READOBJ MODULE PURE_PREFIX)
   if(NOT DEFINED ${required} OR "${${required}}" STREQUAL "")
     pure_bonjour_fail(VERIFY_INPUT_MISSING "${required} is required")
@@ -230,34 +319,17 @@ if(NOT EXISTS "${MODULE}" OR IS_DIRECTORY "${MODULE}")
 endif()
 
 cmake_path(ABSOLUTE_PATH MODULE NORMALIZE OUTPUT_VARIABLE module_path)
-set(pure_bin "${PURE_PREFIX}/bin")
-cmake_path(ABSOLUTE_PATH pure_bin NORMALIZE OUTPUT_VARIABLE pure_bin)
-if(NOT IS_DIRECTORY "${pure_bin}")
+set(pure_bin_input "${PURE_PREFIX}/bin")
+cmake_path(ABSOLUTE_PATH pure_bin_input NORMALIZE
+  OUTPUT_VARIABLE pure_bin_input)
+if(NOT IS_DIRECTORY "${pure_bin_input}")
   pure_bonjour_fail(IMPORT_PATH_MISSING
-    "Pure runtime directory does not exist: ${pure_bin}")
+    "Pure runtime directory does not exist: ${pure_bin_input}")
 endif()
-
-file(GLOB runtime_paths LIST_DIRECTORIES FALSE "${pure_bin}/*.dll")
-set(runtime_names)
-set(normalized_runtime_paths)
-foreach(runtime_path IN LISTS runtime_paths)
-  cmake_path(ABSOLUTE_PATH runtime_path NORMALIZE
-    OUTPUT_VARIABLE normalized_runtime_path)
-  cmake_path(IS_PREFIX pure_bin "${normalized_runtime_path}" NORMALIZE
-    is_inside_pure_bin)
-  if(NOT is_inside_pure_bin)
-    pure_bonjour_fail(IMPORT_PATH_OUTSIDE
-      "runtime path escapes PURE_PREFIX/bin: ${normalized_runtime_path}")
-  endif()
-  get_filename_component(runtime_name "${normalized_runtime_path}" NAME)
-  string(TOLOWER "${runtime_name}" runtime_lower)
-  if(runtime_lower IN_LIST runtime_names)
-    pure_bonjour_fail(IMPORT_PATH_AMBIGUOUS
-      "duplicate case-folded runtime path for ${runtime_name}")
-  endif()
-  list(APPEND runtime_names "${runtime_lower}")
-  list(APPEND normalized_runtime_paths "${normalized_runtime_path}")
-endforeach()
+file(GLOB runtime_candidates LIST_DIRECTORIES FALSE "${pure_bin_input}/*.dll")
+pure_bonjour_build_runtime_map(
+  "${pure_bin_input}" "${runtime_candidates}"
+  pure_bin runtime_names runtime_paths)
 
 if(DEFINED VERIFY_WORK_DIR AND NOT VERIFY_WORK_DIR STREQUAL "")
   cmake_path(ABSOLUTE_PATH VERIFY_WORK_DIR NORMALIZE
@@ -321,14 +393,10 @@ while(pe_queue)
       pure_bonjour_fail(IMPORT_PATH_MISSING
         "${import_name} is not beneath PURE_PREFIX/bin")
     endif()
-    list(GET normalized_runtime_paths ${runtime_index} resolved_path)
-    cmake_path(IS_PREFIX pure_bin "${resolved_path}" NORMALIZE
-      resolved_inside_pure_bin)
-    if(NOT resolved_inside_pure_bin)
-      pure_bonjour_fail(IMPORT_PATH_OUTSIDE
-        "resolved import escapes PURE_PREFIX/bin: ${resolved_path}")
-    endif()
-    list(APPEND pe_queue "${resolved_path}")
+    list(GET runtime_paths ${runtime_index} resolved_path)
+    pure_bonjour_canonicalize_runtime_candidate(
+      "${pure_bin}" "${resolved_path}" canonical_resolved_path)
+    list(APPEND pe_queue "${canonical_resolved_path}")
   endforeach()
 endwhile()
 

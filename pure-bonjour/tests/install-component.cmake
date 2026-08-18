@@ -104,8 +104,14 @@ if(TEST_MODE STREQUAL "parser")
     endif()
   endfunction()
 
-  run_fixture(valid
-    "DNSAPI.dll;WS2_32.dll;libpure.dll;KERNEL32.dll" "")
+  set(valid_imports
+    DNSAPI.dll
+    WS2_32.dll
+    libpure.dll
+    KERNEL32.dll
+    api-ms-win-crt-runtime-l1-1-0.dll
+    API-MS-WIN-CRT-PRIVATE-L1-1-0.DLL)
+  run_fixture(valid "${valid_imports}" "")
 
   set(malformed "${test_root}/malformed-header.txt")
   write_listing("${malformed}" "Object: fixture/bonjour.dll" "KERNEL32.dll")
@@ -127,10 +133,73 @@ if(TEST_MODE STREQUAL "parser")
   endif()
 
   run_fixture(unknown "mystery-runtime.dll" "IMPORT_UNKNOWN")
+  run_fixture(api-set-payload
+    "api-ms-win-payload-l1-1-0.dll" "IMPORT_UNKNOWN")
+  run_fixture(api-set-invented-family
+    "api-ms-win-crt-payload-l1-1-0.dll" "IMPORT_UNKNOWN")
+  run_fixture(api-set-missing-levels
+    "api-ms-win-crt-runtime.dll" "IMPORT_UNKNOWN")
+  run_fixture(api-set-short-levels
+    "api-ms-win-crt-runtime-l1-1.dll" "IMPORT_UNKNOWN")
+  run_fixture(api-set-extra-suffix
+    "api-ms-win-crt-runtime-l1-1-0-extra.dll" "IMPORT_UNKNOWN")
+  run_fixture(ext-set-invented-family
+    "ext-ms-win-ntuser-payload-l1-1-0.dll" "IMPORT_UNKNOWN")
   run_fixture(dnssd "dnssd.dll" "IMPORT_FORBIDDEN")
   run_fixture(apple-service "mDNSResponder.exe" "IMPORT_FORBIDDEN")
+  run_fixture(msys-runtime "msys-2.0.dll" "IMPORT_FORBIDDEN")
+  run_fixture(cygwin-runtime "cygwin1.dll" "IMPORT_FORBIDDEN")
   run_fixture(ambiguous "libpure.dll;LIBPURE.DLL" "IMPORT_AMBIGUOUS")
   run_fixture(missing "" "IMPORTS_MISSING")
+
+  set(runtime_root "${test_root}/resolver-root")
+  set(outside_root "${test_root}/resolver-outside")
+  set(escape_junction "${runtime_root}/escape")
+  file(MAKE_DIRECTORY "${runtime_root}" "${outside_root}")
+  file(WRITE "${outside_root}/libpure.dll" "outside fixture")
+  cmake_path(NATIVE_PATH escape_junction NORMALIZE escape_junction_native)
+  cmake_path(NATIVE_PATH outside_root NORMALIZE outside_root_native)
+  execute_process(
+    COMMAND "$ENV{COMSPEC}" /d /c mklink /J
+      "${escape_junction_native}" "${outside_root_native}"
+    RESULT_VARIABLE junction_result
+    OUTPUT_VARIABLE junction_output
+    ERROR_VARIABLE junction_error
+    ENCODING UTF-8)
+  if(NOT junction_result EQUAL 0)
+    message(FATAL_ERROR
+      "could not create scoped resolver junction (${junction_result}):\n"
+      "${junction_output}${junction_error}")
+  endif()
+
+  execute_process(
+    COMMAND "${CMAKE_COMMAND}"
+      -DPURE_BONJOUR_RUNTIME_MAP_FIXTURE_ONLY=ON
+      "-DPURE_RUNTIME_ROOT=${runtime_root}"
+      "-DRUNTIME_CANDIDATES=${escape_junction}/libpure.dll"
+      -P "${VERIFIER}"
+    RESULT_VARIABLE escape_result
+    OUTPUT_VARIABLE escape_output
+    ERROR_VARIABLE escape_error
+    ENCODING UTF-8)
+  execute_process(
+    COMMAND "$ENV{COMSPEC}" /d /c rmdir "${escape_junction_native}"
+    RESULT_VARIABLE junction_remove_result
+    OUTPUT_VARIABLE junction_remove_output
+    ERROR_VARIABLE junction_remove_error
+    ENCODING UTF-8)
+  if(NOT junction_remove_result EQUAL 0)
+    message(FATAL_ERROR
+      "could not remove scoped resolver junction (${junction_remove_result}):\n"
+      "${junction_remove_output}${junction_remove_error}")
+  endif()
+  file(REMOVE_RECURSE "${runtime_root}" "${outside_root}")
+  if(escape_result EQUAL 0 OR NOT
+      "${escape_output}${escape_error}" MATCHES "IMPORT_PATH_OUTSIDE")
+    message(FATAL_ERROR
+      "canonical out-of-root candidate did not fail with IMPORT_PATH_OUTSIDE:\n"
+      "${escape_output}${escape_error}")
+  endif()
   return()
 endif()
 
