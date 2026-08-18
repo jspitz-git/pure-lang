@@ -65,3 +65,18 @@ an available Windows Bonjour implementation.
     - The requested Ninja-generator configuration still stalls after compiling
       CMake's ABI object and before the link/archive child process. The CLANG64
       MinGW Makefiles generator is the validated local workaround.
+- 2026-08-18: Implemented bounded Microsoft DNS-SD registration and cleanup.
+  - The deterministic fake-API lifecycle test covers immediate registration
+    rejection, `PENDING -> REGISTERED` callback completion with an effective
+    conflict-renamed instance, a bounded `check` timeout, pending cancellation,
+    `REGISTERED -> STOPPING -> STOPPED` deregistration, callback completion
+    during cancellation, instance release ordering, and repeated null cleanup.
+  - Registration callback state is synchronized with one SRW lock, one
+    manual-reset completion event, a callback counter, and a condition variable.
+    Production `check` waits at most 10 seconds. Shutdown calls cancellation or
+    deregistration without holding the lock, bounds both completion and callback
+    waits, and retains callback-visible state with an explicit diagnostic if
+    quiescence cannot be established safely.
+  - The CLANG64 MinGW Makefiles build completed with strict warnings, and both
+    deterministic tests passed. The lifecycle test passed 10 consecutive runs
+    in 28.82 seconds with CTest's 10-second per-test timeout enabled.

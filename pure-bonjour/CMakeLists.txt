@@ -22,7 +22,17 @@ target_link_libraries(pure-bonjour PRIVATE PkgConfig::PURE dnsapi ws2_32)
 
 include(CTest)
 if(BUILD_TESTING)
-  add_executable(pure-bonjour-unit tests/unit.c bonjour_windows.c)
+  add_library(pure-bonjour-test-backend OBJECT bonjour_windows.c)
+  target_compile_features(pure-bonjour-test-backend PRIVATE c_std_11)
+  target_compile_definitions(pure-bonjour-test-backend PRIVATE
+    _WIN32_WINNT=0x0A00 BONJOUR_WINDOWS_TESTING)
+  target_compile_options(pure-bonjour-test-backend PRIVATE -Wall -Wextra -Werror)
+  target_include_directories(pure-bonjour-test-backend PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR})
+  target_link_libraries(pure-bonjour-test-backend PRIVATE PkgConfig::PURE)
+
+  add_executable(pure-bonjour-unit tests/unit.c
+    $<TARGET_OBJECTS:pure-bonjour-test-backend>)
   target_compile_features(pure-bonjour-unit PRIVATE c_std_11)
   target_compile_definitions(pure-bonjour-unit PRIVATE
     _WIN32_WINNT=0x0A00 BONJOUR_WINDOWS_TESTING)
@@ -30,4 +40,23 @@ if(BUILD_TESTING)
   target_include_directories(pure-bonjour-unit PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
   target_link_libraries(pure-bonjour-unit PRIVATE PkgConfig::PURE dnsapi ws2_32)
   add_test(NAME pure-bonjour-unit COMMAND pure-bonjour-unit)
+  set_tests_properties(pure-bonjour-unit PROPERTIES LABELS "bonjour;unit"
+    TIMEOUT 10 ENVIRONMENT_MODIFICATION
+    "PATH=path_list_prepend:${PURE_PREFIX}/bin")
+
+  add_executable(pure-bonjour-lifecycle tests/lifecycle.c
+    $<TARGET_OBJECTS:pure-bonjour-test-backend>)
+  target_compile_features(pure-bonjour-lifecycle PRIVATE c_std_11)
+  target_compile_definitions(pure-bonjour-lifecycle PRIVATE
+    _WIN32_WINNT=0x0A00 BONJOUR_WINDOWS_TESTING)
+  target_compile_options(pure-bonjour-lifecycle PRIVATE
+    -Wall -Wextra -Werror -UNDEBUG)
+  target_include_directories(pure-bonjour-lifecycle PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR})
+  target_link_libraries(pure-bonjour-lifecycle PRIVATE
+    PkgConfig::PURE dnsapi ws2_32)
+  add_test(NAME pure-bonjour-lifecycle COMMAND pure-bonjour-lifecycle)
+  set_tests_properties(pure-bonjour-lifecycle PROPERTIES
+    LABELS "bonjour;lifecycle" TIMEOUT 10 ENVIRONMENT_MODIFICATION
+    "PATH=path_list_prepend:${PURE_PREFIX}/bin")
 endif()
