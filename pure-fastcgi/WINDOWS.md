@@ -51,6 +51,7 @@ $env:PKG_CONFIG_PATH = "$purePrefix/lib/pkgconfig;C:/msys64/clang64/lib/pkgconfi
   -S "$repo/pure-fastcgi" -B $build -G Ninja `
   -DCMAKE_BUILD_TYPE=Release `
   -DCMAKE_C_COMPILER=C:/msys64/clang64/bin/clang.exe `
+  -DPATCH_EXECUTABLE=C:/msys64/usr/bin/patch.exe `
   "-DPURE_FASTCGI_FCGI2_ARCHIVE=$archive" `
   "-DPURE_FASTCGI_PURE_EXECUTABLE=$purePrefix/bin/pure.exe" `
   "-DPURE_FASTCGI_PURE_RUNTIME_DIR=$purePrefix/bin" `

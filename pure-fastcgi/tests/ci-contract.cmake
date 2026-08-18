@@ -56,6 +56,8 @@ require_text("${job}" JOB
   "FCGI2_COMMIT: 47f2c03b7771f0ef61d887734ef91e6fa747f837"
   "FCGI2_SIZE: 263969"
   "FCGI2_SHA256: e41ddc3a473b555bdc0cbd80703dcb1f4610c1a7700d3b9d3d0c14a416e1074b")
+extract_step("Install the CLANG64 PureFastCGI prerequisites" prerequisites_step)
+require_text("${prerequisites_step}" PREREQUISITES "patch")
 extract_step("Build and install the matching Windows Pure runtime" pure_step)
 require_text("${pure_step}" PURE "-S pure" "-G Ninja"
   "C:/msys64/clang64/bin/clang.exe" "C:/msys64/clang64/bin/clang++.exe"
@@ -69,6 +71,7 @@ require_text("${fetch_step}" FETCH "FetchFcgi2Entry.cmake" "-DOUTPUT=$archive"
 extract_step("Configure and build PureFastCGI with CLANG64" build_step)
 require_text("${build_step}" BUILD "-S pure-fastcgi" "-G Ninja"
   "C:/msys64/clang64/bin/clang.exe" "PURE_FASTCGI_FCGI2_ARCHIVE="
+  "-DPATCH_EXECUTABLE=C:/msys64/usr/bin/patch.exe"
   "PURE_FASTCGI_PURE_EXECUTABLE=" "PURE_FASTCGI_PURE_RUNTIME_DIR="
   "--build $build --parallel 1" "FASTCGI_BUILD_SECONDS=")
 extract_step("Run the complete PureFastCGI CTest label" test_step)
@@ -99,6 +102,7 @@ require_text("${upload_step}" UPLOAD "actions/upload-artifact@v4"
 if(NOT MUTATION_MODE)
   set(mutation_tokens "pure-fastcgi/**" "name: Windows PureFastCGI package"
     "working-directory: source with spaces"
+    "            patch"
     "FCGI2_URL: https://github.com/FastCGI-Archives/fcgi2/archive/refs/tags/2.4.7.tar.gz"
     "FCGI2_COMMIT: 47f2c03b7771f0ef61d887734ef91e6fa747f837"
     "FCGI2_SIZE: 263969"
@@ -107,6 +111,7 @@ if(NOT MUTATION_MODE)
     "-DFLEX_EXECUTABLE=C:/msys64/usr/bin/flex.exe"
     "--install $pureBuild" "PURE_FASTCGI_PURE_PREFIX="
     "FetchFcgi2Entry.cmake" "PURE_FASTCGI_FCGI2_ARCHIVE="
+    "-DPATCH_EXECUTABLE=C:/msys64/usr/bin/patch.exe"
     "-L fastcgi" "--component PureFastCGI" "Remove-Item Env:PURELIB"
     "RUN_RUNTIME_TESTS=ON" "files.Count -ne 6" "gmpVersion"
     "inventory SHA-256" "Collections.Generic.Queue[string]" "DLLName:\\s*"

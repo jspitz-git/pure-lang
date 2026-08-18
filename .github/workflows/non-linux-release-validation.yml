@@ -69,6 +69,7 @@ jobs:
             automake-wrapper
             libtool
             make
+            patch
             bison
             flex
             mingw-w64-clang-x86_64-clang
@@ -138,6 +139,7 @@ jobs:
           & $env:CMAKE_EXE -S pure-fastcgi -B $build -G Ninja `
             -DCMAKE_BUILD_TYPE=Release `
             -DCMAKE_C_COMPILER=C:/msys64/clang64/bin/clang.exe `
+            -DPATCH_EXECUTABLE=C:/msys64/usr/bin/patch.exe `
             "-DPURE_FASTCGI_FCGI2_ARCHIVE=$env:PURE_FASTCGI_ARCHIVE" `
             "-DPURE_FASTCGI_PURE_EXECUTABLE=$env:PURE_FASTCGI_PURE_PREFIX/bin/pure.exe" `
             "-DPURE_FASTCGI_PURE_RUNTIME_DIR=$env:PURE_FASTCGI_PURE_PREFIX/bin" `

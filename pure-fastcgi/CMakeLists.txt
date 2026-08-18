@@ -12,6 +12,8 @@ pkg_check_modules(MPFR REQUIRED IMPORTED_TARGET mpfr)
 
 set(PURE_FASTCGI_FCGI2_ARCHIVE "" CACHE FILEPATH
   "Absolute path to the verified fcgi2 source archive")
+set(PATCH_EXECUTABLE "" CACHE FILEPATH
+  "Absolute path to the patch executable used for the pinned fcgi2 patch")
 if(NOT IS_ABSOLUTE "${PURE_FASTCGI_FCGI2_ARCHIVE}"
     OR NOT EXISTS "${PURE_FASTCGI_FCGI2_ARCHIVE}")
   message(FATAL_ERROR
@@ -153,6 +155,7 @@ if(BUILD_TESTING)
     COMMAND "${CMAKE_COMMAND}"
       "-DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
       "-DFCGI2_ARCHIVE=${PURE_FASTCGI_FCGI2_ARCHIVE}"
+      "-DPATCH_EXECUTABLE=${PATCH_EXECUTABLE}"
       "-DTEST_ROOT=${CMAKE_CURRENT_BINARY_DIR}/source-contract"
       -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/source-contract.cmake")
   set_tests_properties(pure-fastcgi-source-contract PROPERTIES

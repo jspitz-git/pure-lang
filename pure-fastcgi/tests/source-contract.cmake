@@ -15,6 +15,21 @@ if(NOT fcgi2_patch_sha256 STREQUAL PURE_FASTCGI_FCGI2_PATCH_SHA256)
   message(FATAL_ERROR "fcgi2 Windows patch SHA-256 mismatch")
 endif()
 
+# The dependency helper must never discover an arbitrary patch.exe from PATH.
+# A caller that omits the explicit tool must fail before patch application.
+execute_process(
+  COMMAND "${CMAKE_COMMAND}"
+    -DSOURCE_DIR=${SOURCE_DIR}
+    -DARCHIVE=${FCGI2_ARCHIVE}
+    -P "${SOURCE_DIR}/tests/verify-one-archive.cmake"
+  RESULT_VARIABLE missing_patch_result
+  ERROR_VARIABLE missing_patch_error)
+if(missing_patch_result EQUAL 0 OR NOT missing_patch_error MATCHES
+    "PATCH_EXECUTABLE must name an existing absolute file")
+  message(FATAL_ERROR
+    "implicit/arbitrary patch discovery was not rejected: ${missing_patch_error}")
+endif()
+
 pure_fastcgi_prepare_fcgi2(
   ARCHIVE "${FCGI2_ARCHIVE}"
   OUT_SOURCE_DIR extracted)

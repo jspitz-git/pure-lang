@@ -50,7 +50,13 @@ function(pure_fastcgi_prepare_fcgi2)
   if(NOT actual_patch_sha256 STREQUAL PURE_FASTCGI_FCGI2_PATCH_SHA256)
     message(FATAL_ERROR "fcgi2 Windows patch SHA-256 mismatch")
   endif()
-  find_program(PATCH_EXECUTABLE NAMES patch REQUIRED)
+  if(NOT DEFINED PATCH_EXECUTABLE
+      OR NOT IS_ABSOLUTE "${PATCH_EXECUTABLE}"
+      OR NOT EXISTS "${PATCH_EXECUTABLE}"
+      OR IS_DIRECTORY "${PATCH_EXECUTABLE}")
+    message(FATAL_ERROR
+      "PATCH_EXECUTABLE must name an existing absolute file")
+  endif()
   execute_process(
     COMMAND "${PATCH_EXECUTABLE}" --batch --forward -p1
       -i "${PURE_FASTCGI_FCGI2_PATCH}"
