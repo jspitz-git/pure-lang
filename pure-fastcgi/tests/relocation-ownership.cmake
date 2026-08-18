@@ -37,9 +37,31 @@ cmake_path(IS_PREFIX stage_base "${test_root}" NORMALIZE
 if(NOT test_root_beneath_stage_base OR test_root STREQUAL stage_base)
   message(FATAL_ERROR "relocation root escaped its dedicated stage base")
 endif()
+cmake_path(IS_PREFIX stage_base "${other_test_root}" NORMALIZE
+  other_root_beneath_stage_base)
+if(NOT other_root_beneath_stage_base OR other_test_root STREQUAL stage_base)
+  message(FATAL_ERROR "independent fixture root escaped its stage base")
+endif()
+if(EXISTS "${other_test_root}")
+  message(FATAL_ERROR
+    "independent fixture root already exists: ${other_test_root}")
+endif()
+file(MAKE_DIRECTORY "${other_test_root}")
+set(other_sentinel "${other_test_root}/independent-build-sentinel.txt")
+file(WRITE "${other_sentinel}" "independent-build-keep\n")
+file(SHA256 "${other_sentinel}" other_sentinel_before)
 set(stage "${test_root}/stage with spaces")
 set(relocated "${test_root}/relocated 日本語 PureFastCGI")
 file(REMOVE_RECURSE "${test_root}")
+if(NOT EXISTS "${other_sentinel}")
+  message(FATAL_ERROR
+    "cleanup of this build root removed an independent build fixture")
+endif()
+file(SHA256 "${other_sentinel}" other_sentinel_after_own_cleanup)
+if(NOT other_sentinel_after_own_cleanup STREQUAL other_sentinel_before)
+  message(FATAL_ERROR
+    "cleanup of this build root changed an independent build sentinel")
+endif()
 
 execute_process(
   COMMAND "${CMAKE_COMMAND}" --install "${build_dir}"
@@ -301,6 +323,41 @@ set(timeout_alias "${CMAKE_MATCH_1}")
 string(STRIP "${timeout_alias}" timeout_alias)
 if(EXISTS "${timeout_alias}")
   message(FATAL_ERROR "runtime timeout leaked its alias: ${timeout_alias}")
+endif()
+if(EXISTS "${relocated}/lib/pure/protocol_worker.pure")
+  message(FATAL_ERROR
+    "runtime timeout leaked its relocated protocol worker")
+endif()
+
+cmake_path(IS_PREFIX stage_base "${other_test_root}" NORMALIZE
+  cleanup_other_root_beneath_stage_base)
+get_filename_component(cleanup_other_root_name "${other_test_root}" NAME)
+if(NOT cleanup_other_root_beneath_stage_base OR
+    other_test_root STREQUAL stage_base OR
+    NOT cleanup_other_root_name STREQUAL
+      "PureFastCGI-relocation-${other_build_token}")
+  message(FATAL_ERROR
+    "refusing to clean an unowned independent fixture root")
+endif()
+file(SHA256 "${other_sentinel}" other_sentinel_before_cleanup)
+if(NOT other_sentinel_before_cleanup STREQUAL other_sentinel_before)
+  message(FATAL_ERROR "independent build sentinel changed before cleanup")
+endif()
+file(REMOVE "${other_sentinel}")
+set(ENV{PURE_FASTCGI_OTHER_TEST_ROOT} "${other_test_root}")
+execute_process(
+  COMMAND "${POWERSHELL_EXECUTABLE}"
+    -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass
+    -Command "[IO.Directory]::Delete(\$env:PURE_FASTCGI_OTHER_TEST_ROOT,\$false)"
+  RESULT_VARIABLE other_cleanup_result
+  OUTPUT_VARIABLE other_cleanup_output
+  ERROR_VARIABLE other_cleanup_error
+  ENCODING UTF-8)
+unset(ENV{PURE_FASTCGI_OTHER_TEST_ROOT})
+if(NOT other_cleanup_result EQUAL 0 OR EXISTS "${other_test_root}")
+  message(FATAL_ERROR
+    "independent fixture cleanup failed\n"
+    "stdout:\n${other_cleanup_output}\nstderr:\n${other_cleanup_error}")
 endif()
 
 message(STATUS "PureFastCGI relocation and ownership passed")
