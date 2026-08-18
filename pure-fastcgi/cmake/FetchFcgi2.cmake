@@ -1,0 +1,34 @@
+include("${CMAKE_CURRENT_LIST_DIR}/Fcgi2Dependency.cmake")
+
+function(pure_fastcgi_fetch_fcgi2)
+  cmake_parse_arguments(PARSE_ARGV 0 arg "" "OUTPUT" "")
+  if(NOT IS_ABSOLUTE "${arg_OUTPUT}")
+    message(FATAL_ERROR "OUTPUT must name an absolute file")
+  endif()
+
+  if(EXISTS "${arg_OUTPUT}")
+    file(SIZE "${arg_OUTPUT}" actual_size)
+    file(SHA256 "${arg_OUTPUT}" actual_sha256)
+    if(NOT actual_size EQUAL PURE_FASTCGI_FCGI2_ARCHIVE_SIZE
+        OR NOT actual_sha256 STREQUAL PURE_FASTCGI_FCGI2_ARCHIVE_SHA256)
+      message(FATAL_ERROR "refusing to overwrite mismatching fcgi2 archive")
+    endif()
+    return()
+  endif()
+
+  set(part "${arg_OUTPUT}.part")
+  file(DOWNLOAD "${PURE_FASTCGI_FCGI2_URL}" "${part}"
+    EXPECTED_HASH "SHA256=${PURE_FASTCGI_FCGI2_ARCHIVE_SHA256}"
+    STATUS status)
+  list(GET status 0 status_code)
+  list(GET status 1 status_message)
+  if(NOT status_code EQUAL 0)
+    message(FATAL_ERROR "fcgi2 archive download failed: ${status_message}")
+  endif()
+
+  file(SIZE "${part}" actual_size)
+  if(NOT actual_size EQUAL PURE_FASTCGI_FCGI2_ARCHIVE_SIZE)
+    message(FATAL_ERROR "fcgi2 archive size mismatch")
+  endif()
+  file(RENAME "${part}" "${arg_OUTPUT}")
+endfunction()
