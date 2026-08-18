@@ -125,19 +125,15 @@ static int test_records_after_end_request_are_rejected(void) {
   return 0;
 }
 
-static enum fcgi_io_result run_trailing_record_pipe_fixture(
-    struct fcgi_response_state *state) {
+static enum fcgi_drain_result run_post_terminal_pipe_fixture(
+    struct fcgi_response_state *state, const unsigned char *wire,
+    size_t wire_len) {
   static volatile LONG fixture_counter;
   wchar_t pipe_name[128];
   HANDLE server = INVALID_HANDLE_VALUE;
   HANDLE client = INVALID_HANDLE_VALUE;
-  unsigned char wire[32];
-  const unsigned char end_content[8] = {
-      0, 0, 0, 23, FCGI_REQUEST_COMPLETE, 0, 0, 0};
-  size_t stdout_record_len;
-  size_t end_record_len;
   DWORD written = 0;
-  enum fcgi_io_result result = FCGI_IO_SYSTEM;
+  enum fcgi_drain_result result = FCGI_DRAIN_SYSTEM_ERROR;
 
   if (swprintf(pipe_name, sizeof pipe_name / sizeof pipe_name[0],
                L"\\\\.\\pipe\\FastCGI\\pure-fastcgi-codec-%lu-%ld",
@@ -159,15 +155,9 @@ static enum fcgi_io_result run_trailing_record_pipe_fixture(
   if (!ConnectNamedPipe(server, NULL) && GetLastError() != ERROR_PIPE_CONNECTED) {
     goto cleanup;
   }
-  stdout_record_len = fcgi_encode_record(
-      wire, sizeof wire, FCGI_VERSION_1, FCGI_STDOUT, 1, "x", 1);
-  end_record_len = fcgi_encode_record(
-      wire + stdout_record_len, sizeof wire - stdout_record_len,
-      FCGI_VERSION_1, FCGI_END_REQUEST, 1, end_content, sizeof end_content);
-  if (stdout_record_len == 0 || end_record_len == 0 ||
-      !WriteFile(server, wire, (DWORD)(stdout_record_len + end_record_len),
-                 &written, NULL) ||
-      written != stdout_record_len + end_record_len) {
+  if (wire_len != 0 &&
+      (!WriteFile(server, wire, (DWORD)wire_len, &written, NULL) ||
+       written != wire_len)) {
     goto cleanup;
   }
   CloseHandle(server);
@@ -186,10 +176,57 @@ cleanup:
 
 static int test_trailing_pipe_records_are_drained_and_rejected(void) {
   struct fcgi_response_state state = {1, 1, 0};
+  unsigned char wire[32];
+  const unsigned char end_content[8] = {
+      0, 0, 0, 23, FCGI_REQUEST_COMPLETE, 0, 0, 0};
+  size_t stdout_record_len = fcgi_encode_record(
+      wire, sizeof wire, FCGI_VERSION_1, FCGI_STDOUT, 1, "x", 1);
+  size_t end_record_len = fcgi_encode_record(
+      wire + stdout_record_len, sizeof wire - stdout_record_len,
+      FCGI_VERSION_1, FCGI_END_REQUEST, 1, end_content, sizeof end_content);
 
-  CHECK(run_trailing_record_pipe_fixture(&state) == FCGI_IO_PROTOCOL);
+  CHECK(stdout_record_len != 0);
+  CHECK(end_record_len != 0);
+  CHECK(run_post_terminal_pipe_fixture(
+            &state, wire, stdout_record_len + end_record_len) ==
+        FCGI_DRAIN_TRAILING_RECORDS);
   CHECK(state.trailing_record_count == 2);
   CHECK(state.end_request_count == 2);
+  return 0;
+}
+
+static int test_post_terminal_protocol_errors_are_not_trailing_records(void) {
+  const unsigned char wrong_version[8] = {
+      2, FCGI_STDOUT, 0, 1, 0, 0, 0, 0};
+  const unsigned char wrong_request_id[8] = {
+      FCGI_VERSION_1, FCGI_STDOUT, 0, 2, 0, 0, 0, 0};
+  const unsigned char truncated_header[4] = {
+      FCGI_VERSION_1, FCGI_STDOUT, 0, 1};
+  struct fcgi_response_state wrong_version_state = {1, 1, 0};
+  struct fcgi_response_state wrong_request_state = {1, 1, 0};
+  struct fcgi_response_state truncated_state = {1, 1, 0};
+
+  CHECK(run_post_terminal_pipe_fixture(&wrong_version_state, wrong_version,
+                                       sizeof wrong_version) ==
+        FCGI_DRAIN_PROTOCOL_ERROR);
+  CHECK(wrong_version_state.trailing_record_count == 0);
+  CHECK(run_post_terminal_pipe_fixture(&wrong_request_state, wrong_request_id,
+                                       sizeof wrong_request_id) ==
+        FCGI_DRAIN_PROTOCOL_ERROR);
+  CHECK(wrong_request_state.trailing_record_count == 0);
+  CHECK(run_post_terminal_pipe_fixture(&truncated_state, truncated_header,
+                                       sizeof truncated_header) ==
+        FCGI_DRAIN_PROTOCOL_ERROR);
+  CHECK(truncated_state.trailing_record_count == 0);
+  return 0;
+}
+
+static int test_post_terminal_clean_eof_is_distinct(void) {
+  struct fcgi_response_state state = {1, 1, 0};
+
+  CHECK(run_post_terminal_pipe_fixture(&state, NULL, 0) ==
+        FCGI_DRAIN_CLEAN_EOF);
+  CHECK(state.trailing_record_count == 0);
   return 0;
 }
 
@@ -203,6 +240,8 @@ int main(void) {
   CHECK(test_decode_rejects_truncated_content_or_padding() == 0);
   CHECK(test_records_after_end_request_are_rejected() == 0);
   CHECK(test_trailing_pipe_records_are_drained_and_rejected() == 0);
+  CHECK(test_post_terminal_protocol_errors_are_not_trailing_records() == 0);
+  CHECK(test_post_terminal_clean_eof_is_distinct() == 0);
 #ifdef PURE_FASTCGI_NDEBUG_PROBE
   CHECK(0 && "codec checks must remain active under NDEBUG");
 #endif

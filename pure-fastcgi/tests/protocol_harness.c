@@ -30,6 +30,14 @@ enum fcgi_io_result {
   FCGI_IO_SYSTEM
 };
 
+enum fcgi_drain_result {
+  FCGI_DRAIN_CLEAN_EOF,
+  FCGI_DRAIN_TRAILING_RECORDS,
+  FCGI_DRAIN_PROTOCOL_ERROR,
+  FCGI_DRAIN_TIMEOUT,
+  FCGI_DRAIN_SYSTEM_ERROR
+};
+
 struct fcgi_record {
   uint8_t type;
   uint16_t request_id;
@@ -64,7 +72,7 @@ static enum fcgi_io_result fcgi_read_record(HANDLE pipe,
                                             uint64_t deadline_ms);
 static enum fcgi_io_result fcgi_track_response_record(
     struct fcgi_response_state *state, const struct fcgi_record *record);
-static enum fcgi_io_result fcgi_drain_after_terminal(
+static enum fcgi_drain_result fcgi_drain_after_terminal(
     HANDLE pipe, struct fcgi_response_state *state, uint64_t deadline_ms);
 
 static uint64_t fcgi_now_ms(void) { return GetTickCount64(); }
@@ -72,6 +80,7 @@ static uint64_t fcgi_now_ms(void) { return GetTickCount64(); }
 static enum fcgi_io_result fcgi_transfer(HANDLE pipe, void *buffer, size_t size,
                                          uint64_t deadline_ms, int writing) {
   unsigned char *cursor = buffer;
+  size_t initial_size = size;
 
   while (size != 0) {
     OVERLAPPED operation;
@@ -94,7 +103,7 @@ static enum fcgi_io_result fcgi_transfer(HANDLE pipe, void *buffer, size_t size,
       CloseHandle(operation.hEvent);
       if (!writing &&
           (error == ERROR_BROKEN_PIPE || error == ERROR_HANDLE_EOF)) {
-        return FCGI_IO_EOF;
+        return size == initial_size ? FCGI_IO_EOF : FCGI_IO_PROTOCOL;
       }
       return FCGI_IO_SYSTEM;
     }
@@ -126,14 +135,16 @@ static enum fcgi_io_result fcgi_transfer(HANDLE pipe, void *buffer, size_t size,
         CloseHandle(operation.hEvent);
         if (!writing &&
             (error == ERROR_BROKEN_PIPE || error == ERROR_HANDLE_EOF)) {
-          return FCGI_IO_EOF;
+          return size == initial_size ? FCGI_IO_EOF : FCGI_IO_PROTOCOL;
         }
         return FCGI_IO_SYSTEM;
       }
     }
     CloseHandle(operation.hEvent);
     if (transferred == 0) {
-      return writing ? FCGI_IO_SYSTEM : FCGI_IO_EOF;
+      return writing ? FCGI_IO_SYSTEM
+                     : (size == initial_size ? FCGI_IO_EOF
+                                             : FCGI_IO_PROTOCOL);
     }
     cursor += transferred;
     size -= transferred;
@@ -301,6 +312,9 @@ static enum fcgi_io_result fcgi_read_record(HANDLE pipe,
   }
   memcpy(encoded, header, sizeof header);
   result = fcgi_transfer(pipe, encoded + sizeof header, trailing, deadline_ms, 0);
+  if (result == FCGI_IO_EOF) {
+    result = FCGI_IO_PROTOCOL;
+  }
   if (result == FCGI_IO_OK) {
     result = fcgi_decode_record(encoded, sizeof header + trailing, 1, record);
   }
@@ -308,25 +322,32 @@ static enum fcgi_io_result fcgi_read_record(HANDLE pipe,
   return result;
 }
 
-static enum fcgi_io_result fcgi_drain_after_terminal(
+static enum fcgi_drain_result fcgi_drain_after_terminal(
     HANDLE pipe, struct fcgi_response_state *state, uint64_t deadline_ms) {
-  enum fcgi_io_result drain_result = FCGI_IO_OK;
+  int saw_trailing_record = 0;
 
   if (state == NULL || !state->terminal) {
-    return FCGI_IO_PROTOCOL;
+    return FCGI_DRAIN_PROTOCOL_ERROR;
   }
   for (;;) {
     struct fcgi_record record;
     enum fcgi_io_result read_result =
         fcgi_read_record(pipe, &record, deadline_ms);
     if (read_result == FCGI_IO_EOF) {
-      return drain_result;
+      return saw_trailing_record ? FCGI_DRAIN_TRAILING_RECORDS
+                                 : FCGI_DRAIN_CLEAN_EOF;
+    }
+    if (read_result == FCGI_IO_PROTOCOL) {
+      return FCGI_DRAIN_PROTOCOL_ERROR;
+    }
+    if (read_result == FCGI_IO_TIMEOUT) {
+      return FCGI_DRAIN_TIMEOUT;
     }
     if (read_result != FCGI_IO_OK) {
-      return read_result;
+      return FCGI_DRAIN_SYSTEM_ERROR;
     }
     if (fcgi_track_response_record(state, &record) != FCGI_IO_OK) {
-      drain_result = FCGI_IO_PROTOCOL;
+      saw_trailing_record = 1;
     }
   }
 }
@@ -627,12 +648,11 @@ int wmain(int argc, wchar_t **argv) {
         goto cleanup;
       }
       {
-        enum fcgi_io_result drain_result = fcgi_drain_after_terminal(
+        enum fcgi_drain_result drain_result = fcgi_drain_after_terminal(
             client, &response_state, deadline_ms);
-        if (drain_result != FCGI_IO_OK &&
-            drain_result != FCGI_IO_PROTOCOL) {
-          fprintf(stderr, "could not drain the FastCGI response: %d\n",
-                  drain_result);
+        if (drain_result != FCGI_DRAIN_CLEAN_EOF) {
+          fprintf(stderr, "FastCGI response did not end at a clean EOF: %d\n",
+                  (int)drain_result);
           goto cleanup;
         }
       }
