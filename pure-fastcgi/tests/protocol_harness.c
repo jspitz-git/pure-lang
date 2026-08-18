@@ -102,6 +102,9 @@ static enum fcgi_io_result fcgi_transfer(HANDLE pipe, void *buffer, size_t size,
     uint64_t now;
     DWORD wait_ms;
 
+    if (fcgi_now_ms() >= deadline_ms) {
+      return FCGI_IO_TIMEOUT;
+    }
     memset(&operation, 0, sizeof operation);
     operation.hEvent = CreateEventW(NULL, TRUE, FALSE, NULL);
     if (operation.hEvent == NULL) {
