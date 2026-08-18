@@ -181,3 +181,45 @@ an available Windows Bonjour implementation.
     - `ctest.exe --test-dir build/pure-bonjour -R
       "^pure-bonjour-install-component$" --output-on-failure` passed in 1.51
       seconds, and the full seven-test suite passed in 11.69 seconds.
+- 2026-08-19: Added installed and relocated PureBonjour ownership verification.
+  - The callable verifier accepts `STAGE_PREFIX`, `SOURCE_PREFIX`,
+    `BUILD_PREFIX`, and `PURE_PREFIX`. It rejects reparse points before stage
+    traversal, parses the installed inventory and external oracle independently,
+    normalizes paths case-insensitively, and requires the exact eight-file
+    external ownership set and exact seven-row installed payload set. The
+    external `PureBonjourExpected.sha256` remains outside the mutable stage and
+    is the only removal authority.
+  - The accepted package contains exactly 8 owned files totaling 126350 bytes.
+    `PureBonjourInventory.tsv` has SHA-256
+    `743c1066d158ef4cfa19cf1dfdea45a656ad4b2e1769c1fb14952665e03f2e6c`.
+    Prefix scanning covers source, build, and canonical stage spellings in
+    UTF-8/ASCII and UTF-16LE, with forward/backslash and ASCII-case variants.
+  - Twenty-two independent fresh-copy mutations are rejected: changed and
+    missing payloads, undeclared package files, forged inventory metadata,
+    duplicate/case-colliding/absolute/parent-traversing/malformed inventory and
+    oracle rows, all three prefixes in both encodings, a mixed-case spelling,
+    and a directory junction. Mutation cleanup never targets the original stage
+    or any unrelated file.
+  - A complete Pure runtime plus component was installed at
+    `Relocation Ownership/Installed Pure Č`, copied to
+    `Relocation Ownership/Relocated Pure Ž`, verified and smoke-tested at both
+    locations, and overlaid at the relocated prefix. Pure 0.68 passes script
+    paths through the active narrow Windows code page, so the smoke runner uses
+    scoped ASCII junction aliases outside the audited stage for the same
+    physical relocated files; every alias is explicitly removed after the run.
+  - Exact removal driven only by the external oracle preserves byte-identical
+    unrelated sentinels and an unrelated empty directory. The same result holds
+    after the installed inventory is forged to claim an unrelated sentinel.
+    Only now-empty `share/doc/pure-bonjour` directories are removed.
+  - The recursive dependency audit remains 11 PE files and 126 import edges,
+    with the exact seven bridge exports and the previously recorded exact API-set
+    allowlist.
+  - Validation:
+    - `ctest.exe --test-dir build/pure-bonjour -R
+      "^pure-bonjour-(package-verifier|package-mutations|relocation-ownership)$"
+      --output-on-failure` passed all three focused tests in 50.07 seconds before
+      the additional mixed-case regression; the mutation and relocation tests
+      then passed independently in 27.81 and 56.23 seconds.
+    - The final fresh focused run passed 3/3 in 92.58 seconds, and
+      `ctest.exe --test-dir build/pure-bonjour --output-on-failure` passed the
+      complete 10/10 suite in 89.69 seconds of summed test time.

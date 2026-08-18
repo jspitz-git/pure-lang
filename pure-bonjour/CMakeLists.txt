@@ -72,6 +72,45 @@ if(BUILD_TESTING)
   set_tests_properties(pure-bonjour-install-component PROPERTIES
     LABELS "bonjour;packaging" TIMEOUT 30)
 
+  add_test(NAME pure-bonjour-package-verifier
+    COMMAND "${CMAKE_COMMAND}"
+      -DTEST_MODE=valid
+      "-DCMAKE_COMMAND=${CMAKE_COMMAND}"
+      "-DBUILD_DIR=${CMAKE_CURRENT_BINARY_DIR}"
+      "-DVERIFIER=${CMAKE_CURRENT_SOURCE_DIR}/cmake/VerifyInstalledPackage.cmake"
+      "-DSOURCE_PREFIX=${CMAKE_CURRENT_SOURCE_DIR}"
+      "-DPURE_PREFIX=${PURE_PREFIX}"
+      "-DTEST_ROOT=${CMAKE_CURRENT_BINARY_DIR}/package-verifier"
+      -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/package-mutations.cmake")
+  set_tests_properties(pure-bonjour-package-verifier PROPERTIES
+    LABELS "bonjour;packaging;installed" TIMEOUT 60 RUN_SERIAL TRUE)
+
+  add_test(NAME pure-bonjour-package-mutations
+    COMMAND "${CMAKE_COMMAND}"
+      -DTEST_MODE=mutations
+      "-DCMAKE_COMMAND=${CMAKE_COMMAND}"
+      "-DBUILD_DIR=${CMAKE_CURRENT_BINARY_DIR}"
+      "-DVERIFIER=${CMAKE_CURRENT_SOURCE_DIR}/cmake/VerifyInstalledPackage.cmake"
+      "-DSOURCE_PREFIX=${CMAKE_CURRENT_SOURCE_DIR}"
+      "-DPURE_PREFIX=${PURE_PREFIX}"
+      "-DTEST_ROOT=${CMAKE_CURRENT_BINARY_DIR}/package-mutations"
+      -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/package-mutations.cmake")
+  set_tests_properties(pure-bonjour-package-mutations PROPERTIES
+    LABELS "bonjour;packaging;installed;mutation" TIMEOUT 120 RUN_SERIAL TRUE)
+
+  add_test(NAME pure-bonjour-relocation-ownership
+    COMMAND "${CMAKE_COMMAND}"
+      "-DCMAKE_COMMAND=${CMAKE_COMMAND}"
+      "-DBUILD_DIR=${CMAKE_CURRENT_BINARY_DIR}"
+      "-DVERIFIER=${CMAKE_CURRENT_SOURCE_DIR}/cmake/VerifyInstalledPackage.cmake"
+      "-DSOURCE_PREFIX=${CMAKE_CURRENT_SOURCE_DIR}"
+      "-DPURE_PREFIX=${PURE_PREFIX}"
+      "-DTEST_ROOT=${CMAKE_CURRENT_BINARY_DIR}/Relocation Ownership"
+      -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/relocation-ownership.cmake")
+  set_tests_properties(pure-bonjour-relocation-ownership PROPERTIES
+    LABELS "bonjour;packaging;installed;relocation" TIMEOUT 180
+    RUN_SERIAL TRUE)
+
   add_library(pure-bonjour-test-backend OBJECT bonjour_windows.c)
   target_compile_features(pure-bonjour-test-backend PRIVATE c_std_11)
   target_compile_definitions(pure-bonjour-test-backend PRIVATE
