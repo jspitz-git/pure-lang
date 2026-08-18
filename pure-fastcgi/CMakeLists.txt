@@ -23,6 +23,9 @@ pure_fastcgi_prepare_fcgi2(
   ARCHIVE "${PURE_FASTCGI_FCGI2_ARCHIVE}"
   OUT_SOURCE_DIR fcgi2_source)
 pure_fastcgi_add_fcgi2_target(SOURCE_DIR "${fcgi2_source}")
+target_compile_options(fcgi2-static PRIVATE
+  "-ffile-prefix-map=${CMAKE_CURRENT_SOURCE_DIR}=."
+  "-ffile-prefix-map=${CMAKE_CURRENT_BINARY_DIR}=.")
 
 add_library(pure-fastcgi MODULE fastcgi.c fastcgi_extra.c)
 set_target_properties(pure-fastcgi PROPERTIES
@@ -30,11 +33,16 @@ set_target_properties(pure-fastcgi PROPERTIES
   PREFIX ""
   WINDOWS_EXPORT_ALL_SYMBOLS ON)
 target_compile_features(pure-fastcgi PRIVATE c_std_11)
+target_compile_options(pure-fastcgi PRIVATE
+  "-ffile-prefix-map=${CMAKE_CURRENT_SOURCE_DIR}=."
+  "-ffile-prefix-map=${CMAKE_CURRENT_BINARY_DIR}=.")
 target_link_libraries(pure-fastcgi PRIVATE
   fcgi2-static
   PkgConfig::PURE
   PkgConfig::GMP
   PkgConfig::MPFR)
+
+include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/Install.cmake")
 
 include(CTest)
 find_program(LLVM_READOBJ NAMES llvm-readobj REQUIRED)
@@ -144,4 +152,30 @@ if(BUILD_TESTING)
   set_tests_properties(pure-fastcgi-windows-dependency-verifier PROPERTIES
     LABELS "fastcgi;windows;verifier"
     TIMEOUT 30)
+
+  add_test(
+    NAME pure-fastcgi-install-component
+    COMMAND "${CMAKE_COMMAND}"
+      "-DBUILD_DIR=${CMAKE_CURRENT_BINARY_DIR}"
+      "-DSTAGE_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/PureFastCGI component stage"
+      -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/install-component.cmake")
+  set_tests_properties(pure-fastcgi-install-component PROPERTIES
+    LABELS "fastcgi;install;windows"
+    RUN_SERIAL TRUE
+    TIMEOUT 120)
+
+  add_test(
+    NAME pure-fastcgi-package-verifier
+    COMMAND "${CMAKE_COMMAND}"
+      "-DBUILD_DIR=${CMAKE_CURRENT_BINARY_DIR}"
+      "-DSTAGE_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/PureFastCGI verifier stage"
+      "-DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
+      "-DPURE_RUNTIME_ROOT=${PURE_PREFIX}/bin"
+      "-DLLVM_READOBJ=${LLVM_READOBJ}"
+      "-DVERIFIER=${CMAKE_CURRENT_SOURCE_DIR}/cmake/VerifyInstalledPackage.cmake"
+      -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/package-mutations.cmake")
+  set_tests_properties(pure-fastcgi-package-verifier PROPERTIES
+    LABELS "fastcgi;package;windows"
+    RUN_SERIAL TRUE
+    TIMEOUT 180)
 endif()
