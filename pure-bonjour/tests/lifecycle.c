@@ -14,9 +14,12 @@ typedef struct {
   DWORD register_result;
   DWORD cancel_result;
   DWORD deregister_result;
+  DWORD deregister_callback_result;
   int register_calls;
   int cancel_calls;
   int deregister_calls;
+  int deregister_callback_calls;
+  int deregister_nonnull_reserved;
   int free_instance_calls;
   int callback_after_free;
   int callback_on_cancel;
@@ -89,10 +92,17 @@ static DWORD WINAPI fake_deregister(PDNS_SERVICE_REGISTER_REQUEST request,
 {
   fake_dns_t *fake = active_fake;
 
-  (void)cancel;
   assert(fake != NULL);
   ++fake->deregister_calls;
-  fake_fire_callback(fake, ERROR_SUCCESS,
+  if (cancel != NULL) {
+    ++fake->deregister_nonnull_reserved;
+    return ERROR_INVALID_PARAMETER;
+  }
+  if (fake->deregister_result != ERROR_SUCCESS &&
+      fake->deregister_result != DNS_REQUEST_PENDING)
+    return fake->deregister_result;
+  ++fake->deregister_callback_calls;
+  fake_fire_callback(fake, fake->deregister_callback_result,
                      request->pServiceInstance->pszInstanceName);
   return fake->deregister_result;
 }
@@ -118,6 +128,7 @@ static fake_dns_t fake_dns_pending_registration(void)
   fake.api.free_instance = fake_free_instance;
   fake.register_result = DNS_REQUEST_PENDING;
   fake.deregister_result = DNS_REQUEST_PENDING;
+  fake.deregister_callback_result = ERROR_SUCCESS;
   return fake;
 }
 
@@ -187,8 +198,50 @@ static void test_asynchronous_success_updates_effective_name(void)
                       43210);
   bonjour_unpublish(service);
   assert(fake.deregister_calls == 1);
+  assert(fake.deregister_callback_calls == 1);
+  assert(fake.deregister_nonnull_reserved == 0);
   assert(fake.cancel_calls == 0);
   assert(fake.free_instance_calls == 1);
+  assert(fake.callback_after_free == 0);
+}
+
+static void test_deregistration_callback_failure_retains_state(void)
+{
+  fake_dns_t fake = fake_dns_pending_registration();
+  bonjour_service_t *service;
+
+  use_fake(&fake);
+  service = bonjour_publish_with_api("Probe", "_puretodo45._tcp", 43210,
+                                     &fake.api, 25);
+  assert(service != NULL);
+  fake_fire_callback(&fake, ERROR_SUCCESS,
+                     L"Probe._puretodo45._tcp.local");
+  fake.deregister_callback_result = ERROR_ACCESS_DENIED;
+  bonjour_unpublish(service);
+  assert(fake.deregister_calls == 1);
+  assert(fake.deregister_callback_calls == 1);
+  assert(fake.deregister_nonnull_reserved == 0);
+  assert(fake.free_instance_calls == 0);
+  assert(fake.callback_after_free == 0);
+}
+
+static void test_deregistration_dispatch_failure_retains_state(void)
+{
+  fake_dns_t fake = fake_dns_pending_registration();
+  bonjour_service_t *service;
+
+  use_fake(&fake);
+  service = bonjour_publish_with_api("Probe", "_puretodo45._tcp", 43210,
+                                     &fake.api, 25);
+  assert(service != NULL);
+  fake_fire_callback(&fake, ERROR_SUCCESS,
+                     L"Probe._puretodo45._tcp.local");
+  fake.deregister_result = ERROR_ACCESS_DENIED;
+  bonjour_unpublish(service);
+  assert(fake.deregister_calls == 1);
+  assert(fake.deregister_callback_calls == 0);
+  assert(fake.deregister_nonnull_reserved == 0);
+  assert(fake.free_instance_calls == 0);
   assert(fake.callback_after_free == 0);
 }
 
@@ -263,6 +316,8 @@ int main(void)
   assert(interp != NULL);
   test_synchronous_rejection_releases_partial_state();
   test_asynchronous_success_updates_effective_name();
+  test_deregistration_callback_failure_retains_state();
+  test_deregistration_dispatch_failure_retains_state();
   test_check_timeout_is_bounded();
   test_pending_registration_is_cancelled_before_free();
   test_callback_completion_during_cancellation_is_safe();

@@ -38,6 +38,7 @@ struct bonjour_service_t {
   PDNS_SERVICE_INSTANCE instance;
   bonjour_reg_state_t state;
   DWORD status;
+  DWORD shutdown_status;
   unsigned callbacks;
   char *name;
   char *type;
@@ -107,6 +108,9 @@ static void WINAPI bonjour_register_complete(DWORD status, void *context,
       service->state = BONJOUR_REG_FAILED;
       service->status = status;
     }
+  } else if (service->state == BONJOUR_REG_STOPPING &&
+             service->shutdown_status == ERROR_IO_PENDING) {
+    service->shutdown_status = status;
   }
   SetEvent(service->completion);
   --service->callbacks;
@@ -283,7 +287,6 @@ static int bonjour_wait_for_callbacks(bonjour_service_t *service)
 void bonjour_unpublish(bonjour_service_t *service)
 {
   DNS_SERVICE_REGISTER_REQUEST request;
-  DNS_SERVICE_CANCEL deregister_cancel;
   bonjour_reg_state_t previous_state;
   DWORD status = ERROR_SUCCESS;
   DWORD completion_status = WAIT_OBJECT_0;
@@ -291,6 +294,8 @@ void bonjour_unpublish(bonjour_service_t *service)
   if (service == NULL) return;
   AcquireSRWLockExclusive(&service->lock);
   previous_state = service->state;
+  if (previous_state == BONJOUR_REG_REGISTERED)
+    service->shutdown_status = ERROR_IO_PENDING;
   service->state = BONJOUR_REG_STOPPING;
   if (previous_state == BONJOUR_REG_REGISTERED)
     ResetEvent(service->completion);
@@ -300,22 +305,27 @@ void bonjour_unpublish(bonjour_service_t *service)
     status = service->api->cancel_registration(&service->cancel);
   } else if (previous_state == BONJOUR_REG_REGISTERED) {
     memset(&request, 0, sizeof(request));
-    memset(&deregister_cancel, 0, sizeof(deregister_cancel));
     request.Version = 1;
     request.pServiceInstance = service->instance;
     request.pRegisterCompletionCallback = bonjour_register_complete;
     request.pQueryContext = service;
-    status = service->api->deregister_service(&request, &deregister_cancel);
-    if (bonjour_request_accepted(status))
+    status = service->api->deregister_service(&request, NULL);
+    if (bonjour_request_accepted(status)) {
       completion_status = WaitForSingleObject(service->completion,
                                               service->wait_ms);
+      if (completion_status == WAIT_OBJECT_0) {
+        AcquireSRWLockShared(&service->lock);
+        status = service->shutdown_status;
+        ReleaseSRWLockShared(&service->lock);
+      }
+    }
   }
 
   if (!bonjour_request_accepted(status) || completion_status != WAIT_OBJECT_0 ||
       !bonjour_wait_for_callbacks(service)) {
     fprintf(stderr,
-            "pure-bonjour: registration shutdown did not become quiescent "
-            "within %lu ms (status %lu); retaining service state\n",
+            "pure-bonjour: registration shutdown failed or did not become "
+            "quiescent within %lu ms (status %lu); retaining service state\n",
             (unsigned long)service->wait_ms, (unsigned long)status);
     return;
   }
