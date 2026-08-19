@@ -39,6 +39,8 @@ file(
 )
 
 if(BUILD_TESTING)
+  target_compile_definitions(pure-runtime PRIVATE PURE_ENABLE_TEST_HOOKS=1)
+
   find_program(PURE_SH_EXECUTABLE NAMES sh REQUIRED)
   find_program(
     PURE_LLVM_AS_EXECUTABLE
@@ -358,6 +360,27 @@ if(BUILD_TESTING)
       LABELS "jit;stress"
       REQUIRED_FILES
         "${CMAKE_CURRENT_SOURCE_DIR}/test/jit-deferred-generation.pure;${CMAKE_CURRENT_SOURCE_DIR}/test/jit-deferred-generation.log"
+      TIMEOUT 60
+      FAIL_REGULAR_EXPRESSION
+        "failed to remove ORC compilation unit;AddressSanitizer;LeakSanitizer;runtime error:"
+  )
+  add_test(
+    NAME pure-jit-deferred-retry
+    COMMAND
+      "${CMAKE_COMMAND}"
+      -E env PURE_TEST_ORC_FAILURE=deferred-snapshot-add
+      "${CMAKE_COMMAND}"
+      -DPURE_EXECUTABLE=$<TARGET_FILE:pure>
+      -DPURE_SCRIPT=${CMAKE_CURRENT_SOURCE_DIR}/test/jit-deferred-retry.pure
+      -DPURE_EXPECTED=${CMAKE_CURRENT_SOURCE_DIR}/test/jit-deferred-retry.log
+      -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunPureLifetimeStress.cmake"
+  )
+  set_tests_properties(
+    pure-jit-deferred-retry
+    PROPERTIES
+      LABELS "jit;stress"
+      REQUIRED_FILES
+        "${CMAKE_CURRENT_SOURCE_DIR}/test/jit-deferred-retry.pure;${CMAKE_CURRENT_SOURCE_DIR}/test/jit-deferred-retry.log"
       TIMEOUT 60
       FAIL_REGULAR_EXPRESSION
         "failed to remove ORC compilation unit;AddressSanitizer;LeakSanitizer;runtime error:"

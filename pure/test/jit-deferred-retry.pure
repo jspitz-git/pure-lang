@@ -1,0 +1,12 @@
+// A failed deferred materialization attempt must leave this retained closure
+// retryable. The focused CTest injects one failure at the ORC submission
+// boundary; the second call must materialize the same generation.
+
+deferred_retry x = 42;
+let retained = deferred_retry;
+
+retained 2;
+retained 2;
+
+clear retained
+clear deferred_retry

@@ -1396,6 +1396,29 @@ void *interpreter::materialize_global_generation(int32_t tag, string *error_mess
   return materialize_global_generation_by_key(generation->key, error_message);
 }
 
+static llvm::Error add_deferred_snapshot
+(PureJit& jit, llvm::orc::ResourceTrackerSP tracker,
+ std::unique_ptr<llvm::MemoryBuffer> snapshot)
+{
+#ifdef PURE_ENABLE_TEST_HOOKS
+  static bool injected = false;
+  const char *failure = getenv("PURE_TEST_ORC_FAILURE");
+  if (!injected && failure && !strcmp(failure, "deferred-snapshot-add")) {
+    injected = true;
+    return llvm::createStringError
+      ("injected deferred ORC snapshot submission failure");
+  }
+#endif
+  return jit.add_module_snapshot(std::move(tracker), std::move(snapshot));
+}
+
+static std::unique_ptr<llvm::MemoryBuffer> clone_snapshot
+(const llvm::MemoryBuffer& snapshot)
+{
+  return llvm::MemoryBuffer::getMemBufferCopy
+    (snapshot.getBuffer(), snapshot.getBufferIdentifier());
+}
+
 void *interpreter::materialize_global_generation_by_key
 (uint32_t key, string *error_message)
 {
@@ -1408,8 +1431,17 @@ void *interpreter::materialize_global_generation_by_key
   }
   if (generation->snapshot) {
     llvm::orc::ResourceTrackerSP tracker = ORC->create_resource_tracker();
-    if (llvm::Error error = ORC->add_module_snapshot
-          (tracker, std::move(generation->snapshot))) {
+    if (llvm::Error error = add_deferred_snapshot
+          (*ORC, tracker, clone_snapshot(*generation->snapshot))) {
+      if (llvm::Error cleanup_error = tracker->remove())
+        error = llvm::joinErrors(std::move(error), std::move(cleanup_error));
+      if (error_message) *error_message = llvm::toString(std::move(error));
+      else llvm::consumeError(std::move(error));
+      return 0;
+    }
+    llvm::Expected<llvm::orc::ExecutorAddr> entry = ORC->lookup(generation->symbol);
+    if (!entry) {
+      llvm::Error error = entry.takeError();
       if (llvm::Error cleanup_error = tracker->remove())
         error = llvm::joinErrors(std::move(error), std::move(cleanup_error));
       if (error_message) *error_message = llvm::toString(std::move(error));
@@ -1417,8 +1449,10 @@ void *interpreter::materialize_global_generation_by_key
       return 0;
     }
     generation->tracker = std::move(tracker);
-  }
-  if (!generation->address) {
+    generation->address = reinterpret_cast<void*>
+      (static_cast<uintptr_t>(entry->getValue()));
+    generation->snapshot.reset();
+  } else if (!generation->address) {
     llvm::Expected<llvm::orc::ExecutorAddr> entry = ORC->lookup(generation->symbol);
     if (!entry) {
       if (error_message) *error_message = llvm::toString(entry.takeError());
