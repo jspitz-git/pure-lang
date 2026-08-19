@@ -1,7 +1,32 @@
-name: macOS release validation
+name: Non-Linux release validation
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - master
+      - "todo/**"
+    paths:
+      - "pure/**"
+      - "pure-bonjour/**"
+      - "pure/todo/TODO-45-windows-pure-bonjour.md"
+      - "docs/superpowers/specs/2026-08-18-windows-pure-bonjour-design.md"
+      - "docs/superpowers/plans/2026-08-18-windows-pure-bonjour.md"
+      - ".github/workflows/non-linux-release-validation.yml"
+  pull_request:
+    branches:
+      - master
+    paths:
+      - "pure/**"
+      - "pure-bonjour/**"
+      - "pure/todo/TODO-45-windows-pure-bonjour.md"
+      - "docs/superpowers/specs/2026-08-18-windows-pure-bonjour-design.md"
+      - "docs/superpowers/plans/2026-08-18-windows-pure-bonjour.md"
+      - ".github/workflows/non-linux-release-validation.yml"
+
+concurrency:
+  group: non-linux-validation-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -11,6 +36,231 @@ defaults:
     working-directory: pure
 
 jobs:
+  windows-pure-bonjour:
+    name: Windows PureBonjour package
+    runs-on: windows-2025
+    timeout-minutes: 120
+    defaults:
+      run:
+        shell: pwsh
+        working-directory: source with spaces
+    env:
+      CMAKE_EXE: C:/msys64/clang64/bin/cmake.exe
+      CTEST_EXE: C:/msys64/clang64/bin/ctest.exe
+
+    steps:
+      - name: Check out source in a path containing spaces
+        uses: actions/checkout@v4
+        with:
+          path: source with spaces
+
+      - name: Install the exact CLANG64 prerequisites
+        id: setup-msys2
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: CLANG64
+          update: true
+          release: false
+          install: >-
+            bison
+            flex
+            diffutils
+            mingw-w64-clang-x86_64-clang
+            mingw-w64-clang-x86_64-llvm
+            mingw-w64-clang-x86_64-cmake
+            mingw-w64-clang-x86_64-ninja
+            mingw-w64-clang-x86_64-pkgconf
+            mingw-w64-clang-x86_64-gmp
+            mingw-w64-clang-x86_64-mpfr
+            mingw-w64-clang-x86_64-readline
+            mingw-w64-clang-x86_64-pcre
+            mingw-w64-clang-x86_64-libiconv
+
+      - name: Verify the selected CLANG64 tools
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $msys2Root = '${{ steps.setup-msys2.outputs.msys2-location }}'.Replace('\', '/').TrimEnd('/')
+          if ($msys2Root -ine 'C:/msys64') {
+            throw "setup-msys2 selected an unexpected root: $msys2Root"
+          }
+          # GITHUB_PATH entries are prepended in reverse write order.
+          'C:/msys64/usr/bin' |
+            Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          'C:/msys64/clang64/bin' |
+            Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          $env:Path = "C:/msys64/clang64/bin;C:/msys64/usr/bin;$env:Path"
+          $tools = [ordered]@{
+            clang = 'C:/msys64/clang64/bin/clang.exe'
+            cmake = 'C:/msys64/clang64/bin/cmake.exe'
+            ninja = 'C:/msys64/clang64/bin/ninja.exe'
+            pkgconf = 'C:/msys64/clang64/bin/pkgconf.exe'
+            'llvm-readobj' = 'C:/msys64/clang64/bin/llvm-readobj.exe'
+            bison = 'C:/msys64/usr/bin/bison.exe'
+            flex = 'C:/msys64/usr/bin/flex.exe'
+          }
+          foreach ($tool in $tools.Keys) {
+            if (-not (Test-Path -LiteralPath $tools[$tool] -PathType Leaf)) {
+              throw "$tool is missing at $($tools[$tool])"
+            }
+            & $tools[$tool] --version
+            if ($LASTEXITCODE -ne 0) { throw "$tool version probe failed" }
+          }
+
+      - name: Build and install the matching Windows Pure SDK
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $repo = (Get-Location).Path
+          $pureBuild = Join-Path $repo 'build/windows Pure SDK build'
+          $purePrefix = Join-Path $repo 'build/windows Pure SDK prefix'
+          & $env:CMAKE_EXE -S pure -B $pureBuild -G Ninja `
+            -DCMAKE_BUILD_TYPE=Release `
+            -DCMAKE_C_COMPILER=C:/msys64/clang64/bin/clang.exe `
+            -DCMAKE_CXX_COMPILER=C:/msys64/clang64/bin/clang++.exe `
+            -DLLVM_DIR=C:/msys64/clang64/lib/cmake/llvm `
+            "-DCMAKE_INSTALL_PREFIX=$purePrefix" `
+            -DPURE_STRICT_TOOLCHAIN=ON
+          if ($LASTEXITCODE -ne 0) { throw "Pure configure failed" }
+          & $env:CMAKE_EXE --build $pureBuild --parallel 1
+          if ($LASTEXITCODE -ne 0) { throw "Pure build failed" }
+          & $env:CMAKE_EXE --install $pureBuild
+          if ($LASTEXITCODE -ne 0) { throw "Pure install failed" }
+          "PURE_PREFIX=$($purePrefix.Replace('\', '/'))" |
+            Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Configure and build PureBonjour
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $repo = (Get-Location).Path
+          $build = Join-Path $repo 'build/windows PureBonjour release'
+          $purePrefix = [IO.Path]::GetFullPath($env:PURE_PREFIX)
+          $env:PKG_CONFIG_PATH = (Join-Path $purePrefix 'lib/pkgconfig')
+          & $env:CMAKE_EXE -S pure-bonjour -B $build -G Ninja `
+            -DCMAKE_BUILD_TYPE=Release `
+            -DCMAKE_C_COMPILER=C:/msys64/clang64/bin/clang.exe `
+            "-DPKG_CONFIG_EXECUTABLE=C:/msys64/clang64/bin/pkgconf.exe" `
+            "-DPURE_PREFIX=$purePrefix" `
+            -DBUILD_TESTING=ON
+          if ($LASTEXITCODE -ne 0) { throw "PureBonjour configure failed" }
+          & $env:CMAKE_EXE --build $build --parallel 1
+          if ($LASTEXITCODE -ne 0) { throw "PureBonjour build failed" }
+          "PURE_BONJOUR_BUILD=$($build.Replace('\', '/'))" |
+            Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Run the complete PureBonjour test label
+        run: |
+          $ErrorActionPreference = 'Stop'
+          & C:/msys64/clang64/bin/ctest.exe --test-dir $env:PURE_BONJOUR_BUILD `
+            -L bonjour --output-on-failure --no-tests=error
+          if ($LASTEXITCODE -ne 0) { throw "PureBonjour CTest failed" }
+
+      - name: Install only PureBonjour and verify sanitized runtime
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $repo = (Get-Location).Path
+          $source = Join-Path $repo 'pure-bonjour'
+          $build = [IO.Path]::GetFullPath($env:PURE_BONJOUR_BUILD)
+          $purePrefix = [IO.Path]::GetFullPath($env:PURE_PREFIX)
+          $stage = Join-Path $repo 'build/staged PureBonjour package'
+          & $env:CMAKE_EXE --install $build --prefix $stage `
+            --component PureBonjour
+          if ($LASTEXITCODE -ne 0) { throw "PureBonjour install failed" }
+          Remove-Item Env:PURELIB -ErrorAction SilentlyContinue
+          $env:Path = "$purePrefix/bin;$env:SystemRoot/System32/WindowsPowerShell/v1.0;$env:SystemRoot/System32;$env:SystemRoot"
+          if ($env:Path -match '(?i)(^|;).*[/\\]msys64[/\\]') {
+            throw "MSYS2 path survived sanitization: $env:Path"
+          }
+          & $env:CMAKE_EXE `
+            "-DSTAGE_PREFIX=$stage" `
+            "-DSOURCE_PREFIX=$source" `
+            "-DBUILD_PREFIX=$build" `
+            "-DPURE_PREFIX=$purePrefix" `
+            -P pure-bonjour/cmake/VerifyInstalledPackage.cmake
+          if ($LASTEXITCODE -ne 0) {
+            throw "installed PureBonjour verification failed"
+          }
+          "PURE_BONJOUR_STAGE=$($stage.Replace('\', '/'))" |
+            Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Create the deterministic PureBonjour ZIP twice
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $artifactDirectory = Join-Path (Get-Location).Path 'build/pure-bonjour-artifacts'
+          $first = Join-Path $artifactDirectory 'windows-pure-bonjour-first.zip'
+          $second = Join-Path $artifactDirectory 'windows-pure-bonjour-second.zip'
+          $archive = Join-Path $artifactDirectory 'windows-pure-bonjour.zip'
+          $summary = Join-Path $artifactDirectory 'windows-pure-bonjour-summary.txt'
+          New-Item -ItemType Directory -Path $artifactDirectory -Force | Out-Null
+          $files = @(Get-ChildItem -LiteralPath $env:PURE_BONJOUR_STAGE -File -Recurse)
+          if ($files.Count -ne 8) {
+            throw "unexpected staged file count: $($files.Count)"
+          }
+          [string[]]$relativeFiles = $files | ForEach-Object {
+            [IO.Path]::GetRelativePath($env:PURE_BONJOUR_STAGE, $_.FullName).Replace('\', '/')
+          }
+          [Array]::Sort($relativeFiles, [StringComparer]::Ordinal)
+          Add-Type -AssemblyName System.IO.Compression
+          function New-DeterministicArchive([string]$destination) {
+            $archiveStream = [IO.File]::Open(
+              $destination, [IO.FileMode]::Create, [IO.FileAccess]::Write,
+              [IO.FileShare]::None)
+            $zip = [IO.Compression.ZipArchive]::new(
+              $archiveStream, [IO.Compression.ZipArchiveMode]::Create, $false)
+            try {
+              foreach ($relative in $relativeFiles) {
+                $source = Join-Path $env:PURE_BONJOUR_STAGE `
+                  $relative.Replace('/', [IO.Path]::DirectorySeparatorChar)
+                $entry = $zip.CreateEntry(
+                  $relative, [IO.Compression.CompressionLevel]::Optimal)
+                $entry.LastWriteTime = [DateTimeOffset]'2000-01-01T00:00:00+00:00'
+                $entry.ExternalAttributes = 0
+                $inputStream = [IO.File]::OpenRead($source)
+                $entryStream = $entry.Open()
+                try {
+                  $inputStream.CopyTo($entryStream)
+                } finally {
+                  $entryStream.Dispose()
+                  $inputStream.Dispose()
+                }
+              }
+            } finally {
+              $zip.Dispose()
+              $archiveStream.Dispose()
+            }
+          }
+          New-DeterministicArchive $first
+          New-DeterministicArchive $second
+          $firstHash = (Get-FileHash -LiteralPath $first -Algorithm SHA256).Hash.ToLowerInvariant()
+          $secondHash = (Get-FileHash -LiteralPath $second -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($firstHash -cne $secondHash) {
+            throw "deterministic ZIP hashes differ: $firstHash vs $secondHash"
+          }
+          Copy-Item -LiteralPath $first -Destination $archive
+          $stageBytes = ($files | Measure-Object Length -Sum).Sum
+          $archiveBytes = (Get-Item -LiteralPath $archive).Length
+          @(
+            "files=8"
+            "stage-bytes=$stageBytes"
+            "zip-bytes=$archiveBytes"
+            "zip-sha256=$firstHash"
+          ) | Out-File -LiteralPath $summary -Encoding utf8
+          @"
+          ### Windows PureBonjour package
+
+          - files: 8
+          - staged bytes: $stageBytes
+          - ZIP bytes: $archiveBytes
+          - ZIP SHA-256: ``$firstHash``
+          "@ | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
+
+      - name: Upload the PureBonjour package
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-pure-bonjour
+          path: |
+            source with spaces/build/pure-bonjour-artifacts/windows-pure-bonjour.zip
+            source with spaces/build/pure-bonjour-artifacts/windows-pure-bonjour-summary.txt
+          if-no-files-found: error
+
   macos-15-arm64:
     name: macOS 15 arm64
     runs-on: macos-15

@@ -43,6 +43,13 @@ add_custom_target(verify-windows-dependencies
 
 include(CTest)
 if(BUILD_TESTING)
+  add_test(NAME pure-bonjour-ci-contract
+    COMMAND "${CMAKE_COMMAND}"
+      "-DWORKFLOW=${CMAKE_CURRENT_SOURCE_DIR}/../.github/workflows/non-linux-release-validation.yml"
+      -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/ci-contract.cmake")
+  set_tests_properties(pure-bonjour-ci-contract PROPERTIES
+    LABELS "bonjour;unit;ci" TIMEOUT 30)
+
   add_test(NAME pure-bonjour-install-destinations
     COMMAND "${CMAKE_COMMAND}"
       -DTEST_MODE=destinations

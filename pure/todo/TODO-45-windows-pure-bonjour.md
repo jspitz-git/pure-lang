@@ -5,19 +5,23 @@ Branch: todo/45-windows-pure-bonjour
 
 ## Purpose
 
-Determine whether `pure-bonjour` can be legally and technically supported with
-an available Windows Bonjour implementation.
+Ship `pure-bonjour` on x86-64 Windows 10 and later through Microsoft's system
+DNS Service Discovery API, without installing or redistributing Apple's
+Bonjour for Windows product.
 
 ## Scope
 
-- Identify a redistributable `dns_sd` SDK/runtime and its supported architectures.
-- Build the bridge and validate service registration and discovery.
-- Document any external Bonjour installation requirement.
+- Use `DnsServiceRegister`, `DnsServiceBrowse`, and `DnsServiceResolve` from the
+  Windows SDK and system `dnsapi.dll`.
+- Build the bridge with CLANG64 and validate bounded registration, discovery,
+  resolution, cancellation, relocation, and removal.
+- Package only the exact optional `PureBonjour` component and document its
+  local-link/firewall boundary and lack of a third-party service dependency.
 
 ## Task List
 
-1. [ ] Resolve SDK availability, licensing, and redistribution terms.
-2. [ ] Build the module against the selected Windows implementation.
+1. [x] Resolve SDK availability, licensing, and redistribution terms.
+2. [x] Build the module against the selected Windows implementation.
 3. [x] Add bounded loopback registration and discovery tests.
 4. [ ] Decide whether to bundle, externally detect, or defer the package.
 
@@ -29,11 +33,15 @@ an available Windows Bonjour implementation.
 ## Validation Plan
 
 - Register, discover, resolve, and remove a temporary local service.
-- Verify clean behavior when the Bonjour service is absent.
+- Verify bounded API rejection, cancellation, firewall/policy denial, and an
+  empty no-result window; Windows has no optional Bonjour daemon to remove.
 
 ## Open Questions
 
-- Which maintained and redistributable Windows Bonjour runtime is suitable.
+- Final ship-or-defer remains gated on the clean `windows-2025` workflow and
+  independent inspection of its `windows-pure-bonjour` artifact. The selected
+  runtime is the Windows 10+ system `dnsapi.dll`; no redistributable third-party
+  Bonjour runtime is part of the package.
 
 ## Progress Log
 
@@ -276,3 +284,42 @@ an available Windows Bonjour implementation.
   - Fresh focused validation passed 3/3 in 214.58 seconds (12.27, 89.73, and
     112.57 seconds). The subsequent full suite passed 10/10 in 223.23 seconds;
     the local-link loopback remained bounded at 3.80 seconds.
+- 2026-08-19: Documented the Windows backend and added the clean-runner CI
+  contract and `windows-pure-bonjour` job without triggering remote CI.
+  - The source-owned `WINDOWS.md` now records the Windows 10+ x86-64 baseline,
+    CLANG64 commands, Microsoft `dnsapi.dll` backend, exact eight-path manifest,
+    local-link/firewall scope, API/no-result/cancellation diagnostics, installed
+    verification, licensing boundary, and exact removal behavior. Pure 0.68
+    Unicode relocation is documented as using target-verified scoped ASCII
+    junction aliases which are explicitly removed after use.
+  - `Install.cmake` installs and hashes that full source document instead of
+    generating the former concise file. The exact path set remains eight files;
+    the refreshed component is 132678 bytes and its inventory is 1357 bytes
+    with SHA-256
+    `bbd17101a1175ed342f515ccd05feb751c5e2c8f1bd0d4327e93947edcb7ff36`.
+  - The workflow contract was run before the YAML edit and failed with the
+    expected `CI_CONTRACT_JOB` token because the job was absent. It now locks
+    the five path triggers, job identity, checkout path containing spaces,
+    exact CLANG64 prerequisite block, matching staged Pure build, absolute
+    `PURE_PREFIX`, Ninja build, Bonjour-labeled CTest, component-only install,
+    MSYS2/PURELIB-sanitized verifier, two stable-metadata ordinal ZIP builds,
+    equal SHA-256, and the `windows-pure-bonjour` v4 artifact plus summary.
+  - Fresh local validation passed the CI contract alone in 0.88 seconds and the
+    complete Bonjour-labeled suite in 223.15 seconds. All ten pre-existing tests
+    remained green and the new contract made the result 11/11. The real
+    local-link test then passed five consecutive runs in 19.09 seconds.
+  - The recursive audit still reports 11 PE files, 126 import edges, and exactly
+    seven public exports. Source README matches are limited to its two intentional
+    `@version@` occurrences and one `|today|` template marker; fresh generated
+    and staged README/WINDOWS files contain no unresolved marker. The fresh
+    staged Windows notes hash exactly matches the source at
+    `74a9737a75fb9c84ea2417071a83ab10f8d78baa9b8e0e36c0ab242b05a495f4`.
+  - Self-review found that the setup action's installed MSYS tools were probed
+    by absolute path but not explicitly placed on later PowerShell-step search
+    paths. A new contract assertion first failed with `CI_CONTRACT_TOOLS`; the
+    workflow now writes both roots to `GITHUB_PATH`, keeps CLANG64 first, and the
+    contract passes in 0.92 seconds. PowerShell's parser then accepted all six
+    Windows job script blocks without syntax errors. The final post-review full
+    suite passed 11/11 in 223.27 seconds.
+  - Remote clean-runner execution and independent artifact inspection remain a
+    Task 8 gate, so this TODO stays open and no ship decision is recorded yet.

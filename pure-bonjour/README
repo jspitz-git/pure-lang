@@ -10,12 +10,13 @@ Version @version@, |today|
 
 Albert Gräf <aggraef@gmail.com>
 
-This is a simple interface to Bonjour_, Apple's Zeroconf_ implementation. The
-module lets you publish and query Zeroconf network services using Bonjour,
-allowing you to establish connections for various kinds of TCP and UDP network
-services without having to manually configure network addresses. It is
-typically used along with the :mod:`sockets` module which lets you create the
-network connections discovered with :mod:`bonjour`.
+This is a simple interface for publishing and querying Zeroconf_ network
+services. It uses the Bonjour_ ``dns_sd`` interface on its traditional
+platforms and Microsoft's native DNS Service Discovery API on Windows. This
+lets applications establish connections for TCP and UDP services without
+manually configuring network addresses. It is typically used along with the
+:mod:`sockets` module, which creates the network connections discovered with
+:mod:`bonjour`.
 
 .. _Bonjour: http://developer.apple.com/bonjour/
 .. _Zeroconf: http://en.wikipedia.org/wiki/Zero-configuration_networking
@@ -68,15 +69,19 @@ Installation
 Get the latest source from
 https://bitbucket.org/purelang/pure-lang/downloads/pure-bonjour-@version@.tar.gz.
 
-Run ``make`` to compile the module and ``make install`` (as root) to install
-it in the Pure library directory. This requires GNU make, and of course you
-need to have Pure and Bonjour installed. The latter should be readily available
-on most Linux systems, and ports are available for BSD systems as well.
+On systems using the portable ``dns_sd`` backend, run ``make`` to compile the
+module and ``make install`` (as root) to install it in the Pure library
+directory. This requires GNU make, Pure, and a compatible ``dns_sd``
+implementation. Packages are available for the systems which use this backend.
 
-On 64-bit Windows 10 or later, the CMake build uses Microsoft's DNS Service
-Discovery API supplied by ``dnsapi.dll``. Install its optional payload with
-``cmake --install <build-dir> --component PureBonjour``. Apple Bonjour is not
-required and no Apple runtime or service is installed by this component.
+On x86-64 Windows 10 or later, use the CLANG64 CMake build. It calls the
+Microsoft DNS Service Discovery API supplied by the system ``dnsapi.dll``;
+there is no separate Bonjour service to install. Install only the optional
+payload with ``cmake --install <build-dir> --component PureBonjour``. The
+component contains no Apple runtime, SDK, service, or DLL. See `WINDOWS.md`_
+for exact build, test, manifest, relocation, diagnostics, and removal details.
+
+.. _`WINDOWS.md`: WINDOWS.md
 
 ``make`` tries to guess your Pure installation directory and platform-specific
 setup. If it gets this wrong, you can set some variables manually, please
@@ -88,16 +93,14 @@ default, so you may want to copy it to the Pure library directory if needed.
 Usage
 =====
 
-To use the operations of this module, you need to have Bonjour (or a
-compatible Zeroconf implementation such as Avahi) installed and the
-corresponding service running on your system. If you have a Mac running OS X,
-then most likely Bonjour is already up and running, but for other systems
-you'll have to consult your system documentation for instructions.
-
-The Windows backend is an exception to that portable ``dns_sd`` arrangement:
-it calls the Windows DNS-SD API directly. Discovery remains local-link traffic,
-so firewall or multicast policy can produce API failures or an empty result
-even though no separate Bonjour service is needed.
+On non-Windows systems, use the Bonjour daemon or a compatible Zeroconf
+implementation expected by the platform's ``dns_sd`` library. The Windows
+backend instead calls the Microsoft DNS-SD API directly and needs no
+third-party daemon. Discovery remains local-link multicast traffic, so Windows
+firewall or network policy can produce an API failure or an empty result. A
+negative result reports an operational failure; an empty successful snapshot
+means that no matching service was resolved during the observation window.
+Cleanup and cancellation waits are bounded.
 
 The following import declaration loads the functions of the bonjour module in
 your Pure script::

@@ -138,13 +138,7 @@ file(READ "${CMAKE_CURRENT_BINARY_DIR}/README" generated_readme)
 string(REPLACE "|today|" "${today}" generated_readme "${generated_readme}")
 file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/README" "${generated_readme}")
 
-set(windows_notes "${CMAKE_CURRENT_BINARY_DIR}/WINDOWS.md")
-file(WRITE "${windows_notes}"
-  "# PureBonjour on Windows\n\n"
-  "PureBonjour ${PROJECT_VERSION} supports x86-64 Windows 10 or later. "
-  "It uses Microsoft's DNS Service Discovery API from `dnsapi.dll`; "
-  "Apple Bonjour is neither required nor redistributed. Local-link "
-  "discovery can be limited by firewall or multicast policy.\n")
+set(windows_notes "${CMAKE_CURRENT_SOURCE_DIR}/WINDOWS.md")
 
 set(pure_bonjour_inventory
   "${CMAKE_CURRENT_BINARY_DIR}/PureBonjourInventory.tsv")
