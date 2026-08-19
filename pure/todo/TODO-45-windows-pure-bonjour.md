@@ -362,3 +362,44 @@ Bonjour for Windows product.
     `fcf6e0bf00169f97c6e5d591837c7de6d97de5ef9ce378471354f5abafb3721d`,
     and source/staged `WINDOWS.md` share SHA-256
     `6b89ee56e54e68f56ecb0bb9ea3600d7fdabb249efcba792ec63e30a42dd5559`.
+- 2026-08-19: Task 8 local-final validation completed; the clean-runner gate
+  remains pending.
+  - The binding fresh Ninja configure used `build/pure-bonjour-final` with
+    Release, CLANG64 Clang, CLANG64 `pkg-config`, and the staged Pure prefix.
+    It again stalled after `The C compiler identification is Clang 22.1.8` at
+    `Detecting C compiler ABI info`. A bounded wrapper killed the complete
+    process tree after 45.408 seconds; stderr was empty and a subsequent
+    executable-name check found no remaining `cmake`, `ninja`, `clang`, linker,
+    or LLVM archive process. Ninja did not pass.
+  - The partial Ninja directory was removed after verifying its absolute path
+    was the intended worktree `build/pure-bonjour-final`. The first fresh
+    MinGW Makefiles fallback configure, matching the plan arguments, failed
+    because the new shell did not have `PKG_CONFIG_PATH` and therefore could
+    not locate `pure>=0.68`. That incomplete directory was also removed. With
+    `PKG_CONFIG_PATH` scoped to
+    `C:/pure-lang/pure/build/windows-clang64-prefix/lib/pkgconfig`, the fresh
+    fallback configure found Pure 0.68 and completed configuration/generation
+    in 1.4/0.4 seconds.
+  - `C:\msys64\clang64\bin\cmake.exe --build
+    build/pure-bonjour-final --verbose` completed at 100%. Every native compile
+    used `-Wall -Wextra -Werror`, and the full output contained no diagnostics.
+  - `C:\msys64\clang64\bin\ctest.exe --test-dir
+    build/pure-bonjour-final -L bonjour --output-on-failure
+    --no-tests=error` passed 11/11 in 237.32 seconds. This included the CI
+    contract, packaging security matrices, installed/relocation ownership, and
+    the real local-link loopback smoke, which passed in 3.81 seconds.
+  - `C:\msys64\clang64\bin\cmake.exe --build
+    build/pure-bonjour-final --target verify-windows-dependencies` passed with
+    11 recursively inspected PE files, 126 import edges, and exactly seven
+    exports.
+  - Component-only install to the fresh spaces-and-Unicode path
+    `build/PureBonjour final stage Č` produced exactly eight files. An
+    independent `VerifyInstalledPackage.cmake` invocation accepted all eight,
+    totaling 133095 bytes, with inventory SHA-256
+    `86aa862c441591227c29d083360daa6c3e7dcdc515bd0b9085304df158d6dc81`;
+    it repeated the 11-PE/126-edge dependency closure and passed the installed
+    smoke with its sanitized child environment.
+  - No branch push, workflow run, artifact download, or other external action
+    was performed. Successful `windows-pure-bonjour` clean-runner job evidence
+    and independent inspection of its `windows-pure-bonjour` artifact remain
+    required. The final ship decision stays unchecked and TODO-45 stays Open.
