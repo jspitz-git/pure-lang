@@ -1,0 +1,81 @@
+using bonjour;
+using namespace bonjour;
+
+extern int atoi(char*);
+extern int puts(char*);
+extern double pure_nanosleep(double) = nanosleep;
+
+service_type = "_puretodo45._tcp";
+success_marker = "PURE_BONJOUR_LOOPBACK_OK";
+
+find_service name port xs =
+  any (\(n,t,d,a,p) -> n==name && t==service_type &&
+                         d=="local" && p==port && #a>0) xs;
+
+matching_service name port xs = find_service name port xs if listp xs;
+matching_service _ _ _ = 0 otherwise;
+
+raise_if_error result =
+  if intp result && result<0 then throw result else result;
+
+pause_then f = nanosleep 0.1 $$ f;
+
+wait_for_service _ _ _ 0 = throw "service discovery timed out";
+wait_for_service browser name port attempts =
+  if changed<0 then throw changed
+  else if changed>0 then
+    if matching_service name port (raise_if_error services) then ()
+    else pause_then (wait_for_service browser name port (attempts-1))
+  else pause_then (wait_for_service browser name port (attempts-1))
+when
+  changed = avail browser;
+  services = if changed>0 then get browser else [];
+end;
+
+wait_for_removal _ _ _ 0 = throw "service removal timed out";
+wait_for_removal browser name port attempts =
+  if changed<0 then throw changed
+  else if changed>0 then
+    if matching_service name port (raise_if_error services) then
+      pause_then (wait_for_removal browser name port (attempts-1))
+    else ()
+  else pause_then (wait_for_removal browser name port (attempts-1))
+when
+  changed = avail browser;
+  services = if changed>0 then get browser else [];
+end;
+
+release object = finalizer (clear_sentry object)
+  if cookedp object when finalizer = get_sentry object end;
+release _ = () otherwise;
+
+verify_registration name port (actual_name,actual_type,actual_port) =
+  () if actual_name==name && actual_type==service_type && actual_port==port;
+verify_registration _ _ _ = throw "registration result mismatch" otherwise;
+
+with_service browser name port =
+  if null service then throw "service registration could not start"
+  else
+    catch (\error -> release service $$ throw error)
+      (verify_registration name port (raise_if_error (check service)) $$
+       wait_for_service browser name port 50 $$
+       release service) $$
+    wait_for_removal browser name port 50
+when
+  service = publish name service_type port;
+end;
+
+run name port =
+  if null browser then throw "service browse could not start"
+  else catch (\error -> release browser $$ throw error)
+    (with_service browser name port $$
+     release browser $$
+     puts success_marker)
+when
+  browser = browse service_type;
+end;
+
+if argc~=2 then throw "expected service name and port"
+else if port<=0 || port>65535 then throw "invalid service port"
+else run (argv!0) port
+when port = atoi (argv!1) end;
