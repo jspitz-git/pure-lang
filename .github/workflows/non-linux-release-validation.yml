@@ -125,6 +125,8 @@ jobs:
             -DMODE=STAGE `
             "-DPURE_PREFIX=$purePrefix" `
             -DTOOLCHAIN_BIN=C:/msys64/clang64/bin `
+            -DLLVM_READOBJ=C:/msys64/clang64/bin/llvm-readobj.exe `
+            -DRUNTIME_MANIFEST=pure-bonjour/cmake/PureWindowsRuntimeClosure.cmake `
             -P pure/cmake/StageWindowsRuntimeDlls.cmake
           if ($LASTEXITCODE -ne 0) { throw "Pure runtime DLL staging failed" }
           "PURE_PREFIX=$($purePrefix.Replace('\', '/'))" |

@@ -47,6 +47,10 @@ if(BUILD_TESTING)
     COMMAND "${CMAKE_COMMAND}"
       "-DSTAGER=${CMAKE_CURRENT_SOURCE_DIR}/../pure/cmake/StageWindowsRuntimeDlls.cmake"
       "-DTEST_ROOT=${CMAKE_CURRENT_BINARY_DIR}/sdk-runtime-closure-fixture"
+      "-DLLVM_READOBJ=${PURE_BONJOUR_LLVM_READOBJ}"
+      "-DTOOLCHAIN_BIN=${pure_bonjour_compiler_directory}"
+      "-DPURE_RUNTIME_BIN=${PURE_PREFIX}/bin"
+      "-DPRODUCTION_MANIFEST=${CMAKE_CURRENT_SOURCE_DIR}/cmake/PureWindowsRuntimeClosure.cmake"
       -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/sdk-runtime-closure.cmake")
   set_tests_properties(pure-bonjour-sdk-runtime-closure-contract PROPERTIES
     LABELS "bonjour;unit;ci;packaging" TIMEOUT 15)

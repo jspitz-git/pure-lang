@@ -1,0 +1,55 @@
+# Exact recursive non-system closure reached from the CLANG64 Pure SDK roots
+# pure.exe and libpure.dll. Consumers must independently derive the reached set
+# and require equality with this manifest.
+set(pure_windows_runtime_dlls
+  libc++.dll
+  libgmp-10.dll
+  libiconv-2.dll
+  libmpfr-6.dll
+  libpcre-1.dll
+  libpcreposix-0.dll
+  libreadline8.dll
+  libtermcap-0.dll
+  libwinpthread-1.dll
+  libzstd.dll
+  zlib1.dll)
+
+set(pure_windows_system_dlls
+  advapi32.dll
+  api-ms-win-crt-convert-l1-1-0.dll
+  api-ms-win-crt-environment-l1-1-0.dll
+  api-ms-win-crt-filesystem-l1-1-0.dll
+  api-ms-win-crt-heap-l1-1-0.dll
+  api-ms-win-crt-locale-l1-1-0.dll
+  api-ms-win-crt-math-l1-1-0.dll
+  api-ms-win-crt-multibyte-l1-1-0.dll
+  api-ms-win-crt-private-l1-1-0.dll
+  api-ms-win-crt-process-l1-1-0.dll
+  api-ms-win-crt-runtime-l1-1-0.dll
+  api-ms-win-crt-stdio-l1-1-0.dll
+  api-ms-win-crt-string-l1-1-0.dll
+  api-ms-win-crt-time-l1-1-0.dll
+  api-ms-win-crt-utility-l1-1-0.dll
+  bcrypt.dll
+  cfgmgr32.dll
+  comdlg32.dll
+  crypt32.dll
+  dnsapi.dll
+  gdi32.dll
+  imm32.dll
+  kernel32.dll
+  kernelbase.dll
+  ntdll.dll
+  ole32.dll
+  oleaut32.dll
+  psapi.dll
+  rpcrt4.dll
+  sechost.dll
+  setupapi.dll
+  shell32.dll
+  shlwapi.dll
+  ucrtbase.dll
+  user32.dll
+  version.dll
+  winmm.dll
+  ws2_32.dll)
