@@ -189,6 +189,58 @@ function(ci_require_mapping_key mapping_start mapping_end key expected category
   set(${output} ${key_index} PARENT_SCOPE)
 endfunction()
 
+function(ci_normalize_scalar raw output)
+  string(STRIP "${raw}" value)
+  string(LENGTH "${value}" value_length)
+  if(value_length EQUAL 0)
+    message(FATAL_ERROR "CI_CONTRACT_SYNTAX: empty scalar is unsupported")
+  endif()
+  string(SUBSTRING "${value}" 0 1 first)
+  math(EXPR last_index "${value_length} - 1")
+  string(SUBSTRING "${value}" ${last_index} 1 last)
+  if(first STREQUAL "\"" OR first STREQUAL "'")
+    if(value_length LESS 2 OR NOT last STREQUAL first)
+      message(FATAL_ERROR
+        "CI_CONTRACT_SYNTAX: malformed quoted scalar [${value}]")
+    endif()
+    math(EXPR inner_length "${value_length} - 2")
+    string(SUBSTRING "${value}" 1 ${inner_length} normalized)
+    string(FIND "${normalized}" "${first}" embedded_quote)
+    if(NOT embedded_quote EQUAL -1)
+      message(FATAL_ERROR
+        "CI_CONTRACT_SYNTAX: quoted scalar escapes are unsupported [${value}]")
+    endif()
+  else()
+    string(FIND "${value}" "\"" double_quote)
+    string(FIND "${value}" "'" single_quote)
+    if(NOT double_quote EQUAL -1 OR NOT single_quote EQUAL -1)
+      message(FATAL_ERROR
+        "CI_CONTRACT_SYNTAX: malformed unquoted scalar [${value}]")
+    endif()
+    set(normalized "${value}")
+  endif()
+  set(${output} "${normalized}" PARENT_SCOPE)
+endfunction()
+
+function(ci_extract_direct_scalar step_start step_end key category output)
+  set(property_count 0)
+  set(normalized "")
+  set(index ${step_start})
+  while(index LESS step_end)
+    ci_line(${index} line)
+    if(line MATCHES "^        ${key}:(.*)$")
+      math(EXPR property_count "${property_count} + 1")
+      ci_normalize_scalar("${CMAKE_MATCH_1}" normalized)
+    endif()
+    math(EXPR index "${index} + 1")
+  endwhile()
+  if(NOT property_count EQUAL 1)
+    message(FATAL_ERROR
+      "CI_CONTRACT_${category}: expected one direct ${key} scalar, found ${property_count}")
+  endif()
+  set(${output} "${normalized}" PARENT_SCOPE)
+endfunction()
+
 function(ci_require_text scope category)
   foreach(required IN LISTS ARGN)
     string(FIND "${scope}" "${required}" position)
@@ -557,17 +609,26 @@ set(upload_action_count 0)
 set(index ${steps_index})
 while(index LESS job_end)
   ci_line(${index} line)
-  if(line STREQUAL "        uses: actions/upload-artifact@v4")
-    math(EXPR upload_action_count "${upload_action_count} + 1")
+  if(line MATCHES "^        uses:(.*)$")
+    ci_normalize_scalar("${CMAKE_MATCH_1}" action_reference)
+    string(FIND "${action_reference}" "actions/upload-artifact@"
+      upload_prefix)
+    if(upload_prefix EQUAL 0)
+      math(EXPR upload_action_count "${upload_action_count} + 1")
+    endif()
   endif()
   math(EXPR index "${index} + 1")
 endwhile()
 if(NOT upload_action_count EQUAL 1)
   message(FATAL_ERROR
-    "CI_CONTRACT_UPLOAD_COUNT: expected one upload-artifact@v4 step, found ${upload_action_count}")
+    "CI_CONTRACT_UPLOAD_COUNT: expected one upload-artifact action, found ${upload_action_count}")
 endif()
-ci_find_unique_line("        uses: actions/upload-artifact@v4" ${upload_start}
-  ${upload_end} UPLOAD upload_uses)
+ci_extract_direct_scalar(${upload_start} ${upload_end} uses UPLOAD
+  upload_action_reference)
+if(NOT upload_action_reference STREQUAL "actions/upload-artifact@v4")
+  message(FATAL_ERROR
+    "CI_CONTRACT_UPLOAD_VERSION: intended upload must use actions/upload-artifact@v4")
+endif()
 ci_extract_mapping(${upload_start} ${upload_end} env UPLOAD
   upload_env_start upload_env_end upload_env_code)
 ci_require_mapping_key(${upload_env_start} ${upload_env_end} PATH
@@ -601,6 +662,21 @@ if(NOT MUTATION_MODE)
         "CI_CONTRACT_${category}")
       message(FATAL_ERROR
         "CI_CONTRACT_MUTATION: ${name} was not rejected as ${category}; "
+        "exit=${result} output=[${output}${error}]")
+    endif()
+  endfunction()
+
+  function(ci_expect_accepted name subject)
+    set(path "${CMAKE_CURRENT_BINARY_DIR}/ci-contract-${name}.yml")
+    file(WRITE "${path}" "${subject}")
+    execute_process(
+      COMMAND "${CMAKE_COMMAND}" "-DWORKFLOW=${path}" -DMUTATION_MODE=ON
+        -P "${CMAKE_CURRENT_LIST_FILE}"
+      RESULT_VARIABLE result OUTPUT_VARIABLE output ERROR_VARIABLE error)
+    file(REMOVE "${path}")
+    if(NOT result EQUAL 0)
+      message(FATAL_ERROR
+        "CI_CONTRACT_MUTATION: ${name} should be accepted; "
         "exit=${result} output=[${output}${error}]")
     endif()
   endfunction()
@@ -812,6 +888,45 @@ if(NOT MUTATION_MODE)
     "      - name: Shadow upload\n        uses: actions/upload-artifact@v4\n        with:\n          name: shadow\n          path: shadow.zip\n\n      - name: Upload the PureBonjour package\n        uses: actions/upload-artifact@v4\n        env:"
     mutated "${workflow}")
   ci_expect_rejected(second-upload-step "${mutated}" UPLOAD_COUNT)
+
+  set(shadow_upload_anchor
+    "      - name: Upload the PureBonjour package\n        uses: actions/upload-artifact@v4\n        env:")
+  set(shadow_references
+    actions/upload-artifact@v3
+    actions/upload-artifact@v4.6.2
+    "\"actions/upload-artifact@v4\""
+    "'actions/upload-artifact@v4'")
+  set(shadow_fixture_names v3 v4-point-release double-quoted-v4
+    single-quoted-v4)
+  foreach(shadow_reference fixture_name IN ZIP_LISTS
+      shadow_references shadow_fixture_names)
+    string(REPLACE "${shadow_upload_anchor}"
+      "      - name: Shadow upload ${fixture_name}\n        uses: ${shadow_reference}\n        with:\n          name: shadow\n          path: shadow.zip\n\n${shadow_upload_anchor}"
+      mutated "${workflow}")
+    ci_expect_rejected("second-upload-${fixture_name}"
+      "${mutated}" UPLOAD_COUNT)
+  endforeach()
+
+  ci_mutate_named_step_line("${workflow}" "Upload the PureBonjour package"
+    "        uses: actions/upload-artifact@v4"
+    "        uses: actions/upload-artifact@v4.6.2" mutated)
+  ci_expect_rejected(intended-upload-wrong-version
+    "${mutated}" UPLOAD_VERSION)
+
+  ci_mutate_named_step_line("${workflow}" "Upload the PureBonjour package"
+    "        uses: actions/upload-artifact@v4"
+    "        uses: \"actions/upload-artifact@v4\"" mutated)
+  ci_expect_accepted(intended-upload-quoted-v4 "${mutated}")
+
+  ci_mutate_named_step_line("${workflow}" "Upload the PureBonjour package"
+    "        uses: actions/upload-artifact@v4"
+    "        uses: 'actions/upload-artifact@v4'" mutated)
+  ci_expect_accepted(intended-upload-single-quoted-v4 "${mutated}")
+
+  ci_mutate_named_step_line("${workflow}" "Upload the PureBonjour package"
+    "        uses: actions/upload-artifact@v4"
+    "        uses: \"actions/upload-artifact@v4" mutated)
+  ci_expect_rejected(intended-upload-malformed-quote "${mutated}" SYNTAX)
 
   ci_mutate_named_step_line("${workflow}"
     "Check out source in a path containing spaces"
