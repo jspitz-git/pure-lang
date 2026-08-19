@@ -238,6 +238,7 @@ struct bonjour_service_t {
   UINT_PTR token;
   int cancel_established;
   int shutdown_inflight;
+  int cleanup_owner;
 };
 
 static void WINAPI bonjour_system_free_records(PDNS_RECORD records,
@@ -259,6 +260,8 @@ static const bonjour_dns_api_t bonjour_system_dns_api = {
   DnsServiceResolveCancel,
   bonjour_system_free_records,
 #ifdef BONJOUR_WINDOWS_TESTING
+  NULL,
+  NULL,
   NULL,
   NULL,
   NULL,
@@ -311,9 +314,14 @@ static int bonjour_request_accepted(DWORD status)
   return status == ERROR_SUCCESS || status == DNS_REQUEST_PENDING;
 }
 
-static int bonjour_cancel_completed(DWORD status)
+static int bonjour_register_cancel_completed(DWORD status)
 {
-  return bonjour_request_accepted(status) || status == ERROR_CANCELLED;
+  return status == ERROR_SUCCESS || status == ERROR_CANCELLED;
+}
+
+static int bonjour_query_cancel_completed(DWORD status)
+{
+  return status == ERROR_SUCCESS;
 }
 
 static void WINAPI bonjour_register_complete(DWORD status, void *context,
@@ -330,6 +338,10 @@ static void WINAPI bonjour_register_complete(DWORD status, void *context,
     bonjour_orphan_free_instance(instance);
     return;
   }
+#ifdef BONJOUR_WINDOWS_TESTING
+  if (service->api->after_registration_route_acquire != NULL)
+    service->api->after_registration_route_acquire();
+#endif
   AcquireSRWLockExclusive(&service->lock);
   ++service->callbacks;
   ReleaseSRWLockExclusive(&service->lock);
@@ -565,27 +577,44 @@ void bonjour_unpublish(bonjour_service_t *service)
 
   if (service == NULL) return;
   AcquireSRWLockExclusive(&service->lock);
+  if (service->cleanup_owner) {
+    ReleaseSRWLockExclusive(&service->lock);
+    return;
+  }
+  service->cleanup_owner = 1;
   previous_state = service->state;
   if (previous_state == BONJOUR_REG_STOPPED) {
+    service->cleanup_owner = 0;
     ReleaseSRWLockExclusive(&service->lock);
     return;
   }
   if (previous_state == BONJOUR_REG_STOPPING &&
       service->cancel_established) {
     ReleaseSRWLockExclusive(&service->lock);
+#ifdef BONJOUR_WINDOWS_TESTING
+    if (service->api->before_service_route_drain != NULL)
+      service->api->before_service_route_drain();
+#endif
     if (bonjour_route_remove_and_wait(service->token, service->wait_ms))
       bonjour_release_service(service);
+    else {
+      AcquireSRWLockExclusive(&service->lock);
+      service->cleanup_owner = 0;
+      ReleaseSRWLockExclusive(&service->lock);
+    }
     return;
   }
   if (previous_state == BONJOUR_REG_STOPPING && service->shutdown_inflight) {
     wait_for_shutdown = 1;
     ReleaseSRWLockExclusive(&service->lock);
   } else {
-    if (previous_state == BONJOUR_REG_REGISTERED)
+    if (previous_state == BONJOUR_REG_REGISTERED) {
       service->shutdown_status = ERROR_IO_PENDING;
-    service->state = BONJOUR_REG_STOPPING;
-    if (previous_state == BONJOUR_REG_REGISTERED)
+      service->state = BONJOUR_REG_STOPPING;
       ResetEvent(service->completion);
+    } else if (previous_state == BONJOUR_REG_FAILED) {
+      service->state = BONJOUR_REG_STOPPING;
+    }
     ReleaseSRWLockExclusive(&service->lock);
   }
 
@@ -621,20 +650,27 @@ void bonjour_unpublish(bonjour_service_t *service)
   }
 
   if (previous_state == BONJOUR_REG_PENDING &&
-      !bonjour_cancel_completed(status)) {
+      !bonjour_register_cancel_completed(status)) {
     AcquireSRWLockExclusive(&service->lock);
-    service->state = previous_state;
+    service->cleanup_owner = 0;
     ReleaseSRWLockExclusive(&service->lock);
     fprintf(stderr,
             "pure-bonjour: registration cancellation failed (status %lu); "
             "retaining state for retry\n", (unsigned long)status);
     return;
   }
+  if (previous_state == BONJOUR_REG_PENDING) {
+    AcquireSRWLockExclusive(&service->lock);
+    service->state = BONJOUR_REG_STOPPING;
+    service->cancel_established = 1;
+    ReleaseSRWLockExclusive(&service->lock);
+  }
   if (previous_state == BONJOUR_REG_REGISTERED &&
       !bonjour_request_accepted(status)) {
     AcquireSRWLockExclusive(&service->lock);
     service->state = BONJOUR_REG_REGISTERED;
     service->shutdown_inflight = 0;
+    service->cleanup_owner = 0;
     ReleaseSRWLockExclusive(&service->lock);
     fprintf(stderr,
             "pure-bonjour: deregistration dispatch failed (status %lu); "
@@ -643,6 +679,9 @@ void bonjour_unpublish(bonjour_service_t *service)
   }
   if ((previous_state == BONJOUR_REG_REGISTERED || wait_for_shutdown) &&
       completion_status != WAIT_OBJECT_0) {
+    AcquireSRWLockExclusive(&service->lock);
+    service->cleanup_owner = 0;
+    ReleaseSRWLockExclusive(&service->lock);
     fprintf(stderr,
             "pure-bonjour: deregistration did not complete within %lu ms; "
             "retaining registered service state for retry\n",
@@ -654,6 +693,7 @@ void bonjour_unpublish(bonjour_service_t *service)
     AcquireSRWLockExclusive(&service->lock);
     service->state = BONJOUR_REG_REGISTERED;
     service->shutdown_inflight = 0;
+    service->cleanup_owner = 0;
     ReleaseSRWLockExclusive(&service->lock);
     fprintf(stderr,
             "pure-bonjour: deregistration callback failed (status %lu); "
@@ -661,7 +701,8 @@ void bonjour_unpublish(bonjour_service_t *service)
     return;
   }
   AcquireSRWLockExclusive(&service->lock);
-  if (previous_state != BONJOUR_REG_REGISTERED && !wait_for_shutdown)
+  if (previous_state != BONJOUR_REG_REGISTERED &&
+      previous_state != BONJOUR_REG_PENDING && !wait_for_shutdown)
     service->cancel_established = 1;
   ReleaseSRWLockExclusive(&service->lock);
 
@@ -673,7 +714,14 @@ void bonjour_unpublish(bonjour_service_t *service)
             (unsigned long)service->wait_ms, (unsigned long)status);
   }
 
+#ifdef BONJOUR_WINDOWS_TESTING
+  if (service->api->before_service_route_drain != NULL)
+    service->api->before_service_route_drain();
+#endif
   if (!bonjour_route_remove_and_wait(service->token, service->wait_ms)) {
+    AcquireSRWLockExclusive(&service->lock);
+    service->cleanup_owner = 0;
+    ReleaseSRWLockExclusive(&service->lock);
     fprintf(stderr,
             "pure-bonjour: registration callback drain timed out; retaining "
             "state for retry\n");
@@ -1023,7 +1071,7 @@ static void bonjour_cancel_resolvers_for_fqdn(bonjour_browser_t *browser,
     ReleaseSRWLockExclusive(&browser->lock);
     if (call_cancel)
       status = browser->api->cancel_resolve(&resolver->cancel);
-    if (!bonjour_cancel_completed((DWORD)status)) {
+    if (!bonjour_query_cancel_completed((DWORD)status)) {
       AcquireSRWLockExclusive(&browser->lock);
       bonjour_resolver_retry_cancel_locked(resolver);
       ReleaseSRWLockExclusive(&browser->lock);
@@ -1457,7 +1505,7 @@ void bonjour_close(bonjour_browser_t *browser)
   if (perform_browse_cancel)
     browse_status = browser->api->cancel_browse(&browser->cancel);
 
-  if (!bonjour_cancel_completed((DWORD)browse_status)) {
+  if (!bonjour_query_cancel_completed((DWORD)browse_status)) {
     AcquireSRWLockExclusive(&browser->lock);
     browser->cleanup_owner = 0;
     browser->closing = 0;
@@ -1506,7 +1554,7 @@ void bonjour_close(bonjour_browser_t *browser)
     if (resolver == NULL) break;
     if (call_cancel)
       status = browser->api->cancel_resolve(&resolver->cancel);
-    if (!bonjour_cancel_completed((DWORD)status)) {
+    if (!bonjour_query_cancel_completed((DWORD)status)) {
       AcquireSRWLockExclusive(&browser->lock);
       bonjour_resolver_retry_cancel_locked(resolver);
       browser->cleanup_owner = 0;

@@ -87,6 +87,8 @@ typedef struct {
   VOID (WINAPI *before_resolver_link)(void);
   VOID (WINAPI *before_browser_cleanup)(void);
   VOID (WINAPI *after_browse_route_acquire)(void);
+  VOID (WINAPI *after_registration_route_acquire)(void);
+  VOID (WINAPI *before_service_route_drain)(void);
 } bonjour_dns_api_t;
 
 BONJOUR_WINDOWS_PRIVATE bonjour_service_t *bonjour_publish_with_api(

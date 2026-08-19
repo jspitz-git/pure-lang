@@ -46,12 +46,40 @@ Bonjour for Windows product.
 
 ## Progress Log
 
+- 2026-08-19: Closed the service-cleanup ownership review round locally; the
+  TODO remains open for renewed remote and artifact evidence.
+  - Official Microsoft return contracts were rechecked. Only
+    `DnsServiceRegisterCancel` documents `ERROR_CANCELLED` as an
+    already-cancelled result; `DnsServiceBrowseCancel` and
+    `DnsServiceResolveCancel` document only `ERROR_SUCCESS` as success.
+    `DNS_REQUEST_PENDING` is not accepted as completed cancellation for any of
+    the three cancel calls. See the Microsoft Learn pages for
+    [RegisterCancel](https://learn.microsoft.com/en-us/windows/win32/api/windns/nf-windns-dnsserviceregistercancel),
+    [BrowseCancel](https://learn.microsoft.com/en-us/windows/win32/api/windns/nf-windns-dnsservicebrowsecancel),
+    and [ResolveCancel](https://learn.microsoft.com/en-us/windows/win32/api/windns/nf-windns-dnsserviceresolvecancel).
+  - Service cleanup now claims one owner under the service lock before any
+    Cancel/DeRegister call and retains ownership through route drain and final
+    free. Concurrent callers, including multiple retries after cancellation is
+    established, return without removing the route or freeing shared state.
+  - A registration callback that wins during a failed RegisterCancel updates
+    the terminal registration state. Cleanup no longer overwrites it with
+    PENDING; a successful callback makes the next cleanup use DeRegister.
+  - Validation:
+    - `ctest.exe --test-dir build/pure-bonjour-final -R
+      "^pure-bonjour-lifecycle$" --repeat until-fail:20 --output-on-failure`
+      passed 20/20 runs in 58.70 seconds.
+    - `ctest.exe --test-dir build/pure-bonjour-final --output-on-failure -j 1`
+      passed 14/14 tests in 280.29 seconds, including lifecycle in 2.90 seconds
+      and the real loopback in 4.74 seconds.
+    - `cmake.exe --build build/pure-bonjour-final --target
+      verify-windows-dependencies` passed with 11 PE files, 126 import edges,
+      and exactly seven exports.
+
 - 2026-08-19: Closed the second cancellation-lifetime review round locally;
   the TODO remains open for renewed remote and artifact evidence.
-  - The three Microsoft cancel APIs treat `ERROR_CANCELLED` as an
-    already-cancelled operation that is safe to drain and clean up. Other
-    failures still retain the callback route, owning object, and SDK cancel
-    handle for retry.
+  - This round initially treated `ERROR_CANCELLED` as a completed cancellation
+    for all three APIs; the subsequent official-contract audit above narrowed
+    that handling to RegisterCancel only.
   - Deregistration dispatch failure, callback failure, and delayed completion
     retain the registered service and its route. Explicit cleanup retries the
     dispatch or finishes a previously accepted request instead of reporting a

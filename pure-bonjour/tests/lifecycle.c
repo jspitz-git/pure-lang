@@ -36,6 +36,7 @@ typedef struct {
   int free_resolved_instance_calls;
   int callback_after_free;
   int callback_on_cancel;
+  DWORD callback_on_cancel_status;
   int browse_calls;
   int browse_cancel_calls;
   int resolve_calls;
@@ -52,6 +53,14 @@ typedef struct {
   HANDLE browse_cancel_release;
   HANDLE resolve_cancel_entered;
   HANDLE resolve_cancel_release;
+  HANDLE registration_cancel_entered;
+  HANDLE registration_cancel_release;
+  HANDLE registration_route_entered;
+  HANDLE registration_route_release;
+  HANDLE service_drain_entered;
+  HANDLE service_drain_release;
+  int service_drain_calls;
+  int service_drain_block_call;
   PDNS_SERVICE_REGISTER_COMPLETE callback;
   void *callback_context;
   PDNS_SERVICE_BROWSE_CALLBACK browse_callback;
@@ -130,8 +139,17 @@ static DWORD WINAPI fake_cancel(PDNS_SERVICE_CANCEL cancel)
   (void)cancel;
   assert(fake != NULL);
   ++fake->cancel_calls;
-  if (fake->callback_on_cancel)
-    fake_fire_callback(fake, ERROR_CANCELLED, NULL);
+  if (fake->registration_cancel_entered != NULL) {
+    assert(SetEvent(fake->registration_cancel_entered));
+    assert(WaitForSingleObject(fake->registration_cancel_release, 1000) ==
+           WAIT_OBJECT_0);
+  }
+  if (fake->callback_on_cancel) {
+    DWORD status = fake->callback_on_cancel_status;
+    fake_fire_callback(fake, status,
+                       status == ERROR_SUCCESS
+                           ? L"Probe._puretodo45._tcp.local" : NULL);
+  }
   return fake->cancel_result;
 }
 
@@ -303,6 +321,29 @@ static VOID WINAPI fake_after_browse_route_acquire(void)
          WAIT_OBJECT_0);
 }
 
+static VOID WINAPI fake_after_registration_route_acquire(void)
+{
+  fake_dns_t *fake = active_fake;
+
+  assert(fake != NULL);
+  if (fake->registration_route_entered == NULL) return;
+  assert(SetEvent(fake->registration_route_entered));
+  assert(WaitForSingleObject(fake->registration_route_release, 1000) ==
+         WAIT_OBJECT_0);
+}
+
+static VOID WINAPI fake_before_service_route_drain(void)
+{
+  fake_dns_t *fake = active_fake;
+
+  assert(fake != NULL);
+  ++fake->service_drain_calls;
+  if (fake->service_drain_calls != fake->service_drain_block_call) return;
+  assert(SetEvent(fake->service_drain_entered));
+  assert(WaitForSingleObject(fake->service_drain_release, 1000) ==
+         WAIT_OBJECT_0);
+}
+
 static VOID WINAPI fake_record_list_free(PDNS_RECORD records,
                                          DNS_FREE_TYPE free_type)
 {
@@ -334,7 +375,11 @@ static fake_dns_t fake_dns_pending_registration(void)
   fake.api.before_resolver_link = fake_before_resolver_link;
   fake.api.before_browser_cleanup = fake_before_browser_cleanup;
   fake.api.after_browse_route_acquire = fake_after_browse_route_acquire;
+  fake.api.after_registration_route_acquire =
+      fake_after_registration_route_acquire;
+  fake.api.before_service_route_drain = fake_before_service_route_drain;
   fake.register_result = DNS_REQUEST_PENDING;
+  fake.callback_on_cancel_status = ERROR_CANCELLED;
   fake.deregister_result = DNS_REQUEST_PENDING;
   fake.deregister_callback_result = ERROR_SUCCESS;
   fake.deregister_callback_on_dispatch = 1;
@@ -698,7 +743,7 @@ static void test_registration_already_cancelled_is_safe_to_clean(void)
   assert(bonjour_callback_registry_count() == 0);
 }
 
-static void test_browse_already_cancelled_is_safe_to_clean(void)
+static void test_browse_error_cancelled_retains_state_for_retry(void)
 {
   fake_dns_t fake = fake_dns_pending_registration();
   bonjour_browser_t *browser;
@@ -709,10 +754,14 @@ static void test_browse_already_cancelled_is_safe_to_clean(void)
   assert(browser != NULL);
   bonjour_close(browser);
   assert(fake.browse_cancel_calls == 1);
+  assert(bonjour_callback_registry_count() == 1);
+  fake.browse_cancel_result = ERROR_SUCCESS;
+  bonjour_close(browser);
+  assert(fake.browse_cancel_calls == 2);
   assert(bonjour_callback_registry_count() == 0);
 }
 
-static void test_resolve_already_cancelled_is_safe_to_clean(void)
+static void test_resolve_error_cancelled_retains_state_for_retry(void)
 {
   fake_dns_t fake = fake_dns_pending_registration();
   bonjour_browser_t *browser;
@@ -726,6 +775,75 @@ static void test_resolve_already_cancelled_is_safe_to_clean(void)
   bonjour_close(browser);
   assert(fake.browse_cancel_calls == 1);
   assert(fake.resolve_cancel_calls == 1);
+  assert(bonjour_callback_registry_count() == 1);
+  fake.resolve_cancel_result = ERROR_SUCCESS;
+  bonjour_close(browser);
+  assert(fake.resolve_cancel_calls == 2);
+  assert(bonjour_callback_registry_count() == 0);
+}
+
+static void test_pending_cancel_status_is_not_completion(void)
+{
+  fake_dns_t fake = fake_dns_pending_registration();
+  bonjour_service_t *service;
+  bonjour_browser_t *browser;
+  DNS_RECORD add_record;
+
+  fake.cancel_result = DNS_REQUEST_PENDING;
+  use_fake(&fake);
+  service = bonjour_publish_with_api("Probe", "_puretodo45._tcp", 43210,
+                                     &fake.api, 25);
+  assert(service != NULL);
+  bonjour_unpublish(service);
+  assert(fake.free_instance_calls == 0);
+  assert(bonjour_callback_registry_count() == 1);
+  fake.cancel_result = ERROR_SUCCESS;
+  bonjour_unpublish(service);
+  assert(fake.cancel_calls == 2);
+  assert(bonjour_callback_registry_count() == 0);
+
+  fake.browse_cancel_result = DNS_REQUEST_PENDING;
+  browser = bonjour_browse_with_api("_puretodo45._tcp", &fake.api, 25);
+  assert(browser != NULL);
+  bonjour_close(browser);
+  assert(bonjour_callback_registry_count() == 1);
+  fake.browse_cancel_result = ERROR_SUCCESS;
+  bonjour_close(browser);
+  assert(bonjour_callback_registry_count() == 0);
+
+  fake.browse_cancel_result = ERROR_SUCCESS;
+  fake.resolve_cancel_result = DNS_REQUEST_PENDING;
+  browser = bonjour_browse_with_api("_puretodo45._tcp", &fake.api, 25);
+  assert(browser != NULL);
+  fake_fire_browse(&fake, &add_record, 0);
+  bonjour_close(browser);
+  assert(bonjour_callback_registry_count() == 1);
+  fake.resolve_cancel_result = ERROR_SUCCESS;
+  bonjour_close(browser);
+  assert(bonjour_callback_registry_count() == 0);
+}
+
+static void test_failed_register_cancel_preserves_terminal_callback_outcome(void)
+{
+  fake_dns_t fake = fake_dns_pending_registration();
+  bonjour_service_t *service;
+
+  fake.cancel_result = ERROR_ACCESS_DENIED;
+  fake.callback_on_cancel = 1;
+  fake.callback_on_cancel_status = ERROR_SUCCESS;
+  use_fake(&fake);
+  service = bonjour_publish_with_api("Probe", "_puretodo45._tcp", 43210,
+                                     &fake.api, 25);
+  assert(service != NULL);
+  bonjour_unpublish(service);
+  assert(fake.cancel_calls == 1);
+  assert(fake.deregister_calls == 0);
+  assert(fake.free_instance_calls == 0);
+  assert(bonjour_callback_registry_count() == 1);
+  bonjour_unpublish(service);
+  assert(fake.cancel_calls == 1);
+  assert(fake.deregister_calls == 1);
+  assert(fake.free_instance_calls == 1);
   assert(bonjour_callback_registry_count() == 0);
 }
 
@@ -885,6 +1003,19 @@ static DWORD WINAPI bonjour_close_thread(void *parameter)
   return 0;
 }
 
+static DWORD WINAPI bonjour_unpublish_thread(void *parameter)
+{
+  bonjour_unpublish(parameter);
+  return 0;
+}
+
+static DWORD WINAPI fake_fire_registration_cancelled_thread(void *parameter)
+{
+  fake_dns_t *fake = parameter;
+  fake_fire_callback(fake, ERROR_CANCELLED, NULL);
+  return 0;
+}
+
 typedef struct {
   fake_dns_t *fake;
   DNS_RECORD record;
@@ -928,6 +1059,104 @@ static void test_concurrent_close_has_one_cleanup_owner(void)
   CloseHandle(first);
   CloseHandle(fake.browse_cancel_release);
   CloseHandle(fake.browse_cancel_entered);
+}
+
+static void test_concurrent_unpublish_has_one_api_cleanup_owner(void)
+{
+  fake_dns_t fake = fake_dns_pending_registration();
+  bonjour_service_t *service;
+  HANDLE first;
+  HANDLE second;
+
+  fake.registration_cancel_entered = CreateEventW(NULL, TRUE, FALSE, NULL);
+  fake.registration_cancel_release = CreateEventW(NULL, TRUE, FALSE, NULL);
+  assert(fake.registration_cancel_entered != NULL);
+  assert(fake.registration_cancel_release != NULL);
+  use_fake(&fake);
+  service = bonjour_publish_with_api("Probe", "_puretodo45._tcp", 43210,
+                                     &fake.api, 25);
+  assert(service != NULL);
+  first = CreateThread(NULL, 0, bonjour_unpublish_thread, service, 0, NULL);
+  assert(first != NULL);
+  assert(WaitForSingleObject(fake.registration_cancel_entered, 1000) ==
+         WAIT_OBJECT_0);
+  second = CreateThread(NULL, 0, bonjour_unpublish_thread, service, 0, NULL);
+  assert(second != NULL);
+  assert(WaitForSingleObject(second, 500) == WAIT_OBJECT_0);
+  assert(fake.cancel_calls == 1);
+  assert(fake.free_instance_calls == 0);
+  assert(bonjour_callback_registry_count() == 1);
+  assert(SetEvent(fake.registration_cancel_release));
+  assert(WaitForSingleObject(first, 1000) == WAIT_OBJECT_0);
+  assert(fake.free_instance_calls == 1);
+  assert(bonjour_callback_registry_count() == 0);
+  CloseHandle(second);
+  CloseHandle(first);
+  CloseHandle(fake.registration_cancel_release);
+  CloseHandle(fake.registration_cancel_entered);
+}
+
+static void test_concurrent_retries_after_cancel_established_have_one_owner(void)
+{
+  fake_dns_t fake = fake_dns_pending_registration();
+  bonjour_service_t *service;
+  HANDLE callback_thread;
+  HANDLE first_retry;
+  HANDLE second_retry;
+  HANDLE third_retry;
+
+  fake.registration_route_entered = CreateEventW(NULL, TRUE, FALSE, NULL);
+  fake.registration_route_release = CreateEventW(NULL, TRUE, FALSE, NULL);
+  assert(fake.registration_route_entered != NULL);
+  assert(fake.registration_route_release != NULL);
+  use_fake(&fake);
+  service = bonjour_publish_with_api("Probe", "_puretodo45._tcp", 43210,
+                                     &fake.api, 25);
+  assert(service != NULL);
+  callback_thread = CreateThread(NULL, 0,
+      fake_fire_registration_cancelled_thread, &fake, 0, NULL);
+  assert(callback_thread != NULL);
+  assert(WaitForSingleObject(fake.registration_route_entered, 1000) ==
+         WAIT_OBJECT_0);
+  bonjour_unpublish(service);
+  assert(fake.cancel_calls == 1);
+  assert(fake.free_instance_calls == 0);
+  assert(bonjour_callback_registry_count() == 1);
+  assert(SetEvent(fake.registration_route_release));
+  assert(WaitForSingleObject(callback_thread, 1000) == WAIT_OBJECT_0);
+
+  fake.service_drain_entered = CreateEventW(NULL, TRUE, FALSE, NULL);
+  fake.service_drain_release = CreateEventW(NULL, TRUE, FALSE, NULL);
+  fake.service_drain_block_call = 2;
+  assert(fake.service_drain_entered != NULL);
+  assert(fake.service_drain_release != NULL);
+  first_retry = CreateThread(NULL, 0, bonjour_unpublish_thread,
+                             service, 0, NULL);
+  assert(first_retry != NULL);
+  assert(WaitForSingleObject(fake.service_drain_entered, 1000) ==
+         WAIT_OBJECT_0);
+  second_retry = CreateThread(NULL, 0, bonjour_unpublish_thread,
+                              service, 0, NULL);
+  third_retry = CreateThread(NULL, 0, bonjour_unpublish_thread,
+                             service, 0, NULL);
+  assert(second_retry != NULL);
+  assert(third_retry != NULL);
+  assert(WaitForSingleObject(second_retry, 500) == WAIT_OBJECT_0);
+  assert(WaitForSingleObject(third_retry, 500) == WAIT_OBJECT_0);
+  assert(fake.free_instance_calls == 0);
+  assert(bonjour_callback_registry_count() == 1);
+  assert(SetEvent(fake.service_drain_release));
+  assert(WaitForSingleObject(first_retry, 1000) == WAIT_OBJECT_0);
+  assert(fake.free_instance_calls == 1);
+  assert(bonjour_callback_registry_count() == 0);
+  CloseHandle(third_retry);
+  CloseHandle(second_retry);
+  CloseHandle(first_retry);
+  CloseHandle(fake.service_drain_release);
+  CloseHandle(fake.service_drain_entered);
+  CloseHandle(callback_thread);
+  CloseHandle(fake.registration_route_release);
+  CloseHandle(fake.registration_route_entered);
 }
 
 static void test_concurrent_ptr_deletes_have_one_resolver_cancel_owner(void)
@@ -1405,8 +1634,10 @@ int main(void)
   test_pending_registration_is_cancelled_before_free();
   test_callback_completion_during_cancellation_is_safe();
   test_registration_already_cancelled_is_safe_to_clean();
-  test_browse_already_cancelled_is_safe_to_clean();
-  test_resolve_already_cancelled_is_safe_to_clean();
+  test_browse_error_cancelled_retains_state_for_retry();
+  test_resolve_error_cancelled_retains_state_for_retry();
+  test_pending_cancel_status_is_not_completion();
+  test_failed_register_cancel_preserves_terminal_callback_outcome();
   test_repeated_null_cleanup_is_a_noop();
   test_browse_rejection_releases_partial_state();
   test_browse_resolve_snapshot_update_and_removal();
@@ -1433,6 +1664,8 @@ int main(void)
   test_resolve_cancel_failure_retains_state_for_callback_and_retry();
   test_route_drain_timeout_is_bounded_and_retains_live_browser();
   test_concurrent_close_has_one_cleanup_owner();
+  test_concurrent_unpublish_has_one_api_cleanup_owner();
+  test_concurrent_retries_after_cancel_established_have_one_owner();
   test_concurrent_ptr_deletes_have_one_resolver_cancel_owner();
   bonjour_close(NULL);
   assert(bonjour_callback_registry_count() == 0);
