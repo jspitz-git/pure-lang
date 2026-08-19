@@ -67,6 +67,22 @@ function(run_stager mode expected_result expected_category)
   endif()
 endfunction()
 
+execute_process(
+  COMMAND "${CMAKE_COMMAND}"
+    -DMODE=STAGE
+    "-DPURE_PREFIX=${prefix}"
+    "-DTOOLCHAIN_BIN=${source}"
+    "-DLLVM_READOBJ=${LLVM_READOBJ}"
+    -DRUNTIME_MANIFEST=relative-manifest.cmake
+    -P "${STAGER}"
+  RESULT_VARIABLE relative_result OUTPUT_VARIABLE relative_output
+  ERROR_VARIABLE relative_error)
+if(relative_result EQUAL 0 OR NOT "${relative_output}${relative_error}" MATCHES
+    "SDK_RUNTIME_INPUT: RUNTIME_MANIFEST must be absolute")
+  message(FATAL_ERROR
+    "SDK_RUNTIME_FIXTURE: relative manifest was not rejected explicitly")
+endif()
+
 run_stager(STAGE pass "")
 
 file(GLOB staged RELATIVE "${prefix}/bin" "${prefix}/bin/*.dll")

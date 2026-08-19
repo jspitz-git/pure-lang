@@ -515,7 +515,7 @@ ci_require_text("${pure_run}" PURE
   "-DMODE=STAGE"
   "-DTOOLCHAIN_BIN=C:/msys64/clang64/bin"
   "-DLLVM_READOBJ=C:/msys64/clang64/bin/llvm-readobj.exe"
-  "-DRUNTIME_MANIFEST=pure-bonjour/cmake/PureWindowsRuntimeClosure.cmake"
+  "\"-DRUNTIME_MANIFEST=$repo/pure-bonjour/cmake/PureWindowsRuntimeClosure.cmake\""
   "-P pure/cmake/StageWindowsRuntimeDlls.cmake"
   "Pure runtime DLL staging failed"
   "PURE_PREFIX=")
@@ -525,7 +525,7 @@ set(runtime_stager_block
   "            \"-DPURE_PREFIX=$purePrefix\" `\n"
   "            -DTOOLCHAIN_BIN=C:/msys64/clang64/bin `\n"
   "            -DLLVM_READOBJ=C:/msys64/clang64/bin/llvm-readobj.exe `\n"
-  "            -DRUNTIME_MANIFEST=pure-bonjour/cmake/PureWindowsRuntimeClosure.cmake `\n"
+  "            \"-DRUNTIME_MANIFEST=$repo/pure-bonjour/cmake/PureWindowsRuntimeClosure.cmake\" `\n"
   "            -P pure/cmake/StageWindowsRuntimeDlls.cmake\n"
   "          if ($LASTEXITCODE -ne 0) { throw \"Pure runtime DLL staging failed\" }")
 string(JOIN "" runtime_stager_block ${runtime_stager_block})
@@ -558,7 +558,7 @@ set(pure_run_expected [=[          $ErrorActionPreference = 'Stop'
             "-DPURE_PREFIX=$purePrefix" `
             -DTOOLCHAIN_BIN=C:/msys64/clang64/bin `
             -DLLVM_READOBJ=C:/msys64/clang64/bin/llvm-readobj.exe `
-            -DRUNTIME_MANIFEST=pure-bonjour/cmake/PureWindowsRuntimeClosure.cmake `
+            "-DRUNTIME_MANIFEST=$repo/pure-bonjour/cmake/PureWindowsRuntimeClosure.cmake" `
             -P pure/cmake/StageWindowsRuntimeDlls.cmake
           if ($LASTEXITCODE -ne 0) { throw "Pure runtime DLL staging failed" }
           "PURE_PREFIX=$($purePrefix.Replace('\', '/'))" |
@@ -828,6 +828,13 @@ if(NOT MUTATION_MODE)
     "            -P pure/cmake/StageWindowsRuntimeDlls.cmake"
     "            # -P pure/cmake/StageWindowsRuntimeDlls.cmake" mutated)
   ci_expect_rejected(missing-sdk-runtime-stager "${mutated}" PURE)
+
+  ci_mutate_named_step_line("${workflow}"
+    "Build and install the matching Windows Pure SDK"
+    "            \"-DRUNTIME_MANIFEST=$repo/pure-bonjour/cmake/PureWindowsRuntimeClosure.cmake\" `"
+    "            -DRUNTIME_MANIFEST=pure-bonjour/cmake/PureWindowsRuntimeClosure.cmake `"
+    mutated)
+  ci_expect_rejected(relative-sdk-runtime-manifest "${mutated}" PURE)
 
   ci_mutate_named_step_line("${workflow}"
     "Build and install the matching Windows Pure SDK"
