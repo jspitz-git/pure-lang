@@ -535,6 +535,40 @@ if(NOT runtime_stager_count EQUAL 1)
     "CI_CONTRACT_PURE: expected one reachable exact runtime stager block, "
     "found ${runtime_stager_count}")
 endif()
+set(pure_run_expected [=[          $ErrorActionPreference = 'Stop'
+          $env:Path = "C:/msys64/clang64/bin;C:/msys64/usr/bin;$env:Path"
+          $repo = (Get-Location).Path
+          $pureBuild = Join-Path $repo 'build/windows Pure SDK build'
+          $purePrefix = Join-Path $repo 'build/windows Pure SDK prefix'
+          & $env:CMAKE_EXE -S pure -B $pureBuild -G Ninja `
+            -DCMAKE_BUILD_TYPE=Release `
+            -DCMAKE_MAKE_PROGRAM=C:/msys64/clang64/bin/ninja.exe `
+            -DCMAKE_C_COMPILER=C:/msys64/clang64/bin/clang.exe `
+            -DCMAKE_CXX_COMPILER=C:/msys64/clang64/bin/clang++.exe `
+            -DLLVM_DIR=C:/msys64/clang64/lib/cmake/llvm `
+            "-DCMAKE_INSTALL_PREFIX=$purePrefix" `
+            -DPURE_STRICT_TOOLCHAIN=ON
+          if ($LASTEXITCODE -ne 0) { throw "Pure configure failed" }
+          & $env:CMAKE_EXE --build $pureBuild --parallel 1
+          if ($LASTEXITCODE -ne 0) { throw "Pure build failed" }
+          & $env:CMAKE_EXE --build $pureBuild --target install --parallel 1
+          if ($LASTEXITCODE -ne 0) { throw "Pure install failed" }
+          & $env:CMAKE_EXE `
+            -DMODE=STAGE `
+            "-DPURE_PREFIX=$purePrefix" `
+            -DTOOLCHAIN_BIN=C:/msys64/clang64/bin `
+            -DLLVM_READOBJ=C:/msys64/clang64/bin/llvm-readobj.exe `
+            -DRUNTIME_MANIFEST=pure-bonjour/cmake/PureWindowsRuntimeClosure.cmake `
+            -P pure/cmake/StageWindowsRuntimeDlls.cmake
+          if ($LASTEXITCODE -ne 0) { throw "Pure runtime DLL staging failed" }
+          "PURE_PREFIX=$($purePrefix.Replace('\', '/'))" |
+            Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append]=])
+string(STRIP "${pure_run}" pure_run_normalized)
+string(STRIP "${pure_run_expected}" pure_run_expected_normalized)
+if(NOT pure_run_normalized STREQUAL pure_run_expected_normalized)
+  message(FATAL_ERROR
+    "CI_CONTRACT_PURE: build/install run body must be the exact direct command sequence")
+endif()
 
 ci_extract_step("Configure and build PureBonjour"
   build_start build_end build_code)
@@ -813,6 +847,25 @@ if(NOT MUTATION_MODE)
     "          Write-Output $env:CMAKE_EXE `\n            -DMODE=STAGE `"
     mutated)
   ci_expect_rejected(noninvoked-sdk-runtime-stager "${mutated}" PURE)
+
+  ci_mutate_named_step_line("${workflow}"
+    "Build and install the matching Windows Pure SDK"
+    "          & $env:CMAKE_EXE `\n            -DMODE=STAGE `"
+    "          return\n          & $env:CMAKE_EXE `\n            -DMODE=STAGE `"
+    mutated)
+  ci_expect_rejected(return-before-sdk-runtime-stager "${mutated}" PURE)
+
+  ci_mutate_named_step_line("${workflow}"
+    "Build and install the matching Windows Pure SDK"
+    "          & $env:CMAKE_EXE `\n            -DMODE=STAGE `"
+    "          if ($true) {\n          & $env:CMAKE_EXE `\n            -DMODE=STAGE `"
+    mutated)
+  ci_mutate_named_step_line("${mutated}"
+    "Build and install the matching Windows Pure SDK"
+    "          if ($LASTEXITCODE -ne 0) { throw \"Pure runtime DLL staging failed\" }"
+    "          if ($LASTEXITCODE -ne 0) { throw \"Pure runtime DLL staging failed\" }\n          }"
+    mutated)
+  ci_expect_rejected(wrapped-sdk-runtime-stager "${mutated}" PURE)
 
   string(REPLACE "          if ($LASTEXITCODE -ne 0) { throw \"PureBonjour build failed\" }"
     "          & $env:CMAKE_EXE --install $build\n          if ($LASTEXITCODE -ne 0) { throw \"PureBonjour build failed\" }"
