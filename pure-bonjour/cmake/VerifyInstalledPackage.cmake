@@ -262,33 +262,65 @@ if(NOT IS_ABSOLUTE "${scratch_root_input}")
 endif()
 cmake_path(ABSOLUTE_PATH scratch_root_input NORMALIZE
   OUTPUT_VARIABLE scratch_root_input)
-pure_bonjour_try_unlink_reparse(
-  "${scratch_root_input}" scratch_reparse_unlinked scratch_probe_detail)
-if(scratch_reparse_unlinked)
+foreach(protected IN ITEMS stage pure_prefix)
+  pure_bonjour_require_outside("${scratch_root_input}" "${${protected}}"
+    PACKAGE_SCRATCH)
+endforeach()
+get_filename_component(scratch_parent_input "${scratch_root_input}" DIRECTORY)
+get_filename_component(scratch_basename "${scratch_root_input}" NAME)
+if(scratch_basename STREQUAL "")
+  pure_bonjour_package_fail(PACKAGE_SCRATCH
+    "scratch root must have a child basename: ${scratch_root_input}")
+endif()
+
+# Canonicalize only the existing ordinary parent first.  Combining that trusted
+# parent with the final basename proves the entry location before an existing
+# reparse is unlinked or a missing child is created.
+pure_bonjour_fs_action(inspect-dir "${scratch_parent_input}" ""
+  PACKAGE_SCRATCH)
+file(REAL_PATH "${scratch_parent_input}" scratch_parent)
+set(scratch_location "${scratch_parent}/${scratch_basename}")
+cmake_path(NORMAL_PATH scratch_location)
+foreach(protected IN ITEMS stage pure_prefix)
+  pure_bonjour_require_outside("${scratch_location}" "${${protected}}"
+    PACKAGE_SCRATCH)
+endforeach()
+
+pure_bonjour_probe_entry("${scratch_root_input}" PACKAGE_SCRATCH
+  scratch_entry_kind)
+if(scratch_entry_kind STREQUAL "REPARSE")
+  file(REAL_PATH "${scratch_root_input}" scratch_entry_canonical)
+  foreach(protected IN ITEMS stage pure_prefix)
+    pure_bonjour_require_outside("${scratch_entry_canonical}"
+      "${${protected}}" PACKAGE_SCRATCH)
+  endforeach()
+  pure_bonjour_try_unlink_reparse(
+    "${scratch_root_input}" scratch_reparse_unlinked scratch_probe_detail)
+  if(NOT scratch_reparse_unlinked)
+    pure_bonjour_package_fail(PACKAGE_SCRATCH
+      "could not safely unlink pre-existing scratch reparse entry: "
+      "${scratch_root_input}; ${scratch_probe_detail}")
+  endif()
   pure_bonjour_package_fail(PACKAGE_SCRATCH
     "pre-existing scratch reparse entry was safely unlinked and rejected: "
     "${scratch_root_input}")
-endif()
-if(EXISTS "${scratch_root_input}" OR IS_SYMLINK "${scratch_root_input}")
+elseif(scratch_entry_kind STREQUAL "DIRECTORY")
   pure_bonjour_fs_action(inspect-dir "${scratch_root_input}" ""
     PACKAGE_SCRATCH)
-else()
-  get_filename_component(scratch_parent "${scratch_root_input}" DIRECTORY)
-  pure_bonjour_fs_action(inspect-dir "${scratch_parent}" ""
-    PACKAGE_SCRATCH)
-  file(MAKE_DIRECTORY "${scratch_root_input}")
-  pure_bonjour_fs_action(inspect-dir "${scratch_root_input}"
+  file(REAL_PATH "${scratch_root_input}" scratch_root)
+  foreach(protected IN ITEMS stage pure_prefix)
+    pure_bonjour_require_outside("${scratch_root}" "${${protected}}"
+      PACKAGE_SCRATCH)
+  endforeach()
+elseif(scratch_entry_kind STREQUAL "MISSING")
+  file(MAKE_DIRECTORY "${scratch_location}")
+  pure_bonjour_fs_action(inspect-dir "${scratch_location}"
     "${scratch_parent}" PACKAGE_SCRATCH)
+  file(REAL_PATH "${scratch_location}" scratch_root)
+else()
+  pure_bonjour_package_fail(PACKAGE_SCRATCH
+    "scratch root is not an ordinary directory: ${scratch_root_input}")
 endif()
-file(REAL_PATH "${scratch_root_input}" scratch_root)
-foreach(protected IN ITEMS stage pure_prefix)
-  cmake_path(IS_PREFIX ${protected} "${scratch_root}" NORMALIZE
-    scratch_inside_protected)
-  if(scratch_inside_protected)
-    pure_bonjour_package_fail(PACKAGE_SCRATCH
-      "scratch root is inside ${protected}: ${scratch_root}")
-  endif()
-endforeach()
 string(RANDOM LENGTH 20 ALPHABET 0123456789abcdef scratch_nonce)
 set(package_verify_work_dir
   "${scratch_root}/verify-${verify_id}-${scratch_nonce}")

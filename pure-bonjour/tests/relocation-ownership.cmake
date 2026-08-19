@@ -127,6 +127,7 @@ function(run_remover prefix authority expected_token label)
     COMMAND "${CMAKE_COMMAND}"
       "-DPREFIX=${prefix}"
       "-DBUILD_PREFIX=${authority}"
+      ${ARGN}
       -P "${remover}"
     RESULT_VARIABLE result
     OUTPUT_VARIABLE output
@@ -325,6 +326,72 @@ if(NOT authority_unlink_result EQUAL 0 OR
     NOT reparse_owned_actual_sha STREQUAL reparse_owned_sha OR
     NOT authority_sentinel_actual_sha STREQUAL authority_sentinel_sha)
   message(FATAL_ERROR "reparse authority mutation changed protected files")
+endif()
+
+# A deterministic test hook replaces lib/pure only after the remover's complete
+# preflight.  The first exact deletion must perform its own fresh no-follow walk
+# and reject the new junction before either owned or unrelated state changes.
+set(swap_prefix "${test_root}/Removal Post Preflight Swap")
+install_component("${swap_prefix}")
+set(swap_target "${test_root}/Post Preflight Unrelated Target")
+file(MAKE_DIRECTORY "${swap_target}")
+file(WRITE "${swap_target}/bonjour.dll" "post-preflight sentinel dll\n")
+file(WRITE "${swap_target}/bonjour.pure" "post-preflight sentinel pure\n")
+file(SHA256 "${swap_target}/bonjour.dll" swap_target_sha)
+file(SHA256 "${swap_prefix}/share/doc/pure-bonjour/README" swap_owned_sha)
+set(swap_hook "${test_root}/post-preflight-swap.ps1")
+file(WRITE "${swap_hook}" [=[
+param([string]$Prefix, [string]$Target)
+$source = [IO.Path]::Combine($Prefix, 'lib', 'pure')
+$saved = [IO.Path]::Combine($Prefix, 'lib', 'pure-owned')
+[IO.Directory]::Move($source, $saved)
+& $env:COMSPEC /d /c mklink /J $source $Target | Out-Null
+exit $LASTEXITCODE
+]=])
+execute_process(
+  COMMAND "${CMAKE_COMMAND}"
+    "-DPREFIX=${swap_prefix}"
+    "-DBUILD_PREFIX=${build_dir}"
+    -DPACKAGE_ENABLE_TEST_HOOKS=ON
+    "-DPACKAGE_TEST_POST_PREFLIGHT_SCRIPT=${swap_hook}"
+    "-DPACKAGE_TEST_POST_PREFLIGHT_TARGET=${swap_target}"
+    -P "${remover}"
+  RESULT_VARIABLE swap_result
+  OUTPUT_VARIABLE swap_output
+  ERROR_VARIABLE swap_error
+  ENCODING UTF-8)
+set(swap_target_survived FALSE)
+if(EXISTS "${swap_target}/bonjour.dll")
+  file(SHA256 "${swap_target}/bonjour.dll" swap_target_actual_sha)
+  if(swap_target_actual_sha STREQUAL swap_target_sha)
+    set(swap_target_survived TRUE)
+  endif()
+endif()
+set(swap_owned_survived FALSE)
+if(EXISTS "${swap_prefix}/share/doc/pure-bonjour/README")
+  file(SHA256 "${swap_prefix}/share/doc/pure-bonjour/README"
+    swap_owned_actual_sha)
+  if(swap_owned_actual_sha STREQUAL swap_owned_sha)
+    set(swap_owned_survived TRUE)
+  endif()
+endif()
+set(swap_link "${swap_prefix}/lib/pure")
+cmake_path(NATIVE_PATH swap_link NORMALIZE swap_link_native)
+if(EXISTS "${swap_link}" OR IS_SYMLINK "${swap_link}")
+  execute_process(COMMAND "$ENV{COMSPEC}" /d /c rmdir
+    "${swap_link_native}" RESULT_VARIABLE swap_unlink_result)
+  if(NOT swap_unlink_result EQUAL 0)
+    message(FATAL_ERROR "could not unlink post-preflight swap fixture")
+  endif()
+endif()
+if(EXISTS "${swap_prefix}/lib/pure-owned")
+  file(RENAME "${swap_prefix}/lib/pure-owned" "${swap_prefix}/lib/pure")
+endif()
+if(swap_result EQUAL 0 OR NOT "${swap_output}${swap_error}" MATCHES
+    "PACKAGE_PATH" OR NOT swap_target_survived OR NOT swap_owned_survived)
+  message(FATAL_ERROR
+    "fresh removal-time validation did not reject the swap safely\n"
+    "${swap_output}${swap_error}")
 endif()
 
 run_remover("${relocated_prefix}" "${build_dir}" "" "normal")

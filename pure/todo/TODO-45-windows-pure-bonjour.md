@@ -254,3 +254,25 @@ an available Windows Bonjour implementation.
     tests in 170.05 seconds (10.99, 69.98, and 89.07 seconds respectively).
     The subsequent full suite passed 10/10 in 178.61 seconds of summed test
     time; relocation/removal took 88.72 seconds and local-link loopback 3.79.
+- 2026-08-19: Task 6 security fix round 2 closed binary prefix and scratch
+  pre-mutation gaps.
+  - Unicode prefix scanning now uses replacement fallback rather than skipping
+    an entire arbitrary/binary file after one invalid byte. Every file is
+    decoded as UTF-8 and as UTF-16LE at both byte alignments; odd tails are
+    trimmed safely, while exact raw-byte matching remains in place.
+  - New fresh-copy cases embed a Czech case-changed canonical prefix between
+    invalid UTF-8 bytes and after one leading byte before UTF-16LE. Both are
+    rejected as `PACKAGE_PREFIX`, expanding the verifier matrix to 37 cases.
+  - Scratch protection is now decided before unlink or creation. The verifier
+    checks the normalized lexical location, canonicalizes an ordinary no-follow
+    parent and combines only the basename, read-only probes an existing entry,
+    and checks a reparse target canonically before any permitted unlink.
+    A junction under a protected runtime remains present and byte-identical on
+    rejection; missing children under stage and runtime are never created.
+  - An explicitly enabled test-only post-preflight hook replaces `lib/pure`
+    after the complete removal preflight. The first exact file deletion's fresh
+    no-follow walk rejects that junction as `PACKAGE_PATH`; unrelated and owned
+    sentinels remain byte-identical, directly proving removal-time revalidation.
+  - Fresh focused validation passed 3/3 in 214.58 seconds (12.27, 89.73, and
+    112.57 seconds). The subsequent full suite passed 10/10 in 223.23 seconds;
+    the local-link loopback remained bounded at 3.80 seconds.

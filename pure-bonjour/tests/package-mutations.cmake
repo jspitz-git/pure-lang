@@ -164,6 +164,45 @@ try { $stream.Write($bytes, 0, $bytes.Length) } finally { $stream.Dispose() }
   endif()
 endfunction()
 
+function(append_binary_prefix path value mode)
+  set(script "${test_root}/append-binary-prefix.ps1")
+  if(NOT EXISTS "${script}")
+    file(WRITE "${script}" [=[
+param([string]$Path, [string]$Value,
+  [ValidateSet('invalid-utf8','odd-utf16')][string]$Mode)
+$stream = [IO.File]::Open($Path, [IO.FileMode]::Append,
+  [IO.FileAccess]::Write, [IO.FileShare]::Read)
+try {
+  if ($Mode -eq 'invalid-utf8') {
+    $stream.WriteByte(0xff)
+    $bytes = [Text.Encoding]::UTF8.GetBytes($Value)
+    $stream.Write($bytes, 0, $bytes.Length)
+    $stream.WriteByte(0xfe)
+  } else {
+    # The installed wrapper size is even.  One leading byte places the entire
+    # UTF-16LE leak at the opposite alignment from a whole-file decoder.
+    if (($stream.Position % 2) -ne 0) { throw 'fixture input is not even-sized' }
+    $stream.WriteByte(0x01)
+    $bytes = [Text.Encoding]::Unicode.GetBytes($Value)
+    $stream.Write($bytes, 0, $bytes.Length)
+  }
+} finally { $stream.Dispose() }
+]=])
+  endif()
+  set(powershell
+    "$ENV{SystemRoot}/System32/WindowsPowerShell/v1.0/powershell.exe")
+  execute_process(
+    COMMAND "${powershell}" -NoLogo -NoProfile -NonInteractive
+      -File "${script}" -Path "${path}" -Value "${value}" -Mode "${mode}"
+    RESULT_VARIABLE result
+    OUTPUT_VARIABLE output
+    ERROR_VARIABLE error
+    ENCODING UTF-8)
+  if(NOT result EQUAL 0)
+    message(FATAL_ERROR "binary prefix fixture creation failed: ${output}${error}")
+  endif()
+endfunction()
+
 # Each case starts from a fresh copy.  A production verifier with a missing
 # branch for the named behavior makes the corresponding assertion fail.
 fresh_case(changed-module stage case_build)
@@ -280,6 +319,24 @@ foreach(encoding_name IN ITEMS utf8 utf16)
     run_custom_verifier("${stage}" "${case_build}" "${unicode_source}"
       PACKAGE_PREFIX "unicode-${encoding_name}-${prefix_name}")
   endforeach()
+endforeach()
+
+# Invalid surrounding bytes and odd UTF-16LE alignment must not disable the
+# Unicode case-insensitive scan of an otherwise exact canonical prefix.
+foreach(binary_case IN ITEMS invalid-utf8 odd-utf16)
+  set(case_root "${test_root}/unicode-binary-${binary_case}")
+  set(stage "${case_root}/Stage Č")
+  set(case_build "${case_root}/Build Ž")
+  file(MAKE_DIRECTORY "${stage}" "${case_build}")
+  file(COPY "${valid_stage}/" DESTINATION "${stage}")
+  file(COPY_FILE "${oracle}"
+    "${case_build}/PureBonjourExpected.sha256" ONLY_IF_DIFFERENT)
+  set(leaked_prefix "${unicode_source}")
+  string(REPLACE "Č" "č" leaked_prefix "${leaked_prefix}")
+  append_binary_prefix("${stage}/lib/pure/bonjour.pure"
+    "${leaked_prefix}" "${binary_case}")
+  run_custom_verifier("${stage}" "${case_build}" "${unicode_source}"
+    PACKAGE_PREFIX "unicode-binary-${binary_case}")
 endforeach()
 
 fresh_case(mixed-case-prefix stage case_build)
@@ -442,6 +499,99 @@ if(scratch_result EQUAL 0 OR NOT
     "pre-existing scratch junction was not safely rejected\n"
     "${scratch_output}${scratch_error}")
 endif()
+
+# Protection is decided before mutation.  A scratch junction whose directory
+# entry is under a protected runtime prefix must remain present on rejection.
+fresh_case(protected-scratch-junction stage case_build)
+set(protected_runtime "${test_root}/protected-runtime")
+set(protected_scratch_target "${test_root}/protected-scratch-target")
+set(protected_scratch_link "${protected_runtime}/scratch-link")
+file(MAKE_DIRECTORY "${protected_runtime}" "${protected_scratch_target}")
+file(WRITE "${protected_scratch_target}/sentinel.bin"
+  "protected scratch sentinel\n")
+file(SHA256 "${protected_scratch_target}/sentinel.bin"
+  protected_scratch_sha)
+cmake_path(NATIVE_PATH protected_scratch_target NORMALIZE
+  protected_scratch_target_native)
+cmake_path(NATIVE_PATH protected_scratch_link NORMALIZE
+  protected_scratch_link_native)
+execute_process(
+  COMMAND "$ENV{COMSPEC}" /d /c mklink /J
+    "${protected_scratch_link_native}" "${protected_scratch_target_native}"
+  RESULT_VARIABLE protected_link_result)
+if(NOT protected_link_result EQUAL 0)
+  message(FATAL_ERROR "could not create protected scratch junction")
+endif()
+execute_process(
+  COMMAND "${CMAKE_COMMAND}"
+    "-DSTAGE_PREFIX=${stage}"
+    "-DSOURCE_PREFIX=${source_prefix}"
+    "-DBUILD_PREFIX=${case_build}"
+    "-DPURE_PREFIX=${protected_runtime}"
+    "-DPACKAGE_SCRATCH_ROOT=${protected_scratch_link}"
+    -P "${VERIFIER}"
+  RESULT_VARIABLE protected_scratch_result
+  OUTPUT_VARIABLE protected_scratch_output
+  ERROR_VARIABLE protected_scratch_error
+  ENCODING UTF-8)
+set(protected_link_was_present FALSE)
+if(EXISTS "${protected_scratch_link}" OR IS_SYMLINK "${protected_scratch_link}")
+  set(protected_link_was_present TRUE)
+  execute_process(COMMAND "$ENV{COMSPEC}" /d /c rmdir
+    "${protected_scratch_link_native}" RESULT_VARIABLE protected_unlink_result)
+  if(NOT protected_unlink_result EQUAL 0)
+    message(FATAL_ERROR "could not unlink protected scratch fixture")
+  endif()
+endif()
+file(SHA256 "${protected_scratch_target}/sentinel.bin"
+  protected_scratch_actual_sha)
+if(protected_scratch_result EQUAL 0 OR NOT
+    "${protected_scratch_output}${protected_scratch_error}" MATCHES
+      "PACKAGE_SCRATCH" OR
+    NOT protected_link_was_present OR
+    NOT protected_scratch_actual_sha STREQUAL protected_scratch_sha)
+  message(FATAL_ERROR
+    "protected scratch junction was mutated before rejection\n"
+    "${protected_scratch_output}${protected_scratch_error}")
+endif()
+
+# Missing scratch entries inside either protected prefix must be rejected before
+# file(MAKE_DIRECTORY) can create them.
+foreach(protected_name IN ITEMS stage runtime)
+  fresh_case("missing-scratch-inside-${protected_name}" stage case_build)
+  if(protected_name STREQUAL "stage")
+    set(protected_root "${stage}")
+  else()
+    set(protected_root "${test_root}/missing-scratch-runtime")
+    file(MAKE_DIRECTORY "${protected_root}")
+  endif()
+  set(missing_scratch "${protected_root}/must-not-be-created")
+  execute_process(
+    COMMAND "${CMAKE_COMMAND}"
+      "-DSTAGE_PREFIX=${stage}"
+      "-DSOURCE_PREFIX=${source_prefix}"
+      "-DBUILD_PREFIX=${case_build}"
+      "-DPURE_PREFIX=${protected_root}"
+      "-DPACKAGE_SCRATCH_ROOT=${missing_scratch}"
+      -P "${VERIFIER}"
+    RESULT_VARIABLE missing_scratch_result
+    OUTPUT_VARIABLE missing_scratch_output
+    ERROR_VARIABLE missing_scratch_error
+    ENCODING UTF-8)
+  set(missing_scratch_was_created FALSE)
+  if(EXISTS "${missing_scratch}" OR IS_SYMLINK "${missing_scratch}")
+    set(missing_scratch_was_created TRUE)
+    file(REMOVE_RECURSE "${missing_scratch}")
+  endif()
+  if(missing_scratch_result EQUAL 0 OR NOT
+      "${missing_scratch_output}${missing_scratch_error}" MATCHES
+        "PACKAGE_SCRATCH" OR
+      missing_scratch_was_created)
+    message(FATAL_ERROR
+      "missing scratch under ${protected_name} was created before rejection\n"
+      "${missing_scratch_output}${missing_scratch_error}")
+  endif()
+endforeach()
 
 fresh_case(temp-root-inside-stage stage case_build)
 set(inside_temp "${stage}/controlled-temp")

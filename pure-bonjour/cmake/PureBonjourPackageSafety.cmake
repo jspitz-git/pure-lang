@@ -52,6 +52,34 @@ function(pure_bonjour_try_unlink_reparse path removed_output detail_output)
   set(${detail_output} "${output}${error}" PARENT_SCOPE)
 endfunction()
 
+function(pure_bonjour_require_outside candidate protected token)
+  pure_bonjour_fs_action(assert-outside "${candidate}" "${protected}"
+    "${token}")
+endfunction()
+
+function(pure_bonjour_probe_entry path token kind_output)
+  set(powershell
+    "$ENV{SystemRoot}/System32/WindowsPowerShell/v1.0/powershell.exe")
+  execute_process(
+    COMMAND "${powershell}" -NoLogo -NoProfile -NonInteractive
+      -File "${pure_bonjour_filesystem_safety}"
+      -Mode inspect-entry -Path "${path}"
+    RESULT_VARIABLE result
+    OUTPUT_VARIABLE output
+    ERROR_VARIABLE error
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+    ERROR_STRIP_TRAILING_WHITESPACE
+    ENCODING UTF-8)
+  if(result EQUAL 0)
+    set(${kind_output} "${output}" PARENT_SCOPE)
+  elseif("${output}${error}" MATCHES "MISSING\\|")
+    set(${kind_output} MISSING PARENT_SCOPE)
+  else()
+    pure_bonjour_safety_fail("${token}"
+      "filesystem entry probe failed for ${path}: ${output}${error}")
+  endif()
+endfunction()
+
 function(pure_bonjour_validate_relative_path relative context path_output
     identity_output)
   if(relative STREQUAL "" OR IS_ABSOLUTE "${relative}" OR

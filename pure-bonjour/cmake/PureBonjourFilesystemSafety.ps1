@@ -1,7 +1,8 @@
 param(
   [Parameter(Mandatory=$true)]
-  [ValidateSet('inspect-file','inspect-dir','inspect-tree','remove-file',
-    'remove-empty-dir','remove-tree','unlink-reparse')]
+  [ValidateSet('inspect-entry','inspect-file','inspect-dir','inspect-tree',
+    'assert-outside','remove-file','remove-empty-dir','remove-tree',
+    'unlink-reparse')]
   [string]$Mode,
   [Parameter(Mandatory=$true)][string]$Path,
   [string]$Root = ''
@@ -28,6 +29,20 @@ function Assert-Contained([string]$Candidate, [string]$Container) {
   if (-not $candidateFull.StartsWith($prefix,
       [StringComparison]::OrdinalIgnoreCase)) {
     Stop-Safety 'OUTSIDE' ($candidateFull + ' !< ' + $containerFull)
+  }
+}
+
+function Assert-Outside([string]$Candidate, [string]$Protected) {
+  $candidateFull = Get-Full $Candidate
+  $protectedFull = Get-Full $Protected
+  if ($candidateFull.Equals($protectedFull,
+      [StringComparison]::OrdinalIgnoreCase)) {
+    Stop-Safety 'INSIDE' ($candidateFull + ' == ' + $protectedFull)
+  }
+  $prefix = $protectedFull + [IO.Path]::DirectorySeparatorChar
+  if ($candidateFull.StartsWith($prefix,
+      [StringComparison]::OrdinalIgnoreCase)) {
+    Stop-Safety 'INSIDE' ($candidateFull + ' < ' + $protectedFull)
   }
 }
 
@@ -62,7 +77,13 @@ function Get-NoFollowItem([string]$Candidate, [bool]$WantDirectory,
   return $final
 }
 
-if ($Mode -eq 'unlink-reparse') {
+if ($Mode -eq 'assert-outside') {
+  if ([String]::IsNullOrEmpty($Root)) { Stop-Safety 'ROOT' $Path }
+  Assert-Outside $Path $Root
+  exit 0
+}
+
+if ($Mode -eq 'inspect-entry' -or $Mode -eq 'unlink-reparse') {
   $full = Get-Full $Path
   $parent = [IO.Path]::GetDirectoryName($full)
   [void](Get-NoFollowItem $parent $true $false)
@@ -70,6 +91,16 @@ if ($Mode -eq 'unlink-reparse') {
     $entry = Get-Item -LiteralPath $full -Force
   } catch {
     Stop-Safety 'MISSING' $full
+  }
+  if ($Mode -eq 'inspect-entry') {
+    if (($entry.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+      [Console]::Out.WriteLine('REPARSE')
+    } elseif ($entry.PSIsContainer) {
+      [Console]::Out.WriteLine('DIRECTORY')
+    } else {
+      [Console]::Out.WriteLine('FILE')
+    }
+    exit 0
   }
   if (($entry.Attributes -band [IO.FileAttributes]::ReparsePoint) -eq 0) {
     Stop-Safety 'NOT_REPARSE' $full

@@ -53,8 +53,8 @@ foreach ($prefix in @($SourcePrefix, $BuildPrefix, $StagePrefix)) {
   }
 }
 
-$utf8 = [Text.UTF8Encoding]::new($false, $true)
-$utf16 = [Text.UnicodeEncoding]::new($false, $true, $true)
+$utf8 = [Text.UTF8Encoding]::new($false, $false)
+$utf16 = [Text.UnicodeEncoding]::new($false, $true, $false)
 $pending = [Collections.Generic.Stack[IO.DirectoryInfo]]::new()
 $pending.Push([IO.DirectoryInfo](Get-Item -LiteralPath $Stage -Force))
 while ($pending.Count -gt 0) {
@@ -74,8 +74,21 @@ while ($pending.Count -gt 0) {
         Stop-Scan ('PREFIX:' + $rawNames[$index]) $entry.FullName
       }
     }
-    foreach ($encoding in @($utf8, $utf16)) {
-      try { $text = $encoding.GetString($bytes) } catch { continue }
+    $decodedTexts = [Collections.Generic.List[string]]::new()
+    # Replacement fallback is deliberate: an arbitrary invalid byte must not
+    # disable scanning of valid text elsewhere in the same binary file.
+    $decodedTexts.Add($utf8.GetString($bytes))
+    $evenLength = $bytes.Length - ($bytes.Length % 2)
+    if ($evenLength -gt 0) {
+      $decodedTexts.Add($utf16.GetString($bytes, 0, $evenLength))
+    }
+    if ($bytes.Length -gt 1) {
+      $offsetLength = ($bytes.Length - 1) - (($bytes.Length - 1) % 2)
+      if ($offsetLength -gt 0) {
+        $decodedTexts.Add($utf16.GetString($bytes, 1, $offsetLength))
+      }
+    }
+    foreach ($text in $decodedTexts) {
       foreach ($pattern in $textPatterns) {
         if ($text.IndexOf($pattern,
             [StringComparison]::OrdinalIgnoreCase) -ge 0) {
