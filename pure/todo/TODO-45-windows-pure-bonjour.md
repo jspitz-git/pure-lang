@@ -49,24 +49,29 @@ Bonjour for Windows product.
 - 2026-08-19: Reopened after final whole-branch review found callback-lifetime,
   DNS presentation-name, and configure-authority gaps.
   - Accepted resolve queries now remain live for repeated Microsoft completion
-    callbacks and are cancelled only during browser close. Registration,
-    resolver, and browser callback contexts are conservatively retained as
-    process-lifetime tombstones because Microsoft documents no callback-drain
-    barrier after cancellation; callback-owned instances are still freed once.
+    callbacks and are cancelled on PTR removal or browser close. Monotonic
+    numeric callback cookies route through a lock-protected live-object
+    registry; cleanup removes each cookie, waits callbacks already acquired,
+    and then frees all state. Late callbacks cannot dereference released memory,
+    cookies are never reused, and churn returns the registry and OS handle count
+    to baseline.
   - Instance labels containing literal dots and backslashes use DNS presentation
     escaping and strict decoding. Invalid escapes and control bytes are rejected.
-  - Configuration now requires an x86-64 Windows compiler target, an absolute
-    existing `PURE_PREFIX`, and canonical pkg-config include/library paths below
+  - Configuration now compiles a target-macro probe with the configured compiler
+    target and flags to require Windows x86-64, requires an absolute existing
+    `PURE_PREFIX`, and constrains canonical pkg-config include/library paths below
     that prefix. Final clean-runner and artifact revalidation remain pending.
   - Validation:
     - A fresh CLANG64 MinGW Makefiles build with `-Wall -Wextra -Werror` passed
       without diagnostics.
     - `ctest.exe --test-dir build/pure-bonjour --output-on-failure
-      --no-tests=error` passed 14/14 tests in 246.86 seconds, including the real
-      loopback in 3.80 seconds.
+      --no-tests=error` passed 14/14 tests in 255.51 seconds, including the real
+      loopback in 4.38 seconds, after the final callback/list ordering change.
     - `ctest.exe --test-dir build/pure-bonjour -R
       "^pure-bonjour-lifecycle$" --repeat until-fail:20 --output-on-failure`
-      passed 20 consecutive runs in 46.86 seconds.
+      passed 20 consecutive runs in 46.21 seconds; each run includes 1000
+      registration and 1000 browser cleanup cycles with registry/handle
+      baseline assertions.
     - `cmake.exe --build build/pure-bonjour --target
       verify-windows-dependencies` passed with 11 PE files, 126 import edges,
       and exactly seven exports.

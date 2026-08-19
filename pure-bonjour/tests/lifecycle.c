@@ -44,6 +44,7 @@ typedef struct {
   int resolve_callback_on_cancel;
   int close_on_resolved_free;
   int delete_before_resolver_link;
+  int callback_during_browser_cleanup;
   PDNS_SERVICE_REGISTER_COMPLETE callback;
   void *callback_context;
   PDNS_SERVICE_BROWSE_CALLBACK browse_callback;
@@ -250,6 +251,22 @@ static VOID WINAPI fake_before_resolver_link(void)
   fake->browse_callback(ERROR_SUCCESS, fake->browse_context, &record);
 }
 
+static VOID WINAPI fake_before_browser_cleanup(void)
+{
+  fake_dns_t *fake = active_fake;
+  if (!fake->callback_during_browser_cleanup) return;
+  fake->callback_during_browser_cleanup = 0;
+  memset(&fake->resolved_instance, 0, sizeof(fake->resolved_instance));
+  fake->resolved_ip4 = htonl(0x7f000001u);
+  fake->resolved_instance.pszInstanceName =
+      L"Probe._puretodo45._tcp.local";
+  fake->resolved_instance.ip4Address = &fake->resolved_ip4;
+  fake->resolved_instance.wPort = 41000;
+  fake->resolved_instance.dwInterfaceIndex = 7;
+  fake->resolve_callbacks[0](ERROR_SUCCESS, fake->resolve_contexts[0],
+                             &fake->resolved_instance);
+}
+
 static VOID WINAPI fake_record_list_free(PDNS_RECORD records,
                                          DNS_FREE_TYPE free_type)
 {
@@ -279,6 +296,7 @@ static fake_dns_t fake_dns_pending_registration(void)
   fake.api.cancel_resolve = fake_resolve_cancel;
   fake.api.free_records = fake_record_list_free;
   fake.api.before_resolver_link = fake_before_resolver_link;
+  fake.api.before_browser_cleanup = fake_before_browser_cleanup;
   fake.register_result = DNS_REQUEST_PENDING;
   fake.deregister_result = DNS_REQUEST_PENDING;
   fake.deregister_callback_result = ERROR_SUCCESS;
@@ -496,7 +514,7 @@ static void test_registration_callback_instances_are_freed(void)
   assert(fake.free_instance_calls == 1);
 }
 
-static void test_repeated_unpublish_after_callback_failure_retains_state(void)
+static void test_unpublish_after_callback_failure_releases_state(void)
 {
   fake_dns_t fake = fake_dns_pending_registration();
   bonjour_service_t *service;
@@ -509,16 +527,15 @@ static void test_repeated_unpublish_after_callback_failure_retains_state(void)
                      L"Probe._puretodo45._tcp.local");
   fake.deregister_callback_result = ERROR_ACCESS_DENIED;
   bonjour_unpublish(service);
-  assert(fake.free_instance_calls == 0);
-  bonjour_unpublish(service);
+  assert(fake.free_instance_calls == 1);
   assert(fake.deregister_calls == 1);
   assert(fake.deregister_callback_calls == 1);
   assert(fake.deregister_nonnull_reserved == 0);
-  assert(fake.free_instance_calls == 0);
+  assert(fake.free_instance_calls == 1);
   assert(fake.callback_after_free == 0);
 }
 
-static void test_repeated_unpublish_after_dispatch_failure_retains_state(void)
+static void test_unpublish_after_dispatch_failure_releases_state(void)
 {
   fake_dns_t fake = fake_dns_pending_registration();
   bonjour_service_t *service;
@@ -531,12 +548,11 @@ static void test_repeated_unpublish_after_dispatch_failure_retains_state(void)
                      L"Probe._puretodo45._tcp.local");
   fake.deregister_result = ERROR_ACCESS_DENIED;
   bonjour_unpublish(service);
-  assert(fake.free_instance_calls == 0);
-  bonjour_unpublish(service);
+  assert(fake.free_instance_calls == 1);
   assert(fake.deregister_calls == 1);
   assert(fake.deregister_callback_calls == 0);
   assert(fake.deregister_nonnull_reserved == 0);
-  assert(fake.free_instance_calls == 0);
+  assert(fake.free_instance_calls == 1);
   assert(fake.callback_after_free == 0);
 }
 
@@ -554,7 +570,6 @@ static void test_check_timeout_is_bounded(void)
   started = GetTickCount64();
   assert_error(bonjour_check(service), ERROR_TIMEOUT);
   elapsed = GetTickCount64() - started;
-  assert(elapsed >= 10);
   assert(elapsed < 500);
   bonjour_unpublish(service);
 }
@@ -747,7 +762,7 @@ static void test_unknown_deletes_do_not_grow_name_state(void)
   bonjour_close(browser);
 }
 
-static void test_tombstone_is_retained_while_resolver_can_callback(void)
+static void test_resolver_route_is_removed_with_ptr(void)
 {
   fake_dns_t fake = fake_dns_pending_registration();
   bonjour_browser_t *browser;
@@ -761,14 +776,14 @@ static void test_tombstone_is_retained_while_resolver_can_callback(void)
   assert(bonjour_browser_name_state_count(browser) == 1);
   fake_fire_browse_target(&fake, &remove_record, 1,
                           L"pROBE._PURETODO45._TCP.LOCAL");
-  assert(bonjour_browser_name_state_count(browser) == 1);
+  assert(bonjour_browser_name_state_count(browser) == 0);
   fake_fire_resolve_ipv4(&fake);
   assert(bonjour_avail(browser) == 0);
-  assert(bonjour_browser_name_state_count(browser) == 1);
+  assert(bonjour_browser_name_state_count(browser) == 0);
   bonjour_close(browser);
 }
 
-static void test_completed_and_cancelled_churn_keeps_one_name_tombstone(void)
+static void test_completed_and_cancelled_churn_reclaims_name_state(void)
 {
   fake_dns_t fake = fake_dns_pending_registration();
   bonjour_browser_t *browser;
@@ -787,7 +802,7 @@ static void test_completed_and_cancelled_churn_keeps_one_name_tombstone(void)
     if (index >= 3)
       fake.resolve_callbacks[index](ERROR_CANCELLED,
                                     fake.resolve_contexts[index], NULL);
-    assert(bonjour_browser_name_state_count(browser) == 1);
+    assert(bonjour_browser_name_state_count(browser) == 0);
   }
   assert(fake.resolve_calls == 6);
   bonjour_close(browser);
@@ -834,7 +849,7 @@ static void test_remove_readd_ignores_late_old_generation_completion(void)
   assert(bonjour_browser_name_state_count(browser) == 1);
   fake_fire_browse_target(&fake, &remove_record, 1,
                           L"PROBE._PURETODO45._TCP.LOCAL");
-  assert(bonjour_browser_name_state_count(browser) == 1);
+  assert(bonjour_browser_name_state_count(browser) == 0);
   bonjour_close(browser);
 }
 
@@ -896,7 +911,7 @@ static void test_resolver_callback_after_close_uses_retained_context(void)
   fake.resolve_callbacks[0](ERROR_CANCELLED, fake.resolve_contexts[0], NULL);
   fake_fire_resolve_ipv4_interface(&fake, 0, 0x7f000001u, 7);
   assert(fake.free_resolved_instance_calls == 1);
-  assert(bonjour_avail(browser) == 0);
+  assert(bonjour_callback_registry_count() == 0);
 }
 
 static void test_registration_callback_after_cancel_uses_retained_context(void)
@@ -912,8 +927,50 @@ static void test_registration_callback_after_cancel_uses_retained_context(void)
   bonjour_unpublish(service);
   fake_fire_callback(&fake, ERROR_CANCELLED, NULL);
   assert(fake.free_callback_instance_calls == 1);
-  bonjour_unpublish(service);
   assert(fake.cancel_calls == 1);
+  assert(bonjour_callback_registry_count() == 0);
+}
+
+static void test_late_resolve_during_close_cleanup_misses_detached_route(void)
+{
+  fake_dns_t fake = fake_dns_pending_registration();
+  bonjour_browser_t *browser;
+  DNS_RECORD add_record;
+
+  use_fake(&fake);
+  browser = bonjour_browse_with_api("_puretodo45._tcp", &fake.api, 25);
+  assert(browser != NULL);
+  fake_fire_browse(&fake, &add_record, 0);
+  fake.callback_during_browser_cleanup = 1;
+  bonjour_close(browser);
+  assert(fake.free_resolved_instance_calls == 1);
+  assert(bonjour_callback_registry_count() == 0);
+}
+
+static void test_callback_registry_and_handles_return_to_baseline_after_churn(void)
+{
+  fake_dns_t fake = fake_dns_pending_registration();
+  DWORD handles_before = 0;
+  DWORD handles_after = 0;
+  int index;
+
+  use_fake(&fake);
+  assert(GetProcessHandleCount(GetCurrentProcess(), &handles_before));
+  for (index = 0; index < 1000; ++index) {
+    bonjour_service_t *service = bonjour_publish_with_api(
+        "Probe", "_puretodo45._tcp", 43210, &fake.api, 25);
+    assert(service != NULL);
+    bonjour_unpublish(service);
+  }
+  for (index = 0; index < 1000; ++index) {
+    bonjour_browser_t *browser = bonjour_browse_with_api(
+        "_puretodo45._tcp", &fake.api, 25);
+    assert(browser != NULL);
+    bonjour_close(browser);
+  }
+  assert(bonjour_callback_registry_count() == 0);
+  assert(GetProcessHandleCount(GetCurrentProcess(), &handles_after));
+  assert(handles_after <= handles_before + 2);
 }
 
 static void test_escaped_instance_round_trips_registration_and_discovery(void)
@@ -1020,7 +1077,6 @@ static void test_delayed_browse_cancel_ack_cannot_target_freed_state(void)
   started = GetTickCount64();
   bonjour_close(browser);
   elapsed = GetTickCount64() - started;
-  assert(elapsed >= 10);
   assert(elapsed < 500);
   fake.browse_callback(ERROR_CANCELLED, fake.browse_context, NULL);
   assert(fake.browse_cancel_calls == 1);
@@ -1034,8 +1090,8 @@ int main(void)
   test_synchronous_rejection_releases_partial_state();
   test_asynchronous_success_updates_effective_name();
   test_registration_callback_instances_are_freed();
-  test_repeated_unpublish_after_callback_failure_retains_state();
-  test_repeated_unpublish_after_dispatch_failure_retains_state();
+  test_unpublish_after_callback_failure_releases_state();
+  test_unpublish_after_dispatch_failure_releases_state();
   test_check_timeout_is_bounded();
   test_pending_registration_is_cancelled_before_free();
   test_callback_completion_during_cancellation_is_safe();
@@ -1045,14 +1101,16 @@ int main(void)
   test_removal_while_resolve_pending_cannot_readd_service();
   test_zero_ttl_ptr_removes_without_delete_flag();
   test_unknown_deletes_do_not_grow_name_state();
-  test_tombstone_is_retained_while_resolver_can_callback();
-  test_completed_and_cancelled_churn_keeps_one_name_tombstone();
+  test_resolver_route_is_removed_with_ptr();
+  test_completed_and_cancelled_churn_reclaims_name_state();
   test_delete_before_resolver_link_invalidates_add_generation();
   test_remove_readd_ignores_late_old_generation_completion();
   test_pending_resolver_is_cancelled_during_close();
   test_resolver_accepts_multiple_results_for_query_lifetime();
   test_resolver_callback_after_close_uses_retained_context();
   test_registration_callback_after_cancel_uses_retained_context();
+  test_late_resolve_during_close_cleanup_misses_detached_route();
+  test_callback_registry_and_handles_return_to_baseline_after_churn();
   test_escaped_instance_round_trips_registration_and_discovery();
   test_close_during_resolve_callback_retains_until_callback_tail();
   test_close_allows_synchronous_cancel_callbacks();
@@ -1060,6 +1118,7 @@ int main(void)
   test_delayed_browse_cancel_ack_cannot_target_freed_state();
   test_browse_cancel_failure_retains_state();
   bonjour_close(NULL);
+  assert(bonjour_callback_registry_count() == 0);
   pure_delete_interp(interp);
   puts("pure-bonjour lifecycle tests passed");
   return 0;

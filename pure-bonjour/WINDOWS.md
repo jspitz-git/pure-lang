@@ -115,15 +115,13 @@ Windows system libraries are accepted.
 - Cancellation is normal during garbage collection and test cleanup. A bounded
   cancellation or callback-quiescence failure is reported to standard error;
   the backend retains callback-visible state instead of freeing it unsafely.
-- Microsoft's registration and resolve cancellation APIs provide no documented
-  callback-drain barrier. Consequently cleanup releases callback-owned result
-  instances and registration payloads, but conservatively retains small
-  lock/event/API callback contexts and resolver/browser tombstones until process
-  exit. Retention is proportional to accepted registrations and resolve
-  queries, and therefore is intentionally not bounded across process lifetime;
-  it prevents late callbacks from dereferencing freed memory. Applications that
-  repeatedly create and destroy registrations or browsers should reuse them
-  where practical.
+- Microsoft's cancellation APIs provide no documented callback-drain barrier.
+  Callbacks therefore receive monotonic numeric cookies rather than object
+  pointers. A lock-protected router acquires a live object before a callback can
+  use it; cleanup removes the cookie, waits callbacks that already acquired it,
+  then releases every handle, string and object. Later callbacks miss the
+  router, release only their Microsoft-owned result payload, and return. Cookies
+  are never reused, preventing stale-callback ABA aliasing.
 - The smoke test has explicit port-probe, Pure child, and outer time budgets. A
   timeout points to local API, firewall, or multicast behavior rather than an
   absent third-party daemon.

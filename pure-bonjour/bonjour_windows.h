@@ -27,8 +27,8 @@ BONJOUR_WINDOWS_PRIVATE wchar_t *bonjour_utf8_to_wide(const char *utf8);
 BONJOUR_WINDOWS_PRIVATE char *bonjour_wide_to_utf8(const wchar_t *wide);
 
 /* Each FQDN result is heap allocated and must be released with free().
-   Instance names are one raw UTF-8 DNS-SD label (at most 63 bytes); raw dots
-   are rejected because this private helper has no escaping contract. */
+   Instance names are one UTF-8 DNS-SD label (at most 63 bytes); literal dots
+   and backslashes use DNS presentation escaping. */
 BONJOUR_WINDOWS_PRIVATE wchar_t *bonjour_make_type_fqdn(const char *type);
 BONJOUR_WINDOWS_PRIVATE wchar_t *bonjour_make_instance_fqdn(const char *name,
                                                             const char *type);
@@ -85,6 +85,7 @@ typedef struct {
   DNS_STATUS (WINAPI *cancel_resolve)(PDNS_SERVICE_CANCEL);
   VOID (WINAPI *free_records)(PDNS_RECORD, DNS_FREE_TYPE);
   VOID (WINAPI *before_resolver_link)(void);
+  VOID (WINAPI *before_browser_cleanup)(void);
 } bonjour_dns_api_t;
 
 BONJOUR_WINDOWS_PRIVATE bonjour_service_t *bonjour_publish_with_api(
@@ -94,6 +95,7 @@ BONJOUR_WINDOWS_PRIVATE bonjour_browser_t *bonjour_browse_with_api(
     const char *type, const bonjour_dns_api_t *api, DWORD wait_ms);
 BONJOUR_WINDOWS_PRIVATE size_t bonjour_browser_name_state_count(
     bonjour_browser_t *browser);
+BONJOUR_WINDOWS_PRIVATE size_t bonjour_callback_registry_count(void);
 #endif
 
 #endif

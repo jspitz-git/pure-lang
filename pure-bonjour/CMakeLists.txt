@@ -13,18 +13,12 @@ if(NOT DEFINED PURE_PREFIX)
   message(FATAL_ERROR "PURE_PREFIX is required")
 endif()
 set(pure_bonjour_requested_prefix "${PURE_PREFIX}")
-execute_process(COMMAND "${CMAKE_C_COMPILER}" -dumpmachine
-  OUTPUT_VARIABLE pure_bonjour_target_triple OUTPUT_STRIP_TRAILING_WHITESPACE
-  RESULT_VARIABLE pure_bonjour_dumpmachine_status)
-if(NOT pure_bonjour_dumpmachine_status EQUAL 0)
-  message(FATAL_ERROR "Could not determine the C compiler target")
-endif()
+include(cmake/ValidateConfigure.cmake)
+pure_bonjour_validate_target()
 
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(PURE REQUIRED IMPORTED_TARGET "pure>=0.68")
-include(cmake/ValidateConfigure.cmake)
-pure_bonjour_validate_configure("${pure_bonjour_target_triple}"
-  "${pure_bonjour_requested_prefix}" "${PURE_INCLUDE_DIRS}"
+pure_bonjour_validate_configure("${pure_bonjour_requested_prefix}" "${PURE_INCLUDE_DIRS}"
   "${pkgcfg_lib_PURE_pure}")
 file(REAL_PATH "${pure_bonjour_requested_prefix}" PURE_PREFIX)
 
@@ -63,6 +57,8 @@ if(BUILD_TESTING)
     COMMAND "${CMAKE_COMMAND}"
       "-DVALIDATOR=${CMAKE_CURRENT_SOURCE_DIR}/cmake/ValidateConfigure.cmake"
       "-DTEST_ROOT=${CMAKE_CURRENT_BINARY_DIR}/configure-contract"
+      "-DC_COMPILER=${CMAKE_C_COMPILER}"
+      "-DMAKE_PROGRAM=${CMAKE_MAKE_PROGRAM}"
       -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/configure-contract.cmake")
   set_tests_properties(pure-bonjour-configure-contract PROPERTIES
     LABELS "bonjour;unit;configure" TIMEOUT 15)
