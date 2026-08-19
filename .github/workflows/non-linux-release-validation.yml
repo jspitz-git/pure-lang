@@ -121,6 +121,12 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "Pure build failed" }
           & $env:CMAKE_EXE --build $pureBuild --target install --parallel 1
           if ($LASTEXITCODE -ne 0) { throw "Pure install failed" }
+          & $env:CMAKE_EXE `
+            -DMODE=STAGE `
+            "-DPURE_PREFIX=$purePrefix" `
+            -DTOOLCHAIN_BIN=C:/msys64/clang64/bin `
+            -P pure/cmake/StageWindowsRuntimeDlls.cmake
+          if ($LASTEXITCODE -ne 0) { throw "Pure runtime DLL staging failed" }
           "PURE_PREFIX=$($purePrefix.Replace('\', '/'))" |
             Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 

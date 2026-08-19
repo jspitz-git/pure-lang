@@ -512,6 +512,10 @@ ci_require_text("${pure_run}" PURE
   "-DLLVM_DIR=C:/msys64/clang64/lib/cmake/llvm"
   "& $env:CMAKE_EXE --build $pureBuild --parallel 1"
   "& $env:CMAKE_EXE --build $pureBuild --target install --parallel 1"
+  "-DMODE=STAGE"
+  "-DTOOLCHAIN_BIN=C:/msys64/clang64/bin"
+  "-P pure/cmake/StageWindowsRuntimeDlls.cmake"
+  "Pure runtime DLL staging failed"
   "PURE_PREFIX=")
 
 ci_extract_step("Configure and build PureBonjour"
@@ -766,6 +770,12 @@ if(NOT MUTATION_MODE)
     "& $env:CMAKE_EXE --build $build --parallel 1\n          & $env:CMAKE_EXE --build $build --parallel 1"
     mutated "${workflow}")
   ci_expect_rejected(second-component-build "${mutated}" BUILD)
+
+  ci_mutate_named_step_line("${workflow}"
+    "Build and install the matching Windows Pure SDK"
+    "            -P pure/cmake/StageWindowsRuntimeDlls.cmake"
+    "            # -P pure/cmake/StageWindowsRuntimeDlls.cmake" mutated)
+  ci_expect_rejected(missing-sdk-runtime-stager "${mutated}" PURE)
 
   string(REPLACE "          if ($LASTEXITCODE -ne 0) { throw \"PureBonjour build failed\" }"
     "          & $env:CMAKE_EXE --install $build\n          if ($LASTEXITCODE -ne 0) { throw \"PureBonjour build failed\" }"

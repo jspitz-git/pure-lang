@@ -43,6 +43,14 @@ add_custom_target(verify-windows-dependencies
 
 include(CTest)
 if(BUILD_TESTING)
+  add_test(NAME pure-bonjour-sdk-runtime-closure-contract
+    COMMAND "${CMAKE_COMMAND}"
+      "-DSTAGER=${CMAKE_CURRENT_SOURCE_DIR}/../pure/cmake/StageWindowsRuntimeDlls.cmake"
+      "-DTEST_ROOT=${CMAKE_CURRENT_BINARY_DIR}/sdk-runtime-closure-fixture"
+      -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/sdk-runtime-closure.cmake")
+  set_tests_properties(pure-bonjour-sdk-runtime-closure-contract PROPERTIES
+    LABELS "bonjour;unit;ci;packaging" TIMEOUT 15)
+
   add_executable(pure-bonjour-installed-sdk-consumer
     tests/installed-sdk-consumer.c)
   target_compile_features(pure-bonjour-installed-sdk-consumer PRIVATE c_std_11)
