@@ -1,0 +1,27 @@
+cmake_minimum_required(VERSION 3.25)
+
+function(pure_bonjour_validate_configure triple prefix include_dirs libraries)
+  if(NOT triple MATCHES "^x86_64-.*(windows|mingw)")
+    message(FATAL_ERROR "PureBonjour requires an x86-64 Windows target; got '${triple}'")
+  endif()
+  if(NOT IS_ABSOLUTE "${prefix}" OR NOT IS_DIRECTORY "${prefix}")
+    message(FATAL_ERROR "PURE_PREFIX must be an absolute existing directory")
+  endif()
+  file(REAL_PATH "${prefix}" canonical_prefix)
+  foreach(path IN LISTS include_dirs libraries)
+    if(NOT IS_ABSOLUTE "${path}" OR NOT EXISTS "${path}")
+      message(FATAL_ERROR "Pure pkg-config path does not exist: '${path}'")
+    endif()
+    file(REAL_PATH "${path}" canonical_path)
+    cmake_path(IS_PREFIX canonical_prefix "${canonical_path}" NORMALIZE beneath)
+    if(NOT beneath)
+      message(FATAL_ERROR
+        "Pure pkg-config path escapes canonical PURE_PREFIX: '${path}'")
+    endif()
+  endforeach()
+endfunction()
+
+if(DEFINED TEST_TRIPLE)
+  pure_bonjour_validate_configure("${TEST_TRIPLE}" "${TEST_PREFIX}"
+    "${TEST_INCLUDE}" "${TEST_LIBRARY}")
+endif()

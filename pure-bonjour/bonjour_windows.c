@@ -218,11 +218,15 @@ static void WINAPI bonjour_register_complete(DWORD status, void *context,
 
 static void bonjour_release_service(bonjour_service_t *service)
 {
+  /* The registration API documents no callback-drain barrier.  Release the
+     payload, but retain the small callback context, its lock/event, and API
+     table as a process-lifetime tombstone for a possible late callback. */
   service->api->free_instance(service->instance);
-  CloseHandle(service->completion);
+  service->instance = NULL;
   free(service->name);
+  service->name = NULL;
   free(service->type);
-  free(service);
+  service->type = NULL;
 }
 
 static bonjour_service_t *bonjour_publish_using_api(
@@ -468,10 +472,16 @@ static int bonjour_service_type_valid(const char *type)
 static int bonjour_instance_label_valid(const char *name)
 {
   size_t length;
+  const unsigned char *cursor;
 
-  if (name == NULL || name[0] == '\0' || strchr(name, '.') != NULL) return 0;
+  if (name == NULL || name[0] == '\0') return 0;
   length = strlen(name);
-  return length <= 63;
+  if (length > 63 ||
+      MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, name, -1, NULL, 0) <= 0)
+    return 0;
+  for (cursor = (const unsigned char *)name; *cursor != '\0'; ++cursor)
+    if (*cursor < 0x20 || *cursor == 0x7f) return 0;
+  return 1;
 }
 
 static wchar_t *bonjour_wide_duplicate_range(const wchar_t *text, size_t length)
@@ -772,7 +782,6 @@ static void WINAPI bonjour_resolve_complete(DWORD status, void *context,
   DWORD interface_index = resolver->interface_index;
   uint16_t port = 0;
   int valid = 0;
-  int detached = 0;
 
   AcquireSRWLockExclusive(&browser->lock);
   ++browser->callbacks;
@@ -806,15 +815,6 @@ static void WINAPI bonjour_resolve_complete(DWORD status, void *context,
     if (changed < 0 && browser->status == ERROR_SUCCESS)
       browser->status = ERROR_NOT_ENOUGH_MEMORY;
   }
-  resolver->completed = 1;
-  if (!resolver->dispatching) {
-    detached = bonjour_resolver_detach_locked(browser, resolver);
-    if (detached && browser->closing) {
-      resolver->retired_next = browser->retired;
-      browser->retired = resolver;
-      detached = 0;
-    }
-  }
   bonjour_name_prune_locked(browser, resolver->fqdn);
   ReleaseSRWLockExclusive(&browser->lock);
 
@@ -822,8 +822,6 @@ static void WINAPI bonjour_resolve_complete(DWORD status, void *context,
   free(name);
   free(type);
   free(domain);
-  if (detached) bonjour_resolver_free(resolver);
-
   AcquireSRWLockExclusive(&browser->lock);
   --browser->callbacks;
   bonjour_browser_wake_locked(browser);
@@ -889,8 +887,7 @@ static void bonjour_start_resolver(bonjour_browser_t *browser,
   AcquireSRWLockExclusive(&browser->lock);
   resolver->dispatching = 0;
   --browser->dispatches;
-  if (!bonjour_request_accepted((DWORD)status)) resolver->completed = 1;
-  if (resolver->completed) {
+  if (!bonjour_request_accepted((DWORD)status)) {
     free_resolver = bonjour_resolver_detach_locked(browser, resolver);
     if (free_resolver && browser->closing) {
       resolver->retired_next = browser->retired;
@@ -1122,7 +1119,6 @@ void bonjour_close(bonjour_browser_t *browser)
 {
   PDNS_SERVICE_CANCEL *resolver_cancels = NULL;
   bonjour_resolver_t *resolver;
-  bonjour_resolver_t *retired;
   size_t resolver_count = 0;
   size_t i = 0;
   DNS_STATUS browse_status;
@@ -1168,17 +1164,15 @@ void bonjour_close(bonjour_browser_t *browser)
   resolver_cancels = NULL;
   if (!bonjour_request_accepted((DWORD)browse_status) ||
       !bonjour_request_accepted((DWORD)resolver_status) ||
-      !bonjour_browser_wait(browser, 1, 1))
+      !bonjour_browser_wait(browser, 0, 1))
     goto retain;
 
   bonjour_results_clear(&browser->results);
   bonjour_names_clear(browser);
-  while ((retired = browser->retired) != NULL) {
-    browser->retired = retired->retired_next;
-    bonjour_resolver_free(retired);
-  }
-  free(browser->type_fqdn);
-  free(browser);
+  /* DnsServiceResolveCancel has no documented callback-drain guarantee.
+     Keep the browser and resolver callback contexts as process-lifetime
+     tombstones; callbacks after cancellation observe closing and only release
+     their callback-owned instance. */
   return;
 
 retain:
@@ -1254,6 +1248,9 @@ BONJOUR_WINDOWS_PRIVATE wchar_t *bonjour_make_instance_fqdn(const char *name,
   size_t name_length;
   size_t type_length;
   size_t fqdn_length;
+  size_t escaped_length;
+  size_t source_index;
+  size_t target_index;
   char *utf8_fqdn;
   wchar_t *wide_fqdn;
 
@@ -1261,17 +1258,26 @@ BONJOUR_WINDOWS_PRIVATE wchar_t *bonjour_make_instance_fqdn(const char *name,
     return NULL;
   name_length = strlen(name);
   type_length = strlen(type);
-  if (name_length > 255 || type_length > 255 ||
+  escaped_length = name_length;
+  for (source_index = 0; source_index < name_length; ++source_index)
+    if (name[source_index] == '.' || name[source_index] == '\\')
+      ++escaped_length;
+  if (escaped_length > 255 || type_length > 255 ||
       type_length > 255 - 1 - (sizeof(local_suffix) - 1) ||
-      name_length > 255 - 1 - type_length - (sizeof(local_suffix) - 1))
+      escaped_length > 255 - 1 - type_length - (sizeof(local_suffix) - 1))
     return NULL;
-  fqdn_length = name_length + 1 + type_length + sizeof(local_suffix) - 1;
+  fqdn_length = escaped_length + 1 + type_length + sizeof(local_suffix) - 1;
   utf8_fqdn = malloc(fqdn_length + 1);
   if (utf8_fqdn == NULL) return NULL;
-  memcpy(utf8_fqdn, name, name_length);
-  utf8_fqdn[name_length] = '.';
-  memcpy(utf8_fqdn + name_length + 1, type, type_length);
-  memcpy(utf8_fqdn + name_length + 1 + type_length, local_suffix,
+  target_index = 0;
+  for (source_index = 0; source_index < name_length; ++source_index) {
+    if (name[source_index] == '.' || name[source_index] == '\\')
+      utf8_fqdn[target_index++] = '\\';
+    utf8_fqdn[target_index++] = name[source_index];
+  }
+  utf8_fqdn[target_index++] = '.';
+  memcpy(utf8_fqdn + target_index, type, type_length);
+  memcpy(utf8_fqdn + target_index + type_length, local_suffix,
          sizeof(local_suffix));
   wide_fqdn = bonjour_utf8_to_wide(utf8_fqdn);
   free(utf8_fqdn);
@@ -1283,13 +1289,16 @@ BONJOUR_WINDOWS_PRIVATE int bonjour_split_instance_fqdn(const wchar_t *fqdn,
                                                          char **type,
                                                          char **domain)
 {
-  const wchar_t *separator;
+  const wchar_t *separator = NULL;
   const wchar_t *protocol;
   wchar_t *wide_type;
   wchar_t *wide_name;
   char *utf8_type;
   char *utf8_name;
   char *utf8_domain;
+  size_t source_index;
+  size_t target_index;
+  size_t fqdn_length;
 
   if (name == NULL || type == NULL || domain == NULL) return -1;
   *name = NULL;
@@ -1297,11 +1306,26 @@ BONJOUR_WINDOWS_PRIVATE int bonjour_split_instance_fqdn(const wchar_t *fqdn,
   *domain = NULL;
   if (fqdn == NULL || fqdn[0] == L'\0') return -1;
 
-  for (separator = wcschr(fqdn, L'.'); separator != NULL;
-       separator = wcschr(separator + 1, L'.')) {
+  fqdn_length = wcslen(fqdn);
+  for (source_index = 0; source_index < fqdn_length; ++source_index) {
+    if (fqdn[source_index] == L'\\') {
+      if (source_index + 1 >= fqdn_length ||
+          (fqdn[source_index + 1] != L'.' &&
+           fqdn[source_index + 1] != L'\\'))
+        return -1;
+      ++source_index;
+      continue;
+    }
+    if (fqdn[source_index] == L'.') {
+      separator = fqdn + source_index;
+      break;
+    }
+  }
+  if (separator != NULL) {
+    if (wcschr(separator + 1, L'\\') != NULL) return -1;
     protocol = wcsstr(separator + 1, L"._tcp.");
     if (protocol == NULL) protocol = wcsstr(separator + 1, L"._udp.");
-    if (protocol == NULL) continue;
+    if (protocol == NULL) return -1;
 
     wide_name = bonjour_wide_duplicate_range(fqdn,
                                              (size_t)(separator - fqdn));
@@ -1312,6 +1336,12 @@ BONJOUR_WINDOWS_PRIVATE int bonjour_split_instance_fqdn(const wchar_t *fqdn,
       free(wide_type);
       return -1;
     }
+    target_index = 0;
+    for (source_index = 0; wide_name[source_index] != L'\0'; ++source_index) {
+      if (wide_name[source_index] == L'\\') ++source_index;
+      wide_name[target_index++] = wide_name[source_index];
+    }
+    wide_name[target_index] = L'\0';
     utf8_type = bonjour_wide_to_utf8(wide_type);
     if (utf8_type == NULL || !bonjour_service_type_valid(utf8_type)) {
       free(wide_name);
@@ -1323,7 +1353,8 @@ BONJOUR_WINDOWS_PRIVATE int bonjour_split_instance_fqdn(const wchar_t *fqdn,
     utf8_domain = bonjour_wide_to_utf8(protocol + 6);
     free(wide_name);
     free(wide_type);
-    if (utf8_name == NULL || utf8_name[0] == '\0' || utf8_domain == NULL ||
+    if (utf8_name == NULL || !bonjour_instance_label_valid(utf8_name) ||
+        utf8_domain == NULL ||
         utf8_domain[0] == '\0') {
       free(utf8_name);
       free(utf8_type);

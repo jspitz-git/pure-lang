@@ -55,6 +55,7 @@ typedef struct {
   PDNS_SERVICE_CANCEL resolve_cancel_handles[8];
   PDNS_RECORD last_freed_records;
   bonjour_browser_t *browser_to_close;
+  const wchar_t *expected_service_name;
 } fake_dns_t;
 
 static fake_dns_t *active_fake;
@@ -67,7 +68,9 @@ static PDNS_SERVICE_INSTANCE WINAPI fake_construct_instance(
   fake_dns_t *fake = active_fake;
 
   assert(fake != NULL);
-  assert(wcscmp(service_name, L"Probe._puretodo45._tcp.local") == 0);
+  assert(wcscmp(service_name, fake->expected_service_name != NULL
+                                  ? fake->expected_service_name
+                                  : L"Probe._puretodo45._tcp.local") == 0);
   assert(host_name != NULL);
   assert(host_name[0] != L'\0');
   assert(wcslen(host_name) > 6);
@@ -200,7 +203,9 @@ static DNS_STATUS WINAPI fake_resolve(PDNS_SERVICE_RESOLVE_REQUEST request,
   assert(request->Version == DNS_QUERY_REQUEST_VERSION1);
   assert(request->InterfaceIndex == 0);
   assert(CompareStringOrdinal(request->QueryName, -1,
-                              L"Probe._puretodo45._tcp.local", -1,
+                              fake->expected_service_name != NULL
+                                  ? fake->expected_service_name
+                                  : L"Probe._puretodo45._tcp.local", -1,
                               TRUE) == CSTR_EQUAL);
   index = fake->resolve_calls++;
   assert(index < 8);
@@ -397,6 +402,22 @@ static void fake_fire_resolve_ipv4_at(fake_dns_t *fake, int index,
   fake->resolved_instance.ip4Address = &fake->resolved_ip4;
   fake->resolved_instance.wPort = 41000;
   fake->resolved_instance.dwInterfaceIndex = 7;
+  fake->resolve_callbacks[index](ERROR_SUCCESS, fake->resolve_contexts[index],
+                                 &fake->resolved_instance);
+}
+
+static void fake_fire_resolve_ipv4_interface(fake_dns_t *fake, int index,
+                                             DWORD host_address,
+                                             DWORD interface_index)
+{
+  assert(index >= 0 && index < fake->resolve_calls);
+  memset(&fake->resolved_instance, 0, sizeof(fake->resolved_instance));
+  fake->resolved_ip4 = htonl(host_address);
+  fake->resolved_instance.pszInstanceName =
+      L"Probe._puretodo45._tcp.local";
+  fake->resolved_instance.ip4Address = &fake->resolved_ip4;
+  fake->resolved_instance.wPort = 41000;
+  fake->resolved_instance.dwInterfaceIndex = interface_index;
   fake->resolve_callbacks[index](ERROR_SUCCESS, fake->resolve_contexts[index],
                                  &fake->resolved_instance);
 }
@@ -623,14 +644,14 @@ static void test_browse_resolve_snapshot_update_and_removal(void)
 
   fake_fire_browse(&fake, &duplicate_record, 0);
   assert(fake.record_free_calls == 3);
-  assert(fake.resolve_calls == 2);
+  assert(fake.resolve_calls == 1);
   fake_fire_resolve_ipv4(&fake);
   assert(fake.free_resolved_instance_calls == 2);
   assert(bonjour_avail(browser) == 0);
 
   fake_fire_browse(&fake, &ipv6_record, 0);
   assert(fake.record_free_calls == 4);
-  assert(fake.resolve_calls == 3);
+  assert(fake.resolve_calls == 1);
   fake_fire_resolve_ipv6(&fake);
   assert(fake.free_resolved_instance_calls == 3);
   assert(bonjour_avail(browser) == 1);
@@ -642,7 +663,7 @@ static void test_browse_resolve_snapshot_update_and_removal(void)
   assert_empty_result(bonjour_get(browser));
   bonjour_close(browser);
   assert(fake.browse_cancel_calls == 1);
-  assert(fake.resolve_cancel_calls == 0);
+  assert(fake.resolve_cancel_calls == 1);
 }
 
 static void test_browse_cancel_failure_retains_state(void)
@@ -726,7 +747,7 @@ static void test_unknown_deletes_do_not_grow_name_state(void)
   bonjour_close(browser);
 }
 
-static void test_tombstone_is_pruned_after_old_resolver_completion(void)
+static void test_tombstone_is_retained_while_resolver_can_callback(void)
 {
   fake_dns_t fake = fake_dns_pending_registration();
   bonjour_browser_t *browser;
@@ -743,11 +764,11 @@ static void test_tombstone_is_pruned_after_old_resolver_completion(void)
   assert(bonjour_browser_name_state_count(browser) == 1);
   fake_fire_resolve_ipv4(&fake);
   assert(bonjour_avail(browser) == 0);
-  assert(bonjour_browser_name_state_count(browser) == 0);
+  assert(bonjour_browser_name_state_count(browser) == 1);
   bonjour_close(browser);
 }
 
-static void test_completed_and_cancelled_churn_reclaims_name_state(void)
+static void test_completed_and_cancelled_churn_keeps_one_name_tombstone(void)
 {
   fake_dns_t fake = fake_dns_pending_registration();
   bonjour_browser_t *browser;
@@ -766,7 +787,7 @@ static void test_completed_and_cancelled_churn_reclaims_name_state(void)
     if (index >= 3)
       fake.resolve_callbacks[index](ERROR_CANCELLED,
                                     fake.resolve_contexts[index], NULL);
-    assert(bonjour_browser_name_state_count(browser) == 0);
+    assert(bonjour_browser_name_state_count(browser) == 1);
   }
   assert(fake.resolve_calls == 6);
   bonjour_close(browser);
@@ -813,7 +834,7 @@ static void test_remove_readd_ignores_late_old_generation_completion(void)
   assert(bonjour_browser_name_state_count(browser) == 1);
   fake_fire_browse_target(&fake, &remove_record, 1,
                           L"PROBE._PURETODO45._TCP.LOCAL");
-  assert(bonjour_browser_name_state_count(browser) == 0);
+  assert(bonjour_browser_name_state_count(browser) == 1);
   bonjour_close(browser);
 }
 
@@ -832,6 +853,105 @@ static void test_pending_resolver_is_cancelled_during_close(void)
   assert(fake.browse_cancel_calls == 1);
   assert(fake.resolve_cancel_calls == 1);
   assert(fake.free_resolved_instance_calls == 0);
+}
+
+static void test_resolver_accepts_multiple_results_for_query_lifetime(void)
+{
+  fake_dns_t fake = fake_dns_pending_registration();
+  bonjour_browser_t *browser;
+  DNS_RECORD add_record;
+  pure_expr *snapshot;
+  size_t count = 0;
+  pure_expr **items = NULL;
+
+  use_fake(&fake);
+  browser = bonjour_browse_with_api("_puretodo45._tcp", &fake.api, 25);
+  assert(browser != NULL);
+  fake_fire_browse(&fake, &add_record, 0);
+  fake_fire_resolve_ipv4_interface(&fake, 0, 0x7f000001u, 7);
+  fake_fire_resolve_ipv4_interface(&fake, 0, 0xc0000209u, 9);
+  assert(fake.free_resolved_instance_calls == 2);
+  snapshot = bonjour_get(browser);
+  assert(snapshot != NULL);
+  assert(pure_is_listv(snapshot, &count, &items));
+  assert(count == 2);
+  free(items);
+  pure_freenew(snapshot);
+  bonjour_close(browser);
+  assert(fake.resolve_cancel_calls == 1);
+}
+
+static void test_resolver_callback_after_close_uses_retained_context(void)
+{
+  fake_dns_t fake = fake_dns_pending_registration();
+  bonjour_browser_t *browser;
+  DNS_RECORD add_record;
+
+  fake.resolve_callback_on_cancel = 0;
+  use_fake(&fake);
+  browser = bonjour_browse_with_api("_puretodo45._tcp", &fake.api, 25);
+  assert(browser != NULL);
+  fake_fire_browse(&fake, &add_record, 0);
+  bonjour_close(browser);
+  fake.resolve_callbacks[0](ERROR_CANCELLED, fake.resolve_contexts[0], NULL);
+  fake_fire_resolve_ipv4_interface(&fake, 0, 0x7f000001u, 7);
+  assert(fake.free_resolved_instance_calls == 1);
+  assert(bonjour_avail(browser) == 0);
+}
+
+static void test_registration_callback_after_cancel_uses_retained_context(void)
+{
+  fake_dns_t fake = fake_dns_pending_registration();
+  bonjour_service_t *service;
+
+  fake.callback_on_cancel = 0;
+  use_fake(&fake);
+  service = bonjour_publish_with_api("Probe", "_puretodo45._tcp", 43210,
+                                     &fake.api, 25);
+  assert(service != NULL);
+  bonjour_unpublish(service);
+  fake_fire_callback(&fake, ERROR_CANCELLED, NULL);
+  assert(fake.free_callback_instance_calls == 1);
+  bonjour_unpublish(service);
+  assert(fake.cancel_calls == 1);
+}
+
+static void test_escaped_instance_round_trips_registration_and_discovery(void)
+{
+  fake_dns_t fake = fake_dns_pending_registration();
+  bonjour_service_t *service;
+  bonjour_browser_t *browser;
+  DNS_RECORD add_record;
+  DNS_RECORD remove_record;
+
+  fake.expected_service_name =
+      L"Probe\\.raw\\\\path._puretodo45._tcp.local";
+  use_fake(&fake);
+  service = bonjour_publish_with_api("Probe.raw\\path", "_puretodo45._tcp",
+                                     43210, &fake.api, 25);
+  assert(service != NULL);
+  fake_fire_callback(&fake, ERROR_SUCCESS, fake.expected_service_name);
+  assert_registration(bonjour_check(service), "Probe.raw\\path",
+                      "_puretodo45._tcp", 43210);
+
+  browser = bonjour_browse_with_api("_puretodo45._tcp", &fake.api, 25);
+  assert(browser != NULL);
+  fake_fire_browse_target(&fake, &add_record, 0, fake.expected_service_name);
+  memset(&fake.resolved_instance, 0, sizeof(fake.resolved_instance));
+  fake.resolved_ip4 = htonl(0x7f000001u);
+  fake.resolved_instance.pszInstanceName = (PWSTR)fake.expected_service_name;
+  fake.resolved_instance.ip4Address = &fake.resolved_ip4;
+  fake.resolved_instance.wPort = 41000;
+  fake.resolved_instance.dwInterfaceIndex = 7;
+  fake.resolve_callbacks[0](ERROR_SUCCESS, fake.resolve_contexts[0],
+                            &fake.resolved_instance);
+  assert_single_result(bonjour_get(browser), "Probe.raw\\path", "127.0.0.1",
+                       41000);
+  fake_fire_browse_target(&fake, &remove_record, 1,
+                          fake.expected_service_name);
+  assert_empty_result(bonjour_get(browser));
+  bonjour_close(browser);
+  bonjour_unpublish(service);
 }
 
 static void test_close_during_resolve_callback_retains_until_callback_tail(void)
@@ -925,11 +1045,15 @@ int main(void)
   test_removal_while_resolve_pending_cannot_readd_service();
   test_zero_ttl_ptr_removes_without_delete_flag();
   test_unknown_deletes_do_not_grow_name_state();
-  test_tombstone_is_pruned_after_old_resolver_completion();
-  test_completed_and_cancelled_churn_reclaims_name_state();
+  test_tombstone_is_retained_while_resolver_can_callback();
+  test_completed_and_cancelled_churn_keeps_one_name_tombstone();
   test_delete_before_resolver_link_invalidates_add_generation();
   test_remove_readd_ignores_late_old_generation_completion();
   test_pending_resolver_is_cancelled_during_close();
+  test_resolver_accepts_multiple_results_for_query_lifetime();
+  test_resolver_callback_after_close_uses_retained_context();
+  test_registration_callback_after_cancel_uses_retained_context();
+  test_escaped_instance_round_trips_registration_and_discovery();
   test_close_during_resolve_callback_retains_until_callback_tail();
   test_close_allows_synchronous_cancel_callbacks();
   test_no_result_close_is_bounded();

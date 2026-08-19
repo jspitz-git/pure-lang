@@ -1,6 +1,6 @@
 # TODO-45 - Windows pure-bonjour Package
 
-Status: Closed on 2026-08-19
+Status: Open
 Branch: todo/45-windows-pure-bonjour
 
 ## Purpose
@@ -23,7 +23,7 @@ Bonjour for Windows product.
 1. [x] Resolve SDK availability, licensing, and redistribution terms.
 2. [x] Build the module against the selected Windows implementation.
 3. [x] Add bounded loopback registration and discovery tests.
-4. [x] Ship the optional package with the Microsoft system DNS-SD backend.
+4. [ ] Ship the optional package with the Microsoft system DNS-SD backend.
 
 ## Guardrails
 
@@ -38,12 +38,38 @@ Bonjour for Windows product.
 
 ## Final Decision
 
-- Ship `PureBonjour` as an optional Windows component. It uses the Windows 10+
-  system `dnsapi.dll`; no Apple Bonjour or other third-party service runtime is
-  installed or redistributed. The exact Windows clean-runner job and its
-  independently downloaded artifact passed the release gate described below.
+- Candidate decision: ship `PureBonjour` as an optional Windows component. It
+  uses the Windows 10+ system `dnsapi.dll`; no Apple Bonjour or other
+  third-party service runtime is installed or redistributed. Final shipment is
+  pending a fresh Windows clean-runner and independent artifact gate after the
+  final review fixes.
 
 ## Progress Log
+
+- 2026-08-19: Reopened after final whole-branch review found callback-lifetime,
+  DNS presentation-name, and configure-authority gaps.
+  - Accepted resolve queries now remain live for repeated Microsoft completion
+    callbacks and are cancelled only during browser close. Registration,
+    resolver, and browser callback contexts are conservatively retained as
+    process-lifetime tombstones because Microsoft documents no callback-drain
+    barrier after cancellation; callback-owned instances are still freed once.
+  - Instance labels containing literal dots and backslashes use DNS presentation
+    escaping and strict decoding. Invalid escapes and control bytes are rejected.
+  - Configuration now requires an x86-64 Windows compiler target, an absolute
+    existing `PURE_PREFIX`, and canonical pkg-config include/library paths below
+    that prefix. Final clean-runner and artifact revalidation remain pending.
+  - Validation:
+    - A fresh CLANG64 MinGW Makefiles build with `-Wall -Wextra -Werror` passed
+      without diagnostics.
+    - `ctest.exe --test-dir build/pure-bonjour --output-on-failure
+      --no-tests=error` passed 14/14 tests in 246.86 seconds, including the real
+      loopback in 3.80 seconds.
+    - `ctest.exe --test-dir build/pure-bonjour -R
+      "^pure-bonjour-lifecycle$" --repeat until-fail:20 --output-on-failure`
+      passed 20 consecutive runs in 46.86 seconds.
+    - `cmake.exe --build build/pure-bonjour --target
+      verify-windows-dependencies` passed with 11 PE files, 126 import edges,
+      and exactly seven exports.
 
 - 2026-07-25: Created as an optional networking Windows package investigation.
 - 2026-08-18: Added the Windows-only CMake module target, private UTF/name/status

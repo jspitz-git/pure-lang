@@ -70,7 +70,21 @@ static void test_names(void)
   too_long_instance[sizeof(too_long_instance) - 1] = '\0';
   assert(bonjour_make_instance_fqdn(too_long_instance,
                                     "_puretodo45._tcp") == NULL);
-  assert(bonjour_make_instance_fqdn("Probe.raw", "_puretodo45._tcp") == NULL);
+  fqdn = bonjour_make_instance_fqdn("Probe.raw\\path", "_puretodo45._tcp");
+  assert(fqdn != NULL);
+  assert(wcscmp(fqdn, L"Probe\\.raw\\\\path._puretodo45._tcp.local") == 0);
+  assert(bonjour_split_instance_fqdn(fqdn, &name, &split_type, &domain) == 0);
+  assert(strcmp(name, "Probe.raw\\path") == 0);
+  free(fqdn); free(name); free(split_type); free(domain);
+  assert(bonjour_split_instance_fqdn(
+             L"Probe\\x._puretodo45._tcp.local", &name, &split_type,
+             &domain) < 0);
+  assert(bonjour_split_instance_fqdn(
+             L"Probe._puretodo45._tcp.local\\x", &name, &split_type,
+             &domain) < 0);
+  assert(bonjour_split_instance_fqdn(
+             L"Probe\x0001._puretodo45._tcp.local", &name, &split_type,
+             &domain) < 0);
 
   memset(too_long_name, 'a', sizeof(too_long_name) - 1);
   too_long_name[sizeof(too_long_name) - 1] = '\0';

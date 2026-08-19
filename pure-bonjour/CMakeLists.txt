@@ -9,8 +9,24 @@ if(NOT CMAKE_SIZEOF_VOID_P EQUAL 8)
   message(FATAL_ERROR "PureBonjour supports only 64-bit Windows")
 endif()
 
+if(NOT DEFINED PURE_PREFIX)
+  message(FATAL_ERROR "PURE_PREFIX is required")
+endif()
+set(pure_bonjour_requested_prefix "${PURE_PREFIX}")
+execute_process(COMMAND "${CMAKE_C_COMPILER}" -dumpmachine
+  OUTPUT_VARIABLE pure_bonjour_target_triple OUTPUT_STRIP_TRAILING_WHITESPACE
+  RESULT_VARIABLE pure_bonjour_dumpmachine_status)
+if(NOT pure_bonjour_dumpmachine_status EQUAL 0)
+  message(FATAL_ERROR "Could not determine the C compiler target")
+endif()
+
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(PURE REQUIRED IMPORTED_TARGET "pure>=0.68")
+include(cmake/ValidateConfigure.cmake)
+pure_bonjour_validate_configure("${pure_bonjour_target_triple}"
+  "${pure_bonjour_requested_prefix}" "${PURE_INCLUDE_DIRS}"
+  "${pkgcfg_lib_PURE_pure}")
+file(REAL_PATH "${pure_bonjour_requested_prefix}" PURE_PREFIX)
 
 add_library(pure-bonjour MODULE bonjour_windows.c)
 set_target_properties(pure-bonjour PROPERTIES OUTPUT_NAME bonjour PREFIX ""
@@ -43,6 +59,14 @@ add_custom_target(verify-windows-dependencies
 
 include(CTest)
 if(BUILD_TESTING)
+  add_test(NAME pure-bonjour-configure-contract
+    COMMAND "${CMAKE_COMMAND}"
+      "-DVALIDATOR=${CMAKE_CURRENT_SOURCE_DIR}/cmake/ValidateConfigure.cmake"
+      "-DTEST_ROOT=${CMAKE_CURRENT_BINARY_DIR}/configure-contract"
+      -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/configure-contract.cmake")
+  set_tests_properties(pure-bonjour-configure-contract PROPERTIES
+    LABELS "bonjour;unit;configure" TIMEOUT 15)
+
   add_test(NAME pure-bonjour-sdk-runtime-closure-contract
     COMMAND "${CMAKE_COMMAND}"
       "-DSTAGER=${CMAKE_CURRENT_SOURCE_DIR}/../pure/cmake/StageWindowsRuntimeDlls.cmake"
