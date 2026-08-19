@@ -92,6 +92,373 @@ Bonjour for Windows product.
     oracle, aliases, verifier scratch, and smoke roots; the extracted evidence
     and its `bonjour.dll` hash were preserved.
 
+### Reproducible final artifact gate transcript
+
+The following is the exact PowerShell shape used for the final gate. It is
+fail-closed: start it only when the named gate directory does not exist. `gh`
+must be authenticated for Actions artifact download. The downloaded Actions
+wrapper and extracted package remain as evidence; only the explicitly named
+temporary oracle and verifier root are removed.
+
+```powershell
+$ErrorActionPreference = 'Stop'
+$repo = (Resolve-Path '.').Path
+$worktreeBuild = (Resolve-Path '.\build').Path
+$ownedGateName = 'TODO45 artifact gate run32294731499 Č'
+$ownedGate = [IO.Path]::GetFullPath((Join-Path $worktreeBuild $ownedGateName))
+$buildPrefix = $worktreeBuild.TrimEnd('\') + '\'
+if (-not $ownedGate.StartsWith(
+    $buildPrefix, [StringComparison]::OrdinalIgnoreCase)) {
+  throw "gate escaped worktree build root: $ownedGate"
+}
+if (Test-Path -LiteralPath $ownedGate) {
+  throw "refusing to reuse evidence directory: $ownedGate"
+}
+New-Item -ItemType Directory -Path $ownedGate | Out-Null
+$gateItem = Get-Item -LiteralPath $ownedGate -Force
+if (($gateItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+  throw "gate is a reparse point: $ownedGate"
+}
+
+$run = gh run view 32294731499 `
+  --json databaseId,status,conclusion,url,headSha,headBranch,jobs |
+  ConvertFrom-Json
+if ($LASTEXITCODE -ne 0) { throw 'could not read workflow run' }
+if ($run.databaseId -ne 32294731499 -or
+    $run.headSha -cne '1dfe2c08ab9c86a997708bf46dc63fea4a5d0c30') {
+  throw 'workflow identity mismatch'
+}
+$windowsJob = @($run.jobs | Where-Object databaseId -eq 96203302905)
+if ($windowsJob.Count -ne 1 -or $windowsJob[0].conclusion -cne 'success') {
+  throw 'exact Windows job is not successful'
+}
+
+$artifacts = gh api `
+  repos/jspitz-git/pure-lang/actions/runs/32294731499/artifacts |
+  ConvertFrom-Json
+if ($LASTEXITCODE -ne 0) { throw 'could not read artifact metadata' }
+$artifact = @($artifacts.artifacts | Where-Object id -eq 9381042576)
+if ($artifact.Count -ne 1 -or $artifact[0].name -cne 'windows-pure-bonjour' -or
+    $artifact[0].expired -or
+    $artifact[0].workflow_run.head_sha -cne
+      '1dfe2c08ab9c86a997708bf46dc63fea4a5d0c30' -or
+    $artifact[0].digest -cne
+      'sha256:2b7de0f5005aa3e7e561233f8bd20346164cce34e156335e210bffdf83d3cb44') {
+  throw 'artifact identity mismatch'
+}
+
+$outer = Join-Path $ownedGate 'github-artifact-wrapper.zip'
+$jobLog = Join-Path $ownedGate 'windows-job-96203302905.log'
+if ((Test-Path -LiteralPath $outer) -or (Test-Path -LiteralPath $jobLog)) {
+  throw 'download destination already exists'
+}
+gh api repos/jspitz-git/pure-lang/actions/artifacts/9381042576/zip > $outer
+if ($LASTEXITCODE -ne 0) { throw 'artifact download failed' }
+gh run view 32294731499 --job 96203302905 --log > $jobLog
+if ($LASTEXITCODE -ne 0) { throw 'job-log download failed' }
+$outerItem = Get-Item -LiteralPath $outer
+$outerHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $outer).Hash.ToLowerInvariant()
+if ($outerItem.Length -ne 54049 -or $outerHash -cne
+    '2b7de0f5005aa3e7e561233f8bd20346164cce34e156335e210bffdf83d3cb44') {
+  throw "Actions wrapper mismatch: $($outerItem.Length) $outerHash"
+}
+"ACTIONS_WRAPPER_OK bytes=$($outerItem.Length) sha256=$outerHash"
+```
+
+Relevant output:
+
+```text
+ACTIONS_WRAPPER_OK bytes=54049 sha256=2b7de0f5005aa3e7e561233f8bd20346164cce34e156335e210bffdf83d3cb44
+```
+
+Audit both ZIP layers before extracting anything. The outer wrapper must own
+one ordinary member; the package must own the exact eight names in ordinal
+order. Extraction uses `CreateNew`, checks every canonical destination beneath
+the newly owned Unicode root, and rejects any reparse parent before writing.
+
+```powershell
+Add-Type -AssemblyName System.IO.Compression
+$inner = Join-Path $ownedGate 'windows-pure-bonjour.zip'
+$outerZip = [IO.Compression.ZipFile]::OpenRead($outer)
+try {
+  if ($outerZip.Entries.Count -ne 1 -or
+      $outerZip.Entries[0].FullName -cne 'windows-pure-bonjour.zip') {
+    throw 'unexpected Actions wrapper layout'
+  }
+  $outerEntry = $outerZip.Entries[0]
+  if ($outerEntry.FullName.Contains('\') -or
+      [IO.Path]::IsPathRooted($outerEntry.FullName) -or
+      $outerEntry.FullName -match '(^|/)\.\.(/|$)') {
+    throw 'unsafe Actions wrapper member'
+  }
+  $input = $outerEntry.Open()
+  $output = [IO.File]::Open(
+    $inner, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write,
+    [IO.FileShare]::None)
+  try { $input.CopyTo($output) } finally { $output.Dispose(); $input.Dispose() }
+} finally {
+  $outerZip.Dispose()
+}
+
+$innerItem = Get-Item -LiteralPath $inner
+$innerHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $inner).Hash.ToLowerInvariant()
+if ($innerItem.Length -ne 54475 -or $innerHash -cne
+    '5c23c770f7845ebee52dc58612148978e16cb323f016121894b95560afd2349e') {
+  throw "inner ZIP mismatch: $($innerItem.Length) $innerHash"
+}
+
+[string[]]$expected = @(
+  'lib/pure/bonjour.dll',
+  'lib/pure/bonjour.pure',
+  'share/doc/pure-bonjour/COPYING',
+  'share/doc/pure-bonjour/COPYING.LESSER',
+  'share/doc/pure-bonjour/PureBonjourInventory.tsv',
+  'share/doc/pure-bonjour/README',
+  'share/doc/pure-bonjour/WINDOWS.md',
+  'share/doc/pure-bonjour/examples/bonjour_examp.pure'
+)
+[Array]::Sort($expected, [StringComparer]::Ordinal)
+$packageZip = [IO.Compression.ZipFile]::OpenRead($inner)
+try {
+  [string[]]$names = @($packageZip.Entries | ForEach-Object FullName)
+  if ($names.Count -ne 8) { throw "expected 8 entries, got $($names.Count)" }
+  $seen = @{}
+  $seenCase = @{}
+  for ($index = 0; $index -lt $names.Count; ++$index) {
+    $name = $names[$index]
+    if ($name -cne $expected[$index]) {
+      throw "unexpected/non-ordinal member $index`: $name"
+    }
+    if ([string]::IsNullOrWhiteSpace($name) -or $name.Contains('\') -or
+        [IO.Path]::IsPathRooted($name) -or $name.StartsWith('/') -or
+        $name -match '^[A-Za-z]:' -or $name -match '(^|/)\.\.(/|$)') {
+      throw "unsafe package member: $name"
+    }
+    if ($seen.ContainsKey($name)) { throw "duplicate member: $name" }
+    $seen[$name] = $true
+    $folded = $name.ToLowerInvariant()
+    if ($seenCase.ContainsKey($folded)) {
+      throw "case-fold collision: $name"
+    }
+    $seenCase[$folded] = $true
+  }
+
+  $stage = Join-Path $ownedGate 'Extracted package Žluťoučký kůň'
+  if (Test-Path -LiteralPath $stage) { throw "stage already exists: $stage" }
+  New-Item -ItemType Directory -Path $stage | Out-Null
+  $stageItem = Get-Item -LiteralPath $stage -Force
+  if (($stageItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+    throw "stage is a reparse point: $stage"
+  }
+  $stageCanonical = [IO.Path]::GetFullPath($stage)
+  $stagePrefix = $stageCanonical.TrimEnd('\') + '\'
+  foreach ($entry in $packageZip.Entries) {
+    $target = [IO.Path]::GetFullPath((Join-Path $stageCanonical $entry.FullName))
+    if (-not $target.StartsWith(
+        $stagePrefix, [StringComparison]::OrdinalIgnoreCase)) {
+      throw "extraction escaped stage: $($entry.FullName)"
+    }
+    $parent = [IO.Path]::GetDirectoryName($target)
+    [IO.Directory]::CreateDirectory($parent) | Out-Null
+    $cursor = Get-Item -LiteralPath $parent -Force
+    while ($cursor.FullName.StartsWith(
+        $stagePrefix, [StringComparison]::OrdinalIgnoreCase)) {
+      if (($cursor.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+        throw "reparse parent during extraction: $($cursor.FullName)"
+      }
+      if ($cursor.FullName -ceq $stageCanonical) { break }
+      $cursor = $cursor.Parent
+    }
+    $input = $entry.Open()
+    $output = [IO.File]::Open(
+      $target, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write,
+      [IO.FileShare]::None)
+    try { $input.CopyTo($output) } finally { $output.Dispose(); $input.Dispose() }
+  }
+} finally {
+  $packageZip.Dispose()
+}
+"INNER_ZIP_OK bytes=$($innerItem.Length) sha256=$innerHash entries=8"
+```
+
+Relevant output:
+
+```text
+INNER_ZIP_OK bytes=54475 sha256=5c23c770f7845ebee52dc58612148978e16cb323f016121894b95560afd2349e entries=8
+```
+
+The installed inventory is checked independently. The temporary eight-row
+oracle below is derived from the already authenticated artifact solely because
+the production verifier requires its normal external-oracle input. It is
+deliberately named `NOT-HASH-AUTHORITY` and is not cited as artifact authority.
+
+```powershell
+$inventory = Join-Path $stage `
+  'share\doc\pure-bonjour\PureBonjourInventory.tsv'
+$rows = @(Import-Csv -Delimiter "`t" -LiteralPath $inventory)
+if ($rows.Count -ne 7) { throw "inventory rows: $($rows.Count)" }
+$oracleDirectory = Join-Path $ownedGate `
+  'artifact-derived-temp-oracle-NOT-HASH-AUTHORITY'
+if (Test-Path -LiteralPath $oracleDirectory) {
+  throw "temporary oracle already exists: $oracleDirectory"
+}
+New-Item -ItemType Directory -Path $oracleDirectory | Out-Null
+$oracleItem = Get-Item -LiteralPath $oracleDirectory -Force
+if (($oracleItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+  throw 'temporary oracle directory is a reparse point'
+}
+$oracleLines = [Collections.Generic.List[string]]::new()
+foreach ($relative in $expected) {
+  $file = [IO.Path]::GetFullPath((Join-Path $stage $relative))
+  if (-not $file.StartsWith($stagePrefix, [StringComparison]::OrdinalIgnoreCase)) {
+    throw "inventory path escaped stage: $relative"
+  }
+  $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $file).Hash.ToLowerInvariant()
+  $size = (Get-Item -LiteralPath $file).Length
+  if ($relative -cne 'share/doc/pure-bonjour/PureBonjourInventory.tsv') {
+    $row = @($rows | Where-Object relative_path -CEQ $relative)
+    if ($row.Count -ne 1 -or $row[0].sha256 -cne $hash -or
+        [int64]$row[0].size -ne $size) {
+      throw "inventory hash/size mismatch: $relative"
+    }
+  }
+  $oracleLines.Add("$hash  $relative")
+}
+$oracle = Join-Path $oracleDirectory 'PureBonjourExpected.sha256'
+[IO.File]::WriteAllLines($oracle, $oracleLines, [Text.UTF8Encoding]::new($false))
+$files = @(Get-ChildItem -LiteralPath $stage -File -Recurse)
+$stageBytes = ($files | Measure-Object Length -Sum).Sum
+$inventoryHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $inventory).Hash.ToLowerInvariant()
+if ($files.Count -ne 8 -or $stageBytes -ne 136850 -or $inventoryHash -cne
+    '1d0520efd0e5ec6470b6ade4279f4208cbec571289f67e7aca3a907c87622518') {
+  throw 'package inventory total/self-hash mismatch'
+}
+"ARTIFACT_INVENTORY_OK rows=7 files=8 bytes=$stageBytes self_sha256=$inventoryHash"
+```
+
+Relevant output (also present in the exact remote Windows job log):
+
+```text
+ARTIFACT_INVENTORY_OK rows=7 files=8 bytes=136850 self_sha256=1d0520efd0e5ec6470b6ade4279f4208cbec571289f67e7aca3a907c87622518
+```
+
+The successful verifier run used the short ASCII root below because Pure 0.68
+cannot reliably load the same module through a long/Unicode Windows loader
+path. `VerifyInstalledPackage.cmake` creates junction aliases, resolves and
+compares their canonical targets before use, removes them itself, performs the
+dependency/export audit, and runs the bounded real publish/browse/resolve/remove
+smoke with sanitized `PATH`.
+
+```powershell
+$purePrefix = 'C:\pure-lang\pure\build\windows-clang64-prefix'
+$pureBuild = (Resolve-Path 'C:\pure-lang\pure\build').Path
+$verifierLeaf = 'g45-32294731499'
+$verifierRoot = [IO.Path]::GetFullPath((Join-Path $pureBuild $verifierLeaf))
+if ($verifierRoot -cne [IO.Path]::GetFullPath(
+    'C:\pure-lang\pure\build\g45-32294731499')) {
+  throw "unexpected verifier root: $verifierRoot"
+}
+$pureBuildPrefix = $pureBuild.TrimEnd('\') + '\'
+if (-not $verifierRoot.StartsWith(
+    $pureBuildPrefix, [StringComparison]::OrdinalIgnoreCase) -or
+    (Test-Path -LiteralPath $verifierRoot)) {
+  throw "verifier root is not a fresh owned child: $verifierRoot"
+}
+New-Item -ItemType Directory -Path $verifierRoot | Out-Null
+$verifierItem = Get-Item -LiteralPath $verifierRoot -Force
+if (($verifierItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+  throw 'verifier root is a reparse point'
+}
+$scratch = Join-Path $verifierRoot 's'
+$before = @(Get-Process pure -ErrorAction SilentlyContinue).Count
+if ($before -ne 0) { throw "Pure process count before: $before" }
+"PURE_PROCESS_COUNT_BEFORE=$before"
+Remove-Item Env:PURELIB -ErrorAction SilentlyContinue
+$env:Path = "$purePrefix\bin;$env:SystemRoot\System32\WindowsPowerShell\v1.0;" +
+  "$env:SystemRoot\System32;$env:SystemRoot"
+if ($env:Path -match '(?i)(^|;).*[/\\]msys64[/\\]') {
+  throw "MSYS2 survived PATH sanitization: $env:Path"
+}
+& 'C:\msys64\clang64\bin\cmake.exe' `
+  "-DSTAGE_PREFIX=$stage" `
+  "-DSOURCE_PREFIX=$repo\pure-bonjour" `
+  "-DBUILD_PREFIX=$oracleDirectory" `
+  "-DPURE_PREFIX=$purePrefix" `
+  "-DPACKAGE_TEMP_ROOT=$verifierRoot" `
+  "-DPACKAGE_SCRATCH_ROOT=$scratch" `
+  -P "$repo\pure-bonjour\cmake\VerifyInstalledPackage.cmake"
+if ($LASTEXITCODE -ne 0) { throw 'installed artifact verifier failed' }
+$after = @(Get-Process pure -ErrorAction SilentlyContinue).Count
+if ($after -ne 0) { throw "Pure process count after: $after" }
+"PURE_PROCESS_COUNT_AFTER=$after"
+```
+
+Relevant output:
+
+```text
+PURE_PROCESS_COUNT_BEFORE=0
+-- PureBonjour dependency audit passed: 11 PE files, 126 import edges, seven exact exports
+-- PureBonjour installed package accepted: 8 files, 136850 bytes, inventory 1d0520efd0e5ec6470b6ade4279f4208cbec571289f67e7aca3a907c87622518; dependency closure pe_files	11;import_edges	126
+PURE_PROCESS_COUNT_AFTER=0
+```
+
+Cleanup is limited to the two exact temporary directories. It refuses a
+different basename, any path outside its declared build root, the root itself
+being a reparse point, or any remaining descendant reparse point (including a
+verifier alias). The authenticated ZIPs and Unicode extraction are not cleanup
+targets, and their module hash is checked again afterwards.
+
+```powershell
+function Remove-OwnedPlainTree(
+    [string]$Path, [string]$OwnedRoot, [string]$ExpectedLeaf) {
+  $root = [IO.Path]::GetFullPath($OwnedRoot)
+  $full = [IO.Path]::GetFullPath($Path)
+  $expected = [IO.Path]::GetFullPath((Join-Path $root $ExpectedLeaf))
+  $prefix = $root.TrimEnd('\') + '\'
+  if ($full -cne $expected -or
+      -not $full.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase)) {
+    throw "cleanup ownership mismatch: $full"
+  }
+  if (-not (Test-Path -LiteralPath $full)) { return }
+  $ownedItem = Get-Item -LiteralPath $full -Force
+  if (($ownedItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+    throw "cleanup root is a reparse point: $full"
+  }
+  foreach ($child in Get-ChildItem -LiteralPath $full -Force -Recurse) {
+    if (($child.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+      throw "cleanup descendant is a reparse point: $($child.FullName)"
+    }
+  }
+  Remove-Item -LiteralPath $full -Recurse -Force
+  if (Test-Path -LiteralPath $full) { throw "cleanup failed: $full" }
+  "CLEANED=$full"
+}
+
+Remove-OwnedPlainTree $oracleDirectory $ownedGate `
+  'artifact-derived-temp-oracle-NOT-HASH-AUTHORITY'
+Remove-OwnedPlainTree $verifierRoot $pureBuild 'g45-32294731499'
+$preservedModule = Join-Path $stage 'lib\pure\bonjour.dll'
+$preservedHash = (Get-FileHash -Algorithm SHA256 `
+  -LiteralPath $preservedModule).Hash.ToLowerInvariant()
+if ($preservedHash -cne
+    '2feb868d99a4a7ad572b67d9b6b77150aa22087549a7aa12eb68256d02e7f039') {
+  throw 'audited extraction changed during cleanup'
+}
+$finalProcesses = @(Get-Process pure -ErrorAction SilentlyContinue).Count
+if ($finalProcesses -ne 0) { throw "Pure process count after cleanup: $finalProcesses" }
+"AUDITED_STAGE_PRESERVED_SHA256=$preservedHash"
+"PURE_PROCESS_COUNT_CLEANUP=$finalProcesses"
+```
+
+Relevant output:
+
+```text
+CLEANED=C:\pure-lang\.worktrees\todo-45-windows-pure-bonjour\build\TODO45 artifact gate run32294731499 Č\artifact-derived-temp-oracle-NOT-HASH-AUTHORITY
+CLEANED=C:\pure-lang\pure\build\g45-32294731499
+AUDITED_STAGE_PRESERVED_SHA256=2feb868d99a4a7ad572b67d9b6b77150aa22087549a7aa12eb68256d02e7f039
+PURE_PROCESS_COUNT_CLEANUP=0
+```
+
 - 2026-08-19: Closed the service-cleanup ownership review round locally; the
   TODO remains open for renewed remote and artifact evidence.
   - Official Microsoft return contracts were rechecked. Only
