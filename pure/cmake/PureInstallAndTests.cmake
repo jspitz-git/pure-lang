@@ -368,7 +368,7 @@ if(BUILD_TESTING)
     NAME pure-jit-deferred-retry
     COMMAND
       "${CMAKE_COMMAND}"
-      -E env PURE_TEST_ORC_FAILURE=deferred-snapshot-add
+      -E env PURE_TEST_ORC_FAILURE=deferred-snapshot-add,deferred-snapshot-lookup
       "${CMAKE_COMMAND}"
       -DPURE_EXECUTABLE=$<TARGET_FILE:pure>
       -DPURE_SCRIPT=${CMAKE_CURRENT_SOURCE_DIR}/test/jit-deferred-retry.pure

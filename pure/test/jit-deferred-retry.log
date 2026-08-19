@@ -1,3 +1,5 @@
 failed to resolve deferred ORC function generation: injected deferred ORC snapshot submission failure
 deferred_retry 2
+failed to resolve deferred ORC function generation: injected deferred ORC snapshot lookup failure
+deferred_retry 2
 42

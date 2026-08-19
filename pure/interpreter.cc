@@ -1396,20 +1396,42 @@ void *interpreter::materialize_global_generation(int32_t tag, string *error_mess
   return materialize_global_generation_by_key(generation->key, error_message);
 }
 
+#ifdef PURE_ENABLE_TEST_HOOKS
+static bool inject_deferred_failure(const char *mode, bool& injected)
+{
+  if (injected) return false;
+  const char *failure = getenv("PURE_TEST_ORC_FAILURE");
+  if (!failure) return false;
+  string failures = ","+string(failure)+",";
+  if (failures.find(","+string(mode)+",") == string::npos) return false;
+  injected = true;
+  return true;
+}
+#endif
+
 static llvm::Error add_deferred_snapshot
 (PureJit& jit, llvm::orc::ResourceTrackerSP tracker,
  std::unique_ptr<llvm::MemoryBuffer> snapshot)
 {
 #ifdef PURE_ENABLE_TEST_HOOKS
   static bool injected = false;
-  const char *failure = getenv("PURE_TEST_ORC_FAILURE");
-  if (!injected && failure && !strcmp(failure, "deferred-snapshot-add")) {
-    injected = true;
+  if (inject_deferred_failure("deferred-snapshot-add", injected))
     return llvm::createStringError
       ("injected deferred ORC snapshot submission failure");
-  }
 #endif
   return jit.add_module_snapshot(std::move(tracker), std::move(snapshot));
+}
+
+static llvm::Expected<llvm::orc::ExecutorAddr> lookup_deferred_snapshot
+(PureJit& jit, llvm::StringRef symbol)
+{
+#ifdef PURE_ENABLE_TEST_HOOKS
+  static bool injected = false;
+  if (inject_deferred_failure("deferred-snapshot-lookup", injected))
+    return llvm::createStringError
+      ("injected deferred ORC snapshot lookup failure");
+#endif
+  return jit.lookup(symbol);
 }
 
 static std::unique_ptr<llvm::MemoryBuffer> clone_snapshot
@@ -1439,7 +1461,8 @@ void *interpreter::materialize_global_generation_by_key
       else llvm::consumeError(std::move(error));
       return 0;
     }
-    llvm::Expected<llvm::orc::ExecutorAddr> entry = ORC->lookup(generation->symbol);
+    llvm::Expected<llvm::orc::ExecutorAddr> entry =
+      lookup_deferred_snapshot(*ORC, generation->symbol);
     if (!entry) {
       llvm::Error error = entry.takeError();
       if (llvm::Error cleanup_error = tracker->remove())
