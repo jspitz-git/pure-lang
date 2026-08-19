@@ -46,19 +46,32 @@ if(NOT install_result EQUAL 0)
     "${install_output}${install_error}")
 endif()
 
-function(run_verifier stage oracle_directory expected_token case_name)
+function(run_custom_verifier stage oracle_directory source_directory
+    expected_token case_name)
   execute_process(
     COMMAND "${CMAKE_COMMAND}"
       "-DSTAGE_PREFIX=${stage}"
-      "-DSOURCE_PREFIX=${source_prefix}"
+      "-DSOURCE_PREFIX=${source_directory}"
       "-DBUILD_PREFIX=${oracle_directory}"
       "-DPURE_PREFIX=${pure_prefix}"
+      "-DPACKAGE_SCRATCH_ROOT=${test_root}/verifier-scratch"
+      ${ARGN}
       -P "${VERIFIER}"
     RESULT_VARIABLE result
     OUTPUT_VARIABLE output
     ERROR_VARIABLE error
     ENCODING UTF-8)
   set(log "${output}${error}")
+  set(expected_scratch_root "${test_root}/verifier-scratch")
+  if(IS_DIRECTORY "${expected_scratch_root}")
+    file(GLOB scratch_leftovers LIST_DIRECTORIES TRUE
+      "${expected_scratch_root}/verify-*")
+    if(scratch_leftovers)
+      message(FATAL_ERROR
+        "${case_name} verifier left controlled scratch entries: "
+        "${scratch_leftovers}")
+    endif()
+  endif()
   if(expected_token STREQUAL "")
     if(NOT result EQUAL 0)
       message(FATAL_ERROR
@@ -73,6 +86,11 @@ function(run_verifier stage oracle_directory expected_token case_name)
         "${case_name} failed without ${expected_token}\n${log}")
     endif()
   endif()
+endfunction()
+
+function(run_verifier stage oracle_directory expected_token case_name)
+  run_custom_verifier("${stage}" "${oracle_directory}" "${source_prefix}"
+    "${expected_token}" "${case_name}" ${ARGN})
 endfunction()
 
 run_verifier("${valid_stage}" "${build_dir}" "" "valid-stage")
@@ -228,6 +246,42 @@ foreach(prefix_name IN ITEMS source build stage)
     "ascii-prefix-${prefix_name}")
 endforeach()
 
+# Canonical Unicode prefixes must be compared with Windows Unicode case
+# semantics in both text encodings, not only ASCII byte folding.
+set(unicode_source "${test_root}/Source Č")
+file(MAKE_DIRECTORY "${unicode_source}/tests")
+file(COPY "${source_prefix}/cmake" DESTINATION "${unicode_source}")
+file(COPY_FILE "${source_prefix}/tests/smoke.pure"
+  "${unicode_source}/tests/smoke.pure" ONLY_IF_DIFFERENT)
+foreach(encoding_name IN ITEMS utf8 utf16)
+  foreach(prefix_name IN ITEMS source build stage)
+    set(case_root "${test_root}/unicode-${encoding_name}-${prefix_name}")
+    set(stage "${case_root}/Stage Č")
+    set(case_build "${case_root}/Build Ž")
+    file(MAKE_DIRECTORY "${stage}" "${case_build}")
+    file(COPY "${valid_stage}/" DESTINATION "${stage}")
+    file(COPY_FILE "${oracle}"
+      "${case_build}/PureBonjourExpected.sha256" ONLY_IF_DIFFERENT)
+    if(prefix_name STREQUAL "source")
+      set(leaked_prefix "${unicode_source}")
+      string(REPLACE "Č" "č" leaked_prefix "${leaked_prefix}")
+    elseif(prefix_name STREQUAL "build")
+      set(leaked_prefix "${case_build}")
+      string(REPLACE "Ž" "ž" leaked_prefix "${leaked_prefix}")
+    else()
+      set(leaked_prefix "${stage}")
+      string(REPLACE "Č" "č" leaked_prefix "${leaked_prefix}")
+    endif()
+    if(encoding_name STREQUAL "utf8")
+      file(APPEND "${stage}/lib/pure/bonjour.pure" "\n${leaked_prefix}\n")
+    else()
+      append_utf16("${stage}/lib/pure/bonjour.pure" "${leaked_prefix}")
+    endif()
+    run_custom_verifier("${stage}" "${case_build}" "${unicode_source}"
+      PACKAGE_PREFIX "unicode-${encoding_name}-${prefix_name}")
+  endforeach()
+endforeach()
+
 fresh_case(mixed-case-prefix stage case_build)
 string(REPLACE "pure-lang" "PuRe-LaNg" leaked_prefix "${source_prefix}")
 string(REPLACE "pure-bonjour" "PuRe-BoNjOuR"
@@ -337,4 +391,121 @@ if(reparse_result EQUAL 0 OR NOT
   message(FATAL_ERROR
     "reparse point was not rejected with PACKAGE_SET\n"
     "${reparse_output}${reparse_error}")
+endif()
+
+# A caller-controlled scratch path may already be a junction.  The verifier
+# must unlink only that entry, fail closed, and never traverse to the sentinel.
+fresh_case(preexisting-scratch-junction stage case_build)
+set(scratch_target "${test_root}/scratch-junction-target")
+set(scratch_link "${test_root}/controlled-scratch-link")
+file(MAKE_DIRECTORY "${scratch_target}")
+file(WRITE "${scratch_target}/sentinel.bin" "scratch sentinel\n")
+file(SHA256 "${scratch_target}/sentinel.bin" scratch_sentinel_sha)
+cmake_path(NATIVE_PATH scratch_target NORMALIZE scratch_target_native)
+cmake_path(NATIVE_PATH scratch_link NORMALIZE scratch_link_native)
+execute_process(
+  COMMAND "$ENV{COMSPEC}" /d /c mklink /J
+    "${scratch_link_native}" "${scratch_target_native}"
+  RESULT_VARIABLE scratch_link_result
+  OUTPUT_VARIABLE scratch_link_output
+  ERROR_VARIABLE scratch_link_error
+  ENCODING UTF-8)
+if(NOT scratch_link_result EQUAL 0)
+  message(FATAL_ERROR
+    "could not create scratch junction: ${scratch_link_output}${scratch_link_error}")
+endif()
+execute_process(
+  COMMAND "${CMAKE_COMMAND}"
+    "-DSTAGE_PREFIX=${stage}"
+    "-DSOURCE_PREFIX=${source_prefix}"
+    "-DBUILD_PREFIX=${case_build}"
+    "-DPURE_PREFIX=${pure_prefix}"
+    "-DPACKAGE_SCRATCH_ROOT=${scratch_link}"
+    -P "${VERIFIER}"
+  RESULT_VARIABLE scratch_result
+  OUTPUT_VARIABLE scratch_output
+  ERROR_VARIABLE scratch_error
+  ENCODING UTF-8)
+if(EXISTS "${scratch_link}" OR IS_SYMLINK "${scratch_link}")
+  execute_process(
+    COMMAND "$ENV{COMSPEC}" /d /c rmdir "${scratch_link_native}"
+    RESULT_VARIABLE scratch_unlink_result)
+  if(NOT scratch_unlink_result EQUAL 0)
+    message(FATAL_ERROR "test could not unlink scratch junction")
+  endif()
+endif()
+file(SHA256 "${scratch_target}/sentinel.bin" scratch_actual_sha)
+if(scratch_result EQUAL 0 OR NOT
+    "${scratch_output}${scratch_error}" MATCHES "PACKAGE_SCRATCH" OR
+    NOT scratch_actual_sha STREQUAL scratch_sentinel_sha)
+  message(FATAL_ERROR
+    "pre-existing scratch junction was not safely rejected\n"
+    "${scratch_output}${scratch_error}")
+endif()
+
+fresh_case(temp-root-inside-stage stage case_build)
+set(inside_temp "${stage}/controlled-temp")
+file(MAKE_DIRECTORY "${inside_temp}")
+run_verifier("${stage}" "${case_build}" PACKAGE_SCRATCH
+  "temp-root-inside-stage" "-DPACKAGE_TEMP_ROOT=${inside_temp}")
+
+# Injected alias commands make mismatch and partial-creation cleanup
+# deterministic without touching any path outside this test root.
+set(alias_log "${test_root}/alias-command.log")
+set(alias_wrong_target "${test_root}/alias-wrong-target")
+file(MAKE_DIRECTORY "${alias_wrong_target}")
+file(WRITE "${alias_wrong_target}/sentinel.bin" "alias sentinel\n")
+file(SHA256 "${alias_wrong_target}/sentinel.bin" alias_sentinel_sha)
+set(alias_mismatch_script "${test_root}/alias-mismatch.ps1")
+file(WRITE "${alias_mismatch_script}" [=[
+param([string]$Alias, [string]$Target, [string]$Kind,
+  [string]$Log, [string]$WrongTarget)
+[IO.File]::AppendAllText($Log, $Alias + [Environment]::NewLine)
+$selected = if ($Kind -eq 'stage') { $WrongTarget } else { $Target }
+& $env:COMSPEC /d /c mklink /J $Alias $selected | Out-Null
+exit $LASTEXITCODE
+]=])
+fresh_case(alias-target-mismatch stage case_build)
+file(REMOVE "${alias_log}")
+run_verifier("${stage}" "${case_build}" PACKAGE_ALIAS
+  "alias-target-mismatch"
+  "-DPACKAGE_ALIAS_SCRIPT=${alias_mismatch_script}"
+  "-DPACKAGE_ALIAS_LOG=${alias_log}"
+  "-DPACKAGE_ALIAS_WRONG_TARGET=${alias_wrong_target}")
+file(SHA256 "${alias_wrong_target}/sentinel.bin" alias_actual_sha)
+if(NOT alias_actual_sha STREQUAL alias_sentinel_sha)
+  message(FATAL_ERROR "alias mismatch handling changed unrelated sentinel")
+endif()
+if(EXISTS "${alias_log}")
+  file(STRINGS "${alias_log}" alias_paths ENCODING UTF-8)
+  foreach(alias_path IN LISTS alias_paths)
+    if(EXISTS "${alias_path}" OR IS_SYMLINK "${alias_path}")
+      message(FATAL_ERROR "alias mismatch cleanup left entry: ${alias_path}")
+    endif()
+  endforeach()
+endif()
+
+set(alias_partial_script "${test_root}/alias-partial.ps1")
+file(WRITE "${alias_partial_script}" [=[
+param([string]$Alias, [string]$Target, [string]$Kind,
+  [string]$Log, [string]$WrongTarget)
+[IO.File]::AppendAllText($Log, $Alias + [Environment]::NewLine)
+if ($Kind -eq 'runtime') { exit 9 }
+& $env:COMSPEC /d /c mklink /J $Alias $Target | Out-Null
+exit $LASTEXITCODE
+]=])
+fresh_case(alias-partial-failure stage case_build)
+file(REMOVE "${alias_log}")
+run_verifier("${stage}" "${case_build}" PACKAGE_ALIAS
+  "alias-partial-failure"
+  "-DPACKAGE_ALIAS_SCRIPT=${alias_partial_script}"
+  "-DPACKAGE_ALIAS_LOG=${alias_log}"
+  "-DPACKAGE_ALIAS_WRONG_TARGET=${alias_wrong_target}")
+if(EXISTS "${alias_log}")
+  file(STRINGS "${alias_log}" alias_paths ENCODING UTF-8)
+  foreach(alias_path IN LISTS alias_paths)
+    if(EXISTS "${alias_path}" OR IS_SYMLINK "${alias_path}")
+      message(FATAL_ERROR "partial alias cleanup left entry: ${alias_path}")
+    endif()
+  endforeach()
 endif()

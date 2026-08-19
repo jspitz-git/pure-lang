@@ -1,5 +1,7 @@
 cmake_minimum_required(VERSION 3.25)
 
+include("${CMAKE_CURRENT_LIST_DIR}/PureBonjourPackageSafety.cmake")
+
 function(pure_bonjour_package_fail token detail)
   message(FATAL_ERROR "${token}: ${detail}")
 endfunction()
@@ -18,9 +20,8 @@ foreach(directory IN ITEMS STAGE_PREFIX SOURCE_PREFIX BUILD_PREFIX PURE_PREFIX)
   endif()
 endforeach()
 
-# PowerShell is used only for byte-accurate traversal properties which CMake
-# cannot portably expose on Windows: every reparse point is rejected without
-# following it, and prefix bytes are searched as UTF-8/ASCII and UTF-16LE.
+# PowerShell is used for byte-accurate traversal and prefix properties which
+# CMake cannot portably expose on Windows.
 set(package_powershell
   "$ENV{SystemRoot}/System32/WindowsPowerShell/v1.0/powershell.exe")
 if(NOT EXISTS "${package_powershell}")
@@ -30,176 +31,43 @@ endif()
 
 cmake_path(ABSOLUTE_PATH STAGE_PREFIX NORMALIZE OUTPUT_VARIABLE stage_input)
 string(SHA256 verify_id "${stage_input}")
-set(verify_work_dir
-  "${CMAKE_CURRENT_BINARY_DIR}/PureBonjourPackageVerify-${verify_id}")
-file(REMOVE_RECURSE "${verify_work_dir}")
-file(MAKE_DIRECTORY "${verify_work_dir}")
-set(stage_scanner "${verify_work_dir}/scan-stage.ps1")
-file(WRITE "${stage_scanner}" [=[
-param(
-  [Parameter(Mandatory=$true)][string]$Stage,
-  [Parameter(Mandatory=$true)][ValidateSet('reparse','prefix')][string]$Mode,
-  [string]$PrefixFile = ''
-)
-$ErrorActionPreference = 'Stop'
-
-function Stop-Scan([string]$Kind, [string]$Path) {
-  [Console]::Error.WriteLine(('{0}|{1}' -f $Kind, $Path))
-  exit 73
-}
-
-$byteEncoding = [Text.Encoding]::GetEncoding(28591)
-$patterns = [Collections.Generic.List[Text.RegularExpressions.Regex]]::new()
-$patternNames = [Collections.Generic.List[string]]::new()
-$patternKeys = [Collections.Generic.HashSet[string]]::new(
-  [StringComparer]::Ordinal)
-if ($Mode -eq 'prefix') {
-  if (-not (Test-Path -LiteralPath $PrefixFile -PathType Leaf)) {
-    Stop-Scan 'PREFIX_INPUT' $PrefixFile
-  }
-  foreach ($prefix in [IO.File]::ReadAllLines($PrefixFile,
-      [Text.Encoding]::UTF8)) {
-    if ([String]::IsNullOrWhiteSpace($prefix)) { continue }
-    $variants = @(
-      $prefix,
-      $prefix.Replace('/', '\'),
-      $prefix.Replace('\', '/'))
-    foreach ($variant in $variants) {
-      foreach ($encoding in @([Text.Encoding]::UTF8, [Text.Encoding]::Unicode)) {
-        $bytes = $encoding.GetBytes($variant)
-        $key = [Convert]::ToBase64String($bytes)
-        if ($patternKeys.Add($key)) {
-          $expression = [Text.StringBuilder]::new()
-          foreach ($value in $bytes) {
-            if (($value -ge 65 -and $value -le 90) -or
-                ($value -ge 97 -and $value -le 122)) {
-              $lower = $value
-              if ($lower -le 90) { $lower += 32 }
-              $upper = $lower - 32
-              [void]$expression.Append(('[{0}{1}]' -f
-                [char]$upper, [char]$lower))
-            } else {
-              [void]$expression.Append(('\x{0:X2}' -f $value))
-            }
-          }
-          $options = [Text.RegularExpressions.RegexOptions]::Compiled -bor
-            [Text.RegularExpressions.RegexOptions]::CultureInvariant
-          $patterns.Add([Text.RegularExpressions.Regex]::new(
-            $expression.ToString(), $options))
-          $patternNames.Add($variant)
-        }
-      }
-    }
-  }
-}
-
-$root = Get-Item -LiteralPath $Stage -Force
-if (($root.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
-  Stop-Scan 'REPARSE' $root.FullName
-}
-if (-not $root.PSIsContainer) { Stop-Scan 'NOT_DIRECTORY' $root.FullName }
-$pending = [Collections.Generic.Stack[IO.DirectoryInfo]]::new()
-$pending.Push([IO.DirectoryInfo]$root)
-while ($pending.Count -gt 0) {
-  $directory = $pending.Pop()
-  foreach ($entry in $directory.EnumerateFileSystemInfos()) {
-    if (($entry.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
-      Stop-Scan 'REPARSE' $entry.FullName
-    }
-    if (($entry.Attributes -band [IO.FileAttributes]::Directory) -ne 0) {
-      $pending.Push([IO.DirectoryInfo]$entry)
-      continue
-    }
-    if ($Mode -eq 'prefix') {
-      $contents = $byteEncoding.GetString(
-        [IO.File]::ReadAllBytes($entry.FullName))
-      for ($patternIndex = 0; $patternIndex -lt $patterns.Count;
-          ++$patternIndex) {
-        if ($patterns[$patternIndex].IsMatch($contents)) {
-          Stop-Scan ('PREFIX:' + $patternNames[$patternIndex]) $entry.FullName
-        }
-      }
-    }
-  }
-}
-]=])
-
-function(pure_bonjour_scan_stage mode prefix_file)
-  execute_process(
-    COMMAND "${package_powershell}" -NoLogo -NoProfile -NonInteractive
-      -File "${stage_scanner}" -Stage "${stage_input}" -Mode "${mode}"
-      -PrefixFile "${prefix_file}"
-    RESULT_VARIABLE result
-    OUTPUT_VARIABLE output
-    ERROR_VARIABLE error
-    ENCODING UTF-8)
-  if(NOT result EQUAL 0)
-    if(mode STREQUAL "prefix")
-      pure_bonjour_package_fail(PACKAGE_PREFIX
-        "stage contains a build-machine prefix: ${output}${error}")
-    else()
-      pure_bonjour_package_fail(PACKAGE_SET
-        "stage contains a reparse point or unsafe entry: ${output}${error}")
-    endif()
-  endif()
-endfunction()
-
 # This pass uses the spelling supplied by the caller, so a reparse point at the
 # stage root cannot disappear through canonicalization.
-pure_bonjour_scan_stage(reparse "")
+pure_bonjour_fs_action(inspect-tree "${stage_input}" "" PACKAGE_SET)
 
 file(REAL_PATH "${stage_input}" stage)
 file(REAL_PATH "${SOURCE_PREFIX}" source_prefix)
 file(REAL_PATH "${BUILD_PREFIX}" build_prefix)
 file(REAL_PATH "${PURE_PREFIX}" pure_prefix)
 
-set(oracle_input "${BUILD_PREFIX}/PureBonjourExpected.sha256")
-if(NOT EXISTS "${oracle_input}" OR IS_DIRECTORY "${oracle_input}" OR
-    IS_SYMLINK "${oracle_input}")
-  pure_bonjour_package_fail(PACKAGE_INVENTORY
-    "external expected-hash oracle is missing or indirect: ${oracle_input}")
+if(DEFINED PACKAGE_TEMP_ROOT AND NOT PACKAGE_TEMP_ROOT STREQUAL "")
+  set(temp_root_input "${PACKAGE_TEMP_ROOT}")
+else()
+  set(temp_root_input "$ENV{TEMP}")
 endif()
-file(REAL_PATH "${oracle_input}" oracle)
-cmake_path(IS_PREFIX stage "${oracle}" NORMALIZE oracle_inside_stage)
-if(oracle_inside_stage)
-  pure_bonjour_package_fail(PACKAGE_INVENTORY
-    "deletion/hash authority must remain outside the mutable stage: ${oracle}")
+if(temp_root_input STREQUAL "" OR NOT IS_ABSOLUTE "${temp_root_input}" OR
+    NOT EXISTS "${temp_root_input}" OR NOT IS_DIRECTORY "${temp_root_input}")
+  pure_bonjour_package_fail(PACKAGE_SCRATCH
+    "temporary root must be an existing absolute directory: ${temp_root_input}")
 endif()
+pure_bonjour_fs_action(inspect-dir "${temp_root_input}" "" PACKAGE_SCRATCH)
+file(REAL_PATH "${temp_root_input}" temp_root)
+foreach(protected IN ITEMS stage pure_prefix)
+  cmake_path(IS_PREFIX ${protected} "${temp_root}" NORMALIZE
+    temp_inside_protected)
+  if(temp_inside_protected)
+    pure_bonjour_package_fail(PACKAGE_SCRATCH
+      "temporary root is inside ${protected}: ${temp_root}")
+  endif()
+endforeach()
 
-set(expected_paths
-  lib/pure/bonjour.dll
-  lib/pure/bonjour.pure
-  share/doc/pure-bonjour/COPYING
-  share/doc/pure-bonjour/COPYING.LESSER
-  share/doc/pure-bonjour/PureBonjourInventory.tsv
-  share/doc/pure-bonjour/README
-  share/doc/pure-bonjour/WINDOWS.md
-  share/doc/pure-bonjour/examples/bonjour_examp.pure)
-list(SORT expected_paths)
+set(oracle_input "${BUILD_PREFIX}/PureBonjourExpected.sha256")
+pure_bonjour_parse_external_oracle("${oracle_input}" "${stage}"
+  oracle oracle_paths oracle_identities oracle_hashes)
+
+set(expected_paths "${pure_bonjour_expected_paths}")
 set(inventory_relative
   "share/doc/pure-bonjour/PureBonjourInventory.tsv")
-
-function(pure_bonjour_validate_relative_path relative context path_output
-    identity_output)
-  if(relative STREQUAL "" OR IS_ABSOLUTE "${relative}" OR
-      relative MATCHES "^[A-Za-z]:" OR relative MATCHES "^[/\\\\]" OR
-      relative MATCHES "(^|[/\\\\])\\.\\.([/\\\\]|$)" OR
-      relative MATCHES "(^|[/\\\\])\\.([/\\\\]|$)" OR
-      relative MATCHES "//|\\\\|:|[*?]" OR
-      NOT relative MATCHES "^[A-Za-z0-9._/+ -]+$")
-    pure_bonjour_package_fail(PACKAGE_INVENTORY
-      "${context} contains unsafe relative path: ${relative}")
-  endif()
-  set(normalized "${relative}")
-  cmake_path(NORMAL_PATH normalized)
-  if(NOT normalized STREQUAL relative)
-    pure_bonjour_package_fail(PACKAGE_INVENTORY
-      "${context} path is not canonical: ${relative}")
-  endif()
-  string(TOLOWER "${normalized}" identity)
-  set(${path_output} "${normalized}" PARENT_SCOPE)
-  set(${identity_output} "${identity}" PARENT_SCOPE)
-endfunction()
 
 # Parse the installed inventory in isolation before consulting its hashes or
 # using any path.  Its seven rows describe payload metadata but never deletion.
@@ -257,52 +125,6 @@ foreach(line IN LISTS inventory_lines)
   list(APPEND inventory_sizes "${expected_size}")
 endforeach()
 
-# Parse the external oracle separately.  It authenticates all eight installed
-# files, including the mutable inventory, but its contents are never installed.
-file(STRINGS "${oracle}" oracle_lines ENCODING UTF-8)
-list(LENGTH oracle_lines oracle_line_count)
-if(NOT oracle_line_count EQUAL 8)
-  pure_bonjour_package_fail(PACKAGE_INVENTORY
-    "external expected-hash oracle must contain exactly eight rows")
-endif()
-set(oracle_paths)
-set(oracle_identities)
-set(oracle_hashes)
-foreach(line IN LISTS oracle_lines)
-  string(LENGTH "${line}" line_length)
-  if(line_length LESS 67)
-    pure_bonjour_package_fail(PACKAGE_INVENTORY
-      "external expected-hash oracle row is malformed: ${line}")
-  endif()
-  string(SUBSTRING "${line}" 0 64 expected_sha)
-  string(SUBSTRING "${line}" 64 2 separator)
-  string(SUBSTRING "${line}" 66 -1 relative)
-  string(LENGTH "${expected_sha}" sha_length)
-  if(NOT sha_length EQUAL 64 OR
-      NOT expected_sha MATCHES "^[0-9A-Fa-f]+$" OR
-      NOT separator STREQUAL "  ")
-    pure_bonjour_package_fail(PACKAGE_INVENTORY
-      "external expected-hash oracle row is malformed: ${line}")
-  endif()
-  pure_bonjour_validate_relative_path(
-    "${relative}" "external expected-hash oracle" normalized identity)
-  if(identity IN_LIST oracle_identities)
-    pure_bonjour_package_fail(PACKAGE_INVENTORY
-      "external expected-hash oracle repeats a case-folded path: ${relative}")
-  endif()
-  string(TOLOWER "${expected_sha}" expected_sha)
-  list(APPEND oracle_paths "${normalized}")
-  list(APPEND oracle_identities "${identity}")
-  list(APPEND oracle_hashes "${expected_sha}")
-endforeach()
-
-set(sorted_oracle_paths "${oracle_paths}")
-list(SORT sorted_oracle_paths)
-if(NOT sorted_oracle_paths STREQUAL expected_paths)
-  pure_bonjour_package_fail(PACKAGE_SET
-    "external oracle ownership set differs from the exact eight paths: "
-    "${sorted_oracle_paths}")
-endif()
 set(expected_inventory_paths "${expected_paths}")
 list(REMOVE_ITEM expected_inventory_paths "${inventory_relative}")
 set(sorted_inventory_paths "${inventory_paths}")
@@ -359,10 +181,19 @@ foreach(relative IN LISTS shared_library_entries)
   endif()
 endforeach()
 
-set(prefix_file "${verify_work_dir}/forbidden-prefixes.txt")
-file(WRITE "${prefix_file}"
-  "${source_prefix}\n${build_prefix}\n${stage}\n")
-pure_bonjour_scan_stage(prefix "${prefix_file}")
+execute_process(
+  COMMAND "${package_powershell}" -NoLogo -NoProfile -NonInteractive
+    -File "${CMAKE_CURRENT_LIST_DIR}/PureBonjourPrefixScan.ps1"
+    -Stage "${stage}" -SourcePrefix "${source_prefix}"
+    -BuildPrefix "${build_prefix}" -StagePrefix "${stage}"
+  RESULT_VARIABLE prefix_result
+  OUTPUT_VARIABLE prefix_output
+  ERROR_VARIABLE prefix_error
+  ENCODING UTF-8)
+if(NOT prefix_result EQUAL 0)
+  pure_bonjour_package_fail(PACKAGE_PREFIX
+    "stage contains a build-machine prefix: ${prefix_output}${prefix_error}")
+endif()
 
 # Inventory metadata and then the external oracle are checked independently.
 # Prefix and reparse rejection have already happened before any file hash or PE
@@ -417,6 +248,61 @@ foreach(required_file IN ITEMS dependency_verifier smoke_runner smoke_source)
   endif()
 endforeach()
 
+# Scratch ownership begins at an ordinary canonical root outside both audited
+# prefixes.  A caller-selected pre-existing reparse entry is unlinked itself and
+# rejected; it is never traversed or recursively removed.
+if(DEFINED PACKAGE_SCRATCH_ROOT AND NOT PACKAGE_SCRATCH_ROOT STREQUAL "")
+  set(scratch_root_input "${PACKAGE_SCRATCH_ROOT}")
+else()
+  set(scratch_root_input "${build_prefix}/PureBonjourPackageScratch")
+endif()
+if(NOT IS_ABSOLUTE "${scratch_root_input}")
+  pure_bonjour_package_fail(PACKAGE_SCRATCH
+    "scratch root must be absolute: ${scratch_root_input}")
+endif()
+cmake_path(ABSOLUTE_PATH scratch_root_input NORMALIZE
+  OUTPUT_VARIABLE scratch_root_input)
+pure_bonjour_try_unlink_reparse(
+  "${scratch_root_input}" scratch_reparse_unlinked scratch_probe_detail)
+if(scratch_reparse_unlinked)
+  pure_bonjour_package_fail(PACKAGE_SCRATCH
+    "pre-existing scratch reparse entry was safely unlinked and rejected: "
+    "${scratch_root_input}")
+endif()
+if(EXISTS "${scratch_root_input}" OR IS_SYMLINK "${scratch_root_input}")
+  pure_bonjour_fs_action(inspect-dir "${scratch_root_input}" ""
+    PACKAGE_SCRATCH)
+else()
+  get_filename_component(scratch_parent "${scratch_root_input}" DIRECTORY)
+  pure_bonjour_fs_action(inspect-dir "${scratch_parent}" ""
+    PACKAGE_SCRATCH)
+  file(MAKE_DIRECTORY "${scratch_root_input}")
+  pure_bonjour_fs_action(inspect-dir "${scratch_root_input}"
+    "${scratch_parent}" PACKAGE_SCRATCH)
+endif()
+file(REAL_PATH "${scratch_root_input}" scratch_root)
+foreach(protected IN ITEMS stage pure_prefix)
+  cmake_path(IS_PREFIX ${protected} "${scratch_root}" NORMALIZE
+    scratch_inside_protected)
+  if(scratch_inside_protected)
+    pure_bonjour_package_fail(PACKAGE_SCRATCH
+      "scratch root is inside ${protected}: ${scratch_root}")
+  endif()
+endforeach()
+string(RANDOM LENGTH 20 ALPHABET 0123456789abcdef scratch_nonce)
+set(package_verify_work_dir
+  "${scratch_root}/verify-${verify_id}-${scratch_nonce}")
+if(EXISTS "${package_verify_work_dir}" OR
+    IS_SYMLINK "${package_verify_work_dir}")
+  pure_bonjour_package_fail(PACKAGE_SCRATCH
+    "unique scratch child unexpectedly exists: ${package_verify_work_dir}")
+endif()
+file(MAKE_DIRECTORY "${package_verify_work_dir}")
+pure_bonjour_fs_action(inspect-dir "${package_verify_work_dir}"
+  "${scratch_root}"
+  PACKAGE_SCRATCH)
+file(REAL_PATH "${package_verify_work_dir}" package_verify_work_dir)
+
 get_filename_component(cmake_program_directory "${CMAKE_COMMAND}" DIRECTORY)
 find_program(package_llvm_readobj NAMES llvm-readobj.exe llvm-readobj
   HINTS "${cmake_program_directory}")
@@ -426,8 +312,9 @@ endif()
 set(LLVM_READOBJ "${package_llvm_readobj}")
 set(MODULE "${stage}/lib/pure/bonjour.dll")
 set(PURE_PREFIX "${pure_prefix}")
-set(VERIFY_WORK_DIR "${verify_work_dir}/dependency-audit")
-set(DEPENDENCY_REPORT "${verify_work_dir}/PureBonjourDependencies.tsv")
+set(VERIFY_WORK_DIR "${package_verify_work_dir}/dependency-audit")
+set(DEPENDENCY_REPORT
+  "${package_verify_work_dir}/PureBonjourDependencies.tsv")
 include("${dependency_verifier}")
 
 set(pure_executable "${pure_prefix}/bin/pure.exe")
@@ -435,58 +322,138 @@ if(NOT EXISTS "${pure_executable}" OR IS_DIRECTORY "${pure_executable}")
   pure_bonjour_package_fail(PACKAGE_SET
     "installed Pure executable is missing: ${pure_executable}")
 endif()
-set(temp_root "$ENV{TEMP}")
-if(temp_root STREQUAL "" OR NOT IS_ABSOLUTE "${temp_root}")
-  set(temp_root "${verify_work_dir}")
+string(RANDOM LENGTH 20 ALPHABET 0123456789abcdef smoke_nonce)
+set(smoke_session "${temp_root}/PureBonjourSmoke-${verify_id}-${smoke_nonce}")
+if(EXISTS "${smoke_session}" OR IS_SYMLINK "${smoke_session}")
+  pure_bonjour_package_fail(PACKAGE_SCRATCH
+    "unique smoke session unexpectedly exists: ${smoke_session}")
 endif()
-set(package_smoke_root "${temp_root}/PureBonjourPackageSmoke-${verify_id}")
-file(REMOVE_RECURSE "${package_smoke_root}")
+file(MAKE_DIRECTORY "${smoke_session}")
+pure_bonjour_fs_action(inspect-dir "${smoke_session}" "${temp_root}"
+  PACKAGE_SCRATCH)
+file(REAL_PATH "${smoke_session}" smoke_session)
+set(package_smoke_root "${smoke_session}/runner")
 file(MAKE_DIRECTORY "${package_smoke_root}")
+pure_bonjour_fs_action(inspect-dir "${package_smoke_root}"
+  "${smoke_session}" PACKAGE_SCRATCH)
 file(COPY_FILE "${smoke_source}" "${package_smoke_root}/smoke.pure"
   ONLY_IF_DIFFERENT)
+set(stage_alias "${smoke_session}/stage")
+set(runtime_alias "${smoke_session}/runtime")
 
-# Pure 0.68 and cmake -E env exchange PATH through narrow Windows strings.  A
-# controlled ASCII junction outside the already-audited stage lets the existing
-# sanitized runner exercise the same physical relocated files even when their
-# canonical prefix contains non-ASCII characters.  These aliases are never
-# used for ownership, hash, or dependency decisions and are explicitly removed.
-string(RANDOM LENGTH 12 ALPHABET 0123456789abcdef smoke_alias_nonce)
-set(stage_alias
-  "${temp_root}/PureBonjourStageAlias-${verify_id}-${smoke_alias_nonce}")
-set(runtime_alias
-  "${temp_root}/PureBonjourRuntimeAlias-${verify_id}-${smoke_alias_nonce}")
-cmake_path(NATIVE_PATH stage_alias NORMALIZE stage_alias_native)
-cmake_path(NATIVE_PATH runtime_alias NORMALIZE runtime_alias_native)
-cmake_path(NATIVE_PATH stage NORMALIZE stage_native)
-cmake_path(NATIVE_PATH pure_prefix NORMALIZE pure_prefix_native)
-execute_process(
-  COMMAND "$ENV{COMSPEC}" /d /c mklink /J
-    "${stage_alias_native}" "${stage_native}"
-  RESULT_VARIABLE stage_alias_result
-  OUTPUT_VARIABLE stage_alias_output
-  ERROR_VARIABLE stage_alias_error
-  ENCODING UTF-8)
+function(pure_bonjour_create_alias alias target kind result_output
+    detail_output)
+  if(DEFINED PACKAGE_ALIAS_SCRIPT AND NOT PACKAGE_ALIAS_SCRIPT STREQUAL "")
+    execute_process(
+      COMMAND "${package_powershell}" -NoLogo -NoProfile -NonInteractive
+        -File "${PACKAGE_ALIAS_SCRIPT}" "${alias}" "${target}" "${kind}"
+        "${PACKAGE_ALIAS_LOG}" "${PACKAGE_ALIAS_WRONG_TARGET}"
+      RESULT_VARIABLE result
+      OUTPUT_VARIABLE output
+      ERROR_VARIABLE error
+      ENCODING UTF-8)
+  else()
+    cmake_path(NATIVE_PATH alias NORMALIZE alias_native)
+    cmake_path(NATIVE_PATH target NORMALIZE target_native)
+    execute_process(
+      COMMAND "$ENV{COMSPEC}" /d /c mklink /J
+        "${alias_native}" "${target_native}"
+      RESULT_VARIABLE result
+      OUTPUT_VARIABLE output
+      ERROR_VARIABLE error
+      ENCODING UTF-8)
+  endif()
+  set(${result_output} "${result}" PARENT_SCOPE)
+  set(${detail_output} "${output}${error}" PARENT_SCOPE)
+endfunction()
+
+function(pure_bonjour_cleanup_smoke cleanup_output)
+  set(cleanup_errors)
+  foreach(alias IN ITEMS "${runtime_alias}" "${stage_alias}")
+    # Probe unconditionally so a dangling reparse entry is not hidden by
+    # CMake's target-following EXISTS semantics.
+    pure_bonjour_try_unlink_reparse(
+      "${alias}" alias_removed alias_remove_detail)
+    if((NOT alias_removed) AND
+        (EXISTS "${alias}" OR IS_SYMLINK "${alias}"))
+      list(APPEND cleanup_errors
+        "alias leftover ${alias}: ${alias_remove_detail}")
+    endif()
+  endforeach()
+  if(EXISTS "${smoke_session}" OR IS_SYMLINK "${smoke_session}")
+    execute_process(
+      COMMAND "${package_powershell}" -NoLogo -NoProfile -NonInteractive
+        -File "${pure_bonjour_filesystem_safety}" -Mode remove-tree
+        -Path "${smoke_session}" -Root "${temp_root}"
+      RESULT_VARIABLE session_result
+      OUTPUT_VARIABLE session_output
+      ERROR_VARIABLE session_error
+      ENCODING UTF-8)
+    if(NOT session_result EQUAL 0 OR EXISTS "${smoke_session}" OR
+        IS_SYMLINK "${smoke_session}")
+      list(APPEND cleanup_errors
+        "smoke-session leftover ${smoke_session}: ${session_output}${session_error}")
+    endif()
+  endif()
+  if(EXISTS "${package_verify_work_dir}" OR
+      IS_SYMLINK "${package_verify_work_dir}")
+    execute_process(
+      COMMAND "${package_powershell}" -NoLogo -NoProfile -NonInteractive
+        -File "${pure_bonjour_filesystem_safety}" -Mode remove-tree
+        -Path "${package_verify_work_dir}" -Root "${scratch_root}"
+      RESULT_VARIABLE scratch_result
+      OUTPUT_VARIABLE scratch_output
+      ERROR_VARIABLE scratch_error
+      ENCODING UTF-8)
+    if(NOT scratch_result EQUAL 0 OR
+        EXISTS "${package_verify_work_dir}" OR
+        IS_SYMLINK "${package_verify_work_dir}")
+      list(APPEND cleanup_errors
+        "scratch leftover ${package_verify_work_dir}: "
+        "${scratch_output}${scratch_error}")
+    endif()
+  endif()
+  string(JOIN " | " cleanup_detail ${cleanup_errors})
+  set(${cleanup_output} "${cleanup_detail}" PARENT_SCOPE)
+endfunction()
+
+function(pure_bonjour_require_alias_target alias intended kind)
+  if(NOT EXISTS "${alias}" AND NOT IS_SYMLINK "${alias}")
+    pure_bonjour_cleanup_smoke(cleanup_detail)
+    pure_bonjour_package_fail(PACKAGE_ALIAS
+      "${kind} alias was not created; cleanup=[${cleanup_detail}]")
+  endif()
+  file(REAL_PATH "${alias}" alias_canonical)
+  file(REAL_PATH "${intended}" intended_canonical)
+  string(TOLOWER "${alias_canonical}" alias_identity)
+  string(TOLOWER "${intended_canonical}" intended_identity)
+  if(NOT alias_identity STREQUAL intended_identity)
+    pure_bonjour_cleanup_smoke(cleanup_detail)
+    pure_bonjour_package_fail(PACKAGE_ALIAS
+      "${kind} alias canonical mismatch: ${alias_canonical} != "
+      "${intended_canonical}; cleanup=[${cleanup_detail}]")
+  endif()
+endfunction()
+
+pure_bonjour_create_alias("${stage_alias}" "${stage}" stage
+  stage_alias_result stage_alias_detail)
 if(NOT stage_alias_result EQUAL 0)
-  file(REMOVE_RECURSE "${package_smoke_root}")
-  pure_bonjour_package_fail(PACKAGE_SET
-    "could not create scoped installed-stage smoke alias: "
-    "${stage_alias_output}${stage_alias_error}")
+  pure_bonjour_cleanup_smoke(cleanup_detail)
+  pure_bonjour_package_fail(PACKAGE_ALIAS
+    "stage alias creation failed: ${stage_alias_detail}; "
+    "cleanup=[${cleanup_detail}]")
 endif()
-execute_process(
-  COMMAND "$ENV{COMSPEC}" /d /c mklink /J
-    "${runtime_alias_native}" "${pure_prefix_native}"
-  RESULT_VARIABLE runtime_alias_result
-  OUTPUT_VARIABLE runtime_alias_output
-  ERROR_VARIABLE runtime_alias_error
-  ENCODING UTF-8)
+pure_bonjour_require_alias_target("${stage_alias}" "${stage}" stage)
+
+pure_bonjour_create_alias("${runtime_alias}" "${pure_prefix}" runtime
+  runtime_alias_result runtime_alias_detail)
 if(NOT runtime_alias_result EQUAL 0)
-  execute_process(
-    COMMAND "$ENV{COMSPEC}" /d /c rmdir "${stage_alias_native}")
-  file(REMOVE_RECURSE "${package_smoke_root}")
-  pure_bonjour_package_fail(PACKAGE_SET
-    "could not create scoped Pure-runtime smoke alias: "
-    "${runtime_alias_output}${runtime_alias_error}")
+  pure_bonjour_cleanup_smoke(cleanup_detail)
+  pure_bonjour_package_fail(PACKAGE_ALIAS
+    "runtime alias creation failed: ${runtime_alias_detail}; "
+    "cleanup=[${cleanup_detail}]")
 endif()
+pure_bonjour_require_alias_target("${runtime_alias}" "${pure_prefix}" runtime)
 
 execute_process(
   COMMAND "${CMAKE_COMMAND}"
@@ -504,25 +471,11 @@ execute_process(
   OUTPUT_VARIABLE package_smoke_output
   ERROR_VARIABLE package_smoke_error
   ENCODING UTF-8)
-execute_process(
-  COMMAND "$ENV{COMSPEC}" /d /c rmdir "${runtime_alias_native}"
-  RESULT_VARIABLE runtime_alias_remove_result
-  OUTPUT_VARIABLE runtime_alias_remove_output
-  ERROR_VARIABLE runtime_alias_remove_error
-  ENCODING UTF-8)
-execute_process(
-  COMMAND "$ENV{COMSPEC}" /d /c rmdir "${stage_alias_native}"
-  RESULT_VARIABLE stage_alias_remove_result
-  OUTPUT_VARIABLE stage_alias_remove_output
-  ERROR_VARIABLE stage_alias_remove_error
-  ENCODING UTF-8)
-file(REMOVE_RECURSE "${package_smoke_root}")
-if(NOT runtime_alias_remove_result EQUAL 0 OR
-    NOT stage_alias_remove_result EQUAL 0)
-  pure_bonjour_package_fail(PACKAGE_SET
-    "could not remove scoped smoke aliases: "
-    "${runtime_alias_remove_output}${runtime_alias_remove_error}"
-    "${stage_alias_remove_output}${stage_alias_remove_error}")
+file(STRINGS "${DEPENDENCY_REPORT}" dependency_lines ENCODING UTF-8)
+pure_bonjour_cleanup_smoke(cleanup_detail)
+if(NOT cleanup_detail STREQUAL "")
+  pure_bonjour_package_fail(PACKAGE_ALIAS
+    "scoped smoke cleanup left controlled entries: ${cleanup_detail}")
 endif()
 if(NOT package_smoke_result EQUAL 0)
   pure_bonjour_package_fail(PACKAGE_SMOKE
@@ -530,7 +483,6 @@ if(NOT package_smoke_result EQUAL 0)
     "${package_smoke_output}${package_smoke_error}")
 endif()
 
-file(STRINGS "${DEPENDENCY_REPORT}" dependency_lines ENCODING UTF-8)
 message(STATUS
   "PureBonjour installed package accepted: 8 files, ${total_bytes} bytes, "
   "inventory ${inventory_sha256}; dependency closure ${dependency_lines}")

@@ -223,3 +223,34 @@ an available Windows Bonjour implementation.
     - The final fresh focused run passed 3/3 in 92.58 seconds, and
       `ctest.exe --test-dir build/pure-bonjour --output-on-failure` passed the
       complete 10/10 suite in 89.69 seconds of summed test time.
+- 2026-08-19: Task 6 security fix round 1 hardened removal and temporary
+  ownership boundaries.
+  - Exact removal now uses a standalone remover and the same strict external
+    oracle parser as verification. It completes a no-follow preflight before
+    deleting anything, then revalidates canonical containment and every parent
+    immediately before deleting each exact file. Only verified ordinary empty
+    `share/doc/pure-bonjour/examples` and `share/doc/pure-bonjour` directories
+    are removed, non-recursively.
+  - The oracle must be an ordinary non-reparse file with a canonical path
+    outside the protected prefix. Noncanonical spellings, in-prefix authority,
+    and an authority reached through a junction all fail before removal.
+  - Verifier scratch and smoke state is created beneath audited canonical roots
+    in unpredictable, non-preexisting children. Preexisting scratch junctions
+    are unlinked without following and rejected; cleanup performs no-follow
+    revalidation and reports any controlled leftover on every alias failure.
+    Both aliases must resolve canonically to their intended audited targets.
+  - Prefix scanning retains raw UTF-8/UTF-16LE byte detection and additionally
+    decodes valid text with .NET `OrdinalIgnoreCase`, covering non-ASCII Windows
+    case changes such as `Č`/`č` and `Ž`/`ž` for source, build, and stage paths.
+  - The expanded verifier matrix has 32 fresh-copy mutation cases. Removal adds
+    adversarial `lib/pure` and package-document junctions, noncanonical,
+    in-prefix, and reparse oracle cases; every case hashes isolated unrelated
+    sentinels and proves no owned file was deleted before rejection.
+  - A self-review leftover assertion exposed a scoped scratch variable collision
+    with the dependency verifier. The regression failed first, then passed after
+    the package-owned scratch child received a distinct variable and was
+    centrally cleaned.
+  - Fresh post-review focused validation passed all three installed-package
+    tests in 170.05 seconds (10.99, 69.98, and 89.07 seconds respectively).
+    The subsequent full suite passed 10/10 in 178.61 seconds of summed test
+    time; relocation/removal took 88.72 seconds and local-link loopback 3.79.

@@ -14,6 +14,7 @@ cmake_path(ABSOLUTE_PATH TEST_ROOT NORMALIZE OUTPUT_VARIABLE test_root)
 set(oracle "${build_dir}/PureBonjourExpected.sha256")
 set(inventory_relative
   "share/doc/pure-bonjour/PureBonjourInventory.tsv")
+set(remover "${source_prefix}/cmake/RemovePureBonjourPackage.cmake")
 
 file(REMOVE_RECURSE "${test_root}")
 file(MAKE_DIRECTORY "${test_root}")
@@ -121,75 +122,27 @@ set(expected_owned_paths
   share/doc/pure-bonjour/examples/bonjour_examp.pure)
 list(SORT expected_owned_paths)
 
-function(validate_owned_path relative normalized_output)
-  if(relative STREQUAL "" OR IS_ABSOLUTE "${relative}" OR
-      relative MATCHES "^[A-Za-z]:" OR relative MATCHES "^[/\\\\]" OR
-      relative MATCHES "(^|[/\\\\])\\.\\.([/\\\\]|$)" OR
-      relative MATCHES "(^|[/\\\\])\\.([/\\\\]|$)" OR
-      relative MATCHES "\\\\|:|[*?]")
-    message(FATAL_ERROR "trusted oracle contains unsafe path: ${relative}")
+function(run_remover prefix authority expected_token label)
+  execute_process(
+    COMMAND "${CMAKE_COMMAND}"
+      "-DPREFIX=${prefix}"
+      "-DBUILD_PREFIX=${authority}"
+      -P "${remover}"
+    RESULT_VARIABLE result
+    OUTPUT_VARIABLE output
+    ERROR_VARIABLE error
+    ENCODING UTF-8)
+  set(log "${output}${error}")
+  if(expected_token STREQUAL "")
+    if(NOT result EQUAL 0)
+      message(FATAL_ERROR "${label} removal failed (${result})\n${log}")
+    endif()
+  else()
+    if(result EQUAL 0 OR NOT log MATCHES "${expected_token}")
+      message(FATAL_ERROR
+        "${label} was not rejected with ${expected_token}\n${log}")
+    endif()
   endif()
-  cmake_path(NORMAL_PATH relative OUTPUT_VARIABLE normalized)
-  string(TOLOWER "${normalized}" identity)
-  set(${normalized_output} "${normalized}|${identity}" PARENT_SCOPE)
-endfunction()
-
-# This is intentionally an oracle-only remover.  It parses and validates the
-# complete external authority before deleting anything and never reads the
-# installed inventory for ownership decisions.
-function(remove_component prefix)
-  file(STRINGS "${oracle}" oracle_lines ENCODING UTF-8)
-  set(paths)
-  set(identities)
-  foreach(line IN LISTS oracle_lines)
-    string(LENGTH "${line}" line_length)
-    if(line_length LESS 67)
-      message(FATAL_ERROR "trusted oracle has malformed row: ${line}")
-    endif()
-    string(SUBSTRING "${line}" 0 64 sha)
-    string(SUBSTRING "${line}" 64 2 separator)
-    string(SUBSTRING "${line}" 66 -1 relative)
-    string(LENGTH "${sha}" sha_length)
-    if(NOT sha_length EQUAL 64 OR NOT sha MATCHES "^[0-9A-Fa-f]+$" OR
-        NOT separator STREQUAL "  ")
-      message(FATAL_ERROR "trusted oracle has malformed row: ${line}")
-    endif()
-    validate_owned_path("${relative}" validated)
-    string(REPLACE "|" ";" validated_fields "${validated}")
-    list(GET validated_fields 0 normalized)
-    list(GET validated_fields 1 identity)
-    if(identity IN_LIST identities)
-      message(FATAL_ERROR "trusted oracle repeats owned path: ${relative}")
-    endif()
-    list(APPEND paths "${normalized}")
-    list(APPEND identities "${identity}")
-  endforeach()
-  set(sorted_paths "${paths}")
-  list(SORT sorted_paths)
-  if(NOT sorted_paths STREQUAL expected_owned_paths)
-    message(FATAL_ERROR
-      "trusted oracle has unexpected ownership set: ${sorted_paths}")
-  endif()
-
-  foreach(relative IN LISTS paths)
-    set(target "${prefix}/${relative}")
-    if(EXISTS "${target}" OR IS_SYMLINK "${target}")
-      file(REMOVE "${target}")
-    endif()
-  endforeach()
-  foreach(directory IN ITEMS
-      "${prefix}/share/doc/pure-bonjour/examples"
-      "${prefix}/share/doc/pure-bonjour")
-    if(IS_DIRECTORY "${directory}")
-      file(GLOB remaining LIST_DIRECTORIES TRUE "${directory}/*")
-      if(remaining)
-        message(FATAL_ERROR
-          "PureBonjour-specific directory is not empty after exact removal: "
-          "${directory}: ${remaining}")
-      endif()
-      file(REMOVE_RECURSE "${directory}")
-    endif()
-  endforeach()
 endfunction()
 
 function(assert_removed_and_preserved prefix label)
@@ -222,7 +175,159 @@ function(assert_removed_and_preserved prefix label)
   endif()
 endfunction()
 
-remove_component("${relocated_prefix}")
+# Removal-time parent replacement must be caught in a full preflight before any
+# owned file is deleted.
+set(removal_base "${test_root}/Removal Mutation Base")
+install_component("${removal_base}")
+file(MAKE_DIRECTORY "${removal_base}/share/unrelated-owner")
+file(WRITE "${removal_base}/share/unrelated-owner/sentinel.bin"
+  "removal sentinel\n")
+
+set(lib_junction_prefix "${test_root}/Removal Lib Junction")
+file(MAKE_DIRECTORY "${lib_junction_prefix}")
+file(COPY "${removal_base}/" DESTINATION "${lib_junction_prefix}")
+file(RENAME "${lib_junction_prefix}/lib/pure"
+  "${lib_junction_prefix}/lib/pure-owned")
+set(lib_junction_target "${test_root}/Unrelated Lib Target")
+file(MAKE_DIRECTORY "${lib_junction_target}")
+file(WRITE "${lib_junction_target}/bonjour.dll" "unrelated dll sentinel\n")
+file(WRITE "${lib_junction_target}/bonjour.pure" "unrelated pure sentinel\n")
+file(SHA256 "${lib_junction_target}/bonjour.dll" lib_target_sha)
+file(SHA256 "${lib_junction_prefix}/share/doc/pure-bonjour/README"
+  lib_prefix_owned_sha)
+cmake_path(NATIVE_PATH lib_junction_target NORMALIZE lib_target_native)
+set(lib_junction "${lib_junction_prefix}/lib/pure")
+cmake_path(NATIVE_PATH lib_junction NORMALIZE lib_junction_native)
+execute_process(COMMAND "$ENV{COMSPEC}" /d /c mklink /J
+  "${lib_junction_native}" "${lib_target_native}"
+  RESULT_VARIABLE lib_junction_result)
+if(NOT lib_junction_result EQUAL 0)
+  message(FATAL_ERROR "could not create removal lib junction")
+endif()
+run_remover("${lib_junction_prefix}" "${build_dir}" PACKAGE_PATH
+  "lib/pure removal-time junction")
+file(SHA256 "${lib_junction_target}/bonjour.dll" lib_target_actual_sha)
+file(SHA256 "${lib_junction_prefix}/share/doc/pure-bonjour/README"
+  lib_prefix_owned_actual_sha)
+execute_process(COMMAND "$ENV{COMSPEC}" /d /c rmdir
+  "${lib_junction_native}" RESULT_VARIABLE lib_unlink_result)
+if(NOT lib_unlink_result EQUAL 0 OR
+    NOT lib_target_actual_sha STREQUAL lib_target_sha OR
+    NOT lib_prefix_owned_actual_sha STREQUAL lib_prefix_owned_sha)
+  message(FATAL_ERROR "lib/pure junction mutation changed protected files")
+endif()
+
+set(doc_junction_prefix "${test_root}/Removal Doc Junction")
+file(MAKE_DIRECTORY "${doc_junction_prefix}")
+file(COPY "${removal_base}/" DESTINATION "${doc_junction_prefix}")
+file(RENAME "${doc_junction_prefix}/share/doc/pure-bonjour"
+  "${doc_junction_prefix}/share/doc/pure-bonjour-owned")
+set(doc_junction_target "${test_root}/Unrelated Doc Target")
+file(MAKE_DIRECTORY "${doc_junction_target}")
+file(COPY
+  "${doc_junction_prefix}/share/doc/pure-bonjour-owned/"
+  DESTINATION "${doc_junction_target}")
+file(SHA256 "${doc_junction_target}/COPYING" doc_target_sha)
+file(SHA256 "${doc_junction_prefix}/lib/pure/bonjour.dll"
+  doc_prefix_owned_sha)
+set(doc_junction "${doc_junction_prefix}/share/doc/pure-bonjour")
+cmake_path(NATIVE_PATH doc_junction NORMALIZE doc_junction_native)
+cmake_path(NATIVE_PATH doc_junction_target NORMALIZE doc_target_native)
+execute_process(COMMAND "$ENV{COMSPEC}" /d /c mklink /J
+  "${doc_junction_native}" "${doc_target_native}"
+  RESULT_VARIABLE doc_junction_result)
+if(NOT doc_junction_result EQUAL 0)
+  message(FATAL_ERROR "could not create removal doc junction")
+endif()
+run_remover("${doc_junction_prefix}" "${build_dir}" PACKAGE_PATH
+  "documentation removal-time junction")
+file(SHA256 "${doc_junction_target}/COPYING" doc_target_actual_sha)
+file(SHA256 "${doc_junction_prefix}/lib/pure/bonjour.dll"
+  doc_prefix_owned_actual_sha)
+execute_process(COMMAND "$ENV{COMSPEC}" /d /c rmdir
+  "${doc_junction_native}" RESULT_VARIABLE doc_unlink_result)
+if(NOT doc_unlink_result EQUAL 0 OR
+    NOT doc_target_actual_sha STREQUAL doc_target_sha OR
+    NOT doc_prefix_owned_actual_sha STREQUAL doc_prefix_owned_sha)
+  message(FATAL_ERROR
+    "documentation junction mutation changed protected files")
+endif()
+
+set(noncanonical_prefix "${test_root}/Removal Noncanonical Oracle")
+install_component("${noncanonical_prefix}")
+set(noncanonical_authority "${test_root}/Noncanonical Authority")
+file(MAKE_DIRECTORY "${noncanonical_authority}")
+file(STRINGS "${oracle}" oracle_lines ENCODING UTF-8)
+list(GET oracle_lines 0 oracle_row)
+string(REPLACE "lib/pure/bonjour.dll" "lib/pure//bonjour.dll"
+  oracle_row "${oracle_row}")
+list(REMOVE_AT oracle_lines 0)
+list(INSERT oracle_lines 0 "${oracle_row}")
+string(JOIN "\n" oracle_text ${oracle_lines})
+file(WRITE "${noncanonical_authority}/PureBonjourExpected.sha256"
+  "${oracle_text}\n")
+file(SHA256 "${noncanonical_prefix}/lib/pure/bonjour.dll"
+  noncanonical_owned_sha)
+run_remover("${noncanonical_prefix}" "${noncanonical_authority}"
+  PACKAGE_INVENTORY "noncanonical removal oracle")
+file(SHA256 "${noncanonical_prefix}/lib/pure/bonjour.dll"
+  noncanonical_owned_actual_sha)
+if(NOT noncanonical_owned_actual_sha STREQUAL noncanonical_owned_sha)
+  message(FATAL_ERROR "noncanonical oracle removed an owned file")
+endif()
+
+set(inside_oracle_prefix "${test_root}/Removal Inside Oracle")
+install_component("${inside_oracle_prefix}")
+file(MAKE_DIRECTORY "${inside_oracle_prefix}/authority")
+file(COPY_FILE "${oracle}"
+  "${inside_oracle_prefix}/authority/PureBonjourExpected.sha256")
+file(SHA256 "${inside_oracle_prefix}/lib/pure/bonjour.dll"
+  inside_owned_sha)
+run_remover("${inside_oracle_prefix}"
+  "${inside_oracle_prefix}/authority" PACKAGE_INVENTORY
+  "inside-prefix removal oracle")
+file(SHA256 "${inside_oracle_prefix}/lib/pure/bonjour.dll"
+  inside_owned_actual_sha)
+if(NOT inside_owned_actual_sha STREQUAL inside_owned_sha)
+  message(FATAL_ERROR "inside-prefix oracle removed an owned file")
+endif()
+
+set(reparse_oracle_prefix "${test_root}/Removal Reparse Oracle")
+install_component("${reparse_oracle_prefix}")
+set(reparse_authority_target "${test_root}/Reparse Authority Target")
+set(reparse_authority_link "${test_root}/Reparse Authority Link")
+file(MAKE_DIRECTORY "${reparse_authority_target}")
+file(COPY_FILE "${oracle}"
+  "${reparse_authority_target}/PureBonjourExpected.sha256")
+file(WRITE "${reparse_authority_target}/sentinel.bin" "authority sentinel\n")
+file(SHA256 "${reparse_authority_target}/sentinel.bin" authority_sentinel_sha)
+cmake_path(NATIVE_PATH reparse_authority_target NORMALIZE
+  reparse_authority_target_native)
+cmake_path(NATIVE_PATH reparse_authority_link NORMALIZE
+  reparse_authority_link_native)
+execute_process(COMMAND "$ENV{COMSPEC}" /d /c mklink /J
+  "${reparse_authority_link_native}" "${reparse_authority_target_native}"
+  RESULT_VARIABLE authority_junction_result)
+if(NOT authority_junction_result EQUAL 0)
+  message(FATAL_ERROR "could not create authority junction")
+endif()
+file(SHA256 "${reparse_oracle_prefix}/lib/pure/bonjour.dll"
+  reparse_owned_sha)
+run_remover("${reparse_oracle_prefix}" "${reparse_authority_link}"
+  PACKAGE_INVENTORY "reparse removal oracle")
+file(SHA256 "${reparse_oracle_prefix}/lib/pure/bonjour.dll"
+  reparse_owned_actual_sha)
+file(SHA256 "${reparse_authority_target}/sentinel.bin"
+  authority_sentinel_actual_sha)
+execute_process(COMMAND "$ENV{COMSPEC}" /d /c rmdir
+  "${reparse_authority_link_native}" RESULT_VARIABLE authority_unlink_result)
+if(NOT authority_unlink_result EQUAL 0 OR
+    NOT reparse_owned_actual_sha STREQUAL reparse_owned_sha OR
+    NOT authority_sentinel_actual_sha STREQUAL authority_sentinel_sha)
+  message(FATAL_ERROR "reparse authority mutation changed protected files")
+endif()
+
+run_remover("${relocated_prefix}" "${build_dir}" "" "normal")
 assert_removed_and_preserved("${relocated_prefix}" "normal removal")
 
 # A forged installed inventory naming an unrelated file must have no influence
@@ -233,5 +338,5 @@ file(COPY "${first_prefix}/" DESTINATION "${forged_prefix}")
 file(APPEND "${forged_prefix}/${inventory_relative}"
   "lib/pure/unrelated-sentinel.bin\tforged\tforged\t0\t"
   "0000000000000000000000000000000000000000000000000000000000000000\t0\n")
-remove_component("${forged_prefix}")
+run_remover("${forged_prefix}" "${build_dir}" "" "forged-inventory")
 assert_removed_and_preserved("${forged_prefix}" "forged-inventory removal")
