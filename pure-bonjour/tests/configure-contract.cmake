@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.25)
-if(NOT DEFINED VALIDATOR OR NOT DEFINED TEST_ROOT)
+if(NOT DEFINED VALIDATOR OR NOT DEFINED TEST_ROOT OR NOT DEFINED GENERATOR)
   message(FATAL_ERROR "test inputs missing")
 endif()
 file(REMOVE_RECURSE "${TEST_ROOT}")
@@ -37,7 +37,7 @@ file(WRITE "${probe_source}/CMakeLists.txt"
   "cmake_minimum_required(VERSION 3.25)\nproject(target_probe C)\n"
   "include(\"${VALIDATOR}\")\npure_bonjour_validate_target()\n")
 execute_process(COMMAND "${CMAKE_COMMAND}" -S "${probe_source}"
-  -B "${TEST_ROOT}/target valid" -G "MinGW Makefiles"
+  -B "${TEST_ROOT}/target valid" -G "${GENERATOR}"
   "-DCMAKE_C_COMPILER=${C_COMPILER}" "-DCMAKE_MAKE_PROGRAM=${MAKE_PROGRAM}"
   RESULT_VARIABLE valid_target_result OUTPUT_VARIABLE valid_target_output
   ERROR_VARIABLE valid_target_error)
@@ -45,7 +45,7 @@ if(NOT valid_target_result EQUAL 0)
   message(FATAL_ERROR "configured x86-64 target rejected:\n${valid_target_output}${valid_target_error}")
 endif()
 execute_process(COMMAND "${CMAKE_COMMAND}" -S "${probe_source}"
-  -B "${TEST_ROOT}/target arm64 mutation" -G "MinGW Makefiles"
+  -B "${TEST_ROOT}/target arm64 mutation" -G "${GENERATOR}"
   "-DCMAKE_C_COMPILER=${C_COMPILER}" "-DCMAKE_MAKE_PROGRAM=${MAKE_PROGRAM}"
   "-DCMAKE_C_COMPILER_TARGET=x86_64-w64-windows-gnu"
   "-DCMAKE_C_FLAGS=-U__x86_64__ -D_M_ARM64=1"

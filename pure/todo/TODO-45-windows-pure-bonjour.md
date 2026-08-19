@@ -892,3 +892,18 @@ Bonjour for Windows product.
     }
     "PURE_PROCESSES_AFTER_CLEANUP`t$finalProcesses"
     ```
+
+- 2026-08-19: Clean-runner rerun `32293262458`, Windows job `96198704636`,
+  reached 13/14 passing tests at commit `abcf5a27`; only
+  `pure-bonjour-configure-contract` failed. Its nested x86-64 configure forced
+  a Makefiles generator while inheriting the parent Ninja executable, so the
+  compiler probe invoked `ninja -f Makefile` and failed before testing the
+  target contract. A local RED reproduced that exact command and parse error.
+  The harness now passes the parent `CMAKE_GENERATOR` together with its
+  spaces-safe `CMAKE_MAKE_PROGRAM`. The local Ninja rerun generated
+  `build.ninja` instead of a Makefile, proving the mismatch is removed, but hit
+  the already documented local Ninja compiler-probe stall and was terminated
+  together with its exact child processes. A freshly reconfigured MinGW local
+  focused CTest passed 1/1 in 4.62 seconds, including rejection of the existing
+  ARM64 flag mutation. A new clean-runner result and artifact inspection are
+  still required, so the TODO remains Open.

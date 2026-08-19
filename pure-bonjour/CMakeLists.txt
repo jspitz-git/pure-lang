@@ -58,6 +58,7 @@ if(BUILD_TESTING)
       "-DVALIDATOR=${CMAKE_CURRENT_SOURCE_DIR}/cmake/ValidateConfigure.cmake"
       "-DTEST_ROOT=${CMAKE_CURRENT_BINARY_DIR}/configure-contract"
       "-DC_COMPILER=${CMAKE_C_COMPILER}"
+      "-DGENERATOR=${CMAKE_GENERATOR}"
       "-DMAKE_PROGRAM=${CMAKE_MAKE_PROGRAM}"
       -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/configure-contract.cmake")
   set_tests_properties(pure-bonjour-configure-contract PROPERTIES
