@@ -46,6 +46,31 @@ Bonjour for Windows product.
 
 ## Progress Log
 
+- 2026-08-19: Corrected final-review cancellation-failure and route-drain
+  blockers while keeping the TODO open for a fresh clean-runner/artifact gate.
+  - A failed `DnsServiceRegisterCancel`, `DnsServiceBrowseCancel`, or
+    `DnsServiceResolveCancel` no longer detaches its callback cookie or frees
+    the object containing the SDK cancel handle. Delayed callbacks retain a
+    valid route, and a later explicit cleanup call retries the failed cancel.
+  - Callback-route draining now uses each operation's finite wait budget. A
+    timeout atomically restores the same non-reused route to the registry and
+    retains the live object; callback-tail cleanup or a later cleanup call can
+    retry without ABA, UAF, or an unbounded wait.
+  - Reentrant browser cleanup testing no longer calls `bonjour_close` through
+    a pointer already released by callback-tail cleanup.
+  - Validation:
+    - `cmake.exe --build build/pure-bonjour-final --target
+      pure-bonjour-lifecycle` completed with strict warnings-as-errors.
+    - `ctest.exe --test-dir build/pure-bonjour-final -R
+      "^pure-bonjour-lifecycle$" --repeat until-fail:20 --output-on-failure`
+      passed 20/20 runs in 65.20 seconds.
+    - `ctest.exe --test-dir build/pure-bonjour-final --output-on-failure -j 1`
+      passed 14/14 tests in 289.09 seconds, including lifecycle in 2.89 seconds
+      and the real loopback in 4.75 seconds.
+    - `cmake.exe --build build/pure-bonjour-final --target
+      verify-windows-dependencies` passed with 11 PE files, 126 import edges,
+      and exactly seven exports.
+
 - 2026-08-19: Reopened after final whole-branch review found callback-lifetime,
   DNS presentation-name, and configure-authority gaps.
   - Accepted resolve queries now remain live for repeated Microsoft completion

@@ -45,6 +45,8 @@ typedef struct {
   int close_on_resolved_free;
   int delete_before_resolver_link;
   int callback_during_browser_cleanup;
+  HANDLE browse_route_entered;
+  HANDLE browse_route_release;
   PDNS_SERVICE_REGISTER_COMPLETE callback;
   void *callback_context;
   PDNS_SERVICE_BROWSE_CALLBACK browse_callback;
@@ -267,6 +269,17 @@ static VOID WINAPI fake_before_browser_cleanup(void)
                              &fake->resolved_instance);
 }
 
+static VOID WINAPI fake_after_browse_route_acquire(void)
+{
+  fake_dns_t *fake = active_fake;
+
+  assert(fake != NULL);
+  if (fake->browse_route_entered == NULL) return;
+  assert(SetEvent(fake->browse_route_entered));
+  assert(WaitForSingleObject(fake->browse_route_release, 1000) ==
+         WAIT_OBJECT_0);
+}
+
 static VOID WINAPI fake_record_list_free(PDNS_RECORD records,
                                          DNS_FREE_TYPE free_type)
 {
@@ -297,6 +310,7 @@ static fake_dns_t fake_dns_pending_registration(void)
   fake.api.free_records = fake_record_list_free;
   fake.api.before_resolver_link = fake_before_resolver_link;
   fake.api.before_browser_cleanup = fake_before_browser_cleanup;
+  fake.api.after_browse_route_acquire = fake_after_browse_route_acquire;
   fake.register_result = DNS_REQUEST_PENDING;
   fake.deregister_result = DNS_REQUEST_PENDING;
   fake.deregister_callback_result = ERROR_SUCCESS;
@@ -691,9 +705,101 @@ static void test_browse_cancel_failure_retains_state(void)
   browser = bonjour_browse_with_api("_puretodo45._tcp", &fake.api, 25);
   assert(browser != NULL);
   bonjour_close(browser);
+  assert(bonjour_callback_registry_count() == 1);
+  fake.browse_callback(ERROR_ACCESS_DENIED, fake.browse_context, NULL);
+  assert(bonjour_callback_registry_count() == 1);
+  fake.browse_cancel_result = ERROR_SUCCESS;
+  bonjour_close(browser);
+  assert(fake.browse_cancel_calls == 2);
+  assert(fake.resolve_cancel_calls == 0);
+  assert(bonjour_callback_registry_count() == 0);
+}
+
+static void test_registration_cancel_failure_retains_state_for_callback_and_retry(void)
+{
+  fake_dns_t fake = fake_dns_pending_registration();
+  bonjour_service_t *service;
+
+  fake.cancel_result = ERROR_ACCESS_DENIED;
+  use_fake(&fake);
+  service = bonjour_publish_with_api("Probe", "_puretodo45._tcp", 43210,
+                                     &fake.api, 25);
+  assert(service != NULL);
+  bonjour_unpublish(service);
+  assert(fake.cancel_calls == 1);
+  assert(fake.free_instance_calls == 0);
+  assert(bonjour_callback_registry_count() == 1);
+  fake_fire_callback(&fake, ERROR_CANCELLED, NULL);
+  assert(fake.free_callback_instance_calls == 1);
+  assert(bonjour_callback_registry_count() == 1);
+  fake.cancel_result = ERROR_SUCCESS;
+  bonjour_unpublish(service);
+  assert(fake.free_instance_calls == 1);
+  assert(bonjour_callback_registry_count() == 0);
+}
+
+static void test_resolve_cancel_failure_retains_state_for_callback_and_retry(void)
+{
+  fake_dns_t fake = fake_dns_pending_registration();
+  bonjour_browser_t *browser;
+  DNS_RECORD add_record;
+
+  fake.resolve_cancel_result = ERROR_ACCESS_DENIED;
+  use_fake(&fake);
+  browser = bonjour_browse_with_api("_puretodo45._tcp", &fake.api, 25);
+  assert(browser != NULL);
+  fake_fire_browse(&fake, &add_record, 0);
+  assert(bonjour_callback_registry_count() == 2);
   bonjour_close(browser);
   assert(fake.browse_cancel_calls == 1);
-  assert(fake.resolve_cancel_calls == 0);
+  assert(fake.resolve_cancel_calls == 1);
+  assert(bonjour_callback_registry_count() == 1);
+  fake_fire_resolve_ipv4(&fake);
+  assert(fake.free_resolved_instance_calls == 1);
+  assert(bonjour_callback_registry_count() == 1);
+  fake.resolve_cancel_result = ERROR_SUCCESS;
+  bonjour_close(browser);
+  assert(fake.browse_cancel_calls == 1);
+  assert(fake.resolve_cancel_calls == 2);
+  assert(bonjour_callback_registry_count() == 0);
+}
+
+static DWORD WINAPI fake_fire_browse_error_thread(void *parameter)
+{
+  fake_dns_t *fake = parameter;
+  fake->browse_callback(ERROR_ACCESS_DENIED, fake->browse_context, NULL);
+  return 0;
+}
+
+static void test_route_drain_timeout_is_bounded_and_retains_live_browser(void)
+{
+  fake_dns_t fake = fake_dns_pending_registration();
+  bonjour_browser_t *browser;
+  HANDLE callback_thread;
+  ULONGLONG started;
+
+  fake.browse_callback_on_cancel = 0;
+  fake.browse_route_entered = CreateEventW(NULL, TRUE, FALSE, NULL);
+  fake.browse_route_release = CreateEventW(NULL, TRUE, FALSE, NULL);
+  assert(fake.browse_route_entered != NULL);
+  assert(fake.browse_route_release != NULL);
+  use_fake(&fake);
+  browser = bonjour_browse_with_api("_puretodo45._tcp", &fake.api, 25);
+  assert(browser != NULL);
+  callback_thread = CreateThread(NULL, 0, fake_fire_browse_error_thread,
+                                 &fake, 0, NULL);
+  assert(callback_thread != NULL);
+  assert(WaitForSingleObject(fake.browse_route_entered, 1000) == WAIT_OBJECT_0);
+  started = GetTickCount64();
+  bonjour_close(browser);
+  assert(GetTickCount64() - started < 500);
+  assert(bonjour_callback_registry_count() == 1);
+  assert(SetEvent(fake.browse_route_release));
+  assert(WaitForSingleObject(callback_thread, 1000) == WAIT_OBJECT_0);
+  assert(bonjour_callback_registry_count() == 0);
+  CloseHandle(callback_thread);
+  CloseHandle(fake.browse_route_release);
+  CloseHandle(fake.browse_route_entered);
 }
 
 static void test_removal_while_resolve_pending_cannot_readd_service(void)
@@ -1026,8 +1132,7 @@ static void test_close_during_resolve_callback_retains_until_callback_tail(void)
   fake_fire_resolve_ipv4(&fake);
   assert(fake.browse_cancel_calls == 1);
   assert(fake.free_resolved_instance_calls == 1);
-  bonjour_close(browser);
-  assert(fake.browse_cancel_calls == 1);
+  assert(bonjour_callback_registry_count() == 0);
 }
 
 static void test_close_allows_synchronous_cancel_callbacks(void)
@@ -1117,6 +1222,9 @@ int main(void)
   test_no_result_close_is_bounded();
   test_delayed_browse_cancel_ack_cannot_target_freed_state();
   test_browse_cancel_failure_retains_state();
+  test_registration_cancel_failure_retains_state_for_callback_and_retry();
+  test_resolve_cancel_failure_retains_state_for_callback_and_retry();
+  test_route_drain_timeout_is_bounded_and_retains_live_browser();
   bonjour_close(NULL);
   assert(bonjour_callback_registry_count() == 0);
   pure_delete_interp(interp);
