@@ -1397,13 +1397,21 @@ void *interpreter::materialize_global_generation(int32_t tag, string *error_mess
 }
 
 #ifdef PURE_ENABLE_TEST_HOOKS
-static bool inject_deferred_failure(const char *mode, bool& injected)
+static bool inject_orc_failure(const char *mode, bool& injected)
 {
   if (injected) return false;
   const char *failure = getenv("PURE_TEST_ORC_FAILURE");
   if (!failure) return false;
   string failures = ","+string(failure)+",";
   if (failures.find(","+string(mode)+",") == string::npos) return false;
+  const char *skip = getenv("PURE_TEST_ORC_FAILURE_SKIP");
+  static set<string> skipped;
+  if (skip) {
+    string skipped_failures = ","+string(skip)+",";
+    if (skipped_failures.find(","+string(mode)+",") != string::npos &&
+        skipped.insert(mode).second)
+      return false;
+  }
   injected = true;
   return true;
 }
@@ -1415,7 +1423,7 @@ static llvm::Error add_deferred_snapshot
 {
 #ifdef PURE_ENABLE_TEST_HOOKS
   static bool injected = false;
-  if (inject_deferred_failure("deferred-snapshot-add", injected))
+  if (inject_orc_failure("deferred-snapshot-add", injected))
     return llvm::createStringError
       ("injected deferred ORC snapshot submission failure");
 #endif
@@ -1427,7 +1435,7 @@ static llvm::Expected<llvm::orc::ExecutorAddr> lookup_deferred_snapshot
 {
 #ifdef PURE_ENABLE_TEST_HOOKS
   static bool injected = false;
-  if (inject_deferred_failure("deferred-snapshot-lookup", injected))
+  if (inject_orc_failure("deferred-snapshot-lookup", injected))
     return llvm::createStringError
       ("injected deferred ORC snapshot lookup failure");
 #endif
@@ -1439,6 +1447,34 @@ static std::unique_ptr<llvm::MemoryBuffer> clone_snapshot
 {
   return llvm::MemoryBuffer::getMemBufferCopy
     (snapshot.getBuffer(), snapshot.getBufferIdentifier());
+}
+
+static llvm::Error add_temporary_eval_module
+(PureJit& jit, llvm::orc::ResourceTrackerSP tracker, llvm::Module& module,
+ llvm::StringRef entry_name, llvm::StringRef exported_name,
+ const char *failure_mode)
+{
+#ifdef PURE_ENABLE_TEST_HOOKS
+  static bool injected = false;
+  if (inject_orc_failure(failure_mode, injected))
+    return llvm::createStringError
+      ("injected "+string(failure_mode)+" ORC add failure");
+#endif
+  return jit.add_module_copy
+    (std::move(tracker), module, entry_name, exported_name);
+}
+
+template <typename Signature>
+static llvm::Expected<Signature*> lookup_temporary_eval_function
+(PureJit& jit, llvm::StringRef exported_name, const char *failure_mode)
+{
+#ifdef PURE_ENABLE_TEST_HOOKS
+  static bool injected = false;
+  if (inject_orc_failure(failure_mode, injected))
+    return llvm::createStringError
+      ("injected "+string(failure_mode)+" ORC lookup failure");
+#endif
+  return jit.lookup_function<Signature>(exported_name);
 }
 
 void *interpreter::materialize_global_generation_by_key
@@ -4833,24 +4869,34 @@ pure_expr *interpreter::eval(expr& x, bool keep)
 {
   globals g;
   save_globals(g);
-  pure_expr *e, *res = eval(x, e, keep);
-  if (!res && e) pure_free(e);
-  restore_globals(g);
-  return res;
+  try {
+    pure_expr *e, *res = eval(x, e, keep);
+    if (!res && e) pure_free(e);
+    restore_globals(g);
+    return res;
+  } catch (...) {
+    restore_globals(g);
+    throw;
+  }
 }
 
 pure_expr *interpreter::eval(expr& x, pure_expr*& e, bool keep)
 {
   globals g;
   save_globals(g);
-  compile();
-  // promote type tags and substitute macros and constants:
-  env vars; expr u = csubst(macsubst(0, subst(vars, rsubst(x))));
-  compile(u);
-  x = u;
-  pure_expr *res = doeval(u, e, keep);
-  restore_globals(g);
-  return res;
+  try {
+    compile();
+    // promote type tags and substitute macros and constants:
+    env vars; expr u = csubst(macsubst(0, subst(vars, rsubst(x))));
+    compile(u);
+    x = u;
+    pure_expr *res = doeval(u, e, keep);
+    restore_globals(g);
+    return res;
+  } catch (...) {
+    restore_globals(g);
+    throw;
+  }
 }
 
 // Define global variables.
@@ -4859,16 +4905,23 @@ pure_expr *interpreter::defn(expr pat, expr& x)
 {
   globals g;
   save_globals(g);
-  pure_expr *e, *res = defn(pat, x, e);
-  if (!res && e) pure_free(e);
-  restore_globals(g);
-  return res;
+  try {
+    pure_expr *e, *res = defn(pat, x, e);
+    if (!res && e) pure_free(e);
+    restore_globals(g);
+    return res;
+  } catch (...) {
+    restore_globals(g);
+    throw;
+  }
 }
 
 pure_expr *interpreter::defn(expr pat, expr& x, pure_expr*& e)
 {
   globals g;
   save_globals(g);
+  bool save_qual = qual;
+  try {
   compile();
   env vars; vinfo vi;
   // promote type tags and substitute macros and constants:
@@ -4876,7 +4929,7 @@ pure_expr *interpreter::defn(expr pat, expr& x, pure_expr*& e)
   expr rhs = csubst(macsubst(0, subst(vars, rsubst(x))));
   expr lhs = bind(vars, vi, lcsubst(pat));
   build_env(vars, lhs);
-  qual = false;
+  qual = save_qual;
   for (env::const_iterator it = vars.begin(); it != vars.end(); ++it) {
     int32_t f = it->first;
     const symbol& sym = symtab.sym(f);
@@ -4899,7 +4952,10 @@ pure_expr *interpreter::defn(expr pat, expr& x, pure_expr*& e)
   compile(rhs);
   x = rhs;
   pure_expr *res = dodefn(vars, vi, lhs, rhs, e, compiling);
-  if (!res) return 0;
+  if (!res) {
+    restore_globals(g);
+    return 0;
+  }
   for (env::const_iterator it = vars.begin(); it != vars.end(); ++it) {
     int32_t f = it->first;
     pure_expr **x = &globalvars[f].x;
@@ -4908,6 +4964,11 @@ pure_expr *interpreter::defn(expr pat, expr& x, pure_expr*& e)
   }
   restore_globals(g);
   return res;
+  } catch (...) {
+    qual = save_qual;
+    restore_globals(g);
+    throw;
+  }
 }
 
 // Define global constants.
@@ -15057,6 +15118,187 @@ pure_expr *interpreter::const_app_value(expr x)
     return 0;
 }
 
+class temporary_eval_guard {
+  Env *&current_environment;
+  Env *previous_environment;
+  Env *temporary_environment;
+  EnvStack& environment_stack;
+  CompilationUnitResources *compilation_units;
+  map<int32_t,GlobalVar> *global_variables;
+  pure_expr *&temporaries;
+  pure_aframe *&activation_stack;
+  llvm::orc::ResourceTrackerSP tracker;
+  vector<int32_t> new_globals;
+  list<pure_expr*> cached_values;
+  bool environment_pushed;
+  bool tracker_retained;
+  bool function_erased;
+  bool cache_owned;
+  bool restored;
+  bool committed;
+
+  void remove_tracker_and_report() noexcept
+  {
+    llvm::Error error = llvm::Error::success();
+    if (tracker_retained && temporary_environment)
+      error = compilation_units->remove(temporary_environment);
+    else if (tracker)
+      error = tracker->remove();
+    tracker_retained = false;
+    tracker.reset();
+    if (error)
+      llvm::logAllUnhandledErrors(std::move(error), llvm::errs(),
+                                  "failed to roll back temporary ORC unit: ");
+  }
+
+  void rollback_globals() noexcept
+  {
+    if (!global_variables) return;
+    for (vector<int32_t>::reverse_iterator tag = new_globals.rbegin(),
+           end = new_globals.rend(); tag != end; ++tag) {
+      map<int32_t,GlobalVar>::iterator variable = global_variables->find(*tag);
+      if (variable == global_variables->end() || variable->second.x) continue;
+      llvm::GlobalVariable *value = variable->second.v;
+      if (value && value->hasName()) {
+        if (llvm::Error error =
+              compilation_units->remove_host_symbol(value->getName())) {
+          llvm::logAllUnhandledErrors
+            (std::move(error), llvm::errs(),
+             "failed to roll back temporary host global: ");
+          continue;
+        }
+        if (value->getParent()) value->eraseFromParent();
+      }
+      global_variables->erase(variable);
+    }
+    new_globals.clear();
+  }
+
+  void erase_function() noexcept
+  {
+    if (!function_erased && temporary_environment &&
+        temporary_environment->f && temporary_environment->f->getParent())
+      temporary_environment->f->eraseFromParent();
+    function_erased = true;
+  }
+
+  void restore_environment() noexcept
+  {
+    if (!restored) {
+      current_environment = previous_environment;
+      restored = true;
+    }
+  }
+
+public:
+  temporary_eval_guard
+  (Env *&current, Env *previous, Env *temporary, EnvStack& stack,
+   CompilationUnitResources *units, map<int32_t,GlobalVar> *globals,
+   pure_expr *&tmps, pure_aframe *&astk)
+    : current_environment(current), previous_environment(previous),
+      temporary_environment(temporary), environment_stack(stack),
+      compilation_units(units), global_variables(globals), temporaries(tmps),
+      activation_stack(astk), environment_pushed(false),
+      tracker_retained(false), function_erased(false), cache_owned(false),
+      restored(false), committed(false) {}
+
+  ~temporary_eval_guard() noexcept
+  {
+    if (committed) return;
+    remove_tracker_and_report();
+    if (!function_erased && temporary_environment &&
+        temporary_environment->f)
+      temporary_environment->f->dropAllReferences();
+    rollback_globals();
+    erase_function();
+    if (environment_pushed && !environment_stack.empty() &&
+        environment_stack.front() == temporary_environment)
+      environment_stack.pop_front();
+    restore_environment();
+    if (temporary_environment) delete temporary_environment;
+    if (cache_owned)
+      for (list<pure_expr*>::iterator value = cached_values.begin(),
+             end = cached_values.end(); value != end; ++value)
+        pure_free(*value);
+    if (!activation_stack) {
+      pure_expr *temporary = temporaries;
+      while (temporary) {
+        pure_expr *next = temporary->xp;
+        pure_freenew(temporary);
+        temporary = next;
+      }
+    }
+  }
+
+  void pushed() noexcept { environment_pushed = true; }
+  void popped() noexcept { environment_pushed = false; }
+
+  void own_tracker(llvm::orc::ResourceTrackerSP value) noexcept
+  {
+    tracker = std::move(value);
+  }
+
+  llvm::orc::ResourceTrackerSP get_tracker() const noexcept { return tracker; }
+
+  void retain_tracker()
+  {
+    compilation_units->retain(temporary_environment, tracker);
+    tracker_retained = true;
+  }
+
+  llvm::Error remove_tracker()
+  {
+    llvm::Error error = tracker_retained
+      ? compilation_units->remove(temporary_environment)
+      : tracker ? tracker->remove() : llvm::Error::success();
+    tracker_retained = false;
+    if (!error) tracker.reset();
+    return error;
+  }
+
+  void own_global(int32_t tag) { new_globals.push_back(tag); }
+  void cache(pure_expr *value) { cached_values.push_back(value); }
+  void adopt_cache(bool owned) noexcept { cache_owned = owned; }
+
+  void erase_temporary_function() noexcept { erase_function(); }
+
+  void delete_temporary_environment() noexcept
+  {
+    restore_environment();
+    Env *environment = temporary_environment;
+    temporary_environment = 0;
+    delete environment;
+  }
+
+  void transfer_environment() noexcept
+  {
+    temporary_environment = 0;
+    tracker.reset();
+    tracker_retained = false;
+  }
+
+  void restore() noexcept { restore_environment(); }
+
+  void commit_definitions(bool success) noexcept
+  {
+    if (success) {
+      for (list<pure_expr*>::iterator value = cached_values.begin(),
+             end = cached_values.end(); value != end; ++value)
+        pure_free(*value);
+      cached_values.clear();
+      cache_owned = false;
+      new_globals.clear();
+    } else
+      rollback_globals();
+  }
+
+  void commit() noexcept
+  {
+    assert(restored && !temporary_environment && !tracker);
+    committed = true;
+  }
+};
+
 pure_expr *interpreter::doeval(expr x, pure_expr*& e, bool keep)
 {
   char test;
@@ -15084,8 +15326,11 @@ pure_expr *interpreter::doeval(expr x, pure_expr*& e, bool keep)
      which might still be called at a later time. */
   Env *save_fptr = fptr;
   fptr = new Env(0, 0, 0, x, false); fptr->refc = 1;
+  temporary_eval_guard guard
+    (fptr, save_fptr, fptr, envstk, compilation_units, 0, tmps, astk);
   Env &f = *fptr;
   push("doeval", &f);
+  guard.pushed();
   fun_prolog("$$init");
 #if DEBUG>1
   ostringstream msg;
@@ -15095,48 +15340,52 @@ pure_expr *interpreter::doeval(expr x, pure_expr*& e, bool keep)
   f.CreateRet(codegen(x));
   fun_finish();
   pop(&f);
+  guard.popped();
   if (!keep) {
     // Compile each anonymous evaluation as an independent ORC unit.
     string verification_error;
     if (!verify_module(*module, verification_error))
       throw err("invalid LLVM module before ORC evaluation: "+
                 verification_error);
-    llvm::orc::ResourceTrackerSP tracker = ORC->create_resource_tracker();
+    guard.own_tracker(ORC->create_resource_tracker());
     string entry_name = f.f->getName().str();
     string exported_name = "$$orc.eval."+to_string(orc_unit_counter++);
-    if (llvm::Error error =
-          ORC->add_module_copy(tracker, *module, entry_name, exported_name)) {
-      if (llvm::Error cleanup_error = tracker->remove())
-        error = llvm::joinErrors(std::move(error), std::move(cleanup_error));
+    if (llvm::Error error = add_temporary_eval_module
+          (*ORC, guard.get_tracker(), *module, entry_name, exported_name,
+           "doeval-add")) {
       throw err("failed to add ORC evaluation module: "+
                 llvm::toString(std::move(error)));
     }
     llvm::Expected<pure_expr* (*)()> entry =
-      ORC->lookup_function<pure_expr*()>(exported_name);
+      lookup_temporary_eval_function<pure_expr*()>
+        (*ORC, exported_name, "doeval-lookup");
     if (!entry) {
       llvm::Error error = entry.takeError();
-      if (llvm::Error cleanup_error = tracker->remove())
-        error = llvm::joinErrors(std::move(error), std::move(cleanup_error));
       throw err("failed to resolve ORC evaluation function: "+
                 llvm::toString(std::move(error)));
     }
     void *fp = reinterpret_cast<void*>(*entry);
-    compilation_units->retain(fptr, tracker);
+    guard.retain_tracker();
     begin_stats();
     res = pure_invoke(fp, &e);
     end_stats();
-    f.f->eraseFromParent();
+    guard.erase_temporary_function();
     // If there are no more references, release the compilation unit and its
     // environment. Escaped closures retain both until their Env is released.
     if (fptr->refc == 1) {
-      if (llvm::Error error = compilation_units->remove(fptr))
+      if (llvm::Error error = guard.remove_tracker())
         throw err("failed to remove ORC evaluation module: "+
                   llvm::toString(std::move(error)));
-      delete fptr;
-    } else
+      guard.delete_temporary_environment();
+    } else {
       fptr->refc--;
+      guard.transfer_environment();
+    }
+  } else {
+    guard.transfer_environment();
   }
-  fptr = save_fptr;
+  guard.restore();
+  guard.commit();
   if (!astk) {
     // collect garbage
     pure_expr *t = tmps;
@@ -15231,8 +15480,12 @@ pure_expr *interpreter::dodefn(env vars, const vinfo& vi,
   // expression, match against the lhs and bind variables in lhs accordingly.
   Env *save_fptr = fptr;
   fptr = new Env(0, 0, 0, rhs, false); fptr->refc = 1;
+  temporary_eval_guard guard
+    (fptr, save_fptr, fptr, envstk, compilation_units, &globalvars,
+     tmps, astk);
   Env &f = *fptr;
   push("dodefn", &f);
+  guard.pushed();
   fun_prolog("$$init");
 #if DEBUG>1
   ostringstream msg;
@@ -15282,7 +15535,6 @@ pure_expr *interpreter::dodefn(env vars, const vinfo& vi,
       f.builder.SetInsertPoint(checkedbb);
     }
   }
-  list<pure_expr*> cache;
   for (env::const_iterator it = vars.begin(); it != vars.end(); ++it) {
     int32_t tag = it->first;
     const env_info& info = it->second;
@@ -15294,6 +15546,7 @@ pure_expr *interpreter::dodefn(env vars, const vinfo& vi,
     const symbol& sym = symtab.sym(tag);
     GlobalVar& v = globalvars[tag];
     if (!v.v) {
+      guard.own_global(tag);
       if (sym.priv)
 	v.v = global_variable
 	  (module, ExprPtrTy, false, GlobalVariable::InternalLinkage,
@@ -15307,7 +15560,7 @@ pure_expr *interpreter::dodefn(env vars, const vinfo& vi,
     /* Cache any old value so that we can free it later. Note that it is not
        safe to do so right away, because the value may be reused in one of the
        current assignments. */
-    if (v.x) cache.push_back(v.x);
+    if (v.x) guard.cache(v.x);
     call("pure_new", x);
 #if DEBUG>2
     ostringstream msg;
@@ -15324,68 +15577,57 @@ pure_expr *interpreter::dodefn(env vars, const vinfo& vi,
   unwind();
   fun_finish();
   pop(&f);
+  guard.popped();
   // Execute an immutable ORC copy. In batch mode the original initializer and
   // its environment remain in the mutable module for later object emission.
   string verification_error;
   if (!verify_module(*module, verification_error))
     throw err("invalid LLVM module before ORC definition: "+
               verification_error);
-  llvm::orc::ResourceTrackerSP tracker = ORC->create_resource_tracker();
+  guard.own_tracker(ORC->create_resource_tracker());
   string entry_name = f.f->getName().str();
   string category = keep ? "batch-defn" : "defn";
   string exported_name = "$$orc."+category+"."+
     to_string(orc_unit_counter++);
-  if (llvm::Error error = ORC->add_module_copy
-        (tracker, *module, entry_name, exported_name)) {
-    if (llvm::Error cleanup_error = tracker->remove())
-      error = llvm::joinErrors(std::move(error), std::move(cleanup_error));
+  if (llvm::Error error = add_temporary_eval_module
+        (*ORC, guard.get_tracker(), *module, entry_name, exported_name,
+         "dodefn-add")) {
     throw err("failed to add ORC definition module: "+
               llvm::toString(std::move(error)));
   }
   llvm::Expected<pure_expr* (*)()> entry =
-    ORC->lookup_function<pure_expr*()>(exported_name);
+    lookup_temporary_eval_function<pure_expr*()>
+      (*ORC, exported_name, "dodefn-lookup");
   if (!entry) {
     llvm::Error error = entry.takeError();
-    if (llvm::Error cleanup_error = tracker->remove())
-      error = llvm::joinErrors(std::move(error), std::move(cleanup_error));
     throw err("failed to resolve ORC definition function: "+
               llvm::toString(std::move(error)));
   }
   void *fp = reinterpret_cast<void*>(*entry);
-  compilation_units->retain(fptr, tracker);
+  guard.retain_tracker();
   begin_stats();
   res = pure_invoke(fp, &e);
   end_stats();
+  guard.adopt_cache(res != 0);
   if (!keep) {
-    f.f->eraseFromParent();
+    guard.erase_temporary_function();
     // If there are no more references, release the compilation unit and its
     // environment. Escaped closures retain both until their Env is released.
     if (fptr->refc == 1) {
-      if (llvm::Error error = compilation_units->remove(fptr))
+      if (llvm::Error error = guard.remove_tracker())
         throw err("failed to remove ORC definition module: "+
                   llvm::toString(std::move(error)));
-      delete fptr;
-    } else
+      guard.delete_temporary_environment();
+    } else {
       fptr->refc--;
-  }
-  fptr = save_fptr;
-  if (res) {
-    // Get rid of any old values now.
-    for (list<pure_expr*>::iterator it = cache.begin(), end = cache.end();
-	 it != end; ++it)
-      pure_free(*it);
-  } else {
-    // We caught an exception, clean up the mess.
-    for (env::const_iterator it = vars.begin(); it != vars.end(); ++it) {
-      int32_t tag = it->first;
-      GlobalVar& v = globalvars[tag];
-      if (!v.x) {
-	remove_host_global(v.v);
-	v.v->eraseFromParent();
-	globalvars.erase(tag);
-      }
+      guard.transfer_environment();
     }
+  } else {
+    guard.transfer_environment();
   }
+  guard.restore();
+  guard.commit_definitions(res != 0);
+  guard.commit();
   if (!astk) {
     // collect garbage
     pure_expr *t = tmps;

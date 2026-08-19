@@ -40,6 +40,7 @@ file(
 
 if(BUILD_TESTING)
   target_compile_definitions(pure-runtime PRIVATE PURE_ENABLE_TEST_HOOKS=1)
+  target_compile_definitions(pure PRIVATE PURE_ENABLE_TEST_HOOKS=1)
 
   find_program(PURE_SH_EXECUTABLE NAMES sh REQUIRED)
   find_program(
@@ -384,6 +385,27 @@ if(BUILD_TESTING)
       TIMEOUT 60
       FAIL_REGULAR_EXPRESSION
         "failed to remove ORC compilation unit;AddressSanitizer;LeakSanitizer;runtime error:"
+  )
+  add_test(
+    NAME pure-jit-eval-failure-recovery
+    COMMAND
+      "${CMAKE_COMMAND}"
+      -DPURE_EXECUTABLE=$<TARGET_FILE:pure>
+      -DPURE_SCRIPT=${CMAKE_CURRENT_SOURCE_DIR}/test/jit-eval-failure-recovery.pure
+      -DPURE_EXPECTED=${CMAKE_CURRENT_SOURCE_DIR}/test/jit-eval-failure-recovery.log
+      -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunPureEvalFailureRecovery.cmake"
+  )
+  set_tests_properties(
+    pure-jit-eval-failure-recovery
+    PROPERTIES
+      LABELS "jit;stress"
+      ENVIRONMENT_MODIFICATION
+        "PATH=path_list_prepend:${LLVM_TOOLS_BINARY_DIR}"
+      REQUIRED_FILES
+        "${CMAKE_CURRENT_SOURCE_DIR}/test/jit-eval-failure-recovery.pure;${CMAKE_CURRENT_SOURCE_DIR}/test/jit-eval-failure-recovery.log"
+      TIMEOUT 60
+      FAIL_REGULAR_EXPRESSION
+        "failed to remove ORC;AddressSanitizer;LeakSanitizer;runtime error:"
   )
   add_test(
     NAME pure-jit-eager

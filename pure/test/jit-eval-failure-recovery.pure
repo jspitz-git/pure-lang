@@ -1,0 +1,84 @@
+// Each CTest child enables exactly one section below. The C helper injects the
+// failure inside a recursive public-API evaluation, so it can compare the
+// JIT-visible fptr before and after the exceptional exit without production
+// introspection hooks.
+
+%<
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+typedef struct _pure_expr pure_expr;
+extern pure_expr *pure_eval(const char *source);
+extern void pure_freenew(pure_expr *value);
+extern const char *lasterr(void);
+
+extern void *pure_test_fptr __asm__("$$fptr$$");
+
+static int pure_test_eval_failure(const char *mode)
+{
+  void *before = pure_test_fptr;
+  pure_expr *result = pure_eval
+    (strncmp(mode, "dodefn-", 7) == 0
+     ? "let failed_definition = (\\x->x) 0"
+     : "(\\x->x) 0");
+  const char *message = lasterr();
+  if (message && *message) puts(message);
+  if (result) pure_freenew(result);
+  return pure_test_fptr == before;
+}
+
+int pure_test_doeval_add(void)
+{
+  return pure_test_eval_failure("doeval-add");
+}
+
+int pure_test_doeval_lookup(void)
+{
+  return pure_test_eval_failure("doeval-lookup");
+}
+
+int pure_test_dodefn_add(void)
+{
+  return pure_test_eval_failure("dodefn-add");
+}
+
+int pure_test_dodefn_lookup(void)
+{
+  return pure_test_eval_failure("dodefn-lookup");
+}
+%>
+
+extern int pure_test_doeval_add();
+extern int pure_test_doeval_lookup();
+extern int pure_test_dodefn_add();
+extern int pure_test_dodefn_lookup();
+
+infixl 2200 +;
+x::int+y::int = x+y;
+
+eval_probe x = x;
+
+#! --if doeval-add
+pure_test_doeval_add;
+eval_probe 42;
+#! --endif
+
+#! --if doeval-lookup
+pure_test_doeval_lookup;
+eval_probe 42;
+#! --endif
+
+#! --if dodefn-add
+pure_test_dodefn_add;
+failed_definition;
+recovered x = x+1;
+recovered 41;
+#! --endif
+
+#! --if dodefn-lookup
+pure_test_dodefn_lookup;
+failed_definition;
+recovered x = x+1;
+recovered 41;
+#! --endif
