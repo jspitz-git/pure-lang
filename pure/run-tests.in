@@ -102,13 +102,24 @@ run_one()
      ! sed 's/\r$//' "$log" > "$work/expected" 2>> "$work/error"
   then
     echo 2 > "$work/status"
-  elif ./run-test ${pufs} < "$work/input" 2>&1 |
-       sed 's/\r$//' |
-       ${DIFF} -u "$work/expected" - > "$work/diff"
-  then
-    echo 0 > "$work/status"
   else
-    echo 1 > "$work/status"
+    ./run-test ${pufs} < "$work/input" > "$work/output" 2>&1
+    interpreter_status=$?
+    if ! sed 's/\r$//' "$work/output" > "$work/normalized" 2>> "$work/error"
+    then
+      echo 2 > "$work/status"
+    elif ! ${DIFF} -u "$work/expected" "$work/normalized" > "$work/diff"
+    then
+      test "$interpreter_status" -eq 0 ||
+        echo "interpreter exited with status $interpreter_status" >> "$work/diff"
+      echo 1 > "$work/status"
+    elif test "$interpreter_status" -eq 0
+    then
+      echo 0 > "$work/status"
+    else
+      echo "interpreter exited with status $interpreter_status" >> "$work/diff"
+      echo 1 > "$work/status"
+    fi
   fi
   if test "$timings" -ne 0; then
     finished=$(date +%s)

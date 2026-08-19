@@ -1,1 +1,4 @@
+extern int puts(char*);
 batch_smoke = 42;
+main = puts "PURE_BATCH_SMOKE=42";
+main;

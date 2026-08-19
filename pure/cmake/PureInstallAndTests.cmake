@@ -563,6 +563,7 @@ if(BUILD_TESTING)
     )
   endif()
 
+  set(batch_smoke_expected_output "PURE_BATCH_SMOKE=42\n")
   add_test(
     NAME pure-batch-object
     COMMAND
@@ -571,6 +572,8 @@ if(BUILD_TESTING)
       -DPURE_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
       -DPURE_BUILD_DIR=${CMAKE_CURRENT_BINARY_DIR}
       -DPURE_LD_LIB_PATH=${LD_LIB_PATH}
+      -DPURE_EXPECTED_OUTPUT=${batch_smoke_expected_output}
+      -DPURE_OBJECT_INSPECTOR=${LLVM_TOOLS_BINARY_DIR}/llvm-readobj
       -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunPureBatchTest.cmake"
   )
   if(PURE_SANITIZERS)
@@ -600,6 +603,8 @@ if(BUILD_TESTING)
       -DPURE_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
       -DPURE_BUILD_DIR=${CMAKE_CURRENT_BINARY_DIR}
       -DPURE_LD_LIB_PATH=${LD_LIB_PATH}
+      -DPURE_EXPECTED_OUTPUT=${batch_smoke_expected_output}
+      -DPURE_OBJECT_INSPECTOR=${LLVM_TOOLS_BINARY_DIR}/llvm-readobj
       -DPURE_SCRIPT=${CMAKE_CURRENT_SOURCE_DIR}/test/batch-smoke.pure
       -DPURE_OUTPUT_NAME=pure-batch-program.o
       -DPURE_RUN_EXECUTABLE=ON
@@ -631,6 +636,8 @@ if(BUILD_TESTING)
         -DPURE_OUTPUT_NAME=pure-batch-faust.o
         -DPURE_FIXTURE_SOURCE=${PURE_FAUST_FIXTURE_OUTPUT_DIR}/reload-a.bc
         -DPURE_FIXTURE_DESTINATION=${PURE_FAUST_FIXTURE_OUTPUT_DIR}/batch_reload.bc
+        -DPURE_EXPECTED_OUTPUT=
+        -DPURE_OBJECT_INSPECTOR=${LLVM_TOOLS_BINARY_DIR}/llvm-readobj
         -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunPureBatchTest.cmake"
     )
     set_tests_properties(
@@ -651,6 +658,16 @@ if(BUILD_TESTING)
       "${PURE_SH_EXECUTABLE}" "${CMAKE_CURRENT_BINARY_DIR}/run-tests" -v
     WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
   )
+  add_test(
+    NAME pure-regression-harness-contract
+    COMMAND
+      "${CMAKE_COMMAND}"
+      -DPURE_SH_EXECUTABLE=${PURE_SH_EXECUTABLE}
+      -DPURE_REGRESSION_HARNESS=${CMAKE_CURRENT_BINARY_DIR}/run-tests
+      -DPURE_RUN_TEST=${CMAKE_CURRENT_BINARY_DIR}/run-test
+      -DPURE_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
+      -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/TestRegressionHarness.cmake"
+  )
   set(regression_timeout 600)
   set(regression_environment "TEST_JOBS=4")
   if(PURE_SANITIZERS)
@@ -665,6 +682,12 @@ if(BUILD_TESTING)
       ENVIRONMENT "${regression_environment}"
       LABELS "regression"
       TIMEOUT ${regression_timeout}
+  )
+  set_tests_properties(
+    pure-regression-harness-contract
+    PROPERTIES
+      LABELS "regression"
+      TIMEOUT 60
   )
 endif()
 

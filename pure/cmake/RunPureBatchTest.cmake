@@ -2,6 +2,9 @@ if(NOT DEFINED PURE_EXECUTABLE OR NOT DEFINED PURE_SOURCE_DIR OR
    NOT DEFINED PURE_BUILD_DIR OR NOT DEFINED PURE_LD_LIB_PATH)
   message(FATAL_ERROR "Missing Pure batch test driver arguments")
 endif()
+if(NOT DEFINED PURE_EXPECTED_OUTPUT OR NOT DEFINED PURE_OBJECT_INSPECTOR)
+  message(FATAL_ERROR "Missing Pure batch harness assertions")
+endif()
 
 if(NOT DEFINED PURE_SCRIPT)
   set(PURE_SCRIPT "${PURE_SOURCE_DIR}/test/batch-smoke.pure")
@@ -54,6 +57,32 @@ file(SIZE "${output}" output_size)
 if(output_size EQUAL 0)
   message(FATAL_ERROR "Pure batch compilation created an empty object")
 endif()
+execute_process(
+  COMMAND "${PURE_OBJECT_INSPECTOR}" --file-headers "${output}"
+  RESULT_VARIABLE object_result
+  OUTPUT_VARIABLE object_report
+  ERROR_VARIABLE object_error
+)
+message("${object_report}${object_error}")
+if(NOT object_result EQUAL 0)
+  message(FATAL_ERROR "Pure batch object inspection exited with status ${object_result}")
+endif()
+if("${object_report}${object_error}" STREQUAL "")
+  message(FATAL_ERROR "Pure batch object inspection returned no report")
+endif()
+string(REGEX MATCH "Format: COFF" object_format "${object_report}${object_error}")
+if(object_format STREQUAL "")
+  message(FATAL_ERROR "Pure batch object is not COFF")
+endif()
+string(
+  REGEX MATCH
+  "Arch: (x86_64|x86-64)|Machine: IMAGE_FILE_MACHINE_AMD64"
+  object_machine
+  "${object_report}${object_error}"
+)
+if(object_machine STREQUAL "")
+  message(FATAL_ERROR "Pure batch object is not x86-64/AMD64")
+endif()
 
 if(PURE_RUN_EXECUTABLE)
   if(NOT DEFINED PURE_EXECUTABLE_SUFFIX OR
@@ -104,10 +133,15 @@ if(PURE_RUN_EXECUTABLE)
       "${executable}"
     RESULT_VARIABLE run_result
     OUTPUT_VARIABLE run_output
-    ERROR_VARIABLE run_output
+    ERROR_VARIABLE run_error
   )
-  message("${run_output}")
+  message("${run_output}${run_error}")
   if(NOT run_result EQUAL 0)
     message(FATAL_ERROR "Pure batch executable exited with status ${run_result}")
+  endif()
+  if(NOT "${run_output}" STREQUAL "${PURE_EXPECTED_OUTPUT}")
+    message(FATAL_ERROR
+      "Pure batch executable stdout did not match the expected literal"
+    )
   endif()
 endif()
