@@ -1,6 +1,6 @@
 # TODO-45 - Windows pure-bonjour Package
 
-Status: Open
+Status: Completed
 Branch: todo/45-windows-pure-bonjour
 
 ## Purpose
@@ -23,7 +23,7 @@ Bonjour for Windows product.
 1. [x] Resolve SDK availability, licensing, and redistribution terms.
 2. [x] Build the module against the selected Windows implementation.
 3. [x] Add bounded loopback registration and discovery tests.
-4. [ ] Decide whether to bundle, externally detect, or defer the package.
+4. [x] Ship the optional package with the Microsoft system DNS-SD backend.
 
 ## Guardrails
 
@@ -36,12 +36,12 @@ Bonjour for Windows product.
 - Verify bounded API rejection, cancellation, firewall/policy denial, and an
   empty no-result window; Windows has no optional Bonjour daemon to remove.
 
-## Open Questions
+## Final Decision
 
-- Final ship-or-defer remains gated on the clean `windows-2025` workflow and
-  independent inspection of its `windows-pure-bonjour` artifact. The selected
-  runtime is the Windows 10+ system `dnsapi.dll`; no redistributable third-party
-  Bonjour runtime is part of the package.
+- Ship `PureBonjour` as an optional Windows component. It uses the Windows 10+
+  system `dnsapi.dll`; no Apple Bonjour or other third-party service runtime is
+  installed or redistributed. The exact Windows clean-runner job and its
+  independently downloaded artifact passed the release gate described below.
 
 ## Progress Log
 
@@ -403,3 +403,52 @@ Bonjour for Windows product.
     was performed. Successful `windows-pure-bonjour` clean-runner job evidence
     and independent inspection of its `windows-pure-bonjour` artifact remain
     required. The final ship decision stays unchecked and TODO-45 stays Open.
+- 2026-08-19: Completed the clean-runner and independent artifact gate for
+  commit `1f05af6f75a7d4ca2a0e94a83096e4446f50b68c`.
+  - Workflow run `32276057210` is at
+    <https://github.com/jspitz-git/pure-lang/actions/runs/32276057210>.
+    Its `Windows PureBonjour package` job `96143650236` succeeded in 9 minutes
+    10 seconds with every step green: exact toolchain/Pure SDK staging,
+    PureBonjour build, the complete test label, installed verifier,
+    deterministic ZIP creation, and artifact upload. The complete label passed
+    13/13 tests in 261.96 seconds. The installed verifier accepted exactly 8
+    files totaling 131706 bytes, inventory SHA-256
+    `7478c25b14d62976be7bf271cd10c91d01560e03d252c5aad653a5c89624170e`,
+    11 PE files, 126 import edges, and exactly seven exports.
+  - The overall workflow conclusion is red only because the parallel
+    `macOS 15 arm64` job `96143650667` failed its complete Release tests. That
+    job is outside TODO-45; the Windows job did not fail, skip, or depend on it.
+  - The authenticated `windows-pure-bonjour` artifact was downloaded to the
+    new controlled path `build/Task 8 artifact download 1f05 Č`. Before
+    extraction, its sole payload ZIP was opened read-only and accepted exactly
+    the eight ordinal package paths, with no directory, empty, rooted, UNC,
+    drive, backslash, dot-segment, duplicate, or case-colliding entry. The ZIP
+    is 52091 bytes with SHA-256
+    `d2505ba8c2e0996a348cf45cd06a854cf61ed0beb8c39dc18ff293366001eedd`.
+    GitHub's job log exposes the uploaded artifact wrapper size (51668 bytes)
+    and wrapper digest, but not the expanded step-summary values, so the inner
+    ZIP size/hash could not be compared to that summary through `gh`.
+  - Safe streaming extraction to the fresh spaces-and-Unicode path
+    `build/Task 8 artifact inspection Ž/Extracted package Č` produced exactly
+    the same eight files. All seven inventory payload rows matched their file
+    sizes and SHA-256 values. The inventory's independently computed SHA-256
+    exactly matches the clean job value above, binding the downloaded bytes to
+    the verifier that passed on the runner.
+  - A local build oracle is intentionally byte-specific and therefore rejected
+    the remote DLL/docs. Using a temporary oracle made from the already
+    runner-bound artifact inventory only for the remaining structural checks,
+    `VerifyInstalledPackage.cmake` accepted 8 files/131706 bytes and repeated
+    the 11-PE/126-edge/seven-export result. This temporary oracle was not used
+    as the independent hash authority; that authority is the clean job's exact
+    logged inventory SHA-256 and successful external-oracle verification.
+  - A separate fresh dependency work directory repeated the 11 PE files, 126
+    import edges, no forbidden/unresolved imports, and exact seven exports.
+    Direct loading from the Unicode spelling produced Windows loader error
+    `0x7E`, the documented Pure 0.68 narrow-path limitation. The verifier's
+    target-checked ASCII junction strategy and a second independent sanitized
+    smoke both exercised the same canonical extracted files successfully with
+    `PATH` limited to the matching Pure `bin` plus Windows system directories,
+    no MSYS2 segment, and zero Pure processes before and after cleanup.
+  - The Windows-specific release boundary is therefore satisfied. TODO-45 is
+    complete and the optional Microsoft-backed PureBonjour package is approved
+    to ship; the unrelated macOS workflow failure remains separate work.
