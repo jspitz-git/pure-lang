@@ -1,6 +1,6 @@
 # TODO-45 - Windows pure-bonjour Package
 
-Status: Open
+Status: Closed on 2026-08-19
 Branch: todo/45-windows-pure-bonjour
 
 ## Purpose
@@ -23,7 +23,7 @@ Bonjour for Windows product.
 1. [x] Resolve SDK availability, licensing, and redistribution terms.
 2. [x] Build the module against the selected Windows implementation.
 3. [x] Add bounded loopback registration and discovery tests.
-4. [ ] Ship the optional package with the Microsoft system DNS-SD backend.
+4. [x] Ship the optional package with the Microsoft system DNS-SD backend.
 
 ## Guardrails
 
@@ -38,13 +38,59 @@ Bonjour for Windows product.
 
 ## Final Decision
 
-- Candidate decision: ship `PureBonjour` as an optional Windows component. It
+- Decision: ship `PureBonjour` as an optional Windows component. It
   uses the Windows 10+ system `dnsapi.dll`; no Apple Bonjour or other
-  third-party service runtime is installed or redistributed. Final shipment is
-  pending a fresh Windows clean-runner and independent artifact gate after the
-  final review fixes.
+  third-party service runtime is installed or redistributed. The final reviewed
+  commit passed the fresh Windows clean-runner and independent artifact gate.
 
 ## Progress Log
+
+- 2026-08-19: Closed after the final clean-runner and independently downloaded
+  artifact gate for exact commit
+  `1dfe2c08ab9c86a997708bf46dc63fea4a5d0c30`.
+  - Workflow run
+    [32294731499](https://github.com/jspitz-git/pure-lang/actions/runs/32294731499)
+    checked out that exact SHA. Its
+    [Windows job 96203302905](https://github.com/jspitz-git/pure-lang/actions/runs/32294731499/job/96203302905)
+    passed every step, including the complete 14/14 PureBonjour label, installed
+    verifier, deterministic ZIP, and upload. The overall workflow conclusion is
+    red only because the parallel out-of-scope macOS full Release test failed;
+    the Windows shipment gate itself is green.
+  - Artifact
+    [9381042576](https://github.com/jspitz-git/pure-lang/actions/runs/32294731499/artifacts/9381042576)
+    is bound by the Actions API to the same run, branch, and head SHA. The
+    downloaded 54,049-byte Actions wrapper has SHA-256
+    `2b7de0f5005aa3e7e561233f8bd20346164cce34e156335e210bffdf83d3cb44`,
+    exactly matching both the API digest and upload log. Its sole expected
+    member is `windows-pure-bonjour.zip` (54,475 bytes, independently measured
+    SHA-256
+    `5c23c770f7845ebee52dc58612148978e16cb323f016121894b95560afd2349e`).
+  - Before extraction, a .NET `ZipArchive` audit required exactly eight inner
+    entries in `StringComparer.Ordinal` order and rejected empty, rooted,
+    drive-qualified, parent-traversing, backslash-containing, duplicate, and
+    case-fold-colliding names. Safe manual extraction beneath
+    `build/TODO45 artifact gate run32294731499 Č/Extracted package Žluťoučký kůň`
+    produced exactly 8 files totaling 136,850 bytes.
+  - All seven installed-inventory sizes and SHA-256 values matched the extracted
+    payloads. The inventory self-hash is
+    `1d0520efd0e5ec6470b6ade4279f4208cbec571289f67e7aca3a907c87622518`,
+    matching the exact Windows job log together with the 8-file/136,850-byte
+    totals. An explicitly named artifact-derived temporary oracle was used only
+    to exercise verifier checks; the authenticated Actions wrapper and embedded
+    inventory, not that temporary file, remain the hash evidence.
+  - With `PURELIB` removed and `PATH` restricted to the matching Pure SDK plus
+    Windows system directories, `VerifyInstalledPackage.cmake` accepted the
+    package and reported 11 PE files, 126 import edges, and exactly seven
+    exports. Its canonical target-checked junction smoke passed from the short
+    ASCII temporary root `C:\pure-lang\pure\build\g45-32294731499`, while the
+    audited target retained spaces and Unicode. Pure process counts were 0
+    before, 0 after, and 0 after cleanup.
+  - Two earlier verifier smoke attempts from longer temporary paths failed
+    without leaving a process; an equivalent short canonical ASCII alias passed.
+    This is the documented Pure 0.68 Windows path/loader limitation, not an
+    artifact content discrepancy. Cleanup removed only the owned temporary
+    oracle, aliases, verifier scratch, and smoke roots; the extracted evidence
+    and its `bonjour.dll` hash were preserved.
 
 - 2026-08-19: Closed the service-cleanup ownership review round locally; the
   TODO remains open for renewed remote and artifact evidence.
