@@ -26,14 +26,22 @@ staging prefix. Then run these commands from the repository root in PowerShell,
 replacing the Pure prefix with its absolute path:
 
 ```powershell
-$env:PKG_CONFIG_PATH = 'C:/path with spaces/Pure/lib/pkgconfig'
-C:/msys64/clang64/bin/cmake.exe -S pure-bonjour `
-  -B 'build/PureBonjour release' -G Ninja `
-  -DCMAKE_BUILD_TYPE=Release `
-  -DCMAKE_C_COMPILER=C:/msys64/clang64/bin/clang.exe `
-  -DPKG_CONFIG_EXECUTABLE=C:/msys64/clang64/bin/pkgconf.exe `
-  '-DPURE_PREFIX=C:/path with spaces/Pure'
-C:/msys64/clang64/bin/cmake.exe --build 'build/PureBonjour release'
+$savedPath = $env:Path
+try {
+  $env:Path = "C:/msys64/clang64/bin;C:/msys64/usr/bin;$savedPath"
+  $env:PKG_CONFIG_PATH = 'C:/path with spaces/Pure/lib/pkgconfig'
+  C:/msys64/clang64/bin/cmake.exe -S pure-bonjour `
+    -B 'build/PureBonjour release' -G Ninja `
+    -DCMAKE_BUILD_TYPE=Release `
+    -DCMAKE_MAKE_PROGRAM=C:/msys64/clang64/bin/ninja.exe `
+    -DCMAKE_C_COMPILER=C:/msys64/clang64/bin/clang.exe `
+    -DPKG_CONFIG_EXECUTABLE=C:/msys64/clang64/bin/pkgconf.exe `
+    '-DPURE_PREFIX=C:/path with spaces/Pure'
+  C:/msys64/clang64/bin/cmake.exe --build 'build/PureBonjour release'
+} finally {
+  # Do not carry the build toolchain into tests or installed verification.
+  $env:Path = $savedPath
+}
 C:/msys64/clang64/bin/cmake.exe --install 'build/PureBonjour release' `
   --prefix 'C:/path with spaces/PureBonjour stage' `
   --component PureBonjour
@@ -70,9 +78,11 @@ C:/msys64/clang64/bin/cmake.exe --build 'build/PureBonjour release' `
   --target verify-windows-dependencies
 ```
 
-To verify a component-only stage independently, unset `PURELIB`, remove every
-MSYS2 directory from `PATH`, and call the installed-package verifier by absolute
-path. It requires absolute source, build, stage, and complete Pure prefixes:
+The `finally` block above restores the caller's original `PATH` before any
+runtime command. To verify a component-only stage independently, unset
+`PURELIB`, replace `PATH` with the staged Pure runtime plus Windows system
+directories only, and call the installed-package verifier by absolute path. It
+requires absolute source, build, stage, and complete Pure prefixes:
 
 ```powershell
 Remove-Item Env:PURELIB -ErrorAction SilentlyContinue

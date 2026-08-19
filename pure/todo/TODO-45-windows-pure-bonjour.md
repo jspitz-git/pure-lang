@@ -323,3 +323,42 @@ Bonjour for Windows product.
     suite passed 11/11 in 223.27 seconds.
   - Remote clean-runner execution and independent artifact inspection remain a
     Task 8 gate, so this TODO stays open and no ship decision is recorded yet.
+- 2026-08-19: Task 7 fix round 1 removed persistent toolchain state and made
+  the workflow contract indentation-aware and exclusivity-sensitive.
+  - The first strengthened contract run failed with `CI_CONTRACT_PATH` because
+    the job wrote CLANG64 and MSYS2 directories to `GITHUB_PATH`. The job no
+    longer changes persistent PATH state. Tool discovery, Pure SDK build, and
+    PureBonjour configure/build prepend CLANG64/MSYS2 only in their own
+    PowerShell processes. CTest, component install/verifier, deterministic ZIP,
+    and upload start with the staged Pure `bin` plus Windows system directories
+    only; `PURELIB` is removed in every runtime-capable run step.
+  - Pure SDK installation now uses the explicit build-system `install` target,
+    leaving exactly one `cmake --install` in the job: the one install bounded by
+    `--component PureBonjour`. The PureBonjour build command has no `--target`
+    and therefore builds all configured targets. The artifact contains exactly
+    one path, `windows-pure-bonjour.zip`; its concise hash/size evidence remains
+    in the GitHub step summary rather than a second uploaded file.
+  - The CMake contract explicitly describes itself as an indentation-aware
+    parser for the exercised workflow subset, not a general YAML semantic
+    parser. It extracts the job and named steps by indentation, validates exact
+    properties inside the correct block, independently checks the exact six
+    push and pull-request paths, compares the exact 13-package prerequisite set,
+    and rejects persistent PATH, extra/targeted builds, unrestricted/duplicate
+    installs, and extra or replacement upload paths. Twenty-four mutations
+    cover comments, cross-step token moves, malformed indentation, both trigger
+    mappings, missing/extra packages, PATH persistence/sanitization, build and
+    install exclusivity, and ZIP upload exclusivity; every mutation must fail
+    with its intended stable category.
+  - No dependency-free YAML semantic parser is installed (`ConvertFrom-Yaml`
+    and Ruby are absent, and Python has no `yaml` module). PowerShell's parser
+    accepted all six Windows job script blocks. The Windows guide now uses an
+    absolute CLANG64 Ninja path, scopes the build PATH in `try`/`finally`, and
+    explicitly restores it before component installation or runtime checks.
+  - Focused component/verifier validation passed 2/2 in 13.11 seconds. The final
+    full Bonjour suite passed 11/11 in 237.76 seconds; the strengthened contract
+    took 6.60 seconds, relocation/removal 119.14 seconds, and the real local-link
+    smoke 3.85 seconds. The unchanged exact eight-file package is 133095 bytes;
+    its inventory SHA-256 is
+    `fcf6e0bf00169f97c6e5d591837c7de6d97de5ef9ce378471354f5abafb3721d`,
+    and source/staged `WINDOWS.md` share SHA-256
+    `6b89ee56e54e68f56ecb0bb9ea3600d7fdabb249efcba792ec63e30a42dd5559`.

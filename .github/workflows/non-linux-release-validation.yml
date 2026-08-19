@@ -83,11 +83,6 @@ jobs:
           if ($msys2Root -ine 'C:/msys64') {
             throw "setup-msys2 selected an unexpected root: $msys2Root"
           }
-          # GITHUB_PATH entries are prepended in reverse write order.
-          'C:/msys64/usr/bin' |
-            Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
-          'C:/msys64/clang64/bin' |
-            Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
           $env:Path = "C:/msys64/clang64/bin;C:/msys64/usr/bin;$env:Path"
           $tools = [ordered]@{
             clang = 'C:/msys64/clang64/bin/clang.exe'
@@ -109,11 +104,13 @@ jobs:
       - name: Build and install the matching Windows Pure SDK
         run: |
           $ErrorActionPreference = 'Stop'
+          $env:Path = "C:/msys64/clang64/bin;C:/msys64/usr/bin;$env:Path"
           $repo = (Get-Location).Path
           $pureBuild = Join-Path $repo 'build/windows Pure SDK build'
           $purePrefix = Join-Path $repo 'build/windows Pure SDK prefix'
           & $env:CMAKE_EXE -S pure -B $pureBuild -G Ninja `
             -DCMAKE_BUILD_TYPE=Release `
+            -DCMAKE_MAKE_PROGRAM=C:/msys64/clang64/bin/ninja.exe `
             -DCMAKE_C_COMPILER=C:/msys64/clang64/bin/clang.exe `
             -DCMAKE_CXX_COMPILER=C:/msys64/clang64/bin/clang++.exe `
             -DLLVM_DIR=C:/msys64/clang64/lib/cmake/llvm `
@@ -122,7 +119,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "Pure configure failed" }
           & $env:CMAKE_EXE --build $pureBuild --parallel 1
           if ($LASTEXITCODE -ne 0) { throw "Pure build failed" }
-          & $env:CMAKE_EXE --install $pureBuild
+          & $env:CMAKE_EXE --build $pureBuild --target install --parallel 1
           if ($LASTEXITCODE -ne 0) { throw "Pure install failed" }
           "PURE_PREFIX=$($purePrefix.Replace('\', '/'))" |
             Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
@@ -130,12 +127,14 @@ jobs:
       - name: Configure and build PureBonjour
         run: |
           $ErrorActionPreference = 'Stop'
+          $env:Path = "C:/msys64/clang64/bin;C:/msys64/usr/bin;$env:Path"
           $repo = (Get-Location).Path
           $build = Join-Path $repo 'build/windows PureBonjour release'
           $purePrefix = [IO.Path]::GetFullPath($env:PURE_PREFIX)
           $env:PKG_CONFIG_PATH = (Join-Path $purePrefix 'lib/pkgconfig')
           & $env:CMAKE_EXE -S pure-bonjour -B $build -G Ninja `
             -DCMAKE_BUILD_TYPE=Release `
+            -DCMAKE_MAKE_PROGRAM=C:/msys64/clang64/bin/ninja.exe `
             -DCMAKE_C_COMPILER=C:/msys64/clang64/bin/clang.exe `
             "-DPKG_CONFIG_EXECUTABLE=C:/msys64/clang64/bin/pkgconf.exe" `
             "-DPURE_PREFIX=$purePrefix" `
@@ -149,6 +148,12 @@ jobs:
       - name: Run the complete PureBonjour test label
         run: |
           $ErrorActionPreference = 'Stop'
+          $purePrefix = [IO.Path]::GetFullPath($env:PURE_PREFIX)
+          Remove-Item Env:PURELIB -ErrorAction SilentlyContinue
+          $env:Path = "$purePrefix/bin;$env:SystemRoot/System32/WindowsPowerShell/v1.0;$env:SystemRoot/System32;$env:SystemRoot"
+          if ($env:Path -match '(?i)(^|;).*[/\\]msys64[/\\]') {
+            throw "MSYS2 path survived sanitization: $env:Path"
+          }
           & C:/msys64/clang64/bin/ctest.exe --test-dir $env:PURE_BONJOUR_BUILD `
             -L bonjour --output-on-failure --no-tests=error
           if ($LASTEXITCODE -ne 0) { throw "PureBonjour CTest failed" }
@@ -161,14 +166,14 @@ jobs:
           $build = [IO.Path]::GetFullPath($env:PURE_BONJOUR_BUILD)
           $purePrefix = [IO.Path]::GetFullPath($env:PURE_PREFIX)
           $stage = Join-Path $repo 'build/staged PureBonjour package'
-          & $env:CMAKE_EXE --install $build --prefix $stage `
-            --component PureBonjour
-          if ($LASTEXITCODE -ne 0) { throw "PureBonjour install failed" }
           Remove-Item Env:PURELIB -ErrorAction SilentlyContinue
           $env:Path = "$purePrefix/bin;$env:SystemRoot/System32/WindowsPowerShell/v1.0;$env:SystemRoot/System32;$env:SystemRoot"
           if ($env:Path -match '(?i)(^|;).*[/\\]msys64[/\\]') {
             throw "MSYS2 path survived sanitization: $env:Path"
           }
+          & $env:CMAKE_EXE --install $build --prefix $stage `
+            --component PureBonjour
+          if ($LASTEXITCODE -ne 0) { throw "PureBonjour install failed" }
           & $env:CMAKE_EXE `
             "-DSTAGE_PREFIX=$stage" `
             "-DSOURCE_PREFIX=$source" `
@@ -184,11 +189,16 @@ jobs:
       - name: Create the deterministic PureBonjour ZIP twice
         run: |
           $ErrorActionPreference = 'Stop'
+          $purePrefix = [IO.Path]::GetFullPath($env:PURE_PREFIX)
+          Remove-Item Env:PURELIB -ErrorAction SilentlyContinue
+          $env:Path = "$purePrefix/bin;$env:SystemRoot/System32/WindowsPowerShell/v1.0;$env:SystemRoot/System32;$env:SystemRoot"
+          if ($env:Path -match '(?i)(^|;).*[/\\]msys64[/\\]') {
+            throw "MSYS2 path survived sanitization: $env:Path"
+          }
           $artifactDirectory = Join-Path (Get-Location).Path 'build/pure-bonjour-artifacts'
           $first = Join-Path $artifactDirectory 'windows-pure-bonjour-first.zip'
           $second = Join-Path $artifactDirectory 'windows-pure-bonjour-second.zip'
           $archive = Join-Path $artifactDirectory 'windows-pure-bonjour.zip'
-          $summary = Join-Path $artifactDirectory 'windows-pure-bonjour-summary.txt'
           New-Item -ItemType Directory -Path $artifactDirectory -Force | Out-Null
           $files = @(Get-ChildItem -LiteralPath $env:PURE_BONJOUR_STAGE -File -Recurse)
           if ($files.Count -ne 8) {
@@ -237,12 +247,6 @@ jobs:
           Copy-Item -LiteralPath $first -Destination $archive
           $stageBytes = ($files | Measure-Object Length -Sum).Sum
           $archiveBytes = (Get-Item -LiteralPath $archive).Length
-          @(
-            "files=8"
-            "stage-bytes=$stageBytes"
-            "zip-bytes=$archiveBytes"
-            "zip-sha256=$firstHash"
-          ) | Out-File -LiteralPath $summary -Encoding utf8
           @"
           ### Windows PureBonjour package
 
@@ -254,11 +258,11 @@ jobs:
 
       - name: Upload the PureBonjour package
         uses: actions/upload-artifact@v4
+        env:
+          PATH: ${{ env.PURE_PREFIX }}/bin;C:/Windows/System32/WindowsPowerShell/v1.0;C:/Windows/System32;C:/Windows
         with:
           name: windows-pure-bonjour
-          path: |
-            source with spaces/build/pure-bonjour-artifacts/windows-pure-bonjour.zip
-            source with spaces/build/pure-bonjour-artifacts/windows-pure-bonjour-summary.txt
+          path: source with spaces/build/pure-bonjour-artifacts/windows-pure-bonjour.zip
           if-no-files-found: error
 
   macos-15-arm64:
