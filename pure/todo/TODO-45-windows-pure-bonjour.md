@@ -1,6 +1,6 @@
 # TODO-45 - Windows pure-bonjour Package
 
-Status: Completed
+Status: Closed on 2026-08-19
 Branch: todo/45-windows-pure-bonjour
 
 ## Purpose
@@ -407,6 +407,8 @@ Bonjour for Windows product.
   commit `1f05af6f75a7d4ca2a0e94a83096e4446f50b68c`.
   - Workflow run `32276057210` is at
     <https://github.com/jspitz-git/pure-lang/actions/runs/32276057210>.
+    The successful Windows job is at
+    <https://github.com/jspitz-git/pure-lang/actions/runs/32276057210/job/96143650236>.
     Its `Windows PureBonjour package` job `96143650236` succeeded in 9 minutes
     10 seconds with every step green: exact toolchain/Pure SDK staging,
     PureBonjour build, the complete test label, installed verifier,
@@ -428,6 +430,10 @@ Bonjour for Windows product.
     GitHub's job log exposes the uploaded artifact wrapper size (51668 bytes)
     and wrapper digest, but not the expanded step-summary values, so the inner
     ZIP size/hash could not be compared to that summary through `gh`.
+    Artifact metadata is identified by ID `9374344930` at
+    <https://api.github.com/repos/jspitz-git/pure-lang/actions/artifacts/9374344930>;
+    its authenticated archive endpoint is
+    <https://api.github.com/repos/jspitz-git/pure-lang/actions/artifacts/9374344930/zip>.
   - Safe streaming extraction to the fresh spaces-and-Unicode path
     `build/Task 8 artifact inspection Ž/Extracted package Č` produced exactly
     the same eight files. All seven inventory payload rows matched their file
@@ -452,3 +458,217 @@ Bonjour for Windows product.
   - The Windows-specific release boundary is therefore satisfied. TODO-45 is
     complete and the optional Microsoft-backed PureBonjour package is approved
     to ship; the unrelated macOS workflow failure remains separate work.
+  - Exact remote metadata and download commands (PowerShell, from the worktree
+    root):
+
+    ```powershell
+    gh run view 32276057210 --repo jspitz-git/pure-lang `
+      --json databaseId,headSha,headBranch,conclusion,status,url,jobs,createdAt,updatedAt
+    gh run view 32276057210 --repo jspitz-git/pure-lang `
+      --job 96143650236 --log | Select-String -Pattern `
+      'tests passed|Test time|dependency audit passed|PE files|import edges|seven exact exports|Installed PureBonjour package verified|ZIP|SHA-256|sha256|bytes|Pure Windows SDK runtime closure'
+    gh api repos/jspitz-git/pure-lang/actions/artifacts/9374344930
+    $target = 'C:\pure-lang\.worktrees\todo-45-windows-pure-bonjour\build\Task 8 artifact download 1f05 Č'
+    if (Test-Path -LiteralPath $target) { throw "target already exists: $target" }
+    New-Item -ItemType Directory -Path $target | Out-Null
+    gh run download 32276057210 --repo jspitz-git/pure-lang `
+      --name windows-pure-bonjour --dir $target
+    ```
+
+  - Exact pre-extraction ZIP safety, inventory, and hash inspection used
+    `System.IO.Compression.ZipArchiveMode.Read`; for every entry it rejected an
+    empty name, directory, backslash, leading slash, UNC/drive root, `.`/`..`
+    segment, exact duplicate, case-folded collision, or name outside the exact
+    eight-path set. The executed inspection ended with:
+
+    ```powershell
+    Add-Type -AssemblyName System.IO.Compression
+    $zipPath = 'C:\pure-lang\.worktrees\todo-45-windows-pure-bonjour\build\Task 8 artifact download 1f05 Č\windows-pure-bonjour.zip'
+    $expected = @(
+      'lib/pure/bonjour.dll',
+      'lib/pure/bonjour.pure',
+      'share/doc/pure-bonjour/COPYING',
+      'share/doc/pure-bonjour/COPYING.LESSER',
+      'share/doc/pure-bonjour/PureBonjourInventory.tsv',
+      'share/doc/pure-bonjour/README',
+      'share/doc/pure-bonjour/WINDOWS.md',
+      'share/doc/pure-bonjour/examples/bonjour_examp.pure'
+    )
+    $item = Get-Item -LiteralPath $zipPath
+    $hash = (Get-FileHash -LiteralPath $zipPath -Algorithm SHA256).Hash.ToLowerInvariant()
+    $stream = [IO.File]::OpenRead($zipPath)
+    $zip = [IO.Compression.ZipArchive]::new(
+      $stream, [IO.Compression.ZipArchiveMode]::Read, $false)
+    try {
+      $names = @($zip.Entries | ForEach-Object { $_.FullName })
+      if ($names.Count -ne 8) { throw "entry count $($names.Count)" }
+      $ordinal = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+      $folded = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+      foreach ($entry in $zip.Entries) {
+        $name = $entry.FullName
+        if ([string]::IsNullOrEmpty($name) -or $name.EndsWith('/') -or
+            $name.Contains('\') -or $name.StartsWith('/') -or
+            $name.StartsWith('//') -or $name -match '^[A-Za-z]:' -or
+            @($name.Split('/')) -contains '.' -or
+            @($name.Split('/')) -contains '..') { throw "unsafe entry: $name" }
+        if (-not $ordinal.Add($name)) { throw "duplicate entry: $name" }
+        if (-not $folded.Add($name)) { throw "case collision: $name" }
+        if ($expected -cnotcontains $name) { throw "unexpected entry: $name" }
+      }
+      foreach ($name in $expected) {
+        if (-not $ordinal.Contains($name)) { throw "missing entry: $name" }
+      }
+    } finally { $zip.Dispose(); $stream.Dispose() }
+    "ZIP_BYTES`t$($item.Length)"
+    "ZIP_SHA256`t$hash"
+    ```
+
+  - Exact safe extraction created a previously absent
+    `build/Task 8 artifact inspection Ž/Extracted package Č`, reopened the ZIP
+    read-only, created each accepted parent incrementally, rejected every
+    reparse parent and pre-existing file, and streamed each entry with
+    `FileMode.CreateNew`:
+
+    ```powershell
+    $root = 'C:\pure-lang\.worktrees\todo-45-windows-pure-bonjour\build\Task 8 artifact inspection Ž'
+    if (Test-Path -LiteralPath $root) { throw "inspection root already exists: $root" }
+    New-Item -ItemType Directory -Path $root | Out-Null
+    $extract = Join-Path $root 'Extracted package Č'
+    New-Item -ItemType Directory -Path $extract | Out-Null
+    $stream = [IO.File]::OpenRead($zipPath)
+    $zip = [IO.Compression.ZipArchive]::new(
+      $stream, [IO.Compression.ZipArchiveMode]::Read, $false)
+    try {
+      foreach ($entry in $zip.Entries) {
+        $segments = $entry.FullName.Split('/')
+        $destination = $extract
+        for ($i = 0; $i -lt $segments.Length - 1; $i++) {
+          $destination = Join-Path $destination $segments[$i]
+          if (-not (Test-Path -LiteralPath $destination)) {
+            New-Item -ItemType Directory -Path $destination | Out-Null
+          }
+          $directoryItem = Get-Item -LiteralPath $destination -Force
+          if (($directoryItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+            throw "reparse directory: $destination"
+          }
+        }
+        $destination = Join-Path $destination $segments[-1]
+        if (Test-Path -LiteralPath $destination) {
+          throw "pre-existing extraction target: $destination"
+        }
+        $input = $entry.Open()
+        $output = [IO.File]::Open(
+          $destination, [IO.FileMode]::CreateNew,
+          [IO.FileAccess]::Write, [IO.FileShare]::None)
+        try { $input.CopyTo($output) }
+        finally { $output.Dispose(); $input.Dispose() }
+      }
+    } finally { $zip.Dispose(); $stream.Dispose() }
+    ```
+
+    External inventory verification then ran:
+
+    ```powershell
+    $extract = 'C:\pure-lang\.worktrees\todo-45-windows-pure-bonjour\build\Task 8 artifact inspection Ž\Extracted package Č'
+    $inventoryPath = Join-Path $extract 'share/doc/pure-bonjour/PureBonjourInventory.tsv'
+    $rows = @(Import-Csv -LiteralPath $inventoryPath -Delimiter "`t")
+    if ($rows.Count -ne 7) { throw "inventory rows: $($rows.Count)" }
+    $seen = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    foreach ($row in $rows) {
+      if (-not $seen.Add($row.relative_path)) {
+        throw "duplicate inventory row: $($row.relative_path)"
+      }
+      $path = Join-Path $extract `
+        $row.relative_path.Replace('/', [IO.Path]::DirectorySeparatorChar)
+      $item = Get-Item -LiteralPath $path
+      $sha = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant()
+      if ([string]$item.Length -cne $row.size -or $sha -cne $row.sha256) {
+        throw "inventory mismatch: $($row.relative_path)"
+      }
+    }
+    $inventorySha = (Get-FileHash -LiteralPath $inventoryPath `
+      -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($inventorySha -cne `
+        '7478c25b14d62976be7bf271cd10c91d01560e03d252c5aad653a5c89624170e') {
+      throw "inventory oracle mismatch: $inventorySha"
+    }
+    ```
+
+  - The first installed-verifier command used the local build oracle and
+    correctly failed `PACKAGE_HASH` because the remote build is byte-distinct.
+    After writing the clearly labeled temporary artifact-derived
+    `Remote oracle/PureBonjourExpected.sha256`, the exact remaining-check command
+    was:
+
+    ```powershell
+    & 'C:/msys64/clang64/bin/cmake.exe' `
+      '-DSTAGE_PREFIX=C:/pure-lang/.worktrees/todo-45-windows-pure-bonjour/build/Task 8 artifact inspection Ž/Extracted package Č' `
+      '-DSOURCE_PREFIX=C:/pure-lang/.worktrees/todo-45-windows-pure-bonjour/pure-bonjour' `
+      '-DBUILD_PREFIX=C:/pure-lang/.worktrees/todo-45-windows-pure-bonjour/build/Task 8 artifact inspection Ž/Remote oracle' `
+      '-DPURE_PREFIX=C:/pure-lang/.worktrees/todo-45-windows-pure-bonjour/build/pure-sdk-regression-prefix' `
+      -P pure-bonjour/cmake/VerifyInstalledPackage.cmake
+    ```
+
+    The temporary oracle was removed after use and was never treated as the
+    independent hash authority.
+
+  - Exact independent PE/import/export audit command:
+
+    ```powershell
+    $audit = 'C:\pure-lang\.worktrees\todo-45-windows-pure-bonjour\build\Task 8 artifact inspection Ž\Independent dependency audit'
+    if (Test-Path -LiteralPath $audit) { throw "audit path already exists: $audit" }
+    & 'C:/msys64/clang64/bin/cmake.exe' `
+      -DLLVM_READOBJ=C:/msys64/clang64/bin/llvm-readobj.exe `
+      '-DMODULE=C:/pure-lang/.worktrees/todo-45-windows-pure-bonjour/build/Task 8 artifact inspection Ž/Extracted package Č/lib/pure/bonjour.dll' `
+      '-DPURE_PREFIX=C:/pure-lang/.worktrees/todo-45-windows-pure-bonjour/build/pure-sdk-regression-prefix' `
+      '-DVERIFY_WORK_DIR=C:/pure-lang/.worktrees/todo-45-windows-pure-bonjour/build/Task 8 artifact inspection Ž/Independent dependency audit' `
+      '-DDEPENDENCY_REPORT=C:/pure-lang/.worktrees/todo-45-windows-pure-bonjour/build/Task 8 artifact inspection Ž/Independent dependency audit/PureBonjourDependencies.tsv' `
+      -P pure-bonjour/cmake/VerifyWindowsDependencies.cmake
+    ```
+
+  - Exact sanitized smoke used `cmd.exe /d /c mklink /J` to create the fresh
+    ASCII `build/task8-artifact-stage-alias` pointing to the canonical Unicode
+    extraction, recorded the alias target (the installed verifier separately
+    checked its canonical target), removed `PURELIB`, rejected any
+    `msys64` segment, recorded Pure process counts before/after, and ran:
+
+    ```powershell
+    $target = 'C:\pure-lang\.worktrees\todo-45-windows-pure-bonjour\build\Task 8 artifact inspection Ž\Extracted package Č'
+    $alias = 'C:\pure-lang\.worktrees\todo-45-windows-pure-bonjour\build\task8-artifact-stage-alias'
+    $smokeRoot = 'C:\pure-lang\.worktrees\todo-45-windows-pure-bonjour\build\task8-artifact-sanitized-smoke'
+    if (Test-Path -LiteralPath $alias) { throw "alias already exists: $alias" }
+    if (Test-Path -LiteralPath $smokeRoot) { throw "smoke root already exists: $smokeRoot" }
+    $targetNative = [IO.Path]::GetFullPath($target)
+    $aliasNative = [IO.Path]::GetFullPath($alias)
+    cmd.exe /d /c mklink /J "$aliasNative" "$targetNative"
+    if ($LASTEXITCODE -ne 0) { throw 'alias creation failed' }
+    try {
+      $canonicalAlias = (Get-Item -LiteralPath $alias).Target
+      "ALIAS_TARGET`t$canonicalAlias"
+      $before = @(Get-Process -Name pure -ErrorAction SilentlyContinue).Count
+      Remove-Item Env:PURELIB -ErrorAction SilentlyContinue
+      $purePrefix = 'C:\pure-lang\.worktrees\todo-45-windows-pure-bonjour\build\pure-sdk-regression-prefix'
+      $safePath = "$purePrefix\bin;$env:SystemRoot\System32;$env:SystemRoot;$env:SystemRoot\System32\Wbem"
+      if ($safePath -match '(?i)(^|;).*[/\\]msys64[/\\]') {
+        throw "MSYS2 survived: $safePath"
+      }
+      $env:Path = $safePath
+      & 'C:/msys64/clang64/bin/cmake.exe' -DSMOKE_OUTER_TIMEOUT_SECONDS=30 `
+        '-DSMOKE_ROOT=C:/pure-lang/.worktrees/todo-45-windows-pure-bonjour/build/task8-artifact-sanitized-smoke' `
+        '-DPURE_EXECUTABLE=C:/pure-lang/.worktrees/todo-45-windows-pure-bonjour/build/pure-sdk-regression-prefix/bin/pure.exe' `
+        '-DMODULE_PATH=C:/pure-lang/.worktrees/todo-45-windows-pure-bonjour/build/task8-artifact-stage-alias/lib/pure/bonjour.dll' `
+        '-DWRAPPER_PATH=C:/pure-lang/.worktrees/todo-45-windows-pure-bonjour/build/task8-artifact-stage-alias/lib/pure/bonjour.pure' `
+        '-DSMOKE_SCRIPT=C:/pure-lang/.worktrees/todo-45-windows-pure-bonjour/pure-bonjour/tests/smoke.pure' `
+        -P pure-bonjour/cmake/RunSmokeTest.cmake
+      if (@(Get-Process -Name pure -ErrorAction SilentlyContinue).Count -ne $before) {
+        throw 'Pure process count changed'
+      }
+    } finally {
+      cmd.exe /d /c rmdir "$aliasNative"
+      if ($LASTEXITCODE -ne 0) { throw 'alias cleanup failed' }
+    }
+    if (Test-Path -LiteralPath 'build\task8-artifact-stage-alias') {
+      throw 'alias remains'
+    }
+    @(Get-Process -Name pure -ErrorAction SilentlyContinue).Count
+    ```
