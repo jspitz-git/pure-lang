@@ -596,9 +596,64 @@ Bonjour for Windows product.
 
   - The first installed-verifier command used the local build oracle and
     correctly failed `PACKAGE_HASH` because the remote build is byte-distinct.
-    After writing the clearly labeled temporary artifact-derived
-    `Remote oracle/PureBonjourExpected.sha256`, the exact remaining-check command
-    was:
+    The following exact command then created the clearly labeled temporary,
+    artifact-derived `Remote oracle/PureBonjourExpected.sha256`. The explicit
+    path array is ordinally sorted; hashing all eight extracted files includes
+    the inventory's independently checked self-hash.
+
+    ```powershell
+    $inspectionRoot = [IO.Path]::GetFullPath(
+      'C:\pure-lang\.worktrees\todo-45-windows-pure-bonjour\build\Task 8 artifact inspection Ž')
+    $extract = [IO.Path]::GetFullPath((Join-Path $inspectionRoot 'Extracted package Č'))
+    $oracleRoot = [IO.Path]::GetFullPath((Join-Path $inspectionRoot 'Remote oracle'))
+    $oraclePath = Join-Path $oracleRoot 'PureBonjourExpected.sha256'
+    $ownedPrefix = $inspectionRoot.TrimEnd('\') + '\'
+    if (-not $oracleRoot.StartsWith($ownedPrefix, [StringComparison]::OrdinalIgnoreCase)) {
+      throw "oracle escaped inspection root: $oracleRoot"
+    }
+    if (Test-Path -LiteralPath $oracleRoot) {
+      throw "oracle root already exists: $oracleRoot"
+    }
+    $oraclePaths = @(
+      'lib/pure/bonjour.dll',
+      'lib/pure/bonjour.pure',
+      'share/doc/pure-bonjour/COPYING',
+      'share/doc/pure-bonjour/COPYING.LESSER',
+      'share/doc/pure-bonjour/PureBonjourInventory.tsv',
+      'share/doc/pure-bonjour/README',
+      'share/doc/pure-bonjour/WINDOWS.md',
+      'share/doc/pure-bonjour/examples/bonjour_examp.pure'
+    )
+    $rows = foreach ($relative in $oraclePaths) {
+      $file = Join-Path $extract `
+        $relative.Replace('/', [IO.Path]::DirectorySeparatorChar)
+      if (-not (Test-Path -LiteralPath $file -PathType Leaf)) {
+        throw "artifact oracle input missing: $relative"
+      }
+      $sha = (Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash.ToLowerInvariant()
+      "$sha  $relative"
+    }
+    if ($rows.Count -ne 8) { throw "oracle row count: $($rows.Count)" }
+    New-Item -ItemType Directory -Path $oracleRoot | Out-Null
+    [IO.File]::WriteAllLines(
+      $oraclePath, $rows, [Text.UTF8Encoding]::new($false))
+    Get-Content -LiteralPath $oraclePath
+    ```
+
+    The eight emitted rows, in order, were:
+
+    ```text
+    2a869ba14a170351322cf11a51d8efb84c50fa2f9d65538324a9d55b4d394756  lib/pure/bonjour.dll
+    c8e5413133079718936c19fafbcb1c84d44af02f778f79f949657760b5bd2a75  lib/pure/bonjour.pure
+    0b383d5a63da644f628d99c33976ea6487ed89aaa59f0b3257992deac1171e6b  share/doc/pure-bonjour/COPYING
+    03c570a068086ee577dcd795519ea93462b2ed2fcb6dcc4dfce56a71a2fd6e5a  share/doc/pure-bonjour/COPYING.LESSER
+    7478c25b14d62976be7bf271cd10c91d01560e03d252c5aad653a5c89624170e  share/doc/pure-bonjour/PureBonjourInventory.tsv
+    562eb7733c773041151c40e3a10cae71b861ca11be98e4e26be6a7c02e01c831  share/doc/pure-bonjour/README
+    c6efd4807ba9b62d622865e7dcbf96d2c1c65eb0c3fc5098d841687927a9fe78  share/doc/pure-bonjour/WINDOWS.md
+    0953f2a348248c1f9fb50c357af3bcb989cc62d9658a143399bd56c7f26596cd  share/doc/pure-bonjour/examples/bonjour_examp.pure
+    ```
+
+    The exact remaining-check command was:
 
     ```powershell
     & 'C:/msys64/clang64/bin/cmake.exe' `
@@ -609,8 +664,32 @@ Bonjour for Windows product.
       -P pure-bonjour/cmake/VerifyInstalledPackage.cmake
     ```
 
-    The temporary oracle was removed after use and was never treated as the
-    independent hash authority.
+    The temporary oracle was removed after use with a fresh containment and
+    existence check:
+
+    ```powershell
+    $inspectionRoot = [IO.Path]::GetFullPath(
+      'C:\pure-lang\.worktrees\todo-45-windows-pure-bonjour\build\Task 8 artifact inspection Ž')
+    $oracleRoot = [IO.Path]::GetFullPath((Join-Path $inspectionRoot 'Remote oracle'))
+    $ownedPrefix = $inspectionRoot.TrimEnd('\') + '\'
+    if (-not $oracleRoot.StartsWith($ownedPrefix, [StringComparison]::OrdinalIgnoreCase)) {
+      throw "oracle escaped inspection root: $oracleRoot"
+    }
+    if (-not (Test-Path -LiteralPath $oracleRoot -PathType Container)) {
+      throw "temporary oracle root missing: $oracleRoot"
+    }
+    $oracleItem = Get-Item -LiteralPath $oracleRoot -Force
+    if (($oracleItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+      throw "temporary oracle root is a reparse point: $oracleRoot"
+    }
+    Remove-Item -LiteralPath $oracleRoot -Recurse
+    if (Test-Path -LiteralPath $oracleRoot) {
+      throw "temporary oracle root remains: $oracleRoot"
+    }
+    ```
+
+    It was only a temporary structural-check input derived from the artifact
+    under inspection and was never treated as the independent hash authority.
 
   - Exact independent PE/import/export audit command:
 
@@ -640,12 +719,26 @@ Bonjour for Windows product.
     if (Test-Path -LiteralPath $smokeRoot) { throw "smoke root already exists: $smokeRoot" }
     $targetNative = [IO.Path]::GetFullPath($target)
     $aliasNative = [IO.Path]::GetFullPath($alias)
+    $smokeNative = [IO.Path]::GetFullPath($smokeRoot)
+    $ownedRoot = [IO.Path]::GetFullPath(
+      'C:\pure-lang\.worktrees\todo-45-windows-pure-bonjour\build')
+    $ownedPrefix = $ownedRoot.TrimEnd('\') + '\'
+    foreach ($ownedPath in @($aliasNative, $smokeNative)) {
+      if (-not $ownedPath.StartsWith($ownedPrefix, [StringComparison]::OrdinalIgnoreCase)) {
+        throw "owned scratch escaped build root: $ownedPath"
+      }
+    }
     cmd.exe /d /c mklink /J "$aliasNative" "$targetNative"
     if ($LASTEXITCODE -ne 0) { throw 'alias creation failed' }
     try {
       $canonicalAlias = (Get-Item -LiteralPath $alias).Target
       "ALIAS_TARGET`t$canonicalAlias"
+      if ([IO.Path]::GetFullPath($canonicalAlias) -cne $targetNative) {
+        throw "alias target mismatch: $canonicalAlias"
+      }
       $before = @(Get-Process -Name pure -ErrorAction SilentlyContinue).Count
+      if ($before -ne 0) { throw "Pure processes before smoke: $before" }
+      "PURE_PROCESSES_BEFORE`t$before"
       Remove-Item Env:PURELIB -ErrorAction SilentlyContinue
       $purePrefix = 'C:\pure-lang\.worktrees\todo-45-windows-pure-bonjour\build\pure-sdk-regression-prefix'
       $safePath = "$purePrefix\bin;$env:SystemRoot\System32;$env:SystemRoot;$env:SystemRoot\System32\Wbem"
@@ -660,15 +753,33 @@ Bonjour for Windows product.
         '-DWRAPPER_PATH=C:/pure-lang/.worktrees/todo-45-windows-pure-bonjour/build/task8-artifact-stage-alias/lib/pure/bonjour.pure' `
         '-DSMOKE_SCRIPT=C:/pure-lang/.worktrees/todo-45-windows-pure-bonjour/pure-bonjour/tests/smoke.pure' `
         -P pure-bonjour/cmake/RunSmokeTest.cmake
-      if (@(Get-Process -Name pure -ErrorAction SilentlyContinue).Count -ne $before) {
-        throw 'Pure process count changed'
-      }
+      $after = @(Get-Process -Name pure -ErrorAction SilentlyContinue).Count
+      if ($after -ne 0) { throw "Pure processes after smoke: $after" }
+      "PURE_PROCESSES_AFTER`t$after"
     } finally {
+      if (Test-Path -LiteralPath $smokeRoot) {
+        $smokeItem = Get-Item -LiteralPath $smokeRoot -Force
+        if (($smokeItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+          throw "smoke root is a reparse point: $smokeRoot"
+        }
+        if (@(Get-ChildItem -LiteralPath $smokeRoot -Force).Count -ne 0) {
+          throw "smoke root is not empty: $smokeRoot"
+        }
+        Remove-Item -LiteralPath $smokeRoot
+      }
+      $aliasItem = Get-Item -LiteralPath $alias -Force
+      if (($aliasItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -eq 0 -or
+          [IO.Path]::GetFullPath($aliasItem.Target) -cne $targetNative) {
+        throw "alias changed before cleanup: $alias"
+      }
       cmd.exe /d /c rmdir "$aliasNative"
       if ($LASTEXITCODE -ne 0) { throw 'alias cleanup failed' }
     }
-    if (Test-Path -LiteralPath 'build\task8-artifact-stage-alias') {
-      throw 'alias remains'
+    if (Test-Path -LiteralPath $alias) { throw 'alias remains' }
+    if (Test-Path -LiteralPath $smokeRoot) { throw 'smoke root remains' }
+    $finalProcesses = @(Get-Process -Name pure -ErrorAction SilentlyContinue).Count
+    if ($finalProcesses -ne 0) {
+      throw "Pure processes after cleanup: $finalProcesses"
     }
-    @(Get-Process -Name pure -ErrorAction SilentlyContinue).Count
+    "PURE_PROCESSES_AFTER_CLEANUP`t$finalProcesses"
     ```
