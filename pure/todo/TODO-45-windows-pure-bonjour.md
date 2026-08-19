@@ -46,6 +46,31 @@ Bonjour for Windows product.
 
 ## Progress Log
 
+- 2026-08-19: Closed the second cancellation-lifetime review round locally;
+  the TODO remains open for renewed remote and artifact evidence.
+  - The three Microsoft cancel APIs treat `ERROR_CANCELLED` as an
+    already-cancelled operation that is safe to drain and clean up. Other
+    failures still retain the callback route, owning object, and SDK cancel
+    handle for retry.
+  - Deregistration dispatch failure, callback failure, and delayed completion
+    retain the registered service and its route. Explicit cleanup retries the
+    dispatch or finishes a previously accepted request instead of reporting a
+    false cleanup success.
+  - Browser cleanup now has one lock-claimed owner from cancellation through
+    final free. Resolver cancellation uses lock-protected
+    `ACTIVE`/`CANCELING`/`CANCELLED` ownership, so concurrent close calls and
+    duplicate PTR-delete callbacks cannot both detach or free the same state.
+  - Validation:
+    - `ctest.exe --test-dir build/pure-bonjour-final -R
+      "^pure-bonjour-lifecycle$" --repeat until-fail:20 --output-on-failure`
+      passed 20/20 runs in 57.50 seconds.
+    - `ctest.exe --test-dir build/pure-bonjour-final --output-on-failure -j 1`
+      passed 14/14 tests in 279.42 seconds, including lifecycle in 2.98 seconds
+      and the real loopback in 4.46 seconds.
+    - `cmake.exe --build build/pure-bonjour-final --target
+      verify-windows-dependencies` passed with 11 PE files, 126 import edges,
+      and exactly seven exports.
+
 - 2026-08-19: Corrected final-review cancellation-failure and route-drain
   blockers while keeping the TODO open for a fresh clean-runner/artifact gate.
   - A failed `DnsServiceRegisterCancel`, `DnsServiceBrowseCancel`, or
