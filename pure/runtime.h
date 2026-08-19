@@ -1726,7 +1726,7 @@ pure_expr *pure_readdir(const char *name);
 
 /* glob(3) support. */
 
-#include <glob.h>
+#include "glob.h"
 
 /* Decode the result of glob into a Pure list. */
 pure_expr *globlist(const glob_t *pglob);

@@ -43,6 +43,18 @@ add_custom_target(verify-windows-dependencies
 
 include(CTest)
 if(BUILD_TESTING)
+  add_executable(pure-bonjour-installed-sdk-consumer
+    tests/installed-sdk-consumer.c)
+  target_compile_features(pure-bonjour-installed-sdk-consumer PRIVATE c_std_11)
+  target_compile_options(pure-bonjour-installed-sdk-consumer PRIVATE
+    -Wall -Wextra -Werror)
+  target_link_libraries(pure-bonjour-installed-sdk-consumer PRIVATE
+    PkgConfig::PURE)
+  add_test(NAME pure-bonjour-installed-sdk-consumer
+    COMMAND pure-bonjour-installed-sdk-consumer)
+  set_tests_properties(pure-bonjour-installed-sdk-consumer PROPERTIES
+    LABELS "bonjour;unit;installed" TIMEOUT 10)
+
   add_test(NAME pure-bonjour-ci-contract
     COMMAND "${CMAKE_COMMAND}"
       "-DWORKFLOW=${CMAKE_CURRENT_SOURCE_DIR}/../.github/workflows/non-linux-release-validation.yml"
