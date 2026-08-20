@@ -549,6 +549,54 @@ if(BUILD_TESTING)
     PROPERTIES PASS_REGULAR_EXPRESSION "11(.|\n)*101"
   )
 
+  set(transaction_invalid_bc
+      "${PURE_BITCODE_FIXTURE_OUTPUT_DIR}/transaction-invalid.bc")
+  set(transaction_valid_bc
+      "${PURE_BITCODE_FIXTURE_OUTPUT_DIR}/transaction-valid.bc")
+  set(transaction_batch_object
+      "${CMAKE_CURRENT_BINARY_DIR}/test/bitcode/transaction-recovery.o")
+  set(transaction_batch_executable
+      "${CMAKE_CURRENT_BINARY_DIR}/test/bitcode/transaction-recovery${CMAKE_EXECUTABLE_SUFFIX}")
+  if(PURE_SANITIZERS)
+    set(transaction_test_timeout 300)
+  else()
+    set(transaction_test_timeout 120)
+  endif()
+  add_test(
+    NAME pure-bitcode-transaction-recovery
+    COMMAND
+      "${CMAKE_COMMAND}"
+      -DPURE_SH_EXECUTABLE=${PURE_SH_EXECUTABLE}
+      -DPURE_RUN_TEST=${CMAKE_CURRENT_BINARY_DIR}/run-test
+      -DPURE_FIXTURE_DIR=${PURE_BITCODE_FIXTURE_OUTPUT_DIR}
+      -DPURE_SCRIPT=${CMAKE_CURRENT_SOURCE_DIR}/test/bitcode/transaction-recovery.pure
+      -DPURE_C_COMPILER=${CMAKE_C_COMPILER}
+      -DPURE_C_SOURCE=${CMAKE_CURRENT_SOURCE_DIR}/test/bitcode/transaction-invalid.c
+      -DPURE_BITCODE_OUTPUT=${transaction_invalid_bc}
+      -DPURE_SECOND_C_SOURCE=${CMAKE_CURRENT_SOURCE_DIR}/test/bitcode/transaction-valid.c
+      -DPURE_SECOND_BITCODE_OUTPUT=${transaction_valid_bc}
+      -DPURE_BATCH_OBJECT=${transaction_batch_object}
+      -DPURE_BATCH_EXECUTABLE=${transaction_batch_executable}
+      -DPURE_CXX_COMPILER=${CMAKE_CXX_COMPILER}
+      -DPURE_MAIN_OBJECT=$<TARGET_OBJECTS:pure-main-object>
+      -DPURE_RUNTIME_DIR=${CMAKE_CURRENT_BINARY_DIR}
+      -DPURE_LD_LIB_PATH=${LD_LIB_PATH}
+      -DPURE_SANITIZERS=${PURE_SANITIZERS}
+      -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunPureBitcodeTest.cmake"
+  )
+  set_tests_properties(
+    pure-bitcode-transaction-recovery
+    PROPERTIES
+      LABELS "bitcode;batch;integration"
+      REQUIRED_FILES
+        "${CMAKE_CURRENT_SOURCE_DIR}/test/bitcode/transaction-invalid.c;${CMAKE_CURRENT_SOURCE_DIR}/test/bitcode/transaction-valid.c;${CMAKE_CURRENT_SOURCE_DIR}/test/bitcode/transaction-recovery.pure"
+      TIMEOUT ${transaction_test_timeout}
+      PASS_REGULAR_EXPRESSION
+        "pure_transaction_missing(.|\n)*42"
+      FAIL_REGULAR_EXPRESSION
+        "AddressSanitizer;LeakSanitizer;runtime error:"
+  )
+
   if(PURE_FAUST_EXECUTABLE)
     add_test(
       NAME pure-faust-lifecycle

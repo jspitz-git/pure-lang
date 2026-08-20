@@ -70,6 +70,7 @@ char *alloca ();
 #include <llvm/Passes/PassBuilder.h>
 #include <llvm/TargetParser/Triple.h>
 #include <llvm/Transforms/Utils/BasicBlockUtils.h>
+#include <llvm/Transforms/Utils/Cloning.h>
 
 #include "config.h"
 
@@ -4045,6 +4046,130 @@ static const char *incompatible_triple_component
   return 0;
 }
 
+static std::unique_ptr<llvm::Module> prepare_linked_module
+(const llvm::Module& live, std::unique_ptr<llvm::Module> imported,
+ string& error)
+{
+  std::unique_ptr<llvm::Module> candidate = llvm::CloneModule(live);
+  if (llvm::Linker::linkModules(*candidate, std::move(imported))) {
+    error = "Error linking bitcode module";
+    return 0;
+  }
+  string verification_error;
+  if (!verify_module(*candidate, verification_error)) {
+    error = "Invalid linked bitcode module: "+verification_error;
+    return 0;
+  }
+  return candidate;
+}
+
+static bool finalize_linked_bitcode
+(llvm::Module& linked, const list<string>& function_symbols,
+ const list<string>& data_symbols, const list<string>& alias_symbols,
+ const list<string>& ifunc_symbols, const bcdata_t& bitcode,
+ NewPassManagerState& pass_state, string& error)
+{
+  using namespace llvm;
+  for (list<string>::const_iterator it = function_symbols.begin();
+       it != function_symbols.end(); ++it) {
+    Function *function = linked.getFunction(*it);
+    if (!function || function->isDeclaration()) {
+      error = "Linked function symbol '"+*it+"' is missing";
+      return false;
+    }
+    function->setLinkage(Function::InternalLinkage);
+  }
+  for (list<string>::const_iterator it = data_symbols.begin();
+       it != data_symbols.end(); ++it) {
+    GlobalVariable *variable = linked.getGlobalVariable(*it);
+    if (!variable) {
+      error = "Linked data symbol '"+*it+"' is missing";
+      return false;
+    }
+    variable->setLinkage(GlobalVariable::InternalLinkage);
+  }
+  for (list<string>::const_iterator it = alias_symbols.begin();
+       it != alias_symbols.end(); ++it) {
+    GlobalAlias *alias = linked.getNamedAlias(*it);
+    if (!alias) {
+      error = "Linked alias symbol '"+*it+"' is missing";
+      return false;
+    }
+    alias->setLinkage(GlobalAlias::InternalLinkage);
+  }
+  for (list<string>::const_iterator it = ifunc_symbols.begin();
+       it != ifunc_symbols.end(); ++it) {
+    GlobalIFunc *ifunc = linked.getNamedIFunc(*it);
+    if (!ifunc) {
+      error = "Linked ifunc symbol '"+*it+"' is missing";
+      return false;
+    }
+    ifunc->setLinkage(GlobalIFunc::InternalLinkage);
+  }
+  for (list<bc_export_t>::const_iterator it = bitcode.exports.begin();
+       it != bitcode.exports.end(); ++it) {
+    Function *function = linked.getFunction(it->linked_name);
+    if (!function || function->isDeclaration()) {
+      error = "Linked export '"+it->source_name+"' is missing";
+      return false;
+    }
+    pass_state.optimize(*function);
+  }
+  string verification_error;
+  if (!verify_module(linked, verification_error)) {
+    error = "Invalid linked bitcode module: "+verification_error;
+    return false;
+  }
+  return true;
+}
+
+static bool prepare_linked_bitcode_exports
+(PureJit& jit, const llvm::Module& candidate, const bcdata_t& bitcode,
+ uint64_t& unit_counter, string& error)
+{
+  llvm::orc::ResourceTrackerSP tracker = jit.create_resource_tracker();
+  for (list<bc_export_t>::const_iterator it = bitcode.exports.begin();
+       it != bitcode.exports.end(); ++it) {
+    string exported_name = "$$orc.batch-bitcode."+
+      to_string(unit_counter++);
+    if (llvm::Error add_error = jit.add_module_copy
+          (tracker, candidate, it->linked_name, exported_name)) {
+      if (llvm::Error cleanup_error = tracker->remove())
+        add_error = llvm::joinErrors(std::move(add_error),
+                                    std::move(cleanup_error));
+      error = "Failed to submit batch bitcode export '"+it->source_name+
+        "': "+llvm::toString(std::move(add_error));
+      return false;
+    }
+    llvm::Expected<llvm::orc::ExecutorAddr> address = jit.lookup(exported_name);
+    if (!address) {
+      llvm::Error lookup_error = address.takeError();
+      if (llvm::Error cleanup_error = tracker->remove())
+        lookup_error = llvm::joinErrors(std::move(lookup_error),
+                                       std::move(cleanup_error));
+      error = "Failed to materialize bitcode export '"+it->source_name+
+        "': "+llvm::toString(std::move(lookup_error));
+      return false;
+    }
+  }
+  if (llvm::Error cleanup_error = tracker->remove()) {
+    error = "Failed to retire prepared batch bitcode exports: "+
+      llvm::toString(std::move(cleanup_error));
+    return false;
+  }
+  return true;
+}
+
+static bool commit_module_candidate
+(llvm::Module& live, std::unique_ptr<llvm::Module> imported, string& error)
+{
+  if (llvm::Linker::linkModules(live, std::move(imported))) {
+    error = "Error committing bitcode module";
+    return false;
+  }
+  return true;
+}
+
 bool interpreter::LoadBitcode(bool priv, const char *name, string *msg)
 {
   using namespace llvm;
@@ -4234,71 +4359,97 @@ bool interpreter::LoadBitcode(bool priv, const char *name, string *msg)
     return true;
   }
 
-  // Batch output still needs provider definitions in its emitted module.
-  // LLVM 22 consumes the source module regardless of link success.
-  if (Linker::linkModules(*module, std::move(M))) {
-    if (msg && msg->empty()) *msg = "Error linking bitcode module";
+  // Keep the live Module object stable: environments, wrappers, host globals,
+  // and wrapped expressions retain raw pointers into it. Prepare the complete
+  // result privately, including provider materialization, then repeat only the
+  // already-proven deterministic link as the commit step.
+  std::unique_ptr<Module> commit_source = CloneModule(*M);
+  string candidate_error;
+  std::unique_ptr<Module> candidate = prepare_linked_module
+    (*module, std::move(M), candidate_error);
+  if (!candidate || !finalize_linked_bitcode
+        (*candidate, function_symbols, data_symbols, alias_symbols,
+         ifunc_symbols, bitcode, *pass_state, candidate_error)) {
+    if (msg) *msg = candidate_error;
     bc_errmsg(name, msg);
     return false;
   }
-  string verification_error;
-  if (!verify_module(*module, verification_error)) {
-    if (msg) *msg = "Invalid linked bitcode module: "+verification_error;
-    bc_errmsg(name, msg);
-    return false;
-  }
-  for (list<string>::const_iterator it = function_symbols.begin();
-       it != function_symbols.end(); ++it) {
-    Function *function = module->getFunction(*it);
-    if (!function || function->isDeclaration()) {
-      if (msg) *msg = "Linked function symbol '"+*it+"' is missing";
-      bc_errmsg(name, msg);
-      return false;
-    }
-    function->setLinkage(Function::InternalLinkage);
-  }
-  for (list<string>::const_iterator it = data_symbols.begin();
-       it != data_symbols.end(); ++it) {
-    GlobalVariable *variable = module->getGlobalVariable(*it);
-    if (!variable) {
-      if (msg) *msg = "Linked data symbol '"+*it+"' is missing";
-      bc_errmsg(name, msg);
-      return false;
-    }
-    variable->setLinkage(GlobalVariable::InternalLinkage);
-  }
-  for (list<string>::const_iterator it = alias_symbols.begin();
-       it != alias_symbols.end(); ++it) {
-    GlobalAlias *alias = module->getNamedAlias(*it);
-    if (!alias) {
-      if (msg) *msg = "Linked alias symbol '"+*it+"' is missing";
-      bc_errmsg(name, msg);
-      return false;
-    }
-    alias->setLinkage(GlobalAlias::InternalLinkage);
-  }
-  for (list<string>::const_iterator it = ifunc_symbols.begin();
-       it != ifunc_symbols.end(); ++it) {
-    GlobalIFunc *ifunc = module->getNamedIFunc(*it);
-    if (!ifunc) {
-      if (msg) *msg = "Linked ifunc symbol '"+*it+"' is missing";
-      bc_errmsg(name, msg);
-      return false;
-    }
-    ifunc->setLinkage(GlobalIFunc::InternalLinkage);
-  }
-  // Resolve only the names copied before the source module was consumed.
+  // Preflight every deterministic declare_extern rejection without creating a
+  // symbol, wrapper, host global, or ExternInfo entry. Provider materialization
+  // below then proves the remaining ORC dependency boundary off-module.
   for (list<bc_export_t>::const_iterator it = bitcode.exports.begin();
        it != bitcode.exports.end(); ++it) {
-    Function *f = module->getFunction(it->linked_name);
-    if (!f || f->isDeclaration()) {
-      if (msg) *msg = "Linked export '"+it->source_name+"' is missing";
-      bc_errmsg(name, msg);
-      return false;
+    string absasid = make_absid(it->source_name);
+    symbol *existing_symbol = symtab.lookup(absasid);
+    if (!existing_symbol) continue;
+    if (existing_symbol->priv != priv) {
+      candidate_error = "symbol '"+it->source_name+"' already declared "+
+        (existing_symbol->priv ? "'private'" : "'public'");
+      break;
     }
-    pass_state->optimize(*f);
+    map<int32_t,ExternInfo>::const_iterator existing_external =
+      externals.find(existing_symbol->f);
+    env::const_iterator existing_definition =
+      globenv.find(existing_symbol->f);
+    if (existing_definition != globenv.end() &&
+        existing_external == externals.end()) {
+      candidate_error = "symbol '"+it->source_name+
+        "' is already defined as a Pure "+
+        ((existing_definition->second.t == env_info::fun) ? "function" :
+         (existing_definition->second.t == env_info::fvar) ? "variable" :
+         (existing_definition->second.t == env_info::cvar) ? "constant" :
+         "gizmo");
+      break;
+    }
+    if (existing_external != externals.end()) {
+      Function *provider = candidate->getFunction(it->linked_name);
+      assert(provider);
+      const ExternInfo& info = existing_external->second;
+      vector<llvm_const_Type*> argument_types;
+      argument_types.reserve(it->argtypes.size());
+      vector<CAbiType> abi_argument_types;
+      abi_argument_types.reserve(it->argtypes.size());
+      for (list<string>::const_iterator argument = it->argtypes.begin();
+           argument != it->argtypes.end(); ++argument) {
+        argument_types.push_back(named_type(*argument));
+        abi_argument_types.push_back(CAbiType(*argument));
+      }
+      llvm_const_Type *result_type = named_type(it->restype);
+      CAbiType abi_result_type(it->restype);
+      if (result_type != info.type || argument_types != info.argtypes ||
+          abi_result_type != info.abi_type ||
+          abi_argument_types != info.abi_argtypes ||
+          it->varargs != info.varargs ||
+          provider->getFunctionType()->getReturnType() != result_type ||
+          provider->getFunctionType()->params() !=
+            ArrayRef<llvm_const_Type*>(argument_types)) {
+        candidate_error = "declaration of extern function '"+
+          it->linked_name+"' does not match previous declaration";
+        break;
+      }
+    }
+  }
+  if (!candidate_error.empty() || !prepare_linked_bitcode_exports
+        (*ORC, *candidate, bitcode, orc_unit_counter, candidate_error)) {
+    if (msg) *msg = candidate_error;
+    bc_errmsg(name, msg);
+    return false;
+  }
+  if (!commit_module_candidate(*module, std::move(commit_source),
+                               candidate_error) ||
+      !finalize_linked_bitcode
+        (*module, function_symbols, data_symbols, alias_symbols,
+         ifunc_symbols, bitcode, *pass_state, candidate_error)) {
+    if (msg) *msg = candidate_error;
+    bc_errmsg(name, msg);
+    return false;
+  }
+  // Metadata publication happens only after the candidate has linked,
+  // verified, optimized, and materialized every imported provider.
+  for (list<bc_export_t>::const_iterator it = bitcode.exports.begin();
+       it != bitcode.exports.end(); ++it) {
     declare_extern(priv, it->linked_name, it->restype, it->argtypes,
-                   it->varargs, 0, it->source_name, false);
+                   it->varargs, 0, it->source_name, false, false);
   }
   bitcode.declare(*symtab.current_namespace, priv);
   loaded_bcs.emplace(module_key, std::move(bitcode));
@@ -15111,7 +15262,7 @@ Function *interpreter::declare_extern(int priv, string name, string restype,
     raw_ostream& out = outs();
     f->print(out);
   }
-  void *wrapper_address = compile_orc_function(f, "external");
+  void *wrapper_address = materialize ? compile_orc_function(f, "external") : 0;
   externals[sym.f] = ExternInfo(sym.f, name, type, argt, abi_type,
                                 abi_argtypes, f, varargs);
   externals[sym.f].fp = wrapper_address;
