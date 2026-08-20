@@ -779,9 +779,9 @@ if(BUILD_TESTING)
           "${reference_bc};${PURE_FAUST_FIXTURE_OUTPUT_DIR}/reload-a.bc;${PURE_FAUST_FIXTURE_OUTPUT_DIR}/reload-b.bc;${PURE_FAUST_FIXTURE_OUTPUT_DIR}/reload-float.bc;${PURE_FAUST_FIXTURE_OUTPUT_DIR}/reload-unresolved.bc;${PURE_FAUST_FIXTURE_OUTPUT_DIR}/lifecycle.pure"
         TIMEOUT ${faust_test_timeout}
         PASS_REGULAR_EXPRESSION
-          "faust_missing_test_dependency(.|\n)*FAUST-ABC 11 11 22(.|\n)*Module was previously loaded with the double sample ABI(.|\n)*FAUST-FLOAT 22(.|\n)*42"
+          "faust_missing_test_dependency(.|\n)*Cannot reload Faust module while DSP instances are live(.|\n)*FAUST-LIVE-C 11 11 11 22(.|\n)*Module was previously loaded with the double sample ABI(.|\n)*FAUST-FLOAT 22(.|\n)*42"
         FAIL_REGULAR_EXPRESSION
-          "failed to remove ORC compilation unit;AddressSanitizer;LeakSanitizer;runtime error:"
+          "failed to remove ORC compilation unit;failed to retire prepared Faust reload;failed to collect ORC Faust generation;AddressSanitizer;LeakSanitizer;runtime error:"
     )
   endif()
 
@@ -887,8 +887,17 @@ if(BUILD_TESTING)
         -DPURE_OUTPUT_NAME=pure-batch-faust.o
         -DPURE_FIXTURE_SOURCE=${PURE_FAUST_FIXTURE_OUTPUT_DIR}/reload-a.bc
         -DPURE_FIXTURE_DESTINATION=${PURE_FAUST_FIXTURE_OUTPUT_DIR}/batch_reload.bc
-        -DPURE_EXPECTED_OUTPUT=
+        "-DPURE_EXPECTED_OUTPUT=FAUST-BATCH-RUNTIME 11 11 22\n"
+        "-DPURE_EXPECTED_COMPILE_SENTINEL=FAUST-BATCH-COMPILE 11 11 22"
+        -DPURE_EXPECTED_DIAGNOSTIC=faust_missing_test_dependency
         -DPURE_OBJECT_INSPECTOR=${LLVM_TOOLS_BINARY_DIR}/llvm-readobj
+        -DPURE_RUN_EXECUTABLE=ON
+        -DPURE_BATCH_EXECUTABLE_NAME=pure-batch-faust
+        -DPURE_EXPECTED_CXX_COMPILER=${PURE_EXPECTED_BATCH_CXX}
+        -DPURE_VERIFY_CXX_OUTPUT=FALSE
+        -DPURE_MAIN_OBJECT=$<TARGET_OBJECTS:pure-main-object>
+        -DPURE_EXECUTABLE_SUFFIX=${CMAKE_EXECUTABLE_SUFFIX}
+        -DPURE_SANITIZERS=${PURE_SANITIZERS}
         -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunPureBatchTest.cmake"
     )
     set_tests_properties(
@@ -896,10 +905,10 @@ if(BUILD_TESTING)
       PROPERTIES
         LABELS "batch;faust;integration"
         REQUIRED_FILES
-          "${reference_bc};${PURE_FAUST_FIXTURE_OUTPUT_DIR}/reload-a.bc;${PURE_FAUST_FIXTURE_OUTPUT_DIR}/reload-b.bc;${PURE_FAUST_FIXTURE_OUTPUT_DIR}/batch.pure"
+          "${reference_bc};${PURE_FAUST_FIXTURE_OUTPUT_DIR}/reload-a.bc;${PURE_FAUST_FIXTURE_OUTPUT_DIR}/reload-b.bc;${PURE_FAUST_FIXTURE_OUTPUT_DIR}/reload-unresolved.bc;${PURE_FAUST_FIXTURE_OUTPUT_DIR}/batch.pure"
         TIMEOUT ${batch_test_timeout}
         FAIL_REGULAR_EXPRESSION
-          "failed to;AddressSanitizer;LeakSanitizer;runtime error:"
+          "failed to retire prepared Faust reload;failed to collect ORC Faust generation;AddressSanitizer;LeakSanitizer;runtime error:"
     )
   endif()
 

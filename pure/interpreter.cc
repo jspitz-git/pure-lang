@@ -219,6 +219,9 @@ struct CompilationUnitResources {
         ifuncs(std::move(ifuncs)) {}
   };
 
+  typedef list<FaustGeneration> FaustGenerations;
+  typedef map<string, FaustGenerations> FaustModules;
+
   struct FunctionGeneration {
     int32_t tag;
     uint64_t generation;
@@ -293,7 +296,7 @@ struct CompilationUnitResources {
   list<QuarantinedHostSymbol> quarantined_host_symbols;
   map<const llvm::Function*, CompiledFunction> functions;
   map<string, llvm::orc::ResourceTrackerSP> bitcode_modules;
-  map<string, list<FaustGeneration> > faust_modules;
+  FaustModules faust_modules;
   map<string, uint64_t> next_faust_generations;
   map<string, HostSymbol> host_symbols;
   map<uint32_t, FunctionGeneration> implementations;
@@ -604,20 +607,24 @@ struct CompilationUnitResources {
     return ++next_faust_generations[module_name];
   }
 
-  FaustGeneration *retain_faust
-  (string module_name, uint64_t generation,
-   llvm::orc::ResourceTrackerSP tracker,
-   list<llvm::Function*> functions = {},
-   list<llvm::GlobalVariable*> variables = {},
-   list<llvm::GlobalAlias*> aliases = {},
-   list<llvm::GlobalIFunc*> ifuncs = {})
+  FaustGeneration *publish_prepared_faust
+  (FaustModules& prepared, const string& module_name) noexcept
   {
-    assert(!module_name.empty() && generation && tracker);
-    list<FaustGeneration>& generations = faust_modules[module_name];
-    generations.emplace_back
-      (generation, std::move(tracker), std::move(functions),
-       std::move(variables), std::move(aliases), std::move(ifuncs));
-    return &generations.back();
+    assert(prepared.size() == 1 &&
+           prepared.begin()->first == module_name &&
+           prepared.begin()->second.size() == 1);
+    FaustModules::iterator module = faust_modules.find(module_name);
+    if (module == faust_modules.end()) {
+      FaustModules::node_type node = prepared.extract(module_name);
+      FaustModules::insert_return_type inserted =
+        faust_modules.insert(std::move(node));
+      assert(inserted.inserted);
+      module = inserted.position;
+    } else {
+      module->second.splice(module->second.end(), prepared.begin()->second);
+      prepared.erase(prepared.begin());
+    }
+    return &module->second.back();
   }
 
   FaustGeneration *current_faust(const string& module_name)
@@ -4376,11 +4383,14 @@ struct prepared_faust_reload {
   int tag;
   std::unique_ptr<batch_bitcode_transaction> wrapper_transaction;
   std::unique_ptr<llvm::Module> linked_candidate;
+  vector<pair<llvm::GlobalValue*, llvm::GlobalValue*> > declaration_bindings;
   map<string, void*> addresses;
   list<llvm::Function*> stable_functions;
   vector<pair<void**, void*> > bindings;
+  vector<pair<llvm::GlobalVariable*, llvm::Function*> > batch_initializers;
   list<int> required_symbols;
   llvm::orc::ResourceTrackerSP tracker;
+  CompilationUnitResources::FaustModules generation_holder;
   bcmap entry_holder;
   map<int, bcmap::iterator> dsp_entry_holder;
   set<string> namespace_holder;
@@ -4395,35 +4405,50 @@ struct prepared_faust_reload {
   prepared_faust_reload(const prepared_faust_reload&) = delete;
   prepared_faust_reload& operator=(const prepared_faust_reload&) = delete;
 
+  llvm::orc::ResourceTrackerSP *owned_tracker() noexcept
+  {
+    if (tracker) return &tracker;
+    if (generation_holder.empty() ||
+        generation_holder.begin()->second.empty())
+      return 0;
+    assert(generation_holder.size() == 1 &&
+           generation_holder.begin()->second.size() == 1);
+    llvm::orc::ResourceTrackerSP& retained =
+      generation_holder.begin()->second.front().tracker;
+    return retained ? &retained : 0;
+  }
+
   void discard_tracker(string *message = 0)
   {
-    if (!tracker) return;
-    if (llvm::Error cleanup_error = tracker->remove()) {
+    llvm::orc::ResourceTrackerSP *candidate = owned_tracker();
+    if (!candidate) return;
+    if (llvm::Error cleanup_error = (*candidate)->remove()) {
       string detail = llvm::toString(std::move(cleanup_error));
       owner.compilation_units->quarantine_tracker
-        (tracker, "failed to retire prepared Faust reload");
+        (*candidate, "failed to retire prepared Faust reload");
       if (message) *message += ": "+detail;
-      tracker.reset();
+      candidate->reset();
     } else {
-      tracker.reset();
+      candidate->reset();
     }
   }
 
   ~prepared_faust_reload()
   {
-    if (!tracker) return;
-    if (llvm::Error cleanup_error = tracker->remove()) {
+    llvm::orc::ResourceTrackerSP *candidate = owned_tracker();
+    if (!candidate) return;
+    if (llvm::Error cleanup_error = (*candidate)->remove()) {
       string detail = llvm::toString(std::move(cleanup_error));
       try {
         owner.compilation_units->quarantine_tracker
-          (tracker, "failed to retire prepared Faust reload");
-        tracker.reset();
+          (*candidate, "failed to retire prepared Faust reload");
       } catch (...) {
       }
+      candidate->reset();
       llvm::errs() << "failed to retire prepared Faust reload: "
                    << detail << '\n';
     } else {
-      tracker.reset();
+      candidate->reset();
     }
   }
 };
@@ -4432,6 +4457,133 @@ static string faust_logical_name(const string& module_name,
                                  const string& operation)
 {
   return "$$faust$"+module_name+"$"+operation;
+}
+
+static bool prepare_faust_module_transfer
+(llvm::Module& live, llvm::Module& provider,
+ vector<pair<llvm::GlobalValue*, llvm::GlobalValue*> >& declarations,
+ string& error)
+{
+  using namespace llvm;
+  auto prepare_value = [&](GlobalValue& source) {
+    if (!source.hasName()) return true;
+    GlobalValue *destination = live.getNamedValue(source.getName());
+    if (!source.isDeclaration()) {
+      if (!destination) return true;
+      error = "Prepared batch Faust definition collides with live symbol '"+
+        source.getName().str()+"'";
+      return false;
+    }
+    if (!destination) return true;
+    if (source.getValueID() != destination->getValueID() ||
+        source.getType() != destination->getType() ||
+        source.getValueType() != destination->getValueType()) {
+      error = "Prepared batch Faust declaration conflicts with live symbol '"+
+        source.getName().str()+"'";
+      return false;
+    }
+    Function *source_function = dyn_cast<Function>(&source);
+    Function *destination_function = dyn_cast<Function>(destination);
+    if (source_function &&
+        source_function->getCallingConv() !=
+          destination_function->getCallingConv()) {
+      error = "Prepared batch Faust declaration changes the calling "
+        "convention of '"+source.getName().str()+"'";
+      return false;
+    }
+    declarations.push_back(make_pair(&source, destination));
+    return true;
+  };
+  for (Function& function : provider)
+    if (!prepare_value(function)) return false;
+  for (GlobalVariable& variable : provider.globals())
+    if (!prepare_value(variable)) return false;
+  for (GlobalAlias& alias : provider.aliases())
+    if (!prepare_value(alias)) return false;
+  for (GlobalIFunc& ifunc : provider.ifuncs())
+    if (!prepare_value(ifunc)) return false;
+
+  auto prepare_comdat = [&](GlobalObject& object) {
+    if (!object.hasComdat()) return true;
+    const Comdat *source = object.getComdat();
+    Module::ComdatSymTabType::const_iterator destination =
+      live.getComdatSymbolTable().find(source->getName());
+    if (destination == live.getComdatSymbolTable().end() ||
+        destination->second.getSelectionKind() == source->getSelectionKind())
+      return true;
+    error = "Prepared batch Faust COMDAT conflicts with live group '"+
+      source->getName().str()+"'";
+    return false;
+  };
+  for (Function& function : provider)
+    if (!function.isDeclaration() && !prepare_comdat(function)) return false;
+  for (GlobalVariable& variable : provider.globals())
+    if (!variable.isDeclaration() && !prepare_comdat(variable)) return false;
+  return true;
+}
+
+static void commit_faust_module_transfer
+(llvm::Module& live, llvm::Module& provider,
+ const llvm::Module& linked_candidate,
+ const vector<pair<llvm::GlobalValue*, llvm::GlobalValue*> >& declarations)
+{
+  using namespace llvm;
+  // The candidate has already proved the module-level assembly and flags.
+  // Apply those non-reporting properties before transferring the exact
+  // provider nodes whose addresses are retained by the Faust generation.
+  live.setModuleInlineAsm(linked_candidate.getModuleInlineAsm());
+  if (NamedMDNode *flags = live.getNamedMetadata("llvm.module.flags"))
+    live.eraseNamedMetadata(flags);
+  if (const NamedMDNode *flags =
+        linked_candidate.getNamedMetadata("llvm.module.flags")) {
+    NamedMDNode *destination =
+      live.getOrInsertNamedMetadata("llvm.module.flags");
+    for (unsigned i = 0; i < flags->getNumOperands(); ++i)
+      destination->addOperand(flags->getOperand(i));
+  }
+  for (const NamedMDNode& metadata : provider.named_metadata()) {
+    if (metadata.getName() == "llvm.module.flags") continue;
+    NamedMDNode *destination =
+      live.getOrInsertNamedMetadata(metadata.getName());
+    for (unsigned i = 0; i < metadata.getNumOperands(); ++i)
+      destination->addOperand(metadata.getOperand(i));
+  }
+
+  for (vector<pair<GlobalValue*, GlobalValue*> >::const_iterator binding =
+         declarations.begin(); binding != declarations.end(); ++binding) {
+    binding->first->replaceAllUsesWith(binding->second);
+    binding->first->eraseFromParent();
+  }
+
+  auto bind_comdat = [&](GlobalObject& object) {
+    if (!object.hasComdat()) return;
+    Comdat *source = object.getComdat();
+    Comdat *destination = live.getOrInsertComdat(source->getName());
+    destination->setSelectionKind(source->getSelectionKind());
+    object.setComdat(destination);
+  };
+  for (Function& function : provider)
+    if (!function.isDeclaration()) bind_comdat(function);
+  for (GlobalVariable& variable : provider.globals())
+    if (!variable.isDeclaration()) bind_comdat(variable);
+
+  live.getFunctionList().splice(live.getFunctionList().end(),
+                                provider.getFunctionList());
+  while (!provider.global_empty()) {
+    GlobalVariable *variable = &*provider.global_begin();
+    provider.removeGlobalVariable(variable);
+    live.insertGlobalVariable(variable);
+  }
+  while (!provider.alias_empty()) {
+    GlobalAlias *alias = &*provider.alias_begin();
+    provider.removeAlias(alias);
+    live.insertAlias(alias);
+  }
+  while (!provider.ifunc_empty()) {
+    GlobalIFunc *ifunc = &*provider.ifunc_begin();
+    provider.removeIFunc(ifunc);
+    live.insertIFunc(ifunc);
+  }
 }
 
 static std::unique_ptr<prepared_faust_reload> prepare_faust_reload
@@ -4585,15 +4737,23 @@ static std::unique_ptr<prepared_faust_reload> prepare_faust_reload
     prepared->linked_candidate = prepare_linked_module
       (*owner.module, CloneModule(*reload.provider), error, "Faust");
     if (!prepared->linked_candidate) return 0;
+    if (!prepare_faust_module_transfer
+          (*owner.module, *reload.provider,
+           prepared->declaration_bindings, error))
+      return 0;
     materialization_module = prepared->linked_candidate.get();
-    prepared->generation_functions.assign
-      (reload.owned_functions.size(), (Function*)0);
-    prepared->generation_variables.assign
-      (reload.owned_variables.size(), (GlobalVariable*)0);
-    prepared->generation_aliases.assign
-      (reload.owned_aliases.size(), (GlobalAlias*)0);
-    prepared->generation_ifuncs.assign
-      (reload.owned_ifuncs.size(), (GlobalIFunc*)0);
+    for (Function& function : *reload.provider)
+      if (!function.isDeclaration())
+        prepared->generation_functions.push_back(&function);
+    for (GlobalVariable& variable : reload.provider->globals())
+      if (!variable.isDeclaration())
+        prepared->generation_variables.push_back(&variable);
+    for (GlobalAlias& alias : reload.provider->aliases())
+      if (!alias.isDeclaration())
+        prepared->generation_aliases.push_back(&alias);
+    for (GlobalIFunc& ifunc : reload.provider->ifuncs())
+      if (!ifunc.isDeclaration())
+        prepared->generation_ifuncs.push_back(&ifunc);
   }
 
   prepared->tracker = owner.ORC->create_resource_tracker();
@@ -4666,6 +4826,28 @@ static std::unique_ptr<prepared_faust_reload> prepare_faust_reload
     }
     prepared->bindings.push_back
       (make_pair(target, prepared->addresses.find(*operation)->second));
+    if (owner.compiling) {
+      Function *physical = reload.provider->getFunction
+        (reload.exported_functions.find(*operation)->second);
+      assert(physical && !physical->isDeclaration());
+      prepared->batch_initializers.push_back(make_pair(slot, physical));
+    }
+  }
+  try {
+    CompilationUnitResources::FaustGenerations& generations =
+      prepared->generation_holder[reload.module_name];
+    generations.emplace_back
+      (reload.generation, prepared->tracker,
+       std::move(prepared->generation_functions),
+       std::move(prepared->generation_variables),
+       std::move(prepared->generation_aliases),
+       std::move(prepared->generation_ifuncs));
+    prepared->tracker.reset();
+  } catch (const std::exception& retain_error) {
+    error = "Failed to prepare Faust generation ownership: "+
+      string(retain_error.what());
+    prepared->discard_tracker(&error);
+    return 0;
   }
   return prepared;
 }
@@ -4691,72 +4873,27 @@ static bool commit_faust_reload(prepared_faust_reload&& prepared,
     }
   }
 
-  CompilationUnitResources::FaustGeneration *generation = 0;
-  if (reload.modified) {
-    try {
-      generation = owner.compilation_units->retain_faust
-        (reload.module_name, reload.generation, prepared.tracker,
-         std::move(prepared.generation_functions),
-         std::move(prepared.generation_variables),
-         std::move(prepared.generation_aliases),
-         std::move(prepared.generation_ifuncs));
-    } catch (const std::exception& retain_error) {
-      error = "Failed to retain Faust generation: "+
-        string(retain_error.what());
-      prepared.discard_tracker(&error);
-      return false;
-    }
-    prepared.tracker.reset();
-  }
-
   if (owner.compiling && reload.modified) {
-    if (Linker::linkModules(*owner.module, std::move(reload.provider)))
-      report_fatal_error
-        ("batch Faust commit diverged from its verified replay link");
-
-    list<string>::const_iterator function_name =
-      reload.owned_functions.begin();
-    for (list<Function*>::iterator function = generation->functions.begin();
-         function != generation->functions.end();
-         ++function, ++function_name) {
-      *function = owner.module->getFunction(*function_name);
-      if (!*function || (*function)->isDeclaration())
-        report_fatal_error
-          ("prepared batch Faust function disappeared during commit");
-    }
-    list<string>::const_iterator variable_name =
-      reload.owned_variables.begin();
-    for (list<GlobalVariable*>::iterator variable =
-           generation->variables.begin();
-         variable != generation->variables.end();
-         ++variable, ++variable_name) {
-      *variable = owner.module->getGlobalVariable(*variable_name, true);
-      if (!*variable || (*variable)->isDeclaration())
-        report_fatal_error
-          ("prepared batch Faust global disappeared during commit");
-    }
-    list<string>::const_iterator alias_name = reload.owned_aliases.begin();
-    for (list<GlobalAlias*>::iterator alias = generation->aliases.begin();
-         alias != generation->aliases.end(); ++alias, ++alias_name) {
-      *alias = owner.module->getNamedAlias(*alias_name);
-      if (!*alias)
-        report_fatal_error
-          ("prepared batch Faust alias disappeared during commit");
-    }
-    list<string>::const_iterator ifunc_name = reload.owned_ifuncs.begin();
-    for (list<GlobalIFunc*>::iterator ifunc = generation->ifuncs.begin();
-         ifunc != generation->ifuncs.end(); ++ifunc, ++ifunc_name) {
-      *ifunc = owner.module->getNamedIFunc(*ifunc_name);
-      if (!*ifunc)
-        report_fatal_error
-          ("prepared batch Faust ifunc disappeared during commit");
-    }
-    string committed_verification_error;
-    if (!verify_module(*owner.module, committed_verification_error))
-      report_fatal_error
-        (Twine("prepared batch Faust module became invalid during commit: ")+
-         committed_verification_error);
+    assert(prepared.linked_candidate && reload.provider);
+    commit_faust_module_transfer
+      (*owner.module, *reload.provider, *prepared.linked_candidate,
+       prepared.declaration_bindings);
+    assert(reload.provider->empty() && reload.provider->global_empty() &&
+           reload.provider->alias_empty() && reload.provider->ifunc_empty());
+    for (vector<pair<GlobalVariable*, Function*> >::const_iterator binding =
+           prepared.batch_initializers.begin();
+         binding != prepared.batch_initializers.end(); ++binding)
+      binding->first->setInitializer(binding->second);
   }
+
+  // From this point onward every operation consumes a preallocated node,
+  // splices a list, swaps state, or stores a pointer. Disarm wrapper rollback
+  // before generation pointers become globally reachable, then transfer the
+  // still-local tracker/generation record into CompilationUnitResources.
+  prepared.wrapper_transaction->commit();
+  if (reload.modified)
+    owner.compilation_units->publish_prepared_faust
+      (prepared.generation_holder, reload.module_name);
 
   bcmap::iterator module_entry;
   if (reload.loaded) {
@@ -4797,7 +4934,6 @@ static bool commit_faust_reload(prepared_faust_reload&& prepared,
     owner.namespaces.insert(std::move(node));
   }
   owner.required.splice(owner.required.end(), prepared.required_symbols);
-  prepared.wrapper_transaction->commit();
   owner.collect_pending_generations();
   return true;
 }
@@ -13730,9 +13866,15 @@ int interpreter::compiler(string out, list<string> libnames, string llcopts)
     // and update their initializations.
     string name = v.getName().str();
     if (is_faust_var(name)) {
-      Function *f = module->getFunction(name.substr(1));
-      assert(f);
-      v.setInitializer(f);
+      // Transactional batch Faust publication records the current physical
+      // generation directly. The legacy fallback is only for an uninitialized
+      // slot; replacing a committed physical initializer with the stable
+      // logical declaration would leave an undefined symbol in batch output.
+      if (!v.hasInitializer() || v.getInitializer()->isNullValue()) {
+        Function *f = module->getFunction(name.substr(1));
+        assert(f);
+        v.setInitializer(f);
+      }
       continue;
     }
     map<GlobalVariable*,Function*>::iterator jt = varmap.find(&v);

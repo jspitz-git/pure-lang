@@ -21,6 +21,27 @@ if(DEFINED PURE_FIXTURE_SOURCE OR DEFINED PURE_FIXTURE_DESTINATION)
   file(COPY_FILE "${PURE_FIXTURE_SOURCE}" "${PURE_FIXTURE_DESTINATION}")
 endif()
 
+function(assert_compile_output output_value)
+  if(DEFINED PURE_EXPECTED_COMPILE_SENTINEL AND
+     NOT "${PURE_EXPECTED_COMPILE_SENTINEL}" STREQUAL "")
+    string(REPLACE "\r\n" "\n" normalized_output "${output_value}")
+    string(FIND "\n${normalized_output}\n"
+      "\n${PURE_EXPECTED_COMPILE_SENTINEL}\n" sentinel_position)
+    if(sentinel_position EQUAL -1)
+      message(FATAL_ERROR
+        "Pure batch compilation omitted the exact expected sentinel"
+      )
+    endif()
+  endif()
+  if(DEFINED PURE_EXPECTED_DIAGNOSTIC AND
+     NOT "${PURE_EXPECTED_DIAGNOSTIC}" STREQUAL "" AND
+     NOT "${output_value}" MATCHES "${PURE_EXPECTED_DIAGNOSTIC}")
+    message(FATAL_ERROR
+      "Pure batch compilation omitted the expected diagnostic"
+    )
+  endif()
+endfunction()
+
 set(output "${PURE_BUILD_DIR}/test/${PURE_OUTPUT_NAME}")
 file(REMOVE "${output}")
 
@@ -42,14 +63,16 @@ execute_process(
     "${PURE_EXECUTABLE}" --norc --noprelude -c
     "${PURE_SCRIPT}" -o "${output}"
   RESULT_VARIABLE result
-  OUTPUT_VARIABLE command_output
-  ERROR_VARIABLE command_output
+  OUTPUT_VARIABLE command_stdout
+  ERROR_VARIABLE command_stderr
 )
+set(command_output "${command_stdout}${command_stderr}")
 
 message("${command_output}")
 if(NOT result EQUAL 0)
   message(FATAL_ERROR "Pure batch compilation exited with status ${result}")
 endif()
+assert_compile_output("${command_output}")
 if(NOT EXISTS "${output}")
   message(FATAL_ERROR "Pure batch compilation did not create ${output}")
 endif()
@@ -91,7 +114,15 @@ if(PURE_RUN_EXECUTABLE)
     message(FATAL_ERROR "Missing Pure batch executable arguments")
   endif()
   file(COPY_FILE "${PURE_MAIN_OBJECT}" "${PURE_BUILD_DIR}/test/pure_main.o")
-  set(executable "${PURE_BUILD_DIR}/test/pure-batch-program${PURE_EXECUTABLE_SUFFIX}")
+  if(DEFINED PURE_FIXTURE_SOURCE)
+    file(COPY_FILE "${PURE_FIXTURE_SOURCE}" "${PURE_FIXTURE_DESTINATION}")
+  endif()
+  if(NOT DEFINED PURE_BATCH_EXECUTABLE_NAME)
+    set(PURE_BATCH_EXECUTABLE_NAME pure-batch-program)
+  endif()
+  set(executable
+    "${PURE_BUILD_DIR}/test/${PURE_BATCH_EXECUTABLE_NAME}${PURE_EXECUTABLE_SUFFIX}"
+  )
   file(REMOVE "${executable}")
   if(PURE_SANITIZERS)
     set(
@@ -109,22 +140,26 @@ if(PURE_RUN_EXECUTABLE)
       "${PURE_EXECUTABLE}" --norc --noprelude -v0100 -c
       "${PURE_SCRIPT}" -o "${executable}"
     RESULT_VARIABLE link_result
-    OUTPUT_VARIABLE link_output
-    ERROR_VARIABLE link_output
+    OUTPUT_VARIABLE link_stdout
+    ERROR_VARIABLE link_stderr
   )
+  set(link_output "${link_stdout}${link_stderr}")
   message("${link_output}")
   if(NOT link_result EQUAL 0 OR NOT EXISTS "${executable}")
     message(FATAL_ERROR "Pure batch executable link failed with status ${link_result}")
   endif()
-  set(normalized_link_output "${link_output}")
-  set(normalized_expected_cxx "${PURE_EXPECTED_CXX_COMPILER}")
-  string(REPLACE "\\" "/" normalized_link_output "${normalized_link_output}")
-  string(REPLACE "\\" "/" normalized_expected_cxx "${normalized_expected_cxx}")
-  string(FIND "${normalized_link_output}" "${normalized_expected_cxx}" compiler_position)
-  if(compiler_position EQUAL -1)
-    message(FATAL_ERROR
-      "Pure batch executable did not use ${PURE_EXPECTED_CXX_COMPILER}"
-    )
+  assert_compile_output("${link_output}")
+  if(NOT DEFINED PURE_VERIFY_CXX_OUTPUT OR PURE_VERIFY_CXX_OUTPUT)
+    set(normalized_link_output "${link_output}")
+    set(normalized_expected_cxx "${PURE_EXPECTED_CXX_COMPILER}")
+    string(REPLACE "\\" "/" normalized_link_output "${normalized_link_output}")
+    string(REPLACE "\\" "/" normalized_expected_cxx "${normalized_expected_cxx}")
+    string(FIND "${normalized_link_output}" "${normalized_expected_cxx}" compiler_position)
+    if(compiler_position EQUAL -1)
+      message(FATAL_ERROR
+        "Pure batch executable did not use ${PURE_EXPECTED_CXX_COMPILER}"
+      )
+    endif()
   endif()
   execute_process(
     COMMAND

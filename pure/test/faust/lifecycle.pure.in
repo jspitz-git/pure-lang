@@ -19,17 +19,22 @@ using "dsp:@PURE_FAUST_FIXTURE_OUTPUT_DIR@/lifecycle_reload";
 let a_after_failed_b = lifecycle_reload::getNumInputs first;
 if a_after_failed_b == 11 then ()
 else throw "failed Faust B reload damaged the live A instance";
-lifecycle_reload::delete first;
 
 system "sleep 1";
 system "cp @PURE_FAUST_FIXTURE_OUTPUT_DIR@/lifecycle-c.bc @PURE_FAUST_FIXTURE_OUTPUT_DIR@/lifecycle_reload.bc";
+using "dsp:@PURE_FAUST_FIXTURE_OUTPUT_DIR@/lifecycle_reload";
+let a_after_rejected_c = lifecycle_reload::getNumInputs first;
+if a_after_rejected_c == 11 then ()
+else throw "rejected live-instance Faust C reload damaged A";
+lifecycle_reload::delete first;
+
 using "dsp:@PURE_FAUST_FIXTURE_OUTPUT_DIR@/lifecycle_reload";
 let second = lifecycle_reload::newinit 48000;
 let c_after_failed_b = lifecycle_reload::getNumInputs second;
 if c_after_failed_b == 22 then ()
 else throw "valid Faust C did not replace A after failed B";
 lifecycle_reload::delete second;
-puts "FAUST-ABC 11 11 22";
+puts "FAUST-LIVE-C 11 11 11 22";
 
 system "sleep 1";
 system "cp @PURE_FAUST_FIXTURE_OUTPUT_DIR@/lifecycle-float.bc @PURE_FAUST_FIXTURE_OUTPUT_DIR@/lifecycle_reload.bc";

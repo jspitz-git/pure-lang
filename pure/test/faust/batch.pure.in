@@ -1,11 +1,31 @@
 extern int system(char *command);
+extern int printf(char *format, int a, int b, int c);
 
 using "dsp:@PURE_FAUST_FIXTURE_OUTPUT_DIR@/reference";
-batch_faust_inputs = reference::getNumInputs (reference::newinit 48000);
+const batch_faust_inputs =
+  reference::getNumInputs (reference::newinit 48000);
 
 using "dsp:@PURE_FAUST_FIXTURE_OUTPUT_DIR@/batch_reload";
-batch_reload_before = batch_reload::getNumInputs (batch_reload::newinit 48000);
-batch_reload_wait = system "sleep 1";
-batch_reload_copy = system "cp @PURE_FAUST_FIXTURE_OUTPUT_DIR@/reload-b.bc @PURE_FAUST_FIXTURE_OUTPUT_DIR@/batch_reload.bc";
+const batch_a_before =
+  batch_reload::getNumInputs (batch_reload::newinit 48000);
+const 11 = batch_a_before;
+
+const system "sleep 1";
+const system "cp @PURE_FAUST_FIXTURE_OUTPUT_DIR@/reload-unresolved.bc @PURE_FAUST_FIXTURE_OUTPUT_DIR@/batch_reload.bc";
 using "dsp:@PURE_FAUST_FIXTURE_OUTPUT_DIR@/batch_reload";
-batch_reload_after = batch_reload::getNumInputs (batch_reload::newinit 48000);
+const batch_a_after_failed_b =
+  batch_reload::getNumInputs (batch_reload::newinit 48000);
+const 11 = batch_a_after_failed_b;
+
+const system "sleep 1";
+const system "cp @PURE_FAUST_FIXTURE_OUTPUT_DIR@/reload-b.bc @PURE_FAUST_FIXTURE_OUTPUT_DIR@/batch_reload.bc";
+using "dsp:@PURE_FAUST_FIXTURE_OUTPUT_DIR@/batch_reload";
+const batch_c_after_failed_b =
+  batch_reload::getNumInputs (batch_reload::newinit 48000);
+const 22 = batch_c_after_failed_b;
+
+const printf "FAUST-BATCH-COMPILE %d %d %d\n"
+  batch_a_before batch_a_after_failed_b batch_c_after_failed_b;
+main = printf "FAUST-BATCH-RUNTIME %d %d %d\n"
+  batch_a_before batch_a_after_failed_b batch_c_after_failed_b;
+main;
