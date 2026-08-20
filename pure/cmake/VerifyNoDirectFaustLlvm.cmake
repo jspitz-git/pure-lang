@@ -5,10 +5,26 @@ endif()
 file(REAL_PATH "${PURE_REPOSITORY_ROOT}" repository_root)
 file(REAL_PATH "${CMAKE_CURRENT_LIST_FILE}" contract_file)
 file(TO_CMAKE_PATH "${contract_file}" contract_file)
-file(GLOB_RECURSE candidates LIST_DIRECTORIES FALSE
-  "${repository_root}/*")
+execute_process(
+  COMMAND git -C "${repository_root}" ls-files --cached
+  RESULT_VARIABLE git_result
+  OUTPUT_VARIABLE tracked_output
+  ERROR_VARIABLE git_error
+)
+if(NOT git_result EQUAL 0)
+  string(STRIP "${git_error}" git_error)
+  message(FATAL_ERROR
+    "Unable to enumerate tracked repository files with git ls-files: ${git_error}")
+endif()
+string(REPLACE "\r\n" "\n" tracked_output "${tracked_output}")
+string(REPLACE ";" "\\;" tracked_output "${tracked_output}")
+string(REPLACE "\n" ";" tracked_files "${tracked_output}")
 set(violations)
-foreach(candidate IN LISTS candidates)
+foreach(relative IN LISTS tracked_files)
+  if(relative STREQUAL "")
+    continue()
+  endif()
+  set(candidate "${repository_root}/${relative}")
   file(REAL_PATH "${candidate}" normalized)
   file(TO_CMAKE_PATH "${normalized}" normalized)
   if(normalized MATCHES "/(build|\\.git|\\.superpowers)/" OR
