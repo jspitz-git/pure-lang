@@ -68,8 +68,8 @@ if(BUILD_TESTING)
 
   set(PURE_BITCODE_FIXTURE_OUTPUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/test/bitcode")
   set(PURE_BITCODE_FIXTURE_OUTPUTS)
-  foreach(fixture basic declaration-two duplicate-a duplicate-b unresolved
-                  varargs)
+  foreach(fixture basic declaration-one declaration-two duplicate-a duplicate-b
+                  unresolved varargs)
     set(source "${CMAKE_CURRENT_SOURCE_DIR}/test/bitcode/${fixture}.c")
     set(output "${PURE_BITCODE_FIXTURE_OUTPUT_DIR}/${fixture}.bc")
     set(disassembly "${PURE_BITCODE_FIXTURE_OUTPUT_DIR}/${fixture}.ll")
@@ -645,27 +645,54 @@ if(BUILD_TESTING)
   )
 
   add_pure_bitcode_test(
-    declaration-first-retry declaration-first-retry.pure declaration-two.bc
+    declaration-first-retry declaration-first-retry.pure declaration-one.bc
   )
   set_tests_properties(
     pure-bitcode-declaration-first-retry
     PROPERTIES
-      ENVIRONMENT "PURE_TEST_DECLARATION_FAILURE=bitcode-first"
+      ENVIRONMENT
+        "PURE_TEST_DECLARATION_FAILURE=bitcode-first;PURE_TEST_WRAPPER_ROLLBACK=1"
       ENVIRONMENT_MODIFICATION
         "PURE_TEST_ORC_FAILURE=set:bitcode-first-remove"
       PASS_REGULAR_EXPRESSION
-        "injected second bitcode declaration failure(.|\n)*\\[\\](.|\n)*42"
+        "injected second bitcode declaration failure(.|\n)*first bitcode wrapper materialized(.|\n)*compiled function registry returned to baseline(.|\n)*\\[\\](.|\n)*\\[40,2\\](.|\n)*42"
+  )
+  set_property(
+    TEST pure-bitcode-declaration-first-retry APPEND PROPERTY REQUIRED_FILES
+    "${PURE_BITCODE_FIXTURE_OUTPUT_DIR}/declaration-two.bc"
   )
 
   add_pure_bitcode_test(
-    declaration-loaded-retry declaration-loaded-retry.pure declaration-two.bc
+    declaration-loaded-retry declaration-loaded-retry.pure declaration-one.bc
   )
   set_tests_properties(
     pure-bitcode-declaration-loaded-retry
     PROPERTIES
-      ENVIRONMENT "PURE_TEST_DECLARATION_FAILURE=bitcode-loaded"
+      ENVIRONMENT
+        "PURE_TEST_DECLARATION_FAILURE=bitcode-loaded;PURE_TEST_WRAPPER_ROLLBACK=1"
       PASS_REGULAR_EXPRESSION
-        "injected second bitcode declaration failure(.|\n)*\\[\\](.|\n)*42"
+        "7(.|\n)*injected second bitcode declaration failure(.|\n)*first bitcode wrapper materialized(.|\n)*compiled function registry returned to baseline(.|\n)*\\[\\](.|\n)*\\[40,2\\](.|\n)*42"
+  )
+  set_property(
+    TEST pure-bitcode-declaration-loaded-retry APPEND PROPERTY REQUIRED_FILES
+    "${PURE_BITCODE_FIXTURE_OUTPUT_DIR}/declaration-two.bc"
+  )
+
+  add_pure_bitcode_test(
+    declaration-wrapper-cleanup declaration-first-retry.pure declaration-one.bc
+  )
+  set_tests_properties(
+    pure-bitcode-declaration-wrapper-cleanup
+    PROPERTIES
+      ENVIRONMENT
+        "PURE_TEST_DECLARATION_FAILURE=bitcode-first;PURE_TEST_WRAPPER_ROLLBACK=1;PURE_TEST_ORC_FAILURE=bitcode-wrapper-remove-persistent;PURE_TEST_CLEAN_SHUTDOWN=1"
+      TIMEOUT 15
+      PASS_REGULAR_EXPRESSION
+        "injected second bitcode declaration failure(.|\n)*first bitcode wrapper materialized(.|\n)*compiled function registry returned to baseline(.|\n)*injected persistent ORC tracker removal failure(.|\n)*\\[40,2\\](.|\n)*42(.|\n)*failed to remove ORC compilation unit: injected persistent ORC tracker removal failure"
+  )
+  set_property(
+    TEST pure-bitcode-declaration-wrapper-cleanup APPEND PROPERTY REQUIRED_FILES
+    "${PURE_BITCODE_FIXTURE_OUTPUT_DIR}/declaration-two.bc"
   )
 
   add_pure_bitcode_test(

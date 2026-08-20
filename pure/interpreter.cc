@@ -740,6 +740,28 @@ struct CompilationUnitResources {
     return previous_tracker;
   }
 
+  llvm::Error retire_function
+  (const llvm::Function *function, const char *failure_mode = 0) noexcept
+  {
+    map<const llvm::Function*, CompiledFunction>::iterator compiled =
+      functions.find(function);
+    if (compiled == functions.end())
+      return llvm::createStringError
+        ("compiled wrapper registry entry disappeared before rollback");
+    TrackerOwnerSP tracker = compiled->second.tracker;
+#ifdef PURE_ENABLE_TEST_HOOKS
+    if (failure_mode &&
+        std::strcmp(failure_mode, "bitcode-wrapper-remove") == 0 &&
+        orc_failure_requested("bitcode-wrapper-remove-persistent"))
+      tracker->persistent_failure = true;
+#endif
+    llvm::Error error = remove_tracker(tracker, failure_mode);
+    /* The stable tracker_owners list keeps failed cleanup ownership. Never
+       retain a registry key whose Function object is about to be erased. */
+    functions.erase(compiled);
+    return error;
+  }
+
   void publish_bitcode(BitcodeModules::node_type record) noexcept
   {
     assert(!record.empty() && record.mapped() &&
@@ -2264,7 +2286,7 @@ interpreter::interpreter(int _argc, char **_argv)
     result(0), lastres(0), mem(0), exps(0), tmps(0), freectr(0),
     orc_unit_counter(0), specials_only(false), module(0),
     ORC(0), compilation_units(0), pass_state(0), host_global_failure_mode(0),
-    active_jit_calls(0), astk(0), sstk(__sstk),
+    active_bitcode_transaction(0), active_jit_calls(0), astk(0), sstk(__sstk),
     stoplevel(0), tracelevel(-1), debug_skip(false), trace_skip(false),
     fptr(__fptr), tags(0), line(0), column(0), tags_init(false),
     declare_op(false)
@@ -2295,7 +2317,7 @@ interpreter::interpreter(int32_t nsyms, char *syms,
     result(0), lastres(0), mem(0), exps(0), tmps(0), freectr(0),
     orc_unit_counter(0), specials_only(false), module(0),
     ORC(0), compilation_units(0), pass_state(0), host_global_failure_mode(0),
-    active_jit_calls(0), astk(0), sstk(*_sstk),
+    active_bitcode_transaction(0), active_jit_calls(0), astk(0), sstk(*_sstk),
     stoplevel(0), tracelevel(-1), debug_skip(false), trace_skip(false),
     fptr(*(Env**)_fptr), tags(0), line(0), column(0), tags_init(false),
     declare_op(false)
@@ -4393,6 +4415,7 @@ class batch_bitcode_transaction {
   };
 
   interpreter& owner;
+  batch_bitcode_transaction *previous_transaction;
   int32_t symbol_checkpoint;
   int32_t last_tag;
   set<int> defined;
@@ -4402,7 +4425,10 @@ class batch_bitcode_transaction {
   vector<symbol_snapshot> symbols;
   set<const llvm::GlobalValue*> globals;
   set<string> pointer_types;
+  size_t function_registry_checkpoint;
+  vector<llvm::Function*> materialized_wrappers;
   bool committed;
+  bool rolled_back;
 
   void release_snapshots() noexcept
   {
@@ -4473,12 +4499,58 @@ class batch_bitcode_transaction {
       (*value)->eraseFromParent();
   }
 
-public:
-  explicit batch_bitcode_transaction(interpreter& owner)
-    : owner(owner), symbol_checkpoint(owner.symtab.nsyms()),
-      last_tag(owner.last_tag), defined(owner.defined),
-      nodefined(owner.nodefined), externals(owner.externals), committed(false)
+  llvm::Error rollback_materialized_wrappers
+  (const char *failure_mode, string *evidence) noexcept
   {
+    llvm::Error errors = llvm::Error::success();
+    bool materialized = !materialized_wrappers.empty();
+    for (vector<llvm::Function*>::const_iterator wrapper =
+           materialized_wrappers.begin();
+         wrapper != materialized_wrappers.end(); ++wrapper)
+      materialized &= owner.compilation_units->function_address(*wrapper) != 0;
+    for (vector<llvm::Function*>::reverse_iterator wrapper =
+           materialized_wrappers.rbegin();
+         wrapper != materialized_wrappers.rend(); ++wrapper)
+      errors = llvm::joinErrors
+        (std::move(errors), owner.compilation_units->retire_function
+         (*wrapper, failure_mode));
+    bool baseline_restored =
+      owner.compilation_units->functions.size() ==
+        function_registry_checkpoint;
+#ifdef PURE_ENABLE_TEST_HOOKS
+    if (getenv("PURE_TEST_WRAPPER_ROLLBACK")) {
+      if (!materialized)
+        errors = llvm::joinErrors
+          (std::move(errors), llvm::createStringError
+           ("first bitcode wrapper was not materialized before rollback"));
+      if (!baseline_restored)
+        errors = llvm::joinErrors
+          (std::move(errors), llvm::createStringError
+           ("compiled function registry did not return to its baseline"));
+      if (evidence && materialized && baseline_restored)
+        *evidence = "first bitcode wrapper materialized; "
+          "compiled function registry returned to baseline";
+    }
+#else
+    (void)materialized;
+    (void)baseline_restored;
+    (void)evidence;
+#endif
+    materialized_wrappers.clear();
+    return errors;
+  }
+
+public:
+  explicit batch_bitcode_transaction(interpreter& owner,
+                                     size_t wrapper_capacity = 0)
+    : owner(owner), previous_transaction(owner.active_bitcode_transaction),
+      symbol_checkpoint(owner.symtab.nsyms()),
+      last_tag(owner.last_tag), defined(owner.defined),
+      nodefined(owner.nodefined), externals(owner.externals),
+      function_registry_checkpoint(owner.compilation_units->functions.size()),
+      committed(false), rolled_back(false)
+  {
+    materialized_wrappers.reserve(wrapper_capacity);
     for (map<int32_t, GlobalVar>::const_iterator binding =
            owner.globalvars.begin(); binding != owner.globalvars.end();
          ++binding)
@@ -4496,10 +4568,11 @@ public:
     for (map<string, int>::const_iterator type = owner.pointer_tags.begin();
          type != owner.pointer_tags.end(); ++type)
       pointer_types.insert(type->first);
+    owner.active_bitcode_transaction = this;
   }
 
   batch_bitcode_transaction(interpreter& owner, const bcdata_t& bitcode)
-    : batch_bitcode_transaction(owner)
+    : batch_bitcode_transaction(owner, bitcode.exports.size())
   {
     for (list<bc_export_t>::const_iterator export_ = bitcode.exports.begin();
          export_ != bitcode.exports.end(); ++export_) {
@@ -4531,8 +4604,30 @@ public:
     owner.host_global_failure_mode = 0;
     if (committed) {
       release_snapshots();
-      return;
+    } else if (!rolled_back) {
+      if (llvm::Error error = rollback())
+        llvm::logAllUnhandledErrors
+          (std::move(error), llvm::errs(),
+           "failed to roll back compiled bitcode wrapper: ");
     }
+    owner.active_bitcode_transaction = previous_transaction;
+  }
+
+  void record_materialized_wrapper(llvm::Function *wrapper) noexcept
+  {
+    assert(wrapper && owner.active_bitcode_transaction == this &&
+           owner.compilation_units->function_address(wrapper));
+    assert(materialized_wrappers.size() < materialized_wrappers.capacity() &&
+           "bitcode transaction did not preallocate wrapper records");
+    materialized_wrappers.push_back(wrapper);
+  }
+
+  llvm::Error rollback
+  (const char *wrapper_failure_mode = 0, string *evidence = 0) noexcept
+  {
+    if (committed || rolled_back) return llvm::Error::success();
+    llvm::Error errors = rollback_materialized_wrappers
+      (wrapper_failure_mode, evidence);
     owner.defined = defined;
     owner.nodefined = nodefined;
     owner.externals = externals;
@@ -4554,9 +4649,16 @@ public:
         ++type;
       }
     owner.last_tag = last_tag;
+    rolled_back = true;
+    return errors;
   }
 
-  void commit() noexcept { committed = true; }
+  void commit() noexcept
+  {
+    assert(!committed && !rolled_back);
+    committed = true;
+    materialized_wrappers.clear();
+  }
 };
 
 bool interpreter::declare_loaded_faust_namespace
@@ -6215,7 +6317,14 @@ bool interpreter::LoadBitcode(bool priv, const char *name, string *msg)
                        it->varargs, 0, it->source_name, false);
       }
     } catch (const err& declaration_error) {
-      if (msg) *msg = declaration_error.what();
+      string detail = declaration_error.what(), rollback_evidence;
+      llvm::Error rollback_error = transaction.rollback
+        ("bitcode-wrapper-remove", &rollback_evidence);
+      if (!rollback_evidence.empty())
+        detail += ": "+rollback_evidence;
+      if (rollback_error)
+        detail += ": "+llvm::toString(std::move(rollback_error));
+      if (msg) *msg = detail;
       bc_errmsg(name, msg);
       return false;
     }
@@ -6419,7 +6528,13 @@ bool interpreter::LoadBitcode(bool priv, const char *name, string *msg)
         assert(declaration && declaration->isDeclaration());
       }
     } catch (const err& declaration_error) {
-      string detail = declaration_error.what();
+      string detail = declaration_error.what(), rollback_evidence;
+      llvm::Error rollback_error = transaction.rollback
+        ("bitcode-wrapper-remove", &rollback_evidence);
+      if (!rollback_evidence.empty())
+        detail += ": "+rollback_evidence;
+      if (rollback_error)
+        detail += ": "+llvm::toString(std::move(rollback_error));
       if (llvm::Error cleanup_error = compilation_units->remove_tracker
             (tracker, "bitcode-first-remove"))
         detail += ": "+llvm::toString(std::move(cleanup_error));
@@ -17580,6 +17695,8 @@ Function *interpreter::declare_extern(int priv, string name, string restype,
     f->print(out);
   }
   void *wrapper_address = materialize ? compile_orc_function(f, "external") : 0;
+  if (wrapper_address && active_bitcode_transaction)
+    active_bitcode_transaction->record_materialized_wrapper(f);
   externals[sym.f] = ExternInfo(sym.f, name, type, argt, abi_type,
                                 abi_argtypes, f, varargs);
   externals[sym.f].fp = wrapper_address;

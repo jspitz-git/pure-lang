@@ -569,6 +569,8 @@ struct cvector_data {
   }
 };
 
+class batch_bitcode_transaction;
+
 class interpreter
 {
   friend class batch_bitcode_transaction;
@@ -998,6 +1000,7 @@ public:
   CompilationUnitResources *compilation_units;
   NewPassManagerState *pass_state;
   const char *host_global_failure_mode;
+  batch_bitcode_transaction *active_bitcode_transaction;
   llvm::StructType  *ExprTy, *IntExprTy, *DblExprTy, *StrExprTy, *PtrExprTy;
   llvm::StructType  *ComplexTy, *GSLMatrixTy, *GSLDoubleMatrixTy,
     *GSLComplexMatrixTy, *GSLIntMatrixTy;
