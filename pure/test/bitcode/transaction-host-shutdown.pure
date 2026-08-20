@@ -1,0 +1,3 @@
+using "bc:transaction-host-old";
+
+main = ();

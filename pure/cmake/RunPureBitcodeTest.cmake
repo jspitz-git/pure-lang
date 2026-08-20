@@ -6,7 +6,8 @@ if(NOT DEFINED PURE_SH_EXECUTABLE OR
 endif()
 
 if(DEFINED PURE_C_SOURCE OR DEFINED PURE_BITCODE_OUTPUT OR
-   DEFINED PURE_SECOND_C_SOURCE OR DEFINED PURE_SECOND_BITCODE_OUTPUT)
+   DEFINED PURE_SECOND_C_SOURCE OR DEFINED PURE_SECOND_BITCODE_OUTPUT OR
+   DEFINED PURE_THIRD_C_SOURCE OR DEFINED PURE_THIRD_BITCODE_OUTPUT)
   if(NOT DEFINED PURE_C_COMPILER OR
      NOT DEFINED PURE_C_SOURCE OR NOT DEFINED PURE_BITCODE_OUTPUT OR
      NOT DEFINED PURE_SECOND_C_SOURCE OR
@@ -39,6 +40,25 @@ if(DEFINED PURE_C_SOURCE OR DEFINED PURE_BITCODE_OUTPUT OR
       "Second Pure bitcode fixture compilation exited with status ${second_compile_result}: ${second_compile_output}"
     )
   endif()
+  if(DEFINED PURE_THIRD_C_SOURCE OR DEFINED PURE_THIRD_BITCODE_OUTPUT)
+    if(NOT DEFINED PURE_THIRD_C_SOURCE OR
+       NOT DEFINED PURE_THIRD_BITCODE_OUTPUT)
+      message(FATAL_ERROR "Incomplete third Pure bitcode fixture arguments")
+    endif()
+    execute_process(
+      COMMAND
+        "${PURE_C_COMPILER}" -O0 -emit-llvm -c "${PURE_THIRD_C_SOURCE}"
+        -o "${PURE_THIRD_BITCODE_OUTPUT}"
+      RESULT_VARIABLE third_compile_result
+      OUTPUT_VARIABLE third_compile_output
+      ERROR_VARIABLE third_compile_output
+    )
+    if(NOT third_compile_result EQUAL 0)
+      message(FATAL_ERROR
+        "Third Pure bitcode fixture compilation exited with status ${third_compile_result}: ${third_compile_output}"
+      )
+    endif()
+  endif()
 endif()
 
 if(DEFINED PURE_BATCH_OBJECT OR DEFINED PURE_BATCH_EXECUTABLE)
@@ -63,8 +83,19 @@ if(DEFINED PURE_BATCH_OBJECT OR DEFINED PURE_BATCH_EXECUTABLE)
   list(APPEND batch_environment
     "${PURE_LD_LIB_PATH}=${batch_compile_loader_path}")
   if(DEFINED PURE_FAILURE_MODE AND NOT "${PURE_FAILURE_MODE}" STREQUAL "")
-    list(APPEND batch_environment
-      "PURE_TEST_ORC_FAILURE=${PURE_FAILURE_MODE}")
+    if(PURE_FAILURE_MODE STREQUAL "batch-bitcode-host-replacement")
+      list(APPEND batch_environment
+        "PURE_TEST_ORC_FAILURE=batch-bitcode-precommit,batch-bitcode-host-remove"
+        "PURE_TEST_HOST_REPLACEMENT=1"
+        "PURE_TEST_CLEAN_SHUTDOWN=1")
+    elseif(PURE_FAILURE_MODE STREQUAL "batch-bitcode-host-shutdown")
+      list(APPEND batch_environment
+        "PURE_TEST_ORC_FAILURE=batch-bitcode-precommit,batch-bitcode-host-remove-persistent"
+        "PURE_TEST_CLEAN_SHUTDOWN=1")
+    else()
+      list(APPEND batch_environment
+        "PURE_TEST_ORC_FAILURE=${PURE_FAILURE_MODE}")
+    endif()
     if(PURE_FAILURE_MODE STREQUAL "batch-bitcode-host-global")
       list(APPEND batch_environment
         "PURE_TEST_ORC_FAILURE_SKIP=${PURE_FAILURE_MODE}")
@@ -92,6 +123,9 @@ if(DEFINED PURE_BATCH_OBJECT OR DEFINED PURE_BATCH_EXECUTABLE)
     message(FATAL_ERROR
       "Pure bitcode batch compilation omitted the expected failure diagnostic"
     )
+  endif()
+  if(DEFINED PURE_SKIP_BATCH_RUN AND PURE_SKIP_BATCH_RUN)
+    return()
   endif()
   set(batch_link_options)
   if(CMAKE_HOST_UNIX AND NOT CMAKE_HOST_APPLE)

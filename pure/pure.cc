@@ -913,6 +913,13 @@ main(int argc, char *argv[]) try
     /* interp.compiler() apparently leaves the code module in a dangling
        state, so make sure that we take the quick way out. There's really no
        need to clean up the interpreter instance if we're exiting anyway. */
+#ifdef PURE_ENABLE_TEST_HOOKS
+    if (getenv("PURE_TEST_CLEAN_SHUTDOWN")) {
+      // compiler() leaves its code module dangling, as documented above, so
+      // exercise the owned ORC shutdown subset before taking the usual exit.
+      interp.clean_orc_shutdown_for_test();
+    }
+#endif
     pure_finalize();
     exit((status>=0)?status:1);
   }

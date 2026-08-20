@@ -255,12 +255,18 @@ struct CompilationUnitResources {
 
   struct QuarantinedHostSymbol {
     string name;
+    void *address;
+    llvm::JITSymbolFlags flags;
+    llvm::orc::ResourceTrackerSP tracker;
     std::shared_ptr<void> backing;
     bool reported;
 
-    QuarantinedHostSymbol(string name, std::shared_ptr<void> backing,
-                          bool reported)
-      : name(std::move(name)), backing(std::move(backing)),
+    QuarantinedHostSymbol(string name, void *address,
+                          llvm::JITSymbolFlags flags,
+                          llvm::orc::ResourceTrackerSP tracker,
+                          std::shared_ptr<void> backing, bool reported)
+      : name(std::move(name)), address(address), flags(flags),
+        tracker(std::move(tracker)), backing(std::move(backing)),
         reported(reported) {}
   };
 
@@ -283,6 +289,31 @@ struct CompilationUnitResources {
   map<int32_t, uint64_t> next_generations;
   map<int32_t, uint64_t> next_epochs;
 
+  static llvm::Error remove_host_tracker
+  (llvm::orc::ResourceTrackerSP tracker)
+  {
+#ifdef PURE_ENABLE_TEST_HOOKS
+    static unsigned batch_failures = 0;
+    static llvm::orc::ResourceTracker *batch_tracker = 0;
+    static llvm::orc::ResourceTracker *persistent_tracker = 0;
+    if (orc_failure_requested("batch-bitcode-host-remove-persistent") &&
+        (!persistent_tracker || persistent_tracker == tracker.get())) {
+      persistent_tracker = tracker.get();
+      return llvm::createStringError
+        ("injected batch-bitcode-host-remove-persistent ORC tracker removal failure");
+    }
+    if (orc_failure_requested("batch-bitcode-host-remove") &&
+        (!batch_tracker || batch_tracker == tracker.get()) &&
+        batch_failures < 2) {
+      batch_tracker = tracker.get();
+      ++batch_failures;
+      return llvm::createStringError
+        ("injected batch-bitcode-host-remove ORC tracker removal failure");
+    }
+#endif
+    return tracker->remove();
+  }
+
   llvm::Error retain_host_symbol
   (PureJit& jit, llvm::StringRef name, void *address,
    llvm::JITSymbolFlags flags = llvm::JITSymbolFlags::Exported)
@@ -294,7 +325,8 @@ struct CompilationUnitResources {
         return llvm::Error::success();
       void *old_address = old->second.address;
       llvm::JITSymbolFlags old_flags = old->second.flags;
-      if (llvm::Error error = old->second.tracker->remove()) return error;
+      if (llvm::Error error = remove_host_tracker(old->second.tracker))
+        return error;
       host_symbols.erase(old);
 
       llvm::orc::ResourceTrackerSP tracker = jit.create_resource_tracker();
@@ -329,7 +361,7 @@ struct CompilationUnitResources {
   {
     map<string, HostSymbol>::iterator it = host_symbols.find(name.str());
     if (it == host_symbols.end()) return llvm::Error::success();
-    llvm::Error error = it->second.tracker->remove();
+    llvm::Error error = remove_host_tracker(it->second.tracker);
     if (error) return error;
     host_symbols.erase(it);
     return llvm::Error::success();
@@ -347,11 +379,14 @@ struct CompilationUnitResources {
                               bool reported = true)
   {
     assert(!name.empty());
+    map<string, HostSymbol>::const_iterator symbol = host_symbols.find(name);
+    assert(symbol != host_symbols.end());
     quarantined_host_symbols.emplace_back
-      (std::move(name), std::move(backing), reported);
+      (std::move(name), symbol->second.address, symbol->second.flags,
+       symbol->second.tracker, std::move(backing), reported);
   }
 
-  llvm::Error retry_quarantined_trackers()
+  llvm::Error retry_quarantined_trackers(PureJit& jit)
   {
 #ifdef PURE_ENABLE_TEST_HOOKS
     const char *retry = getenv("PURE_TEST_TRACKER_RETRY");
@@ -382,7 +417,30 @@ struct CompilationUnitResources {
     for (list<QuarantinedHostSymbol>::iterator symbol =
            quarantined_host_symbols.begin();
          symbol != quarantined_host_symbols.end(); ) {
-      if (llvm::Error error = remove_host_symbol(symbol->name)) {
+      map<string, HostSymbol>::iterator current =
+        host_symbols.find(symbol->name);
+      bool same_registration = current != host_symbols.end() &&
+        current->second.address == symbol->address &&
+        current->second.flags == symbol->flags &&
+        current->second.tracker.get() == symbol->tracker.get();
+      if (!same_registration) {
+#ifdef PURE_ENABLE_TEST_HOOKS
+        if (getenv("PURE_TEST_HOST_REPLACEMENT")) {
+          if (current == host_symbols.end())
+            return llvm::createStringError
+              ("replacement host symbol disappeared before stale cleanup retry");
+          llvm::Expected<llvm::orc::ExecutorAddr> address =
+            jit.lookup(symbol->name);
+          if (!address) return address.takeError();
+          if (address->toPtr<void*>() != current->second.address)
+            return llvm::createStringError
+              ("replacement host symbol lookup returned stale storage");
+        }
+#endif
+        symbol = quarantined_host_symbols.erase(symbol);
+        continue;
+      }
+      if (llvm::Error error = remove_host_tracker(symbol->tracker)) {
         if (!symbol->reported) {
           llvm::logAllUnhandledErrors
             (std::move(error), llvm::errs(),
@@ -393,10 +451,22 @@ struct CompilationUnitResources {
         }
         ++symbol;
       } else {
+        host_symbols.erase(current);
         symbol = quarantined_host_symbols.erase(symbol);
       }
     }
     return llvm::Error::success();
+  }
+
+  vector<std::shared_ptr<void> > quarantined_host_backings() const
+  {
+    vector<std::shared_ptr<void> > backings;
+    backings.reserve(quarantined_host_symbols.size());
+    for (list<QuarantinedHostSymbol>::const_iterator symbol =
+           quarantined_host_symbols.begin();
+         symbol != quarantined_host_symbols.end(); ++symbol)
+      if (symbol->backing) backings.push_back(symbol->backing);
+    return backings;
   }
 
   void *host_symbol_address(llvm::StringRef name) const
@@ -813,7 +883,8 @@ struct CompilationUnitResources {
       map<string, HostSymbol>::iterator symbol = host_symbols.begin();
       llvm::orc::ResourceTrackerSP tracker = symbol->second.tracker;
       host_symbols.erase(symbol);
-      errors = llvm::joinErrors(std::move(errors), tracker->remove());
+      errors = llvm::joinErrors(std::move(errors),
+                                remove_host_tracker(tracker));
     }
     quarantined_host_symbols.clear();
     return errors;
@@ -2030,19 +2101,40 @@ interpreter::~interpreter()
     delete m;
     m = n;
   }
-  // Free the pass manager and all ORC-owned compilation resources.
+  shutdown_orc_resources();
+  delete module;
+  // if this was the global interpreter, reset it now
+  if (g_interp == this) g_interp = 0;
+}
+
+void interpreter::shutdown_orc_resources() noexcept
+{
+  // A quarantined absolute symbol may still point into detached GlobalVar
+  // storage after its bounded removal fails. Keep that storage alive until
+  // ORC itself has been destroyed.
+  vector<std::shared_ptr<void> > quarantined_host_backings;
+  if (compilation_units)
+    quarantined_host_backings =
+      compilation_units->quarantined_host_backings();
   delete pass_state;
+  pass_state = 0;
   if (compilation_units) {
     if (llvm::Error error = compilation_units->remove_all())
       llvm::logAllUnhandledErrors(std::move(error), llvm::errs(),
                                   "failed to remove ORC compilation unit: ");
     delete compilation_units;
+    compilation_units = 0;
   }
   delete ORC;
-  delete module;
-  // if this was the global interpreter, reset it now
-  if (g_interp == this) g_interp = 0;
+  ORC = 0;
 }
+
+#ifdef PURE_ENABLE_TEST_HOOKS
+void interpreter::clean_orc_shutdown_for_test()
+{
+  shutdown_orc_resources();
+}
+#endif
 
 static inline void
 cdf(interpreter& interp, const char* s, pure_expr *x)
@@ -4568,7 +4660,7 @@ bool interpreter::LoadBitcode(bool priv, const char *name, string *msg)
 {
   using namespace llvm;
   if (llvm::Error cleanup_error =
-        compilation_units->retry_quarantined_trackers()) {
+        compilation_units->retry_quarantined_trackers(*ORC)) {
     if (msg) *msg = "Failed to retry quarantined ORC resources: "+
       llvm::toString(std::move(cleanup_error));
     bc_errmsg(name, msg);
@@ -4653,6 +4745,7 @@ bool interpreter::LoadBitcode(bool priv, const char *name, string *msg)
   bcdata_t bitcode;
   list<string> function_symbols;
   list<string> data_symbols;
+  list<string> owned_data_symbols;
   list<string> alias_symbols;
   list<string> ifunc_symbols;
   string symbol_prefix = "$$bc."+to_string(orc_unit_counter++)+".";
@@ -4694,14 +4787,20 @@ bool interpreter::LoadBitcode(bool priv, const char *name, string *msg)
       M->eraseNamedMetadata(metadata);
   // Non-function definitions are private implementation details of this load;
   // qualify them as well so independent bitcode modules cannot interpose them.
+  size_t anonymous_global = 0;
   for (Module::global_iterator it = M->global_begin(), end = M->global_end();
-       it != end; ++it)
-    if (!it->isDeclaration() &&
-        it->getLinkage() == GlobalVariable::ExternalLinkage) {
-      it->setName(symbol_prefix+it->getName().str());
+       it != end; ++it) {
+    if (it->isDeclaration()) continue;
+    bool public_data = it->getLinkage() == GlobalVariable::ExternalLinkage;
+    string source_name = it->hasName() ? it->getName().str() :
+      "$anon."+to_string(anonymous_global++);
+    it->setName(symbol_prefix+source_name);
+    owned_data_symbols.push_back(it->getName().str());
+    if (public_data) {
       data_symbols.push_back(it->getName().str());
       if (!compiling) it->setLinkage(GlobalVariable::InternalLinkage);
     }
+  }
   for (Module::alias_iterator it = M->alias_begin(), end = M->alias_end();
        it != end; ++it)
     if (it->getLinkage() == GlobalAlias::ExternalLinkage) {
@@ -4838,7 +4937,7 @@ bool interpreter::LoadBitcode(bool priv, const char *name, string *msg)
     }
   }
   if (!candidate_error.empty() || !prepare_linked_bitcode_exports
-        (*ORC, *compilation_units, *candidate, bitcode, data_symbols,
+        (*ORC, *compilation_units, *candidate, bitcode, owned_data_symbols,
          orc_unit_counter, candidate_error)) {
     if (msg) *msg = candidate_error;
     bc_errmsg(name, msg);

@@ -1,6 +1,6 @@
 extern int printf(const char *format, ...);
 
-int pure_transaction_state = 41;
+static int pure_transaction_state = 41;
 
 int pure_transaction_value(void)
 {

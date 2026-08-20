@@ -639,6 +639,60 @@ if(BUILD_TESTING)
         "AddressSanitizer;LeakSanitizer;runtime error:"
   )
 
+  set(transaction_host_old_bc
+      "${PURE_BITCODE_FIXTURE_OUTPUT_DIR}/transaction-host-old.bc")
+  set(transaction_host_invalid_bc
+      "${PURE_BITCODE_FIXTURE_OUTPUT_DIR}/transaction-host-invalid.bc")
+  foreach(host_case replacement shutdown)
+    set(host_batch_object
+        "${CMAKE_CURRENT_BINARY_DIR}/test/bitcode/transaction-host-${host_case}.o")
+    set(host_batch_executable
+        "${CMAKE_CURRENT_BINARY_DIR}/test/bitcode/transaction-host-${host_case}${CMAKE_EXECUTABLE_SUFFIX}")
+    set(host_extra_arguments)
+    set(host_expected_diagnostic injected.batch-bitcode-host-remove)
+    if(host_case STREQUAL "shutdown")
+      list(APPEND host_extra_arguments -DPURE_SKIP_BATCH_RUN=TRUE)
+      set(host_expected_diagnostic failed.to.remove.ORC.compilation.unit)
+    endif()
+    add_test(
+      NAME pure-bitcode-transaction-host-${host_case}
+      COMMAND
+        "${CMAKE_COMMAND}"
+        -DPURE_SH_EXECUTABLE=${PURE_SH_EXECUTABLE}
+        -DPURE_RUN_TEST=${CMAKE_CURRENT_BINARY_DIR}/run-test
+        -DPURE_FIXTURE_DIR=${PURE_BITCODE_FIXTURE_OUTPUT_DIR}
+        -DPURE_SCRIPT=${CMAKE_CURRENT_SOURCE_DIR}/test/bitcode/transaction-host-${host_case}.pure
+        -DPURE_C_COMPILER=${CMAKE_C_COMPILER}
+        -DPURE_C_SOURCE=${CMAKE_CURRENT_SOURCE_DIR}/test/bitcode/transaction-host-old.c
+        -DPURE_BITCODE_OUTPUT=${transaction_host_old_bc}
+        -DPURE_SECOND_C_SOURCE=${CMAKE_CURRENT_SOURCE_DIR}/test/bitcode/transaction-valid.c
+        -DPURE_SECOND_BITCODE_OUTPUT=${transaction_valid_bc}
+        -DPURE_THIRD_C_SOURCE=${CMAKE_CURRENT_SOURCE_DIR}/test/bitcode/transaction-invalid.c
+        -DPURE_THIRD_BITCODE_OUTPUT=${transaction_host_invalid_bc}
+        -DPURE_BATCH_OBJECT=${host_batch_object}
+        -DPURE_BATCH_EXECUTABLE=${host_batch_executable}
+        -DPURE_CXX_COMPILER=${CMAKE_CXX_COMPILER}
+        -DPURE_MAIN_OBJECT=$<TARGET_OBJECTS:pure-main-object>
+        -DPURE_RUNTIME_DIR=${CMAKE_CURRENT_BINARY_DIR}
+        -DPURE_LD_LIB_PATH=${LD_LIB_PATH}
+        -DPURE_SANITIZERS=${PURE_SANITIZERS}
+        -DPURE_FAILURE_MODE=batch-bitcode-host-${host_case}
+        -DPURE_EXPECTED_DIAGNOSTIC=${host_expected_diagnostic}
+        ${host_extra_arguments}
+        -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunPureBitcodeTest.cmake"
+    )
+    set_tests_properties(
+      pure-bitcode-transaction-host-${host_case}
+      PROPERTIES
+        LABELS "bitcode;batch;integration"
+        REQUIRED_FILES
+          "${CMAKE_CURRENT_SOURCE_DIR}/test/bitcode/transaction-host-old.c;${CMAKE_CURRENT_SOURCE_DIR}/test/bitcode/transaction-host-${host_case}.pure"
+        TIMEOUT ${transaction_prepare_batch_timeout}
+        FAIL_REGULAR_EXPRESSION
+          "AddressSanitizer;LeakSanitizer;runtime error:"
+    )
+  endforeach()
+
   if(PURE_FAUST_EXECUTABLE)
     add_test(
       NAME pure-faust-lifecycle

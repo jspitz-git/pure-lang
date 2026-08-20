@@ -1190,6 +1190,9 @@ public:
   void release_faust_instance(int32_t tag, pure_expr *dsp) noexcept;
   // Generic LLVM bitcode interface.
   bool LoadBitcode(bool priv, const char *name, string *msg);
+#ifdef PURE_ENABLE_TEST_HOOKS
+  void clean_orc_shutdown_for_test();
+#endif
   // Handle inline code.
   void inline_code(bool priv, string &code);
   // Global context switching for interpreters.
@@ -1212,6 +1215,7 @@ public:
   void swap_interpreters(interpreter *interp);
 private:
   void init();
+  void shutdown_orc_resources() noexcept;
   char *__baseptr_save;
   int nwrapped;
   Env *__fptr, **__fptr_save;
