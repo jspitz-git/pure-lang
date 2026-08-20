@@ -6214,10 +6214,106 @@ static string llvm_tool(const string& name)
   return shell_tool(tool);
 }
 
+static string inline_shell_argument(const string& argument)
+{
+#ifdef __MINGW32__
+  // Generated inline-compiler paths cannot contain a double quote on Windows.
+  return "\""+argument+"\"";
+#else
+  string quoted = "'";
+  for (size_t i = 0; i < argument.size(); ++i)
+    if (argument[i] == '\'')
+      quoted += "'\\''";
+    else
+      quoted += argument[i];
+  return quoted+"'";
+#endif
+}
+
+struct inline_faust_commands {
+  string faust;
+  string clang;
+};
+
+static string inline_shell_command(string command)
+{
+#ifdef __MINGW32__
+  // system() runs through cmd.exe, which strips the leading quote from a
+  // quoted executable when the complete command has more quoted arguments.
+  if (!command.empty() && command[0] == '"') command = "call "+command;
+#endif
+  return command;
+}
+
+static inline_faust_commands build_inline_faust_commands
+(const string& faust, const string& clang, const string& source,
+ const string& c_output, const string& bitcode_output,
+ const string& class_name)
+{
+  inline_faust_commands commands;
+  commands.faust = inline_shell_command(faust)+
+    " -double -a "+inline_shell_argument("pure.c")+
+    " -lang c -cn "+inline_shell_argument(class_name)+" "+
+    inline_shell_argument(source)+" -o "+inline_shell_argument(c_output);
+  commands.clang = inline_shell_command(clang)+
+    " -x c -O3 -emit-llvm -c "+
+    inline_shell_argument(c_output)+" -o "+
+    inline_shell_argument(bitcode_output);
+  return commands;
+}
+
+static bool inline_command_succeeded(int status)
+{
+  return status != -1 && WIFEXITED(status) && WEXITSTATUS(status) == 0;
+}
+
+static int inline_command_status(int status)
+{
+  return status != -1 && WIFEXITED(status) ? WEXITSTATUS(status) : status;
+}
+
+class owned_inline_files {
+  vector<string> paths;
+public:
+  void take(const string& path)
+  {
+    try {
+      paths.push_back(path);
+    } catch (...) {
+      unlink(path.c_str());
+      throw;
+    }
+  }
+  string create(string path_template)
+  {
+    vector<char> path(path_template.begin(), path_template.end());
+    path.push_back(0);
+    int fd = mkstemp(path.data());
+    if (fd < 0) throw err("error creating inline compiler output");
+    close(fd);
+    string result;
+    try {
+      result.assign(path.data());
+    } catch (...) {
+      unlink(path.data());
+      throw;
+    }
+    take(result);
+    return result;
+  }
+  ~owned_inline_files() noexcept
+  {
+    for (vector<string>::reverse_iterator path = paths.rbegin();
+         path != paths.rend(); ++path)
+      unlink(path->c_str());
+  }
+};
+
 void interpreter::inline_code(bool priv, string &code)
 {
   // Get the language tag and configure accordingly.
-  string modname, tag = lang_tag(code, modname), ext = "", optargs = "";
+  string modname, tag = lang_tag(code, modname), ext = "";
+  string faust_class_name;
   string intermediate_ext = "";
   const char *env, *drv, *args;
   char *asmargs = 0;
@@ -6285,19 +6381,17 @@ void interpreter::inline_code(bool priv, string &code)
       if (vflag) std::cerr << atsccomp << '\n';
     }
   } else if (tag == "dsp") {
-    env = "PURE_FAUST"; drv = "faust -double";
-    args = " -lang llvm ";
-    const char *opt = getenv("FAUST_OPT");
-    if (opt) optargs = string((!*opt||isspace(*opt))?"":" ")+opt;
+    env = "PURE_FAUST"; drv = "faust";
+    args = 0;
     if (modname.empty())
       throw err("missing Faust module name in inline code (try dsp:name)");
     // Mangle the module name so that it can be supplied as the Faust class
     // name (-cn).
-    string name = modname;
-    for (size_t i = 0, n = name.size(); i < n; i++)
-      if ((i==0 && !isalpha(name[i])) || !isalnum(name[i]))
-	name[i] = '_';
-    optargs = " -cn "+name+optargs;
+    faust_class_name = modname;
+    for (size_t i = 0, n = faust_class_name.size(); i < n; i++)
+      if ((i==0 && !isalpha((unsigned char)faust_class_name[i])) ||
+          !isalnum((unsigned char)faust_class_name[i]))
+	faust_class_name[i] = '_';
   } else {
     throw err("bad tag '"+tag+
 	      "' in inline code (try one of c, fortran, ats, dsp:name)");
@@ -6309,6 +6403,7 @@ void interpreter::inline_code(bool priv, string &code)
   // Create a temporary file holding the code.
   size_t n = code.size();
   string src = modname;
+  if (tag == "dsp") src = "pure Faust inline";
   if (src.empty()) {
     src = source.empty()?"stdin":source;
     static unsigned count = 0;
@@ -6320,6 +6415,7 @@ void interpreter::inline_code(bool priv, string &code)
   char *fnm = (char*)malloc(tmpl.size()+1);
   strcpy(fnm, tmpl.c_str());
   int fd = mkstemp(fnm);
+  std::unique_ptr<char, decltype(&free)> fnm_owner(fnm, &free);
   string nm = fnm;
   if (fd<0) goto err;
   if (write(fd, code.c_str(), n) < (ssize_t)n) {
@@ -6339,6 +6435,34 @@ void interpreter::inline_code(bool priv, string &code)
     }
   }
   {
+    if (tag == "dsp") {
+      const char *configured_faust = getenv("PURE_FAUST");
+      if (!configured_faust) configured_faust = drv;
+      const char *configured_clang = getenv("PURE_CC");
+      if (!configured_clang) configured_clang = clang.c_str();
+      owned_inline_files owned;
+      owned.take(nm);
+      string c_output = owned.create("pure Faust C.XXXXXX");
+      string bitcode_output = owned.create("pure Faust bitcode.XXXXXX");
+      inline_faust_commands commands = build_inline_faust_commands
+        (configured_faust, configured_clang, nm, c_output, bitcode_output,
+         faust_class_name);
+      bool vflag = (verbose&verbosity::compiler) != 0;
+      if (vflag) std::cerr << commands.faust << '\n';
+      int faust_status = system(commands.faust.c_str());
+      if (!inline_command_succeeded(faust_status))
+        throw err("error compiling inline Faust code with Faust (status "+
+                  to_string(inline_command_status(faust_status))+")");
+      if (vflag) std::cerr << commands.clang << '\n';
+      int clang_status = system(commands.clang.c_str());
+      if (!inline_command_succeeded(clang_status))
+        throw err("error compiling inline Faust C code with Clang (status "+
+                  to_string(inline_command_status(clang_status))+")");
+      string msg;
+      if (!LoadFaustDSP(priv, bitcode_output.c_str(), &msg, modname.c_str()))
+        throw err(msg);
+      return;
+    }
     // Invoke the compiler.
     const char *pure_cc = getenv(env);
     if (!pure_cc) pure_cc = drv;
@@ -6356,7 +6480,7 @@ void interpreter::inline_code(bool priv, string &code)
       args = asmargs;
     }
     string fname = nm, bcname = string(fnm)+ext, bcname2 = string(fnm)+".bc",
-      cmd = string(pure_cc)+args+fname+optargs+" -o "+bcname;
+      cmd = string(pure_cc)+args+fname+" -o "+bcname;
     const char *bcnm = bcname.c_str(), *bcnm2 = bcname2.c_str();
     bool vflag = (verbose&verbosity::compiler) != 0;
     if (vflag) std::cerr << cmd << '\n';

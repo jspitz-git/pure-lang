@@ -1,0 +1,21 @@
+%< -*- dsp:inline_test -*-
+process = _ * 2;
+%>
+
+let dsp = inline_test::newinit 48000;
+let inputs = inline_test::getNumInputs dsp;
+let outputs = inline_test::getNumOutputs dsp;
+if inputs == 1 then ()
+else throw "inline Faust returned the wrong input arity";
+if outputs == 1 then ()
+else throw "inline Faust returned the wrong output arity";
+
+let input = {21.0};
+let output = {0.0};
+let _ = inline_test::compute dsp 1 input output;
+let sample = output!(0,0);
+if sample == 42.0 then ()
+else throw "inline Faust compute returned the wrong sample";
+
+let _ = inline_test::delete dsp;
+inputs,outputs,sample;

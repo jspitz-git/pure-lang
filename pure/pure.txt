@@ -10405,8 +10405,8 @@ matrices.
 
 Pure's LLVM bitcode loader has some special knowledge about Faust built into
 it, which makes interfacing to Faust programs simple and efficient. You'll
-need a recent LLVM-capable version of Faust (Faust 2.0 or later, abbreviated
-"Faust2" in the following) to make this work.
+need a recent version of Faust with the ``pure.c`` architecture (Faust 2.0 or
+later, abbreviated "Faust2" in the following) to make this work.
 
 .. note:: There's also an alternative interface to Faust which is available as
    a separate package, please check the :doc:`pure-faust<pure-faust>` package
@@ -10417,63 +10417,36 @@ need a recent LLVM-capable version of Faust (Faust 2.0 or later, abbreviated
    especially if you want to load a lot of different Faust modules dynamically
    at runtime.)
 
-The ``-lang llvm`` option instructs the Faust compiler to output LLVM
-bitcode. Also, you want to add the ``-double`` option to make the compiled
-Faust module use double precision floating point values for samples and
-control values. So you'd compile an existing Faust module in the source file
-example.dsp as follows:
-
-.. code-block:: console
-
-   faust -double -lang llvm example.dsp -o example.bc
-
-The ``-double`` option isn't strictly necessary, but it makes interfacing
-between Pure and Faust easier and more efficient, since Pure uses ``double``
-as its native floating point format.
-
-Alternatively, you can also use the Faust ``pure.c`` architecture (included in
-recent Faust2 revisions and also in the :doc:`pure-faust<pure-faust>` package)
-to compile a Faust program to corresponding C source which can then be fed
-into an LLVM-capable C compiler to produce bitcode which is compatible with
-Pure's Faust bitcode loader. This is useful, in particular, if you want to
-make use of special optimization options provided by the C compiler, or if the
-Faust module needs to be linked against additional C/C++ code. For instance:
+The supported compilation route uses the Faust ``pure.c`` architecture
+(included in recent Faust2 revisions and also in the
+:doc:`pure-faust<pure-faust>` package) to produce C source, then compiles that
+C with a Clang whose LLVM major matches the running Pure interpreter. Faust's
+own LLVM backend is unsupported because the Faust executable may have been
+built against a different LLVM major. For an LLVM 22 Pure build, compile an
+existing ``example.dsp`` as follows:
 
 .. code-block:: console
 
    faust -double -a pure.c -lang c example.dsp -o example.c
    clang-22 -emit-llvm -O3 -c example.c -o example.bc
 
-The :doc:`pure-faust<pure-faust>` package contains a little helper script
-``faust2pure`` (also available in recent Faust revisions) which makes this a
-lot easier, so that you can simply write:
+The ``-double`` option makes the generated module use double precision for
+sample and control values, matching Pure's native floating point format.
 
-.. code-block:: console
-
-   faust2pure -double -bitcode example.dsp
-
-A third possibility is to just inline Faust code in a Pure script, as
+You can also inline Faust code in a Pure script, as
 described in the `Inline Code`_ section. The compilation step is then handled
-by the Pure compiler and the ``-double`` option is added automatically. The
-:envvar:`PURE_FAUST` environment variable can be used to specify a custom
-Faust command to be invoked by the Pure interpreter. This is useful if you'd
-like to invoke the Faust compiler with some special options, e.g.:
+by the Pure compiler: it invokes Faust with ``-double``, ``pure.c`` and the C
+backend, then compiles the result with the configured matching Clang. The
+:envvar:`PURE_FAUST` environment variable can specify a custom Faust command,
+and :envvar:`PURE_CC` can specify the matching Clang command. For example:
 
 .. code-block:: console
 
-   PURE_FAUST="faust -single -vec"
+   PURE_FAUST="faust -vec"
+   PURE_CC="clang-22 -O3"
 
-(Note that you do not have to include the ``-lang llvm`` option; the inline
-compiler will supply it automatically.)
-
-Moreover, you can also set the :envvar:`FAUST_OPT` environment variable to
-specify any needed postprocessing of the output of the Faust compiler; this is
-typically used to invoke the LLVM ``opt`` utility in a pipeline, in order to
-have some additional optimizations performed on the Faust-generated code:
-
-.. code-block:: console
-
-   FAUST_OPT="| opt -O3"
+The inline compiler supplies the precision, architecture, backend and bitcode
+options; custom commands should only add compatible tool-specific options.
 
 After loading or inlining the Faust module, the Pure compiler makes the
 interface routines of the Faust module available in its own namespace. Thus,

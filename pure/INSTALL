@@ -400,15 +400,16 @@ the release's LLVM major version instead of reusing artifacts from LLVM 2.x,
 Faust Policy
 ============
 
-Faust integration consumes LLVM 22-compatible bitcode. The recommended direct
-command is::
-
-  $ faust -double -lang llvm example.dsp -o example.bc
-
-The bundled ``pure.c`` architecture can also be compiled with Clang 22::
+Faust integration uses the bundled ``pure.c`` architecture and a Clang
+compiler whose LLVM major matches Pure. For an LLVM 22 build, use::
 
   $ faust -double -a pure.c -lang c example.dsp -o example.c
   $ clang-22 -O3 -emit-llvm -c example.c -o example.bc
+
+Faust's own LLVM backend is unsupported because the Faust executable may use
+a different LLVM major. Inline DSP sections run the same C pipeline
+automatically, using ``PURE_FAUST`` for the Faust command and ``PURE_CC`` for
+the matching Clang command when these environment variables are set.
 
 Current Faust modules expose an explicit ``pure_faust_sample_format`` marker.
 Pure validates this marker, falls back to recognized legacy metadata only when
