@@ -1,0 +1,8 @@
+function(pure_prepend_path output entry current platform_is_windows)
+  if(platform_is_windows)
+    set(separator ";")
+  else()
+    set(separator ":")
+  endif()
+  set(${output} "${entry}${separator}${current}" PARENT_SCOPE)
+endfunction()

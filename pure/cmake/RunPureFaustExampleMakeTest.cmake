@@ -6,11 +6,22 @@ foreach(required
     PURE_FAUST_EXECUTABLE
     PURE_C_COMPILER
     PURE_LLVM_DIS_EXECUTABLE
+    PURE_PATH_LIST_MODULE
     PURE_WORK_ROOT)
   if(NOT DEFINED ${required} OR "${${required}}" STREQUAL "")
     message(FATAL_ERROR "Missing Faust example Makefile argument ${required}")
   endif()
 endforeach()
+
+include("${PURE_PATH_LIST_MODULE}")
+pure_prepend_path(posix_contract
+  "/opt/Faust Tools/bin" "/usr/local/bin:/usr/bin:/bin" FALSE)
+if(NOT posix_contract STREQUAL
+    "/opt/Faust Tools/bin:/usr/local/bin:/usr/bin:/bin")
+  message(FATAL_ERROR
+    "POSIX Faust PATH construction used the wrong separator: "
+    "[${posix_contract}]")
+endif()
 
 string(RANDOM LENGTH 12 ALPHABET 0123456789abcdef nonce)
 set(work_dir "${PURE_WORK_ROOT}/Faust Make path ${nonce}")
@@ -25,10 +36,11 @@ file(COPY_FILE "${PURE_DSP_SOURCE}" "${dsp}")
 
 get_filename_component(faust_dir "${PURE_FAUST_EXECUTABLE}" DIRECTORY)
 get_filename_component(faust_name "${PURE_FAUST_EXECUTABLE}" NAME)
+pure_prepend_path(faust_search_path "${faust_dir}" "$ENV{PATH}" "${WIN32}")
 execute_process(
   COMMAND
     "${CMAKE_COMMAND}" -E env
-    "PATH=${faust_dir};$ENV{PATH}"
+    "PATH=${faust_search_path}"
     "${PURE_MAKE_EXECUTABLE}" -f "${makefile}"
     "SHELL=${PURE_SH_EXECUTABLE}"
     "FAUST=${faust_name}" "CLANG=${PURE_C_COMPILER}" reference.bc

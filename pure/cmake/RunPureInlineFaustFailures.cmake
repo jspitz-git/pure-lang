@@ -1,6 +1,7 @@
 foreach(required
     PURE_EXECUTABLE
     PURE_SCRIPT_TEMPLATE
+    PURE_LIFETIME_SCRIPT_TEMPLATE
     PURE_FAUST_EXECUTABLE
     PURE_C_COMPILER
     PURE_SOURCE_DIR
@@ -9,6 +10,16 @@ foreach(required
     message(FATAL_ERROR "Missing inline Faust failure argument ${required}")
   endif()
 endforeach()
+
+set(sanitizer_pattern
+  "AddressSanitizer|LeakSanitizer|runtime error:|stack-use-after-scope")
+
+function(find_inline_leftovers work_dir output)
+  file(GLOB leftovers LIST_DIRECTORIES FALSE
+    "${work_dir}/stdin*"
+    "${work_dir}/pure Faust *")
+  set(${output} "${leftovers}" PARENT_SCOPE)
+endfunction()
 
 function(quote_command output command)
   if(WIN32)
@@ -85,7 +96,7 @@ function(run_failure_case name faust_command clang_command environment expected)
   string(REPLACE "\r\n" "\n" output "${output}")
   string(REPLACE "\r\n" "\n" error_output "${error_output}")
   string(STRIP "${error_output}" diagnostic)
-  file(GLOB leftovers LIST_DIRECTORIES FALSE "${work_dir}/pure Faust *")
+  find_inline_leftovers("${work_dir}" leftovers)
   file(REMOVE_RECURSE "${work_dir}")
   if(NOT result EQUAL 0)
     file(REMOVE_RECURSE "${wrapper_dir}")
@@ -106,6 +117,73 @@ function(run_failure_case name faust_command clang_command environment expected)
   endif()
 endfunction()
 
+function(run_inline_source_lifetime_case name environment expected_diagnostic)
+  string(RANDOM LENGTH 12 ALPHABET 0123456789abcdef nonce)
+  set(work_dir "${PURE_WORK_ROOT}/${name} path ${nonce}")
+  set(script "${work_dir}/inline source lifetime.pure")
+  file(MAKE_DIRECTORY "${work_dir}")
+  if(expected_diagnostic STREQUAL "")
+    set(LIFETIME_EXPRESSION "inline_source_lifetime 41")
+  else()
+    set(LIFETIME_EXPRESSION "42")
+  endif()
+  configure_file("${PURE_LIFETIME_SCRIPT_TEMPLATE}" "${script}" @ONLY)
+  execute_process(
+    COMMAND
+      "${CMAKE_COMMAND}" -E env
+      "PURE_CC=${clang}"
+      "PURELIB=${PURE_SOURCE_DIR}/lib"
+      "PURE_INCLUDE=${PURE_SOURCE_DIR}/test"
+      "srcdir=${PURE_SOURCE_DIR}"
+      "LC_ALL=C"
+      ${environment}
+      "${PURE_EXECUTABLE}" --norc -v0
+    INPUT_FILE "${script}"
+    WORKING_DIRECTORY "${work_dir}"
+    RESULT_VARIABLE result
+    OUTPUT_VARIABLE output
+    ERROR_VARIABLE error_output
+  )
+  string(REPLACE "\r\n" "\n" output "${output}")
+  string(REPLACE "\r\n" "\n" error_output "${error_output}")
+  string(STRIP "${error_output}" diagnostic)
+  find_inline_leftovers("${work_dir}" leftovers)
+  file(REMOVE_RECURSE "${work_dir}")
+  if(NOT result EQUAL 0)
+    message(FATAL_ERROR
+      "${name}: Pure exited ${result}\n${error_output}")
+  endif()
+  if(error_output MATCHES "${sanitizer_pattern}")
+    message(FATAL_ERROR "${name}: lifetime sanitizer failure\n${error_output}")
+  endif()
+  if(NOT output STREQUAL "42\n")
+    message(FATAL_ERROR "${name}: unexpected stdout [${output}]")
+  endif()
+  if(expected_diagnostic STREQUAL "")
+    if(NOT diagnostic STREQUAL "")
+      message(FATAL_ERROR "${name}: unexpected diagnostic\n${error_output}")
+    endif()
+  elseif(NOT diagnostic STREQUAL
+      "<stdin>, line 1: ${expected_diagnostic}")
+    message(FATAL_ERROR
+      "${name}: expected one exact diagnostic\n${error_output}")
+  endif()
+  if(leftovers)
+    message(FATAL_ERROR "${name}: leftover owned files ${leftovers}")
+  endif()
+endfunction()
+
+quote_command(clang "${PURE_C_COMPILER}")
+if(DEFINED PURE_LIFETIME_ONLY AND PURE_LIFETIME_ONLY)
+  run_inline_source_lifetime_case(
+    "non-DSP inline lifetime" "" "")
+  run_inline_source_lifetime_case(
+    "post-stabilization failure"
+    "PURE_TEST_INLINE_STABILIZED_FAILURE=1"
+    "injected post-stabilization inline source failure")
+  return()
+endif()
+
 if(WIN32)
   set(wrapper_suffix ".cmd")
 else()
@@ -124,10 +202,16 @@ write_exit_wrapper("${clang_failure}" 42)
 write_corrupting_clang_wrapper("${clang_corrupt}")
 
 quote_command(faust "${PURE_FAUST_EXECUTABLE}")
-quote_command(clang "${PURE_C_COMPILER}")
 quote_command(failing_faust "${faust_failure}")
 quote_command(failing_clang "${clang_failure}")
 quote_command(corrupting_clang "${clang_corrupt}")
+
+run_inline_source_lifetime_case(
+  "non-DSP inline lifetime" "" "")
+run_inline_source_lifetime_case(
+  "post-stabilization failure"
+  "PURE_TEST_INLINE_STABILIZED_FAILURE=1"
+  "injected post-stabilization inline source failure")
 
 run_failure_case(
   "allocation boundary" "${faust}" "${clang}"

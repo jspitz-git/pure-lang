@@ -6446,6 +6446,9 @@ void interpreter::inline_code(bool priv, string &code)
   char *fnm = (char*)malloc(tmpl.size()+1);
   std::unique_ptr<char, decltype(&free)> fnm_owner(fnm, &free);
   strcpy(fnm, tmpl.c_str());
+  // This object must outlive source_file, which retains its address after the
+  // temporary source name has been stabilized.
+  string nm;
   int fd = mkstemp(fnm);
   owned_inline_source source_file(fd, fnm);
   if (fd<0) throw err("error compiling inline code");
@@ -6453,7 +6456,7 @@ void interpreter::inline_code(bool priv, string &code)
   if (getenv("PURE_TEST_INLINE_SOURCE_FAILURE"))
     throw err("injected inline source allocation failure");
 #endif
-  string nm = fnm;
+  nm = fnm;
   if (ext.empty()) source_file.stabilize(nm);
   if (write(fd, code.c_str(), n) < (ssize_t)n) {
     source_file.close_descriptor();
@@ -6470,6 +6473,10 @@ void interpreter::inline_code(bool priv, string &code)
     }
     source_file.stabilize(nm);
   }
+#ifdef PURE_ENABLE_TEST_HOOKS
+  if (getenv("PURE_TEST_INLINE_STABILIZED_FAILURE"))
+    throw err("injected post-stabilization inline source failure");
+#endif
   {
     if (tag == "dsp") {
       const char *configured_faust = getenv("PURE_FAUST");

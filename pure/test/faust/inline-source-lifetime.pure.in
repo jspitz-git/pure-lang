@@ -1,0 +1,8 @@
+%<
+int inline_source_lifetime(int value)
+{
+  return value + 1;
+}
+%>
+
+@LIFETIME_EXPRESSION@;

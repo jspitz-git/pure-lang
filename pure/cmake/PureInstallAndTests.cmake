@@ -832,6 +832,7 @@ if(BUILD_TESTING)
         "${CMAKE_COMMAND}"
         -DPURE_EXECUTABLE=$<TARGET_FILE:pure>
         -DPURE_SCRIPT_TEMPLATE=${CMAKE_CURRENT_SOURCE_DIR}/test/faust/inline-dsp-failure.pure.in
+        -DPURE_LIFETIME_SCRIPT_TEMPLATE=${CMAKE_CURRENT_SOURCE_DIR}/test/faust/inline-source-lifetime.pure.in
         -DPURE_FAUST_EXECUTABLE=${PURE_FAUST_EXECUTABLE}
         -DPURE_C_COMPILER=${CMAKE_C_COMPILER}
         -DPURE_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
@@ -845,10 +846,37 @@ if(BUILD_TESTING)
         ENVIRONMENT_MODIFICATION
           "PATH=path_list_prepend:${LLVM_TOOLS_BINARY_DIR};PATH=path_list_prepend:${CMAKE_CURRENT_BINARY_DIR}"
         REQUIRED_FILES
-          "${CMAKE_CURRENT_SOURCE_DIR}/test/faust/inline-dsp-failure.pure.in"
+          "${CMAKE_CURRENT_SOURCE_DIR}/test/faust/inline-dsp-failure.pure.in;${CMAKE_CURRENT_SOURCE_DIR}/test/faust/inline-source-lifetime.pure.in"
         TIMEOUT 180
         FAIL_REGULAR_EXPRESSION
           "failed to remove ORC compilation unit;failed to retire prepared Faust reload;failed to collect ORC Faust generation;AddressSanitizer;LeakSanitizer;runtime error:"
+    )
+
+    add_test(
+      NAME pure-inline-source-lifetime
+      COMMAND
+        "${CMAKE_COMMAND}"
+        -DPURE_EXECUTABLE=$<TARGET_FILE:pure>
+        -DPURE_SCRIPT_TEMPLATE=${CMAKE_CURRENT_SOURCE_DIR}/test/faust/inline-dsp-failure.pure.in
+        -DPURE_LIFETIME_SCRIPT_TEMPLATE=${CMAKE_CURRENT_SOURCE_DIR}/test/faust/inline-source-lifetime.pure.in
+        -DPURE_FAUST_EXECUTABLE=${PURE_FAUST_EXECUTABLE}
+        -DPURE_C_COMPILER=${CMAKE_C_COMPILER}
+        -DPURE_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
+        -DPURE_WORK_ROOT=${CMAKE_CURRENT_BINARY_DIR}/test/faust
+        -DPURE_LIFETIME_ONLY=TRUE
+        -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunPureInlineFaustFailures.cmake"
+    )
+    set_tests_properties(
+      pure-inline-source-lifetime
+      PROPERTIES
+        LABELS "bitcode;inline;integration;lifetime"
+        ENVIRONMENT_MODIFICATION
+          "PATH=path_list_prepend:${LLVM_TOOLS_BINARY_DIR};PATH=path_list_prepend:${CMAKE_CURRENT_BINARY_DIR}"
+        REQUIRED_FILES
+          "${CMAKE_CURRENT_SOURCE_DIR}/test/faust/inline-source-lifetime.pure.in"
+        TIMEOUT 180
+        FAIL_REGULAR_EXPRESSION
+          "AddressSanitizer;LeakSanitizer;runtime error:;stack-use-after-scope"
     )
 
     add_test(
@@ -862,6 +890,7 @@ if(BUILD_TESTING)
         -DPURE_FAUST_EXECUTABLE=${PURE_FAUST_EXECUTABLE}
         -DPURE_C_COMPILER=${CMAKE_C_COMPILER}
         -DPURE_LLVM_DIS_EXECUTABLE=${PURE_LLVM_DIS_EXECUTABLE}
+        -DPURE_PATH_LIST_MODULE=${CMAKE_CURRENT_SOURCE_DIR}/cmake/PurePathList.cmake
         -DPURE_WORK_ROOT=${CMAKE_CURRENT_BINARY_DIR}/test/faust
         -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunPureFaustExampleMakeTest.cmake"
     )
