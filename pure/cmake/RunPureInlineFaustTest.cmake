@@ -13,15 +13,28 @@ endforeach()
 string(RANDOM LENGTH 12 ALPHABET 0123456789abcdef nonce)
 set(work_dir "${PURE_WORK_ROOT}/inline Faust ${nonce}")
 set(script "${work_dir}/inline DSP test.pure")
+set(clang_sentinel "${work_dir}/configured Clang invocation.txt")
 file(MAKE_DIRECTORY "${work_dir}")
 configure_file("${PURE_SCRIPT_TEMPLATE}" "${script}" @ONLY)
 
 if(WIN32)
   set(faust_command "\"${PURE_FAUST_EXECUTABLE}\"")
-  set(clang_command "\"${PURE_C_COMPILER}\"")
+  set(clang_wrapper "${work_dir}/configured Clang wrapper.cmd")
+  file(WRITE "${clang_wrapper}"
+    "@echo off\r\n"
+    ">\"${clang_sentinel}\" echo %*\r\n"
+    "call \"${PURE_C_COMPILER}\" %*\r\n")
+  set(clang_command "\"${clang_wrapper}\"")
 else()
   set(faust_command "'${PURE_FAUST_EXECUTABLE}'")
-  set(clang_command "'${PURE_C_COMPILER}'")
+  set(clang_wrapper "${work_dir}/configured Clang wrapper.sh")
+  file(WRITE "${clang_wrapper}"
+    "#!/bin/sh\n"
+    "printf '%s\\n' \"$*\" >'${clang_sentinel}'\n"
+    "exec '${PURE_C_COMPILER}' \"$@\"\n")
+  file(CHMOD "${clang_wrapper}"
+    PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE)
+  set(clang_command "'${clang_wrapper}'")
 endif()
 
 execute_process(
@@ -44,6 +57,11 @@ execute_process(
 string(REPLACE "\r\n" "\n" normalized_output "${output}")
 set(expected_output "()\n()\n()\n1,1,42.0\n")
 file(GLOB leftovers LIST_DIRECTORIES FALSE "${work_dir}/pure Faust *")
+set(clang_invocation "")
+if(EXISTS "${clang_sentinel}")
+  file(READ "${clang_sentinel}" clang_invocation)
+  string(STRIP "${clang_invocation}" clang_invocation)
+endif()
 file(REMOVE_RECURSE "${work_dir}")
 
 if(leftovers)
@@ -66,4 +84,15 @@ endif()
 if(NOT error_output STREQUAL "")
   message(FATAL_ERROR
     "Pure inline Faust emitted unexpected diagnostics:\n${error_output}")
+endif()
+if(WIN32)
+  set(expected_clang_invocation
+    "^-x c -O3 -emit-llvm -c \"pure Faust C\\.[A-Za-z0-9]+\" -o \"pure Faust bitcode\\.[A-Za-z0-9]+\"$")
+else()
+  set(expected_clang_invocation
+    "^-x c -O3 -emit-llvm -c pure Faust C\\.[A-Za-z0-9]+ -o pure Faust bitcode\\.[A-Za-z0-9]+$")
+endif()
+if(NOT clang_invocation MATCHES "${expected_clang_invocation}")
+  message(FATAL_ERROR
+    "Configured PURE_CC wrapper saw wrong invocation: [${clang_invocation}]")
 endif()

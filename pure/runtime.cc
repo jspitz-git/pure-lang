@@ -17160,7 +17160,8 @@ pure_expr *faust_load(const char *fname)
 
 /* These data structures and routines are used to handle the metadata and
    control parameters in a Faust DSP. (This is basically the same as in the
-   pure-faust module, but tailored for faust -lang llvm.) */
+   pure-faust module, but tailored for Faust code generated with the pure.c
+   architecture and compiled to bitcode by the matching Clang toolchain.) */
 
 typedef pair<const char*,const char*> strpair;
 

@@ -6309,6 +6309,37 @@ public:
   }
 };
 
+class owned_inline_source {
+  int fd;
+  const char *path;
+  const string *stable_path;
+  bool owns_path;
+public:
+  owned_inline_source(int fd, const char *path) noexcept
+    : fd(fd), path(path), stable_path(0), owns_path(fd >= 0) {}
+  void stabilize(const string& value) noexcept
+  {
+    stable_path = &value;
+    path = 0;
+  }
+  void close_descriptor() noexcept
+  {
+    if (fd >= 0) {
+      close(fd);
+      fd = -1;
+    }
+  }
+  void release_path() noexcept { owns_path = false; }
+  ~owned_inline_source() noexcept
+  {
+    close_descriptor();
+    if (owns_path) {
+      const char *owned_path = stable_path ? stable_path->c_str() : path;
+      if (owned_path) unlink(owned_path);
+    }
+  }
+};
+
 void interpreter::inline_code(bool priv, string &code)
 {
   // Get the language tag and configure accordingly.
@@ -6413,26 +6444,31 @@ void interpreter::inline_code(bool priv, string &code)
   }
   string tmpl = src+".XXXXXX";
   char *fnm = (char*)malloc(tmpl.size()+1);
+  std::unique_ptr<char, decltype(&free)> fnm_owner(fnm, &free);
   strcpy(fnm, tmpl.c_str());
   int fd = mkstemp(fnm);
-  std::unique_ptr<char, decltype(&free)> fnm_owner(fnm, &free);
+  owned_inline_source source_file(fd, fnm);
+  if (fd<0) throw err("error compiling inline code");
+#ifdef PURE_ENABLE_TEST_HOOKS
+  if (getenv("PURE_TEST_INLINE_SOURCE_FAILURE"))
+    throw err("injected inline source allocation failure");
+#endif
   string nm = fnm;
-  if (fd<0) goto err;
+  if (ext.empty()) source_file.stabilize(nm);
   if (write(fd, code.c_str(), n) < (ssize_t)n) {
-    close(fd);
-    unlink(fnm);
+    source_file.close_descriptor();
     goto err;
   }
   code.clear();
-  close(fd);
+  source_file.close_descriptor();
   if (!ext.empty()) {
     // Add the given filename extension so that the compiler knows what kind
     // of input it gets.
     nm += ext;
     if (rename(fnm, nm.c_str())) {
-      unlink(fnm);
       goto err;
     }
+    source_file.stabilize(nm);
   }
   {
     if (tag == "dsp") {
@@ -6442,6 +6478,7 @@ void interpreter::inline_code(bool priv, string &code)
       if (!configured_clang) configured_clang = clang.c_str();
       owned_inline_files owned;
       owned.take(nm);
+      source_file.release_path();
       string c_output = owned.create("pure Faust C.XXXXXX");
       string bitcode_output = owned.create("pure Faust bitcode.XXXXXX");
       inline_faust_commands commands = build_inline_faust_commands

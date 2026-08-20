@@ -1,0 +1,5 @@
+%< -*- dsp:inline_failure -*-
+process = _;
+%>
+
+42;

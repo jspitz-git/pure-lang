@@ -1,9 +1,9 @@
 
-# GNU Makefile to compile the C, Fortran and Faust examples to LLVM bitcode.
+# GNU Makefile to compile the C, Fortran and Faust examples.
 
 # Edit these as needed. CC is the C compiler, FC the Fortran compiler, FAUST
-# the Faust compiler, including any options for LLVM bitcode generation that
-# they may need.
+# the Faust compiler, and CLANG is the Clang executable whose LLVM major
+# matches the running Pure interpreter.
 
 # NOTE: When using the dragonegg plugin for gcc, make sure to set the variable
 # below to the actual pathname of the plugin on your system. Also note that at
@@ -26,7 +26,10 @@ dragonegg=dragonegg
 CC = clang -emit-llvm
 #FC = llvm-gfortran -emit-llvm
 FC = gfortran -fplugin=dragonegg -flto
-FAUST = faust -double -lang llvm
+FAUST = faust
+CLANG = clang
+FAUSTFLAGS = -double -a pure.c -lang c
+FAUST_CLANGFLAGS = -O3 -emit-llvm
 
 # Where the LLVM toolchain (llvm-as et al) is located:
 LLVMBIN = $(shell pkg-config pure --variable tool_prefix)
@@ -40,10 +43,9 @@ LLVMBIN = $(shell pkg-config pure --variable tool_prefix)
 # example.
 
 # For the Faust signal processing examples (.dsp programs), you'll need a
-# special version of Grame's Faust compiler (http://faust.grame.fr). Until
-# Faust's new LLVM backend becomes part of the mainline Faust compiler, you
-# can find this on the special 'faust2' branch in Faust's git repository at:
-# git://faudiostream.git.sourceforge.net/gitroot/faudiostream/faudiostream
+# recent Grame Faust compiler (https://faust.grame.fr/) which provides the
+# pure.c architecture. Faust emits C and matching Clang compiles that C to
+# bitcode; Faust's own LLVM backend is not a supported interchange format.
 
 # If your system lacks any of the above then some of the examples will refuse
 # to build. Compilation will proceed anyway, so that you should be able to
@@ -79,8 +81,9 @@ asm: $(assembler)
 clean:
 	-rm -f $(bitcode)
 	-rm -f $(assembler)
+	-rm -f *.faust.c
 
-# direct rules to generate LLVM bitcode (these don't work with dragonegg)
+# Single-stage C and Fortran rules (these don't work with dragonegg).
 
 ifeq (,$(findstring $(dragonegg),$(CC)))
 %.bc: %.c
@@ -93,7 +96,10 @@ ifeq (,$(findstring $(dragonegg),$(FC)))
 endif
 
 %.bc: %.dsp
-	-$(FAUST) $< -o $@
+	-@set -e; cfile='$*.faust.c'; \
+	  trap 'rm -f "$$cfile"' EXIT HUP INT TERM; \
+	  "$(FAUST)" $(FAUSTFLAGS) "$<" -o "$$cfile"; \
+	  "$(CLANG)" $(FAUST_CLANGFLAGS) -x c -c "$$cfile" -o "$@"
 
 # fallback rule to generate LLVM bitcode from assembler
 %.bc: %.ll
@@ -109,4 +115,7 @@ endif
 
 # compile Faust source to LLVM assembler
 %.ll: %.dsp
-	-$(FAUST) $< > $@
+	-@set -e; cfile='$*.faust.c'; \
+	  trap 'rm -f "$$cfile"' EXIT HUP INT TERM; \
+	  "$(FAUST)" $(FAUSTFLAGS) "$<" -o "$$cfile"; \
+	  "$(CLANG)" $(FAUST_CLANGFLAGS) -x c -S "$$cfile" -o "$@"

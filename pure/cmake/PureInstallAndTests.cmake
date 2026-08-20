@@ -827,6 +827,54 @@ if(BUILD_TESTING)
     )
 
     add_test(
+      NAME pure-faust-inline-failures
+      COMMAND
+        "${CMAKE_COMMAND}"
+        -DPURE_EXECUTABLE=$<TARGET_FILE:pure>
+        -DPURE_SCRIPT_TEMPLATE=${CMAKE_CURRENT_SOURCE_DIR}/test/faust/inline-dsp-failure.pure.in
+        -DPURE_FAUST_EXECUTABLE=${PURE_FAUST_EXECUTABLE}
+        -DPURE_C_COMPILER=${CMAKE_C_COMPILER}
+        -DPURE_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
+        -DPURE_WORK_ROOT=${CMAKE_CURRENT_BINARY_DIR}/test/faust
+        -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunPureInlineFaustFailures.cmake"
+    )
+    set_tests_properties(
+      pure-faust-inline-failures
+      PROPERTIES
+        LABELS "faust;bitcode;integration"
+        ENVIRONMENT_MODIFICATION
+          "PATH=path_list_prepend:${LLVM_TOOLS_BINARY_DIR};PATH=path_list_prepend:${CMAKE_CURRENT_BINARY_DIR}"
+        REQUIRED_FILES
+          "${CMAKE_CURRENT_SOURCE_DIR}/test/faust/inline-dsp-failure.pure.in"
+        TIMEOUT 180
+        FAIL_REGULAR_EXPRESSION
+          "failed to remove ORC compilation unit;failed to retire prepared Faust reload;failed to collect ORC Faust generation;AddressSanitizer;LeakSanitizer;runtime error:"
+    )
+
+    add_test(
+      NAME pure-faust-example-makefile
+      COMMAND
+        "${CMAKE_COMMAND}"
+        -DPURE_MAKE_EXECUTABLE=${CMAKE_MAKE_PROGRAM}
+        -DPURE_SH_EXECUTABLE=${PURE_SH_EXECUTABLE}
+        -DPURE_MAKEFILE=${CMAKE_CURRENT_SOURCE_DIR}/examples/bitcode/Makefile
+        -DPURE_DSP_SOURCE=${CMAKE_CURRENT_SOURCE_DIR}/test/faust/reference.dsp
+        -DPURE_FAUST_EXECUTABLE=${PURE_FAUST_EXECUTABLE}
+        -DPURE_C_COMPILER=${CMAKE_C_COMPILER}
+        -DPURE_LLVM_DIS_EXECUTABLE=${PURE_LLVM_DIS_EXECUTABLE}
+        -DPURE_WORK_ROOT=${CMAKE_CURRENT_BINARY_DIR}/test/faust
+        -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunPureFaustExampleMakeTest.cmake"
+    )
+    set_tests_properties(
+      pure-faust-example-makefile
+      PROPERTIES
+        LABELS "faust;bitcode;integration"
+        REQUIRED_FILES
+          "${CMAKE_CURRENT_SOURCE_DIR}/examples/bitcode/Makefile;${CMAKE_CURRENT_SOURCE_DIR}/test/faust/reference.dsp"
+        TIMEOUT 180
+    )
+
+    add_test(
       NAME pure-faust-lifecycle
       COMMAND
         "${CMAKE_COMMAND}"
