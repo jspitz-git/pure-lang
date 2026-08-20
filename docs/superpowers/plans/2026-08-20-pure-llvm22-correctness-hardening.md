@@ -342,7 +342,7 @@ git commit -m "Compile inline Faust through Clang 22"
 - Consumes: all focused tests and production contracts from Tasks 1-6.
 - Produces: fresh Release, corpus, repeated lifetime, ASan, documentation, and cleanup evidence at one exact commit.
 
-- [ ] **Step 1: Configure and build a fresh Release tree sequentially**
+- [x] **Step 1: Configure and build a fresh Release tree sequentially**
 
 Create a new build directory rather than reusing `audit-llvm22-release`. Run:
 
@@ -353,7 +353,7 @@ cmake --build pure/build/llvm22-hardening-release --parallel 1
 
 Record every warning and reject new warnings introduced by these changes.
 
-- [ ] **Step 2: Run the full CTest suite sequentially**
+- [x] **Step 2: Run the full CTest suite sequentially**
 
 ```powershell
 ctest --test-dir pure/build/llvm22-hardening-release --output-on-failure -j 1
@@ -361,11 +361,11 @@ ctest --test-dir pure/build/llvm22-hardening-release --output-on-failure -j 1
 
 Expected: 100% PASS, including the new harness, retry, recovery, transaction, inline Faust, and batch architecture tests.
 
-- [ ] **Step 3: Run the complete regression corpus**
+- [x] **Step 3: Run the complete regression corpus**
 
 From the fresh build directory, run generated `run-tests` with `TEST_JOBS=1`, the validated MSYS2 diff executable, and timing/verbose output. Expected: `prelude.pure` and every `test001.pure` through `test096.pure` PASS; no interpreter nonzero status is masked.
 
-- [ ] **Step 4: Repeat lifetime tests**
+- [x] **Step 4: Repeat lifetime tests**
 
 ```powershell
 ctest --test-dir pure/build/llvm22-hardening-release -R '^pure-jit-(lifetime-stress|deferred-generation|deferred-retry)$' --repeat until-fail:20 --output-on-failure -j 1
@@ -373,7 +373,7 @@ ctest --test-dir pure/build/llvm22-hardening-release -R '^pure-jit-(lifetime-str
 
 Expected: every repetition PASS without removal or runtime diagnostics.
 
-- [ ] **Step 5: Run the ASan transaction gate**
+- [x] **Step 5: Run the ASan transaction gate**
 
 Configure/build the supported LLVM 22 ASan tree sequentially:
 
@@ -385,7 +385,7 @@ ctest --test-dir pure/build/llvm22-hardening-asan -R '^pure-(faust-lifecycle|bit
 
 Expected: all focused tests PASS with no AddressSanitizer, LeakSanitizer, or undefined-runtime diagnostic.
 
-- [ ] **Step 6: Audit owned resources and tracked changes**
+- [x] **Step 6: Audit owned resources and tracked changes**
 
 Verify no Pure/Faust/Clang child remains, remove only uniquely owned temporary fixtures after canonical containment checks, and preserve `_deps/` plus existing `build/`. Run `git diff --check`, inspect every changed hunk, and confirm the documentation scan from Task 6.
 
