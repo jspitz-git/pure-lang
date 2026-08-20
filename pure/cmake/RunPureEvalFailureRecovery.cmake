@@ -6,10 +6,21 @@ endif()
 
 set(summary "")
 set(failures)
-foreach(mode doeval-add doeval-lookup dodefn-add dodefn-lookup)
-  set(failure_environment "PURE_TEST_ORC_FAILURE=${mode}")
+foreach(mode doeval-add doeval-lookup doeval-nested-lookup dodefn-add dodefn-lookup dodefn-remove dodefn-publish)
+  set(failure_mode "${mode}")
+  if(mode STREQUAL "doeval-nested-lookup")
+    set(failure_mode "doeval-lookup")
+  endif()
+  set(failure_environment "PURE_TEST_ORC_FAILURE=${failure_mode}")
+  if(mode STREQUAL "dodefn-remove")
+    list(APPEND failure_environment
+      "PURE_TEST_TRACKER_RETRY=1")
+  endif()
   if(mode MATCHES "^doeval-")
-    list(APPEND failure_environment "PURE_TEST_ORC_FAILURE_SKIP=${mode}")
+    list(APPEND failure_environment "PURE_TEST_ORC_FAILURE_SKIP=${failure_mode}")
+  endif()
+  if(mode STREQUAL "doeval-nested-lookup")
+    list(APPEND failure_environment "PURE_TEST_NESTED_ENVIRONMENT=1")
   endif()
   execute_process(
     COMMAND
@@ -17,7 +28,9 @@ foreach(mode doeval-add doeval-lookup dodefn-add dodefn-lookup)
       ${failure_environment}
       "${PURE_EXECUTABLE}" --norc --noprelude -q
       --disable=doeval-add --disable=doeval-lookup
-      --disable=dodefn-add --disable=dodefn-lookup "--enable=${mode}"
+      --disable=doeval-nested-lookup --disable=dodefn-add
+      --disable=dodefn-lookup --disable=dodefn-remove
+      --disable=dodefn-publish "--enable=${mode}"
     INPUT_FILE "${PURE_SCRIPT}"
     RESULT_VARIABLE result
     OUTPUT_VARIABLE stdout
@@ -29,7 +42,7 @@ foreach(mode doeval-add doeval-lookup dodefn-add dodefn-lookup)
   if(NOT result EQUAL 0)
     list(APPEND failures "Pure ${mode} child exited with status ${result}")
   endif()
-  if(NOT output MATCHES "injected .*ORC .* failure")
+  if(NOT output MATCHES "injected .* failure")
     list(APPEND failures
       "Pure ${mode} child did not report the injected failure")
   endif()
@@ -42,7 +55,27 @@ foreach(mode doeval-add doeval-lookup dodefn-add dodefn-lookup)
       "Pure ${mode} child did not recover with literal 42")
   endif()
 
-  if(mode MATCHES "^dodefn-")
+  if(mode STREQUAL "dodefn-publish")
+    foreach(symbol publish_first publish_second)
+      if(NOT output MATCHES "(^|[\r\n])${symbol}([\r\n]|$)")
+        list(APPEND failures
+          "Pure ${mode} child exposed partially published ${symbol}")
+      endif()
+    endforeach()
+    if(NOT output MATCHES "(^|[\r\n])43([\r\n]|$)")
+      list(APPEND failures
+        "Pure ${mode} child could not redefine both bindings after rollback")
+    endif()
+    string(APPEND summary
+      "${mode}: partial publication hidden; redefined both bindings\n")
+  elseif(mode STREQUAL "dodefn-remove")
+    if(NOT output MATCHES "(^|[\r\n])7([\r\n]|$)")
+      list(APPEND failures
+        "Pure ${mode} child did not restore the previous definition value")
+    endif()
+    string(APPEND summary
+      "${mode}: restored previous value; retried cleanup; recovered 42\n")
+  elseif(mode MATCHES "^dodefn-")
     if(NOT output MATCHES "(^|[\r\n])failed_definition([\r\n]|$)")
       list(APPEND failures
         "Pure ${mode} child exposed the failed definition")

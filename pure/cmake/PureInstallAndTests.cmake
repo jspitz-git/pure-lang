@@ -405,7 +405,7 @@ if(BUILD_TESTING)
         "${CMAKE_CURRENT_SOURCE_DIR}/test/jit-eval-failure-recovery.pure;${CMAKE_CURRENT_SOURCE_DIR}/test/jit-eval-failure-recovery.log"
       TIMEOUT 60
       FAIL_REGULAR_EXPRESSION
-        "failed to remove ORC;AddressSanitizer;LeakSanitizer;runtime error:"
+        "failed to roll back temporary ORC unit;failed to roll back temporary host global;AddressSanitizer;LeakSanitizer;runtime error:"
   )
   add_test(
     NAME pure-jit-eager

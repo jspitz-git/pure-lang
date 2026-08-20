@@ -25,7 +25,12 @@ static int pure_test_eval_failure(const char *mode)
   const char *message = lasterr();
   if (message && *message) puts(message);
   if (result) pure_freenew(result);
-  return pure_test_fptr == before;
+  result = pure_eval("let retry_probe = (\\x->x) 42");
+  message = lasterr();
+  if (message && *message) puts(message);
+  int recovered = result != NULL;
+  if (result) pure_freenew(result);
+  return pure_test_fptr == before && recovered;
 }
 
 int pure_test_doeval_add(void)
@@ -38,6 +43,11 @@ int pure_test_doeval_lookup(void)
   return pure_test_eval_failure("doeval-lookup");
 }
 
+int pure_test_doeval_nested_lookup(void)
+{
+  return pure_test_eval_failure("doeval-nested-lookup");
+}
+
 int pure_test_dodefn_add(void)
 {
   return pure_test_eval_failure("dodefn-add");
@@ -47,12 +57,43 @@ int pure_test_dodefn_lookup(void)
 {
   return pure_test_eval_failure("dodefn-lookup");
 }
+
+int pure_test_dodefn_remove(void)
+{
+  void *before = pure_test_fptr;
+  pure_expr *result = pure_eval("let rollback_value = 7");
+  if (result) pure_freenew(result);
+  result = pure_eval("let rollback_value = eval_probe 9");
+  const char *message = lasterr();
+  if (message && *message) puts(message);
+  if (result) pure_freenew(result);
+  result = pure_eval("let retry_probe = (\\x->x) 42");
+  message = lasterr();
+  if (message && *message) puts(message);
+  int recovered = result != NULL;
+  if (result) pure_freenew(result);
+  return pure_test_fptr == before && recovered;
+}
+
+int pure_test_dodefn_publish(void)
+{
+  void *before = pure_test_fptr;
+  pure_expr *result = pure_eval
+    ("let publish_first,publish_second = eval_probe 11,eval_probe 12");
+  const char *message = lasterr();
+  if (message && *message) puts(message);
+  if (result) pure_freenew(result);
+  return pure_test_fptr == before;
+}
 %>
 
 extern int pure_test_doeval_add();
 extern int pure_test_doeval_lookup();
+extern int pure_test_doeval_nested_lookup();
 extern int pure_test_dodefn_add();
 extern int pure_test_dodefn_lookup();
+extern int pure_test_dodefn_remove();
+extern int pure_test_dodefn_publish();
 
 infixl 2200 +;
 x::int+y::int = x+y;
@@ -64,9 +105,29 @@ pure_test_doeval_add;
 eval_probe 42;
 #! --endif
 
+#! --if dodefn-remove
+pure_test_dodefn_remove;
+rollback_value;
+(\x->x) 42;
+#! --endif
+
+#! --if dodefn-publish
+pure_test_dodefn_publish;
+publish_first;
+publish_second;
+let publish_first,publish_second = eval_probe 21,eval_probe 22;
+publish_first+publish_second;
+(\x->x) 42;
+#! --endif
+
 #! --if doeval-lookup
 pure_test_doeval_lookup;
 eval_probe 42;
+#! --endif
+
+#! --if doeval-nested-lookup
+pure_test_doeval_nested_lookup;
+(\x->x) 42;
 #! --endif
 
 #! --if dodefn-add
