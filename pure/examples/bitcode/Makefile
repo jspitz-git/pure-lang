@@ -81,7 +81,7 @@ asm: $(assembler)
 clean:
 	-rm -f $(bitcode)
 	-rm -f $(assembler)
-	-rm -f *.faust.c
+	-rm -f *.faust.*.c
 
 # Single-stage C and Fortran rules (these don't work with dragonegg).
 
@@ -96,7 +96,7 @@ ifeq (,$(findstring $(dragonegg),$(FC)))
 endif
 
 %.bc: %.dsp
-	-@set -e; cfile='$*.faust.c'; \
+	-@set -e; cfile="$@.faust.$$$$.c"; \
 	  trap 'rm -f "$$cfile"' EXIT HUP INT TERM; \
 	  "$(FAUST)" $(FAUSTFLAGS) "$<" -o "$$cfile"; \
 	  "$(CLANG)" $(FAUST_CLANGFLAGS) -x c -c "$$cfile" -o "$@"
@@ -115,7 +115,7 @@ endif
 
 # compile Faust source to LLVM assembler
 %.ll: %.dsp
-	-@set -e; cfile='$*.faust.c'; \
+	-@set -e; cfile="$@.faust.$$$$.c"; \
 	  trap 'rm -f "$$cfile"' EXIT HUP INT TERM; \
 	  "$(FAUST)" $(FAUSTFLAGS) "$<" -o "$$cfile"; \
 	  "$(CLANG)" $(FAUST_CLANGFLAGS) -x c -S "$$cfile" -o "$@"

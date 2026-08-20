@@ -13,6 +13,10 @@ DLL = .so
 shared = -shared
 
 CXXFLAGS = -g -O2
+FAUST = faust
+CLANG = clang
+FAUST_C_FLAGS = -lang c -a pure.c -double
+FAUST_CLANG_FLAGS = -emit-llvm -O3
 
 # Try to guess the host system type and figure out compilation flags.
 host = $(shell ./config.guess)
@@ -47,24 +51,21 @@ bitcode: $(bitcode)
 
 clean:
 	rm -Rf *~ $(cppsrc) $(plugins) $(bitcode) $(svg) $(xml)
+	-rm -f *.faust.*.c
 
 %.cpp: %.dsp
-	faust -a pure.cpp -double $< -o $@
+	"$(FAUST)" -a pure.cpp -double $< -o $@
 
 %$(DLL): %.cpp
 	$(CXX) $(shared) $(PIC) $(CPPFLAGS) $(CXXFLAGS) $(LDFLAGS) -o $@ $<
 
-# Here's an alternative rule which shows how to create bitcode using the C
-# architecture pure.c instead. You'll need an LLVM-capable C compiler like
-# clang for this.
+# Faust bitcode is always generated through the portable pure.c architecture
+# and the Clang selected by CLANG, which must match Pure's LLVM major.
 %.bc: %.dsp
-	faust -lang c -a pure.c -double $< -o $(<:.dsp=.c)
-	clang -emit-llvm -O3 -c $(<:.dsp=.c) -o $@
-	rm -f $(<:.dsp=.c)
-
-# Default rule for generating bitcode directly using Faust.
-%.bc: %.dsp
-	faust -lang llvm -double $< -o $@
+	@set -e; cfile="$@.faust.$$$$.c"; \
+	  trap 'rm -f "$$cfile"' EXIT HUP INT TERM; \
+	  "$(FAUST)" $(FAUST_C_FLAGS) "$<" -o "$$cfile"; \
+	  "$(CLANG)" $(FAUST_CLANG_FLAGS) -x c -c "$$cfile" -o "$@"
 
 %-svg: %.dsp
 	faust -svg $< -o /dev/null

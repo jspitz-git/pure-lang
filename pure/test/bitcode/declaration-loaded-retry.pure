@@ -1,0 +1,9 @@
+namespace declaration_seed;
+using "bc:declaration-two";
+bc_declaration_one 1;
+
+namespace declaration_loaded;
+using "bc:declaration-two";
+globsym "declaration_loaded::bc_declaration_*" 0;
+using "bc:declaration-two";
+bc_declaration_one 19 + bc_declaration_two 20;

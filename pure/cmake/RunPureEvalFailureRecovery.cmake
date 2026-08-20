@@ -12,6 +12,11 @@ foreach(mode doeval-add doeval-lookup doeval-nested-lookup dodefn-add dodefn-loo
     set(failure_mode "doeval-lookup")
   endif()
   set(failure_environment "PURE_TEST_ORC_FAILURE=${failure_mode}")
+  if(mode STREQUAL "doeval-add")
+    set(failure_environment
+      "PURE_TEST_ORC_FAILURE=doeval-add,generic-compile-remove"
+      "PURE_TEST_CLEAN_SHUTDOWN=1")
+  endif()
   if(mode STREQUAL "dodefn-remove")
     list(APPEND failure_environment
       "PURE_TEST_TRACKER_RETRY=1")
@@ -95,6 +100,21 @@ foreach(mode doeval-add doeval-lookup doeval-nested-lookup dodefn-add dodefn-loo
     endif()
     string(APPEND summary
       "${mode}: orphaned tracker cleaned once; shutdown returned\n")
+  elseif(mode STREQUAL "doeval-add")
+    string(REGEX MATCHALL
+      "failed to roll back temporary ORC unit" rollback_diagnostics
+      "${output}")
+    list(LENGTH rollback_diagnostics rollback_count)
+    if(NOT rollback_count EQUAL 1)
+      list(APPEND failures
+        "Pure ${mode} child did not report exactly one stable cleanup failure")
+    endif()
+    if(output MATCHES "failed to remove ORC compilation unit")
+      list(APPEND failures
+        "Pure ${mode} child did not retry its cleanup owner at shutdown")
+    endif()
+    string(APPEND summary
+      "${mode}: failed add retained cleanup owner; recovered 42\n")
   elseif(mode STREQUAL "dodefn-publish")
     foreach(symbol publish_first publish_second)
       if(NOT output MATCHES "(^|[\r\n])${symbol}([\r\n]|$)")

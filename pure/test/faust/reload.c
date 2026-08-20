@@ -6,6 +6,15 @@
 
 const char pure_faust_sample_format[] = "double";
 
+static int faust_test_state;
+static int faust_test_anchor __attribute__((used)) = FAUST_TEST_VERSION;
+
+__attribute__((constructor))
+static void initialize_faust_test_state(void)
+{
+  faust_test_state = faust_test_anchor;
+}
+
 void *newreload(void)
 {
   return malloc(1);
@@ -31,7 +40,7 @@ void buildUserInterfacereload(void *dsp, void *ui)
 int getNumInputsreload(void *dsp)
 {
   (void)dsp;
-  return FAUST_TEST_VERSION;
+  return faust_test_state;
 }
 
 int getNumOutputsreload(void *dsp)

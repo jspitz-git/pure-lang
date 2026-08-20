@@ -1186,6 +1186,8 @@ public:
   // Faust interface.
   bool LoadFaustDSP(bool priv, const char *name, string *msg,
 		    const char *modnm = 0);
+  bool declare_loaded_faust_namespace
+    (bcdata_t& data, const string& module_name, bool priv, string& error);
   void retain_faust_instance(int32_t tag, pure_expr *dsp);
   void release_faust_instance(int32_t tag, pure_expr *dsp) noexcept;
   // Generic LLVM bitcode interface.

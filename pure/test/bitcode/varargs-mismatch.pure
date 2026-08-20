@@ -1,0 +1,3 @@
+extern int abs(int value) = bc_varargs;
+using "bc:varargs";
+42;

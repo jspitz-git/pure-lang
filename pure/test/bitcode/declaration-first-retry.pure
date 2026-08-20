@@ -1,0 +1,5 @@
+namespace declaration_first;
+using "bc:declaration-two";
+globsym "declaration_first::bc_declaration_*" 0;
+using "bc:declaration-two";
+bc_declaration_one 19 + bc_declaration_two 20;

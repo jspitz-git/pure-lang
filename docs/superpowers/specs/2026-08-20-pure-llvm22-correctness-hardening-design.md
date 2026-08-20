@@ -165,8 +165,18 @@ Windows host. Completion requires fresh evidence from:
 - The complete `prelude.pure` plus `test001.pure` through `test096.pure`
   regression corpus with a validated diff executable.
 - Repeated JIT lifetime and deferred-generation tests.
-- An ASan build containing the Faust A/B/C failure-retry scenario.
+- A deterministic Windows ASan address-safety build containing the Faust A/B/C
+  failure-retry scenario and repeated clean-process ORC materialization.
 - A documentation scan showing no supported direct Faust LLVM-bitcode route.
+
+Leak freedom is not an acceptance claim for this Windows gate. LLVM 22's
+MinGW ASan runtime reaches address diagnostics reliably, but enabling its leak
+exit sweep is not a bounded test for these ORC lifetime scenarios: the sweep is
+known on this host to stall after a surviving compiled closure. Therefore the
+tracked Windows gate uses `detect_leaks=0`, rejects every ASan/runtime marker,
+and repeats each focused scenario from a fresh process. LeakSanitizer evidence
+must be obtained separately on a host/runtime where that exit sweep completes;
+the absence of a `LeakSanitizer` string in this gate is not leak evidence.
 
 Owned temporary test files and processes must be checked and cleaned after
 each gate. Existing untracked `_deps/` and `build/` directories are preserved.
@@ -179,6 +189,7 @@ each gate. Existing untracked `_deps/` and `build/` directories are preserved.
   environment, or leave callable state pointing at destroyed storage.
 - Inline Faust works through the single C/Clang 22 route.
 - The regression runner cannot mask interpreter failure.
-- Full sequential Release, regression, repeated lifetime, and ASan gates pass.
+- Full sequential Release, regression, repeated lifetime, and deterministic
+  ASan address-safety gates pass.
 - The tracked worktree contains only intentional source, test, build-system,
   documentation, specification, and plan changes.

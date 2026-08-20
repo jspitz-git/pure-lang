@@ -22,21 +22,31 @@ if a_after_failed_b == 11 then ()
 else throw "failed Faust B reload damaged the live A instance";
 
 system "sleep 1";
-system "cp @PURE_FAUST_FIXTURE_OUTPUT_DIR@/lifecycle-c.bc @PURE_FAUST_FIXTURE_OUTPUT_DIR@/lifecycle_reload.bc";
+system "cp @PURE_FAUST_FIXTURE_OUTPUT_DIR@/lifecycle-b.bc @PURE_FAUST_FIXTURE_OUTPUT_DIR@/lifecycle_reload.bc";
 system "touch @PURE_FAUST_FIXTURE_OUTPUT_DIR@/lifecycle_reload.bc";
 using "dsp:@PURE_FAUST_FIXTURE_OUTPUT_DIR@/lifecycle_reload";
-let a_after_rejected_c = lifecycle_reload::getNumInputs first;
-if a_after_rejected_c == 11 then ()
-else throw "rejected live-instance Faust C reload damaged A";
+let a_after_rejected_b = lifecycle_reload::getNumInputs first;
+if a_after_rejected_b == 11 then ()
+else throw "rejected live-instance Faust B reload damaged A";
 lifecycle_reload::delete first;
 
 using "dsp:@PURE_FAUST_FIXTURE_OUTPUT_DIR@/lifecycle_reload";
 let second = lifecycle_reload::newinit 48000;
-let c_after_failed_b = lifecycle_reload::getNumInputs second;
-if c_after_failed_b == 22 then ()
-else throw "valid Faust C did not replace A after failed B";
+let b_after_failed_reload = lifecycle_reload::getNumInputs second;
+if b_after_failed_reload == 22 then ()
+else throw "valid Faust B did not replace A after failed reload";
 lifecycle_reload::delete second;
-puts "FAUST-LIVE-C 11 11 11 22";
+
+system "sleep 1";
+system "cp @PURE_FAUST_FIXTURE_OUTPUT_DIR@/lifecycle-c.bc @PURE_FAUST_FIXTURE_OUTPUT_DIR@/lifecycle_reload.bc";
+system "touch @PURE_FAUST_FIXTURE_OUTPUT_DIR@/lifecycle_reload.bc";
+using "dsp:@PURE_FAUST_FIXTURE_OUTPUT_DIR@/lifecycle_reload";
+let third = lifecycle_reload::newinit 48000;
+let c_after_b = lifecycle_reload::getNumInputs third;
+if c_after_b == 33 then ()
+else throw "valid Faust C did not replace B";
+lifecycle_reload::delete third;
+puts "FAUST-LIVE-ABC 11 11 11 22 33";
 
 system "sleep 1";
 system "cp @PURE_FAUST_FIXTURE_OUTPUT_DIR@/lifecycle-float.bc @PURE_FAUST_FIXTURE_OUTPUT_DIR@/lifecycle_reload.bc";
@@ -44,8 +54,8 @@ system "touch @PURE_FAUST_FIXTURE_OUTPUT_DIR@/lifecycle_reload.bc";
 using "dsp:@PURE_FAUST_FIXTURE_OUTPUT_DIR@/lifecycle_reload";
 let after_float_rejection = lifecycle_reload::newinit 48000;
 let c_after_float = lifecycle_reload::getNumInputs after_float_rejection;
-if c_after_float == 22 then ()
+if c_after_float == 33 then ()
 else throw "rejected float reload damaged Faust C";
 lifecycle_reload::delete after_float_rejection;
-puts "FAUST-FLOAT 22";
+puts "FAUST-FLOAT 33";
 42;

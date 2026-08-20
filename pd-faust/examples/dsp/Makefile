@@ -33,10 +33,12 @@ PATH := $(LLVM_PATH):$(PATH)
 # clang bitcode compilation.
 LLVMCC = clang -emit-llvm
 LLVMCXX = clang++ -emit-llvm
+CLANG = clang
+FAUST_CLANGFLAGS = -emit-llvm
 
 # Faust (we only require mainline Faust, but Faust2 will work as well).
-FAUST = faust -double -cn $(<:.dsp=)
-#FAUST = faust -double
+FAUST = faust
+FAUSTFLAGS = -double -cn $(<:.dsp=)
 
 # This is the collection of flags which actually gets passed in the C/C++
 # recipes. Normally you shouldn't have to edit or override these.
@@ -48,7 +50,7 @@ ALL_LDFLAGS = $(LDFLAGS) $(LIBS)
 
 # compile Faust source to C++ module (pure.cpp architecture)
 %.cpp: %.dsp
-	$(FAUST) -a pure.cpp $< -o $@
+	"$(FAUST)" $(FAUSTFLAGS) -a pure.cpp $< -o $@
 
 # compile Faust C++ module to shared lib
 %$(DLL): %.cpp
@@ -56,11 +58,15 @@ ALL_LDFLAGS = $(LDFLAGS) $(LIBS)
 
 # compile Faust source to C module (pure.c architecture)
 %.c: %.dsp
-	$(FAUST) -lang c -a pure.c $< -o $@
+	"$(FAUST)" $(FAUSTFLAGS) -lang c -a pure.c $< -o $@
 
-# compile Faust C module to LLVM bitcode (needs clang)
-%.bc: %.c
-	$(LLVMCC) $(ALL_CFLAGS) -c $< -o $@
+# Compile Faust bitcode through a unique temporary pure.c source and the
+# configurable matching Clang.
+%.bc: %.dsp
+	@set -e; cfile="$@.faust.$$$$.c"; \
+	  trap 'rm -f "$$cfile"' EXIT HUP INT TERM; \
+	  "$(FAUST)" $(FAUSTFLAGS) -lang c -a pure.c "$<" -o "$$cfile"; \
+	  "$(CLANG)" $(FAUST_CLANGFLAGS) $(ALL_CFLAGS) -x c -c "$$cfile" -o "$@"
 
 # dsp sources
 dspsource := $(sort $(wildcard *.dsp))
@@ -95,6 +101,7 @@ json: $(json)
 
 clean:
 	-rm -f $(modules)
+	-rm -f *.faust.*.c
 
 distclean: clean
 	rm -Rf $(cppsource) $(svg) $(xml) $(json)

@@ -1,4 +1,5 @@
 failed to resolve deferred ORC function generation: injected deferred ORC snapshot submission failure
+injected deferred-snapshot-remove ORC tracker removal failure
 deferred_retry 2
 failed to resolve deferred ORC function generation: injected deferred ORC snapshot lookup failure
 deferred_retry 2

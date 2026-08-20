@@ -24,6 +24,10 @@ stage_faust_fixture(
 execute_process(COMMAND "${CMAKE_COMMAND}" -E sleep 1)
 stage_faust_fixture(
   "${PURE_FIXTURE_DIR}/reload-b.bc"
+  "${PURE_FIXTURE_DIR}/lifecycle-b.bc")
+execute_process(COMMAND "${CMAKE_COMMAND}" -E sleep 1)
+stage_faust_fixture(
+  "${PURE_FIXTURE_DIR}/reload-c.bc"
   "${PURE_FIXTURE_DIR}/lifecycle-c.bc")
 execute_process(COMMAND "${CMAKE_COMMAND}" -E sleep 1)
 stage_faust_fixture(

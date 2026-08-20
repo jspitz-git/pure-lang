@@ -1,4 +1,4 @@
-doeval-add: recovered 42
+doeval-add: failed add retained cleanup owner; recovered 42
 doeval-lookup: recovered 42
 doeval-nested-lookup: recovered 42
 dodefn-add: failed definition hidden; recovered 42

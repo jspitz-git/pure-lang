@@ -31,16 +31,8 @@ CXX = g++
 CFLAGS = -O3 -ffast-math -msse
 CXXFLAGS = -O3 -ffast-math -msse
 
-# Faust2 is needed to create LLVM bitcode from Faust sources. For compiling
-# C/C++ to bitcode you can use either llvm-gcc (now deprecated), gcc >= 4.5
-# with the dragonegg plugin, or clang. Fortran can be compiled to bitcode
-# using either llvm-gfortran (deprecated) or gfortran >= 4.5 with dragonegg.
-# Defaults are gcc/gfortran+dragonegg, you can change these below.
-
-# Enable direct compilation Faust -> LLVM bitcode/assembler. Note that at
-# present this doesn't work for some of the STK examples which require
-# auxiliary C code to work, so this is disabled for now.
-#faustllvm=yes
+# Faust bitcode uses the portable pure.c architecture followed by Clang.
+# CLANG must select the compiler whose LLVM major matches Pure.
 
 # This should work out of the box if you installed dragonegg on ggc's plugin
 # path (gcc -print-file-name=plugin).
@@ -58,15 +50,13 @@ PATH := $(LLVM_PATH):$(PATH)
 LLVMFC = gfortran -fplugin=dragonegg -flto
 LLVMCC = clang -emit-llvm
 LLVMCXX = clang++ -emit-llvm
-#FAUST = faust -double
-FAUST = faust -double -cn $(<:.dsp=)
+FAUST = faust
+CLANG = clang
+FAUSTFLAGS = -double -cn $(<:.dsp=)
+FAUST_CLANGFLAGS = -emit-llvm
 
 PURE_INCLUDES = $(shell pkg-config pure --cflags)
 PURE_LIBS = $(shell pkg-config pure --libs)
-
-# Enable optimization of Faust bitcode modules for direct Faust bitcode output
-# (faust -lang llvm).
-OPT = | opt -O3
 
 # This is the collection of flags which actually gets passed in the C/C++
 # recipes. Normally you shouldn't have to edit or override these.
@@ -99,27 +89,19 @@ asmsource  := $(dsp_source:%.dsp=%.ll)
 %$(DLL): %.c
 	$(CC) $(shared) $(ALL_CFLAGS) $< -o $@ $(ALL_LDFLAGS) $(PURE_LIBS)
 
-ifdef faustllvm
-# compile Faust source to LLVM bitcode (needs faust2)
+# Compile Faust through a uniquely owned temporary C source. The trap handles
+# compiler errors and interrupted parallel builds without deleting user files.
 %.bc: %.dsp
-	$(FAUST) -lang llvm $< $(OPT) -o $@
+	@set -e; cfile="$@.faust.$$$$.c"; \
+	  trap 'rm -f "$$cfile"' EXIT HUP INT TERM; \
+	  "$(FAUST)" $(FAUSTFLAGS) -lang c -a pure.c "$<" -o "$$cfile"; \
+	  "$(CLANG)" $(FAUST_CLANGFLAGS) $(ALL_CFLAGS) -x c -c "$$cfile" -o "$@"
 
-# compile Faust source to LLVM assembler (needs faust2)
 %.ll: %.dsp
-	$(FAUST) -lang llvm $< > $@
-else
-# make sure that we go through faust -lang c here
-%.bc: %.dsp
-	$(FAUST) -lang c -a pure.c $< -o $(<:.dsp=.c)
-ifeq (,$(findstring $(dragonegg),$(LLVMCC)))
-	$(LLVMCC) $(ALL_CFLAGS) -c $(<:.dsp=.c) -o $@
-	rm -f $(<:.dsp=.c)
-else
-	$(LLVMCC) $(ALL_CFLAGS) -S $(<:.dsp=.c) -o $(<:.dsp=.ll)
-	llvm-as $(<:.dsp=.ll) -o $@
-	rm -f $(<:.dsp=.c) $(<:.dsp=.ll)
-endif
-endif
+	@set -e; cfile="$@.faust.$$$$.c"; \
+	  trap 'rm -f "$$cfile"' EXIT HUP INT TERM; \
+	  "$(FAUST)" $(FAUSTFLAGS) -lang c -a pure.c "$<" -o "$$cfile"; \
+	  "$(CLANG)" $(FAUST_CLANGFLAGS) $(ALL_CFLAGS) -x c -S "$$cfile" -o "$@"
 
 # direct rules to generate LLVM bitcode (these don't work with dragonegg)
 
@@ -164,11 +146,11 @@ endif
 
 # compile Faust source to C++ module (Pure architecture)
 %.cpp: %.dsp
-	$(FAUST) -a pure.cpp $< -o $@
+	"$(FAUST)" $(FAUSTFLAGS) -a pure.cpp $< -o $@
 
 # compile Faust source to C code (needs faust2)
 %.c: %.dsp
-	$(FAUST) -lang c -a pure.c $< -o $@
+	"$(FAUST)" $(FAUSTFLAGS) -lang c -a pure.c $< -o $@
 
 # Faust-specific stuff
 

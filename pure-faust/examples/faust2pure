@@ -12,6 +12,9 @@
 # defaults (these can be changed with the options listed below)
 KEEP="no"
 BITCODE="no"
+FAUST=${FAUST:-faust}
+CLANG=${CLANG:-clang}
+CXX=${CXX:-g++}
 
 PROCARCH="-fPIC"
 dllext=".so"
@@ -87,34 +90,44 @@ cppname="$clsname.cpp"
 soname="$clsname$dllext"
 fi
 tmpdir=`mktemp -d /tmp/faust2pure.XXXXXX`
-
-CXX=g++
-LLVMCC="clang -emit-llvm"
+if [[ -z "$tmpdir" || ! -d "$tmpdir" ]]; then
+    echo "$0: failed to create a private build directory" >&2
+    exit 1
+fi
+cleanup_tmpdir()
+{
+    if [[ -n "$tmpdir" && -d "$tmpdir" ]]; then
+        rm -rf -- "$tmpdir"
+    fi
+}
+trap cleanup_tmpdir EXIT HUP INT TERM
 
 # Create the temp directory
-mkdir -p $tmpdir
+mkdir -p "$tmpdir"
 #trap "echo $0: compile error, intermediate files left in $tmpdir >&2" EXIT
 # Compile the Faust module.
-faust -i $TARGET -a "$FAUSTLIB/$arch" $OPTIONS "$dspname" -o "$tmpdir/$cppname" || exit 1
+"$FAUST" -i $TARGET -a "$FAUSTLIB/$arch" $OPTIONS "$dspname" -o "$tmpdir/$cppname" || exit 1
 if [[ $BITCODE == yes ]]; then
 # compile Faust C module to LLVM bitcode using the pure.c architecture (needs
 # clang)
-$LLVMCC $CXXFLAGS $FAUSTTOOLSFLAGS $PROCARCH -I"$ABSDIR" -c "$tmpdir/$cppname" -o "$tmpdir/$soname" || exit 1
+"$CLANG" -emit-llvm $CXXFLAGS $FAUSTTOOLSFLAGS $PROCARCH -I"$ABSDIR" -c "$tmpdir/$cppname" -o "$tmpdir/$soname" || exit 1
 else
-$CXX -shared $CXXFLAGS $FAUSTTOOLSFLAGS $PROCARCH -I"$ABSDIR" "$tmpdir/$cppname" -o "$tmpdir/$soname" || exit 1
+"$CXX" -shared $CXXFLAGS $FAUSTTOOLSFLAGS $PROCARCH -I"$ABSDIR" "$tmpdir/$cppname" -o "$tmpdir/$soname" || exit 1
 fi
 #trap - EXIT
 
 # copy down the plugin
-rm -rf "$SRCDIR/$soname"
+rm -f "$SRCDIR/$soname"
 cp "$tmpdir/$soname" "$SRCDIR"
 if [[ $KEEP == yes ]]; then
     # keep the build directory
     rm -rf "$SRCDIR/$clsname"
-    mv $tmpdir "$SRCDIR/$clsname"
+    mv "$tmpdir" "$SRCDIR/$clsname"
+    tmpdir=
 else
     # Clean up.
-    rm -rf $tmpdir
+    cleanup_tmpdir
+    tmpdir=
 fi
 BINARIES="$BINARIES$SRCDIR/$soname;"
 

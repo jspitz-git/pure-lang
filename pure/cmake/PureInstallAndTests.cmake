@@ -68,7 +68,8 @@ if(BUILD_TESTING)
 
   set(PURE_BITCODE_FIXTURE_OUTPUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/test/bitcode")
   set(PURE_BITCODE_FIXTURE_OUTPUTS)
-  foreach(fixture basic duplicate-a duplicate-b unresolved)
+  foreach(fixture basic declaration-two duplicate-a duplicate-b unresolved
+                  varargs)
     set(source "${CMAKE_CURRENT_SOURCE_DIR}/test/bitcode/${fixture}.c")
     set(output "${PURE_BITCODE_FIXTURE_OUTPUT_DIR}/${fixture}.bc")
     set(disassembly "${PURE_BITCODE_FIXTURE_OUTPUT_DIR}/${fixture}.ll")
@@ -202,11 +203,13 @@ if(BUILD_TESTING)
     )
     list(APPEND PURE_FAUST_FIXTURE_OUTPUTS "${reference_bc}")
 
-    foreach(fixture reload-a reload-b)
+    foreach(fixture reload-a reload-b reload-c)
       if(fixture STREQUAL "reload-a")
         set(version 11)
-      else()
+      elseif(fixture STREQUAL "reload-b")
         set(version 22)
+      else()
+        set(version 33)
       endif()
       set(output "${PURE_FAUST_FIXTURE_OUTPUT_DIR}/${fixture}.bc")
       set(disassembly "${PURE_FAUST_FIXTURE_OUTPUT_DIR}/${fixture}.ll")
@@ -297,6 +300,11 @@ if(BUILD_TESTING)
       @ONLY
     )
     configure_file(
+      "${CMAKE_CURRENT_SOURCE_DIR}/test/faust/declaration-loaded-retry.pure.in"
+      "${PURE_FAUST_FIXTURE_OUTPUT_DIR}/declaration-loaded-retry.pure"
+      @ONLY
+    )
+    configure_file(
       "${CMAKE_CURRENT_SOURCE_DIR}/test/faust/batch.pure.in"
       "${PURE_FAUST_FIXTURE_OUTPUT_DIR}/batch.pure"
       @ONLY
@@ -323,6 +331,11 @@ if(BUILD_TESTING)
     "${CMAKE_CURRENT_SOURCE_DIR}/pure_jit.cc"
     "${CMAKE_CURRENT_SOURCE_DIR}/test/pure-jit-smoke.cc"
   )
+  if(WIN32)
+    target_sources(
+      pure-jit-smoke PRIVATE "${PURE_COFF_JITLINK_SOURCE}"
+    )
+  endif()
   target_include_directories(
     pure-jit-smoke
     PRIVATE
@@ -377,6 +390,23 @@ if(BUILD_TESTING)
         "\\[pure-jit object\\].*format='[^']+'.*symbols="
   )
   add_test(
+    NAME pure-jit-fresh-process-repeat
+    COMMAND
+      "${CMAKE_COMMAND}"
+      -DPURE_JIT_SMOKE=$<TARGET_FILE:pure-jit-smoke>
+      -DPURE_ATTEMPTS=20
+      -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunPureJitFreshProcesses.cmake"
+  )
+  set_tests_properties(
+    pure-jit-fresh-process-repeat
+    PROPERTIES
+      LABELS "jit;stress"
+      TIMEOUT 300
+      PASS_REGULAR_EXPRESSION "Pure fresh-process JIT attempts passed: 20"
+      FAIL_REGULAR_EXPRESSION
+        "IMAGE_REL_AMD64_ADDR32NB;AddressSanitizer;runtime error:"
+  )
+  add_test(
     NAME pure-jit-lifetime-stress
     COMMAND
       "${CMAKE_COMMAND}"
@@ -418,7 +448,7 @@ if(BUILD_TESTING)
     NAME pure-jit-deferred-retry
     COMMAND
       "${CMAKE_COMMAND}"
-      -E env PURE_TEST_ORC_FAILURE=deferred-snapshot-add,deferred-snapshot-lookup
+      -E env PURE_TEST_ORC_FAILURE=deferred-snapshot-add,deferred-snapshot-lookup,deferred-snapshot-remove
       "${CMAKE_COMMAND}"
       -DPURE_EXECUTABLE=$<TARGET_FILE:pure>
       -DPURE_SCRIPT=${CMAKE_CURRENT_SOURCE_DIR}/test/jit-deferred-retry.pure
@@ -431,6 +461,26 @@ if(BUILD_TESTING)
       LABELS "jit;stress"
       REQUIRED_FILES
         "${CMAKE_CURRENT_SOURCE_DIR}/test/jit-deferred-retry.pure;${CMAKE_CURRENT_SOURCE_DIR}/test/jit-deferred-retry.log"
+      TIMEOUT 60
+      FAIL_REGULAR_EXPRESSION
+        "failed to remove ORC compilation unit;AddressSanitizer;LeakSanitizer;runtime error:"
+  )
+  add_test(
+    NAME pure-jit-type-retirement-retry
+    COMMAND
+      "${CMAKE_COMMAND}"
+      -DPURE_EXECUTABLE=$<TARGET_FILE:pure>
+      -DPURE_SCRIPT=${CMAKE_CURRENT_SOURCE_DIR}/test/jit-type-retirement-retry.pure
+      -DPURE_FAILURE_MODE=type-generation-remove
+      -DPURE_EXPECTED_DIAGNOSTIC=injected.type-generation-remove.ORC.tracker.removal.failure
+      -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunPureCleanupOwnership.cmake"
+  )
+  set_tests_properties(
+    pure-jit-type-retirement-retry
+    PROPERTIES
+      LABELS "jit;stress"
+      REQUIRED_FILES
+        "${CMAKE_CURRENT_SOURCE_DIR}/test/jit-type-retirement-retry.pure"
       TIMEOUT 60
       FAIL_REGULAR_EXPRESSION
         "failed to remove ORC compilation unit;AddressSanitizer;LeakSanitizer;runtime error:"
@@ -454,7 +504,7 @@ if(BUILD_TESTING)
         "${CMAKE_CURRENT_SOURCE_DIR}/test/jit-eval-failure-recovery.pure;${CMAKE_CURRENT_SOURCE_DIR}/test/jit-eval-failure-recovery.log"
       TIMEOUT 60
       FAIL_REGULAR_EXPRESSION
-        "failed to roll back temporary ORC unit;failed to roll back temporary host global;AddressSanitizer;LeakSanitizer;runtime error:"
+        "failed to roll back temporary host global;AddressSanitizer;LeakSanitizer;runtime error:"
   )
   add_test(
     NAME pure-jit-eager
@@ -592,6 +642,40 @@ if(BUILD_TESTING)
 
   add_pure_bitcode_test(
     pointer-duplicate-exports pointer-duplicate-exports.pure pointer-duplicate-a.bc
+  )
+
+  add_pure_bitcode_test(
+    declaration-first-retry declaration-first-retry.pure declaration-two.bc
+  )
+  set_tests_properties(
+    pure-bitcode-declaration-first-retry
+    PROPERTIES
+      ENVIRONMENT "PURE_TEST_DECLARATION_FAILURE=bitcode-first"
+      ENVIRONMENT_MODIFICATION
+        "PURE_TEST_ORC_FAILURE=set:bitcode-first-remove"
+      PASS_REGULAR_EXPRESSION
+        "injected second bitcode declaration failure(.|\n)*\\[\\](.|\n)*42"
+  )
+
+  add_pure_bitcode_test(
+    declaration-loaded-retry declaration-loaded-retry.pure declaration-two.bc
+  )
+  set_tests_properties(
+    pure-bitcode-declaration-loaded-retry
+    PROPERTIES
+      ENVIRONMENT "PURE_TEST_DECLARATION_FAILURE=bitcode-loaded"
+      PASS_REGULAR_EXPRESSION
+        "injected second bitcode declaration failure(.|\n)*\\[\\](.|\n)*42"
+  )
+
+  add_pure_bitcode_test(
+    varargs-mismatch varargs-mismatch.pure varargs.bc
+  )
+  set_tests_properties(
+    pure-bitcode-varargs-mismatch
+    PROPERTIES
+      PASS_REGULAR_EXPRESSION
+        "does not match previous declaration(.|\n)*42"
   )
   set_tests_properties(
     pure-bitcode-pointer-duplicate-exports
@@ -732,20 +816,25 @@ if(BUILD_TESTING)
       "${PURE_BITCODE_FIXTURE_OUTPUT_DIR}/transaction-host-old.bc")
   set(transaction_host_invalid_bc
       "${PURE_BITCODE_FIXTURE_OUTPUT_DIR}/transaction-host-invalid.bc")
-  foreach(host_case replacement reregistration shutdown)
+  foreach(host_case replacement reregistration restore-fatal shutdown)
     set(host_batch_object
         "${CMAKE_CURRENT_BINARY_DIR}/test/bitcode/transaction-host-${host_case}.o")
     set(host_batch_executable
         "${CMAKE_CURRENT_BINARY_DIR}/test/bitcode/transaction-host-${host_case}${CMAKE_EXECUTABLE_SUFFIX}")
     set(host_extra_arguments)
     set(host_expected_diagnostic injected.batch-bitcode-host-remove)
+    set(host_script
+        ${CMAKE_CURRENT_SOURCE_DIR}/test/bitcode/transaction-host-${host_case}.pure)
     set(host_second_source
         ${CMAKE_CURRENT_SOURCE_DIR}/test/bitcode/transaction-valid.c)
     set(host_second_bitcode ${transaction_valid_bc})
     set(host_third_source
         ${CMAKE_CURRENT_SOURCE_DIR}/test/bitcode/transaction-invalid.c)
     set(host_third_bitcode ${transaction_host_invalid_bc})
-    if(host_case STREQUAL "reregistration")
+    if(host_case STREQUAL "reregistration" OR
+       host_case STREQUAL "restore-fatal")
+      set(host_script
+          ${CMAKE_CURRENT_SOURCE_DIR}/test/bitcode/transaction-host-reregistration.pure)
       set(host_second_source
           ${CMAKE_CURRENT_SOURCE_DIR}/test/bitcode/transaction-host-new.c)
       set(host_second_bitcode
@@ -756,6 +845,13 @@ if(BUILD_TESTING)
           ${PURE_BITCODE_FIXTURE_OUTPUT_DIR}/transaction-after.bc)
       set(host_expected_diagnostic
           "injected.batch-bitcode-host-reregister(.|\\n)*failed.to.remove.ORC.compilation.unit")
+    endif()
+    if(host_case STREQUAL "restore-fatal")
+      list(APPEND host_extra_arguments
+        -DPURE_EXPECT_BATCH_FAILURE=TRUE
+        -DPURE_SKIP_BATCH_RUN=TRUE)
+      set(host_expected_diagnostic
+          "failed.to.replace.ORC.host.symbol(.|\\n)*failed.to.restore.its.authoritative.registration")
     endif()
     if(host_case STREQUAL "shutdown")
       list(APPEND host_extra_arguments -DPURE_SKIP_BATCH_RUN=TRUE)
@@ -768,7 +864,7 @@ if(BUILD_TESTING)
         -DPURE_SH_EXECUTABLE=${PURE_SH_EXECUTABLE}
         -DPURE_RUN_TEST=${CMAKE_CURRENT_BINARY_DIR}/run-test
         -DPURE_FIXTURE_DIR=${PURE_BITCODE_FIXTURE_OUTPUT_DIR}
-        -DPURE_SCRIPT=${CMAKE_CURRENT_SOURCE_DIR}/test/bitcode/transaction-host-${host_case}.pure
+        -DPURE_SCRIPT=${host_script}
         -DPURE_C_COMPILER=${CMAKE_C_COMPILER}
         -DPURE_C_SOURCE=${CMAKE_CURRENT_SOURCE_DIR}/test/bitcode/transaction-host-old.c
         -DPURE_BITCODE_OUTPUT=${transaction_host_old_bc}
@@ -793,7 +889,7 @@ if(BUILD_TESTING)
       PROPERTIES
         LABELS "bitcode;batch;integration"
         REQUIRED_FILES
-          "${CMAKE_CURRENT_SOURCE_DIR}/test/bitcode/transaction-host-old.c;${CMAKE_CURRENT_SOURCE_DIR}/test/bitcode/transaction-host-${host_case}.pure"
+          "${CMAKE_CURRENT_SOURCE_DIR}/test/bitcode/transaction-host-old.c;${host_script}"
         TIMEOUT ${transaction_prepare_batch_timeout}
         FAIL_REGULAR_EXPRESSION
           "AddressSanitizer;LeakSanitizer;runtime error:"
@@ -879,8 +975,8 @@ if(BUILD_TESTING)
           "AddressSanitizer;LeakSanitizer;runtime error:;stack-use-after-scope"
     )
 
-    add_test(
-      NAME pure-faust-example-makefile
+  add_test(
+    NAME pure-faust-example-makefile
       COMMAND
         "${CMAKE_COMMAND}"
         -DPURE_MAKE_EXECUTABLE=${CMAKE_MAKE_PROGRAM}
@@ -893,6 +989,22 @@ if(BUILD_TESTING)
         -DPURE_PATH_LIST_MODULE=${CMAKE_CURRENT_SOURCE_DIR}/cmake/PurePathList.cmake
         -DPURE_WORK_ROOT=${CMAKE_CURRENT_BINARY_DIR}/test/faust
         -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunPureFaustExampleMakeTest.cmake"
+    )
+
+    add_test(
+      NAME pure-faust-pipeline-contract
+      COMMAND
+        "${CMAKE_COMMAND}"
+        -DPURE_REPOSITORY_ROOT=${CMAKE_CURRENT_SOURCE_DIR}/..
+        -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/VerifyNoDirectFaustLlvm.cmake"
+    )
+    set_tests_properties(
+      pure-faust-pipeline-contract
+      PROPERTIES
+        LABELS "faust;bitcode;contract"
+        TIMEOUT 60
+        PASS_REGULAR_EXPRESSION
+          "Repository-wide Faust pipeline contract passed"
     )
     set_tests_properties(
       pure-faust-example-makefile
@@ -923,12 +1035,35 @@ if(BUILD_TESTING)
       PROPERTIES
         LABELS "faust;bitcode;integration"
         REQUIRED_FILES
-          "${reference_bc};${PURE_FAUST_FIXTURE_OUTPUT_DIR}/reload-a.bc;${PURE_FAUST_FIXTURE_OUTPUT_DIR}/reload-b.bc;${PURE_FAUST_FIXTURE_OUTPUT_DIR}/reload-float.bc;${PURE_FAUST_FIXTURE_OUTPUT_DIR}/reload-unresolved.bc;${PURE_FAUST_FIXTURE_OUTPUT_DIR}/lifecycle.pure"
+          "${reference_bc};${PURE_FAUST_FIXTURE_OUTPUT_DIR}/reload-a.bc;${PURE_FAUST_FIXTURE_OUTPUT_DIR}/reload-b.bc;${PURE_FAUST_FIXTURE_OUTPUT_DIR}/reload-c.bc;${PURE_FAUST_FIXTURE_OUTPUT_DIR}/reload-float.bc;${PURE_FAUST_FIXTURE_OUTPUT_DIR}/reload-unresolved.bc;${PURE_FAUST_FIXTURE_OUTPUT_DIR}/lifecycle.pure"
         TIMEOUT ${faust_test_timeout}
         PASS_REGULAR_EXPRESSION
-          "faust_missing_test_dependency(.|\n)*Cannot reload Faust module while DSP instances are live(.|\n)*FAUST-LIVE-C 11 11 11 22(.|\n)*Module was previously loaded with the double sample ABI(.|\n)*FAUST-FLOAT 22(.|\n)*42"
+          "faust_missing_test_dependency(.|\n)*Cannot reload Faust module while DSP instances are live(.|\n)*FAUST-LIVE-ABC 11 11 11 22 33(.|\n)*Module was previously loaded with the double sample ABI(.|\n)*FAUST-FLOAT 33(.|\n)*42"
         FAIL_REGULAR_EXPRESSION
           "failed to remove ORC compilation unit;failed to retire prepared Faust reload;failed to collect ORC Faust generation;AddressSanitizer;LeakSanitizer;runtime error:"
+    )
+    add_test(
+      NAME pure-faust-prepared-cleanup-retry
+      COMMAND
+        "${CMAKE_COMMAND}"
+        -DPURE_SH_EXECUTABLE=${PURE_SH_EXECUTABLE}
+        -DPURE_RUN_TEST=${CMAKE_CURRENT_BINARY_DIR}/run-test
+        -DPURE_FIXTURE_DIR=${PURE_FAUST_FIXTURE_OUTPUT_DIR}
+        -DPURE_SCRIPT=${PURE_FAUST_FIXTURE_OUTPUT_DIR}/lifecycle.pure
+        -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunPureFaustTest.cmake"
+    )
+    set_tests_properties(
+      pure-faust-prepared-cleanup-retry
+      PROPERTIES
+        LABELS "faust;bitcode;integration"
+        ENVIRONMENT "PURE_TEST_ORC_FAILURE=faust-prepared-remove"
+        REQUIRED_FILES
+          "${reference_bc};${PURE_FAUST_FIXTURE_OUTPUT_DIR}/reload-a.bc;${PURE_FAUST_FIXTURE_OUTPUT_DIR}/reload-b.bc;${PURE_FAUST_FIXTURE_OUTPUT_DIR}/reload-c.bc;${PURE_FAUST_FIXTURE_OUTPUT_DIR}/reload-float.bc;${PURE_FAUST_FIXTURE_OUTPUT_DIR}/reload-unresolved.bc;${PURE_FAUST_FIXTURE_OUTPUT_DIR}/lifecycle.pure"
+        TIMEOUT ${faust_test_timeout}
+        PASS_REGULAR_EXPRESSION
+          "injected.faust-prepared-remove.ORC.tracker.removal.failure(.|\n)*FAUST-LIVE-ABC 11 11 11 22 33(.|\n)*42"
+        FAIL_REGULAR_EXPRESSION
+          "failed to remove ORC compilation unit;AddressSanitizer;LeakSanitizer;runtime error:"
     )
   endif()
 
@@ -1034,8 +1169,8 @@ if(BUILD_TESTING)
         -DPURE_OUTPUT_NAME=pure-batch-faust.o
         -DPURE_FIXTURE_SOURCE=${PURE_FAUST_FIXTURE_OUTPUT_DIR}/reload-a.bc
         -DPURE_FIXTURE_DESTINATION=${PURE_FAUST_FIXTURE_OUTPUT_DIR}/batch_reload.bc
-        "-DPURE_EXPECTED_OUTPUT=FAUST-BATCH-RUNTIME 11 11 22\n"
-        "-DPURE_EXPECTED_COMPILE_SENTINEL=FAUST-BATCH-COMPILE 11 11 22"
+        "-DPURE_EXPECTED_OUTPUT=FAUST-BATCH-RUNTIME 11 11 22 33\n"
+        "-DPURE_EXPECTED_COMPILE_SENTINEL=FAUST-BATCH-COMPILE 11 11 22 33"
         -DPURE_EXPECTED_DIAGNOSTIC=faust_missing_test_dependency
         -DPURE_OBJECT_INSPECTOR=${LLVM_TOOLS_BINARY_DIR}/llvm-readobj
         -DPURE_RUN_EXECUTABLE=ON
@@ -1047,12 +1182,36 @@ if(BUILD_TESTING)
         -DPURE_SANITIZERS=${PURE_SANITIZERS}
         -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunPureBatchTest.cmake"
     )
+
+    add_test(
+      NAME pure-faust-declaration-loaded-retry
+      COMMAND
+        "${CMAKE_COMMAND}"
+        -DPURE_SH_EXECUTABLE=${PURE_SH_EXECUTABLE}
+        -DPURE_RUN_TEST=${CMAKE_CURRENT_BINARY_DIR}/run-test
+        -DPURE_FIXTURE_DIR=${PURE_FAUST_FIXTURE_OUTPUT_DIR}
+        -DPURE_SCRIPT=${PURE_FAUST_FIXTURE_OUTPUT_DIR}/declaration-loaded-retry.pure
+        -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunPureBitcodeTest.cmake"
+    )
+    set_tests_properties(
+      pure-faust-declaration-loaded-retry
+      PROPERTIES
+        LABELS "faust;bitcode;integration"
+        ENVIRONMENT "PURE_TEST_DECLARATION_FAILURE=faust-loaded"
+        REQUIRED_FILES
+          "${reference_bc};${PURE_FAUST_FIXTURE_OUTPUT_DIR}/declaration-loaded-retry.pure"
+        TIMEOUT ${faust_test_timeout}
+        PASS_REGULAR_EXPRESSION
+          "injected second Faust declaration failure(.|\n)*\\[\\](.|\n)*2"
+        FAIL_REGULAR_EXPRESSION
+          "AddressSanitizer;LeakSanitizer;runtime error:"
+    )
     set_tests_properties(
       pure-batch-faust
       PROPERTIES
         LABELS "batch;faust;integration"
         REQUIRED_FILES
-          "${reference_bc};${PURE_FAUST_FIXTURE_OUTPUT_DIR}/reload-a.bc;${PURE_FAUST_FIXTURE_OUTPUT_DIR}/reload-b.bc;${PURE_FAUST_FIXTURE_OUTPUT_DIR}/reload-unresolved.bc;${PURE_FAUST_FIXTURE_OUTPUT_DIR}/batch.pure"
+          "${reference_bc};${PURE_FAUST_FIXTURE_OUTPUT_DIR}/reload-a.bc;${PURE_FAUST_FIXTURE_OUTPUT_DIR}/reload-b.bc;${PURE_FAUST_FIXTURE_OUTPUT_DIR}/reload-c.bc;${PURE_FAUST_FIXTURE_OUTPUT_DIR}/reload-unresolved.bc;${PURE_FAUST_FIXTURE_OUTPUT_DIR}/batch.pure"
         TIMEOUT ${batch_test_timeout}
         FAIL_REGULAR_EXPRESSION
           "failed to retire prepared Faust reload;failed to collect ORC Faust generation;AddressSanitizer;LeakSanitizer;runtime error:"
@@ -1174,6 +1333,10 @@ if(BUILD_TESTING)
       "${PURE_SH_EXECUTABLE}" "${CMAKE_CURRENT_BINARY_DIR}/run-tests" -v
     WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
   )
+  # Keep the nested corpus serial in every generated test tree. This is
+  # especially important on Windows, where concurrent MSYS children can race
+  # signal-pipe and temporary-output ownership.
+  set(regression_test_jobs 1)
   add_test(
     NAME pure-regression-harness-contract
     COMMAND
@@ -1182,10 +1345,12 @@ if(BUILD_TESTING)
       -DPURE_REGRESSION_HARNESS=${CMAKE_CURRENT_BINARY_DIR}/run-tests
       -DPURE_RUN_TEST=${CMAKE_CURRENT_BINARY_DIR}/run-test
       -DPURE_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
+      -DPURE_PATH_LIST_MODULE=${CMAKE_CURRENT_SOURCE_DIR}/cmake/PurePathList.cmake
+      -DPURE_CONFIGURED_TEST_JOBS=${regression_test_jobs}
       -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/TestRegressionHarness.cmake"
   )
   set(regression_timeout 600)
-  set(regression_environment "TEST_JOBS=4")
+  set(regression_environment "TEST_JOBS=${regression_test_jobs}")
   if(PURE_SANITIZERS)
     set(regression_timeout 1800)
     list(APPEND regression_environment "PURE_STACK=0")

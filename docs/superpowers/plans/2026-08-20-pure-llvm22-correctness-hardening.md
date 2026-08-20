@@ -261,7 +261,7 @@ At the commit point, install the new DSP metadata and generation as the authorit
 ctest --test-dir pure/build/audit-llvm22-release -R '^pure-(faust-lifecycle|batch-faust)$' --output-on-failure -j 1
 ```
 
-Then run the same focused lifecycle test in the ASan build. Expected: A survives B, C installs, all exact assertions pass, and ASan reports no invalid access, leak, or runtime error.
+Then run the same focused lifecycle test in the ASan build. Expected: A survives B, C installs, all exact assertions pass, and ASan reports no invalid access or runtime error. This Windows gate deliberately uses `detect_leaks=0`: LLVM 22 MinGW's leak exit sweep stalls after a surviving compiled closure on this host, so it is not a deterministic bounded acceptance gate. Treat the result as address-safety evidence only; obtain leak evidence separately on a host/runtime where the exit sweep completes.
 
 - [ ] **Step 6: Commit transactional Faust reload**
 
@@ -383,7 +383,7 @@ cmake --build pure/build/llvm22-hardening-asan --parallel 1
 ctest --test-dir pure/build/llvm22-hardening-asan -R '^pure-(faust-lifecycle|bitcode-transaction-recovery|jit-deferred-retry|jit-eval-failure-recovery)$' --output-on-failure -j 1
 ```
 
-Expected: all focused tests PASS with no AddressSanitizer, LeakSanitizer, or undefined-runtime diagnostic.
+Expected: all focused tests PASS with no AddressSanitizer or undefined-runtime diagnostic, including deterministic clean-process repetitions. `ASAN_OPTIONS=detect_leaks=0` formally narrows this Windows acceptance to address safety because the LLVM 22 MinGW leak exit sweep stalls after a surviving compiled closure; a missing `LeakSanitizer` marker must not be reported as leak evidence.
 
 - [x] **Step 6: Audit owned resources and tracked changes**
 

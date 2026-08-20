@@ -1,0 +1,7 @@
+type cleanup_type n::int = 1;
+cleanup_value n::cleanup_type = 41;
+cleanup_value 1;
+
+type cleanup_type n::bigint = 1;
+cleanup_value 1L;
+42;

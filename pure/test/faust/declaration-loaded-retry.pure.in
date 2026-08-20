@@ -1,0 +1,9 @@
+namespace faust_declaration_seed;
+using "dsp:@PURE_FAUST_FIXTURE_OUTPUT_DIR@/reference";
+reference::getNumInputs (reference::newinit 48000);
+
+namespace faust_declaration_loaded;
+using "dsp:@PURE_FAUST_FIXTURE_OUTPUT_DIR@/reference";
+globsym "faust_declaration_loaded::reference::*" 0;
+using "dsp:@PURE_FAUST_FIXTURE_OUTPUT_DIR@/reference";
+reference::getNumInputs (reference::newinit 48000);

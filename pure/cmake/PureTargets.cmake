@@ -35,11 +35,24 @@ set(PURE_RUNTIME_SOURCES
 )
 
 if(WIN32)
+  set(PURE_COFF_JITLINK_SOURCE
+    "${CMAKE_CURRENT_SOURCE_DIR}/coff_jitlink.cc"
+  )
   list(
     APPEND PURE_RUNTIME_SOURCES
+      "${PURE_COFF_JITLINK_SOURCE}"
       compat/libglob/glob.c
       compat/libglob/fnmatch.c
   )
+  if(PURE_SANITIZERS MATCHES "(^|,)address(,|$)")
+    # The distributed LLVM libraries are not ASan-instrumented. Keep this
+    # narrow LLVM-header shim ABI-compatible with their BumpPtrAllocator
+    # template instantiations; all Pure JIT/runtime code remains instrumented.
+    set_source_files_properties(
+      "${PURE_COFF_JITLINK_SOURCE}"
+      PROPERTIES COMPILE_OPTIONS "-fno-sanitize=address"
+    )
+  endif()
   set_source_files_properties(
     compat/libglob/glob.c
     compat/libglob/fnmatch.c

@@ -86,14 +86,21 @@ execute_process(
   OUTPUT_VARIABLE object_report
   ERROR_VARIABLE object_error
 )
-message("${object_report}${object_error}")
+message("${object_report}")
+if(NOT object_error STREQUAL "")
+  message("Object inspector stderr:\n${object_error}")
+endif()
 if(NOT object_result EQUAL 0)
-  message(FATAL_ERROR "Pure batch object inspection exited with status ${object_result}")
+  message(FATAL_ERROR
+    "Pure batch object inspection exited with status ${object_result}\n"
+    "stdout:\n${object_report}\nstderr:\n${object_error}")
 endif()
-if("${object_report}${object_error}" STREQUAL "")
-  message(FATAL_ERROR "Pure batch object inspection returned no report")
+if(object_report STREQUAL "")
+  message(FATAL_ERROR
+    "Pure batch object inspection returned no stdout report\n"
+    "stderr:\n${object_error}")
 endif()
-string(REGEX MATCH "Format: COFF" object_format "${object_report}${object_error}")
+string(REGEX MATCH "Format: COFF" object_format "${object_report}")
 if(object_format STREQUAL "")
   message(FATAL_ERROR "Pure batch object is not COFF")
 endif()
@@ -101,7 +108,7 @@ string(
   REGEX MATCH
   "Arch: (x86_64|x86-64)|Machine: IMAGE_FILE_MACHINE_AMD64"
   object_machine
-  "${object_report}${object_error}"
+  "${object_report}"
 )
 if(object_machine STREQUAL "")
   message(FATAL_ERROR "Pure batch object is not x86-64/AMD64")

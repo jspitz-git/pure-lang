@@ -93,6 +93,10 @@ if(DEFINED PURE_BATCH_OBJECT OR DEFINED PURE_BATCH_EXECUTABLE)
         "PURE_TEST_ORC_FAILURE=batch-bitcode-precommit,batch-bitcode-host-remove,batch-bitcode-host-reregister,batch-bitcode-host-reregister-shutdown"
         "PURE_TEST_HOST_REREGISTRATION=1"
         "PURE_TEST_CLEAN_SHUTDOWN=1")
+    elseif(PURE_FAILURE_MODE STREQUAL "batch-bitcode-host-restore-fatal")
+      list(APPEND batch_environment
+        "PURE_TEST_ORC_FAILURE=batch-bitcode-precommit,batch-bitcode-host-remove,batch-bitcode-host-reregister,batch-bitcode-host-restore"
+        "PURE_TEST_CLEAN_SHUTDOWN=1")
     elseif(PURE_FAILURE_MODE STREQUAL "batch-bitcode-host-shutdown")
       list(APPEND batch_environment
         "PURE_TEST_ORC_FAILURE=batch-bitcode-precommit,batch-bitcode-host-remove-persistent"
@@ -122,6 +126,18 @@ if(DEFINED PURE_BATCH_OBJECT OR DEFINED PURE_BATCH_EXECUTABLE)
     ERROR_VARIABLE output
   )
   message("${output}")
+  if(DEFINED PURE_EXPECT_BATCH_FAILURE AND PURE_EXPECT_BATCH_FAILURE)
+    if(result EQUAL 0)
+      message(FATAL_ERROR
+        "Pure bitcode batch compilation unexpectedly succeeded")
+    endif()
+    if(NOT DEFINED PURE_EXPECTED_DIAGNOSTIC OR
+       NOT "${output}" MATCHES "${PURE_EXPECTED_DIAGNOSTIC}")
+      message(FATAL_ERROR
+        "Pure bitcode batch failure omitted the expected fatal diagnostic")
+    endif()
+    return()
+  endif()
   if(NOT result EQUAL 0 OR NOT EXISTS "${PURE_BATCH_OBJECT}")
     message(FATAL_ERROR
       "Pure bitcode batch compilation exited with status ${result}"

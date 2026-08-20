@@ -38,6 +38,7 @@ char *alloca ();
 #include "pure_jit.hh"
 #include "util.hh"
 #include <cmath>
+#include <cstring>
 #include <memory>
 #include <sstream>
 #include <system_error>
@@ -179,24 +180,55 @@ extern "C" void pure_faust_release_instance(int32_t tag, pure_expr *dsp)
 map<uint32_t, void (*)(void*)> interpreter::locals_destroy_cb;
 
 struct CompilationUnitResources {
+  enum RemovalKind { generic_removal, host_removal, provider_removal };
+
+  struct TrackerOwner {
+    llvm::orc::ResourceTrackerSP tracker;
+    string label;
+    bool cleanup_pending;
+    bool reported;
+    bool persistent_failure;
+    RemovalKind kind;
+
+    TrackerOwner(llvm::orc::ResourceTrackerSP tracker, string label,
+                 RemovalKind kind)
+      : tracker(std::move(tracker)), label(std::move(label)),
+        cleanup_pending(false), reported(false), persistent_failure(false),
+        kind(kind) {}
+  };
+
+  typedef std::shared_ptr<TrackerOwner> TrackerOwnerSP;
+
+  struct HostBacking {
+    map<int32_t, GlobalVar> bindings;
+
+    ~HostBacking()
+    {
+      for (map<int32_t, GlobalVar>::iterator binding = bindings.begin();
+           binding != bindings.end(); ++binding)
+        if (binding->second.x) pure_free(binding->second.x);
+    }
+  };
+
   struct HostSymbol {
     void *address;
     llvm::JITSymbolFlags flags;
-    llvm::orc::ResourceTrackerSP tracker;
-    std::shared_ptr<void> backing;
+    TrackerOwnerSP tracker;
+    std::shared_ptr<HostBacking> backing;
+    bool quarantined;
 
     HostSymbol(void *address, llvm::JITSymbolFlags flags,
-               llvm::orc::ResourceTrackerSP tracker,
-               std::shared_ptr<void> backing = std::shared_ptr<void>())
+               TrackerOwnerSP tracker,
+               std::shared_ptr<HostBacking> backing)
       : address(address), flags(flags), tracker(std::move(tracker)),
-        backing(std::move(backing)) {}
+        backing(std::move(backing)), quarantined(false) {}
   };
 
   struct CompiledFunction {
     void *address;
-    llvm::orc::ResourceTrackerSP tracker;
+    TrackerOwnerSP tracker;
 
-    CompiledFunction(void *address, llvm::orc::ResourceTrackerSP tracker)
+    CompiledFunction(void *address, TrackerOwnerSP tracker)
       : address(address), tracker(std::move(tracker)) {}
   };
 
@@ -204,14 +236,14 @@ struct CompilationUnitResources {
     uint64_t generation;
     size_t live_instances;
     bool current;
-    llvm::orc::ResourceTrackerSP tracker;
+    TrackerOwnerSP tracker;
     list<llvm::Function*> functions;
     list<llvm::GlobalVariable*> variables;
     list<llvm::GlobalAlias*> aliases;
     list<llvm::GlobalIFunc*> ifuncs;
 
     FaustGeneration(uint64_t generation,
-                    llvm::orc::ResourceTrackerSP tracker,
+                    TrackerOwnerSP tracker,
                     list<llvm::Function*> functions = {},
                     list<llvm::GlobalVariable*> variables = {},
                     list<llvm::GlobalAlias*> aliases = {},
@@ -234,7 +266,7 @@ struct CompilationUnitResources {
     string symbol;
     std::unique_ptr<llvm::MemoryBuffer> snapshot;
     void *address;
-    llvm::orc::ResourceTrackerSP tracker;
+    TrackerOwnerSP tracker;
     map<uint32_t, uint32_t*> closure_refs;
     bool current;
 
@@ -242,7 +274,7 @@ struct CompilationUnitResources {
                        uint32_t key,
                        uint32_t *refp, string symbol,
                        std::unique_ptr<llvm::MemoryBuffer> snapshot,
-                       void *address, llvm::orc::ResourceTrackerSP tracker,
+                       void *address, TrackerOwnerSP tracker,
                        const map<uint32_t, uint32_t*>& closure_refs)
       : tag(tag), generation(generation), epoch(epoch), key(key), refp(refp),
         symbol(std::move(symbol)), snapshot(std::move(snapshot)),
@@ -252,53 +284,25 @@ struct CompilationUnitResources {
 
   struct EnvironmentUnit {
     const Env *environment;
-    llvm::orc::ResourceTrackerSP tracker;
+    TrackerOwnerSP tracker;
     bool persistent_failure;
 
     EnvironmentUnit(const Env *environment,
-                    llvm::orc::ResourceTrackerSP tracker,
+                    TrackerOwnerSP tracker,
                     bool persistent_failure = false)
       : environment(environment), tracker(std::move(tracker)),
         persistent_failure(persistent_failure)
     {}
   };
 
-  struct QuarantinedTracker {
-    llvm::orc::ResourceTrackerSP tracker;
-    string label;
-    bool reported;
-
-    QuarantinedTracker(llvm::orc::ResourceTrackerSP tracker, string label,
-                       bool reported)
-      : tracker(std::move(tracker)), label(std::move(label)),
-        reported(reported) {}
-  };
-
-  struct QuarantinedHostSymbol {
-    string name;
-    void *address;
-    llvm::JITSymbolFlags flags;
-    llvm::orc::ResourceTrackerSP tracker;
-    std::shared_ptr<void> backing;
-    bool reported;
-
-    QuarantinedHostSymbol(string name, void *address,
-                          llvm::JITSymbolFlags flags,
-                          llvm::orc::ResourceTrackerSP tracker,
-                          std::shared_ptr<void> backing, bool reported)
-      : name(std::move(name)), address(address), flags(flags),
-        tracker(std::move(tracker)), backing(std::move(backing)),
-        reported(reported) {}
-  };
-
   typedef list<EnvironmentUnit> EnvironmentUnits;
   typedef map<const Env*, EnvironmentUnits::iterator> EnvironmentIndex;
+  typedef map<string, TrackerOwnerSP> BitcodeModules;
   EnvironmentUnits environment_units;
   EnvironmentIndex trackers;
-  list<QuarantinedTracker> quarantined_trackers;
-  list<QuarantinedHostSymbol> quarantined_host_symbols;
+  list<TrackerOwnerSP> tracker_owners;
   map<const llvm::Function*, CompiledFunction> functions;
-  map<string, llvm::orc::ResourceTrackerSP> bitcode_modules;
+  BitcodeModules bitcode_modules;
   FaustModules faust_modules;
   map<string, uint64_t> next_faust_generations;
   map<string, HostSymbol> host_symbols;
@@ -310,33 +314,142 @@ struct CompilationUnitResources {
   map<int32_t, uint64_t> next_generations;
   map<int32_t, uint64_t> next_epochs;
 
-  static llvm::Error remove_host_tracker
-  (llvm::orc::ResourceTrackerSP tracker)
+  TrackerOwnerSP prepare_tracker
+  (PureJit& jit, string label,
+   RemovalKind kind = generic_removal)
   {
+    TrackerOwnerSP owner(new TrackerOwner
+      (jit.create_resource_tracker(), std::move(label), kind));
+    tracker_owners.push_back(owner);
+    return owner;
+  }
+
+  TrackerOwnerSP find_tracker
+  (const llvm::orc::ResourceTrackerSP& tracker) const noexcept
+  {
+    for (list<TrackerOwnerSP>::const_iterator owner = tracker_owners.begin();
+         owner != tracker_owners.end(); ++owner)
+      if ((*owner)->tracker.get() == tracker.get()) return *owner;
+    return TrackerOwnerSP();
+  }
+
+  void release_tracker_owner(const TrackerOwnerSP& owner) noexcept
+  {
+    if (!owner) return;
+    for (list<TrackerOwnerSP>::iterator current = tracker_owners.begin();
+         current != tracker_owners.end(); ++current)
+      if (current->get() == owner.get()) {
+        tracker_owners.erase(current);
+        break;
+      }
+    owner->cleanup_pending = false;
+    owner->tracker.reset();
+  }
+
+  void discard_unused_tracker(const TrackerOwnerSP& owner) noexcept
+  {
+    assert(owner && owner->tracker && !owner->cleanup_pending);
+    release_tracker_owner(owner);
+  }
+
+  void restore_tracker(const TrackerOwnerSP& owner) noexcept
+  {
+    assert(owner && owner->tracker);
+    owner->cleanup_pending = false;
+    owner->reported = false;
+  }
+
+  llvm::Error remove_tracker
+  (const TrackerOwnerSP& owner, const char *failure_mode = 0) noexcept
+  {
+    if (!owner || !owner->tracker) return llvm::Error::success();
+    owner->cleanup_pending = true;
 #ifdef PURE_ENABLE_TEST_HOOKS
-    static unsigned batch_failures = 0;
-    static llvm::orc::ResourceTracker *batch_tracker = 0;
-    static llvm::orc::ResourceTracker *persistent_tracker = 0;
-    if (orc_failure_requested("batch-bitcode-host-remove-persistent") &&
-        (!persistent_tracker || persistent_tracker == tracker.get())) {
-      persistent_tracker = tracker.get();
+    if (owner->persistent_failure)
       return llvm::createStringError
-        ("injected batch-bitcode-host-remove-persistent ORC tracker removal failure");
+        ("injected persistent ORC tracker removal failure");
+    if (failure_mode) {
+      struct cleanup_failure_state { const char *mode; bool injected; };
+      static cleanup_failure_state failures[] = {
+        {"deferred-snapshot-remove", false},
+        {"generic-compile-remove", false},
+        {"type-generation-remove", false},
+        {"faust-prepared-remove", false},
+        {"bitcode-first-remove", false}
+      };
+      for (size_t i = 0; i < sizeof(failures)/sizeof(failures[0]); ++i)
+        if (std::strcmp(failure_mode, failures[i].mode) == 0 &&
+            inject_orc_failure(failures[i].mode, failures[i].injected))
+          return llvm::createStringError
+            ("injected "+string(failure_mode)+
+             " ORC tracker removal failure");
     }
-    if (orc_failure_requested("batch-bitcode-host-remove") &&
-        (!batch_tracker || batch_tracker == tracker.get()) &&
-        batch_failures < 2) {
-      batch_tracker = tracker.get();
-      ++batch_failures;
-      return llvm::createStringError
-        ("injected batch-bitcode-host-remove ORC tracker removal failure");
+    if (owner->kind == provider_removal) {
+      static bool provider_failure_injected = false;
+      if (inject_orc_failure("batch-bitcode-provider-remove",
+                             provider_failure_injected)) {
+        batch_provider_retry_pending = true;
+        return llvm::createStringError
+          ("injected batch-bitcode-provider-remove ORC tracker removal failure");
+      }
     }
-    if (orc_failure_requested("batch-bitcode-host-reregister-shutdown") &&
-        batch_reregistered_tracker == tracker.get())
-      return llvm::createStringError
-        ("injected batch-bitcode-host-reregister-shutdown ORC tracker removal failure");
+    if (owner->kind == host_removal) {
+      static unsigned batch_failures = 0;
+      static llvm::orc::ResourceTracker *batch_tracker = 0;
+      static llvm::orc::ResourceTracker *persistent_tracker = 0;
+      if (orc_failure_requested("batch-bitcode-host-remove-persistent") &&
+          (!persistent_tracker ||
+           persistent_tracker == owner->tracker.get())) {
+        persistent_tracker = owner->tracker.get();
+        return llvm::createStringError
+          ("injected batch-bitcode-host-remove-persistent ORC tracker removal failure");
+      }
+      if (orc_failure_requested("batch-bitcode-host-remove") &&
+          (!batch_tracker || batch_tracker == owner->tracker.get()) &&
+          batch_failures < 2) {
+        batch_tracker = owner->tracker.get();
+        ++batch_failures;
+        return llvm::createStringError
+          ("injected batch-bitcode-host-remove ORC tracker removal failure");
+      }
+      if (orc_failure_requested("batch-bitcode-host-reregister-shutdown") &&
+          batch_reregistered_tracker == owner->tracker.get())
+        return llvm::createStringError
+          ("injected batch-bitcode-host-reregister-shutdown ORC tracker removal failure");
+    }
 #endif
-    return tracker->remove();
+    llvm::Error error = owner->tracker->remove();
+    if (!error) {
+#ifdef PURE_ENABLE_TEST_HOOKS
+      if (owner->kind == provider_removal)
+        batch_provider_retry_pending = false;
+#endif
+      release_tracker_owner(owner);
+    }
+    return error;
+  }
+
+  llvm::Error remove_tracker
+  (const llvm::orc::ResourceTrackerSP& tracker,
+   const char *failure_mode = 0) noexcept
+  {
+    TrackerOwnerSP owner = find_tracker(tracker);
+    assert(owner && "ORC tracker was not prepared by its cleanup owner");
+    return remove_tracker(owner, failure_mode);
+  }
+
+  void remove_tracker_and_report(const TrackerOwnerSP& owner) noexcept
+  {
+    if (!owner || !owner->tracker) return;
+    if (llvm::Error error = remove_tracker(owner)) {
+      if (!owner->reported) {
+        llvm::logAllUnhandledErrors
+          (std::move(error), llvm::errs(), owner->label+": ");
+        owner->reported = true;
+      } else {
+        llvm::consumeError(std::move(error));
+      }
+    }
   }
 
   static llvm::Error register_host_symbol
@@ -346,11 +459,17 @@ struct CompilationUnitResources {
   {
 #ifdef PURE_ENABLE_TEST_HOOKS
     static bool reregister_failure_injected = false;
+    static bool restore_failure_injected = false;
     if (!rollback && failure_mode &&
         inject_orc_failure("batch-bitcode-host-reregister",
                            reregister_failure_injected))
       return llvm::createStringError
         ("injected batch-bitcode-host-reregister ORC registration failure");
+    if (rollback &&
+        inject_orc_failure("batch-bitcode-host-restore",
+                           restore_failure_injected))
+      return llvm::createStringError
+        ("injected batch-bitcode-host-restore ORC registration failure");
 #endif
     llvm::Error error =
       jit.register_absolute_symbol(tracker, name, address, flags);
@@ -364,97 +483,151 @@ struct CompilationUnitResources {
     return error;
   }
 
-  bool has_quarantined_host_registration
-  (llvm::StringRef name, void *address, llvm::JITSymbolFlags flags,
-   const llvm::orc::ResourceTrackerSP& tracker) const
-  {
-    for (list<QuarantinedHostSymbol>::const_iterator symbol =
-           quarantined_host_symbols.begin();
-         symbol != quarantined_host_symbols.end(); ++symbol)
-      if (symbol->name == name && symbol->address == address &&
-          symbol->flags == flags && symbol->tracker.get() == tracker.get())
-        return true;
-    return false;
-  }
-
   llvm::Error retain_host_symbol
   (PureJit& jit, llvm::StringRef name, void *address,
    llvm::JITSymbolFlags flags = llvm::JITSymbolFlags::Exported,
    const char *failure_mode = 0)
   {
     string symbol_name = name.str();
+    TrackerOwnerSP tracker = prepare_tracker
+      (jit, "failed to retire ORC host symbol '"+symbol_name+"'",
+       host_removal);
+    std::shared_ptr<HostBacking> backing(new HostBacking);
+    map<string, HostSymbol> prepared_symbol;
+    prepared_symbol.emplace
+      (symbol_name, HostSymbol(address, flags, tracker, backing));
+    map<string, HostSymbol>::node_type prepared_node =
+      prepared_symbol.extract(symbol_name);
     map<string, HostSymbol>::iterator old = host_symbols.find(symbol_name);
     if (old != host_symbols.end()) {
-      if (old->second.address == address && old->second.flags == flags)
+      TrackerOwnerSP rollback_tracker = prepare_tracker
+        (jit, "failed to retire rollback ORC host symbol '"+symbol_name+"'",
+         host_removal);
+      if (old->second.address == address && old->second.flags == flags &&
+          !old->second.quarantined) {
+        discard_unused_tracker(tracker);
+        discard_unused_tracker(rollback_tracker);
         return llvm::Error::success();
+      }
       void *old_address = old->second.address;
       llvm::JITSymbolFlags old_flags = old->second.flags;
-      llvm::orc::ResourceTrackerSP old_tracker = old->second.tracker;
-      std::shared_ptr<void> old_backing = old->second.backing;
-      bool quarantined_old = has_quarantined_host_registration
-        (name, old_address, old_flags, old_tracker);
-      if (llvm::Error error = remove_host_tracker(old_tracker))
-        return error;
-      host_symbols.erase(old);
-
-      llvm::orc::ResourceTrackerSP tracker = jit.create_resource_tracker();
-      if (llvm::Error error =
-            register_host_symbol(jit, tracker, name, address, flags,
-                                 quarantined_old ? failure_mode : 0)) {
-        llvm::orc::ResourceTrackerSP rollback_tracker =
-          jit.create_resource_tracker();
-        if (llvm::Error rollback_error = register_host_symbol
-              (jit, rollback_tracker, name, old_address, old_flags, 0, true))
-          return llvm::joinErrors(std::move(error),
-                                  std::move(rollback_error));
-        host_symbols.emplace
-          (symbol_name, HostSymbol(old_address, old_flags,
-                                   std::move(rollback_tracker),
-                                   std::move(old_backing)));
+      TrackerOwnerSP old_tracker = old->second.tracker;
+      if (llvm::Error error = remove_tracker(old_tracker)) {
+        restore_tracker(old_tracker);
+        discard_unused_tracker(tracker);
+        discard_unused_tracker(rollback_tracker);
         return error;
       }
-      host_symbols.emplace
-        (symbol_name, HostSymbol(address, flags, std::move(tracker)));
+
+      if (llvm::Error error =
+            register_host_symbol(jit, tracker->tracker, name, address, flags,
+                                 failure_mode)) {
+        if (llvm::Error cleanup_error = remove_tracker(tracker))
+          error = llvm::joinErrors(std::move(error),
+                                   std::move(cleanup_error));
+        if (llvm::Error rollback_error = register_host_symbol
+              (jit, rollback_tracker->tracker, name,
+               old_address, old_flags, 0, true)) {
+          if (llvm::Error cleanup_error = remove_tracker(rollback_tracker))
+            rollback_error = llvm::joinErrors
+              (std::move(rollback_error), std::move(cleanup_error));
+          string fatal = "failed to replace ORC host symbol '"+symbol_name+
+            "' and failed to restore its authoritative registration: "+
+            llvm::toString(llvm::joinErrors
+              (std::move(error), std::move(rollback_error)));
+          llvm::report_fatal_error(llvm::StringRef(fatal));
+        }
+        old->second.tracker = rollback_tracker;
+        old->second.quarantined = false;
+        return error;
+      }
+      old->second.address = prepared_node.mapped().address;
+      old->second.flags = prepared_node.mapped().flags;
+      old->second.tracker = std::move(prepared_node.mapped().tracker);
+      old->second.backing = std::move(prepared_node.mapped().backing);
+      old->second.quarantined = false;
+      discard_unused_tracker(rollback_tracker);
       return llvm::Error::success();
     }
 
-    llvm::orc::ResourceTrackerSP tracker = jit.create_resource_tracker();
     if (llvm::Error error =
-          register_host_symbol(jit, tracker, name, address, flags,
-                               0))
+          register_host_symbol(jit, tracker->tracker, name, address, flags,
+                               0)) {
+      if (llvm::Error cleanup_error = remove_tracker(tracker))
+        error = llvm::joinErrors(std::move(error), std::move(cleanup_error));
       return error;
-    host_symbols.emplace
-      (symbol_name, HostSymbol(address, flags, std::move(tracker)));
+    }
+    map<string, HostSymbol>::insert_return_type inserted =
+      host_symbols.insert(std::move(prepared_node));
+    assert(inserted.inserted);
     return llvm::Error::success();
+  }
+
+  map<string, HostSymbol>::iterator find_host_symbol
+  (llvm::StringRef name) noexcept
+  {
+    for (map<string, HostSymbol>::iterator symbol = host_symbols.begin();
+         symbol != host_symbols.end(); ++symbol)
+      if (llvm::StringRef(symbol->first) == name) return symbol;
+    return host_symbols.end();
+  }
+
+  map<string, HostSymbol>::const_iterator find_host_symbol
+  (llvm::StringRef name) const noexcept
+  {
+    for (map<string, HostSymbol>::const_iterator symbol = host_symbols.begin();
+         symbol != host_symbols.end(); ++symbol)
+      if (llvm::StringRef(symbol->first) == name) return symbol;
+    return host_symbols.end();
   }
 
   llvm::Error remove_host_symbol(llvm::StringRef name)
   {
-    map<string, HostSymbol>::iterator it = host_symbols.find(name.str());
+    map<string, HostSymbol>::iterator it = find_host_symbol(name);
     if (it == host_symbols.end()) return llvm::Error::success();
-    llvm::Error error = remove_host_tracker(it->second.tracker);
+    llvm::Error error = remove_tracker(it->second.tracker);
     if (error) return error;
     host_symbols.erase(it);
     return llvm::Error::success();
   }
 
-  void quarantine_tracker(llvm::orc::ResourceTrackerSP tracker,
-                          string label, bool reported = true)
+  void restore_host_symbol(llvm::StringRef name) noexcept
   {
-    assert(tracker);
-    quarantined_trackers.emplace_back
-      (std::move(tracker), std::move(label), reported);
+    map<string, HostSymbol>::iterator symbol = find_host_symbol(name);
+    assert(symbol != host_symbols.end());
+    restore_tracker(symbol->second.tracker);
+    symbol->second.quarantined = false;
   }
 
-  void quarantine_host_symbol(string name, std::shared_ptr<void> backing,
-                              bool reported = true)
+  void quarantine_tracker
+  (const llvm::orc::ResourceTrackerSP& tracker,
+   bool reported = true) noexcept
   {
-    assert(!name.empty());
-    map<string, HostSymbol>::const_iterator symbol = host_symbols.find(name);
+    TrackerOwnerSP owner = find_tracker(tracker);
+    assert(owner && owner->cleanup_pending);
+    owner->reported = reported;
+  }
+
+  void quarantine_host_symbol
+  (llvm::GlobalVariable *variable,
+   map<int32_t, GlobalVar>::node_type binding) noexcept
+  {
+    assert(variable && variable->hasName());
+    map<string, HostSymbol>::iterator symbol =
+      find_host_symbol(variable->getName());
     assert(symbol != host_symbols.end());
-    quarantined_host_symbols.emplace_back
-      (std::move(name), symbol->second.address, symbol->second.flags,
-       symbol->second.tracker, std::move(backing), reported);
+    assert(symbol->second.tracker->cleanup_pending &&
+           symbol->second.backing->bindings.empty());
+    binding.mapped().v = 0;
+    try {
+      map<int32_t, GlobalVar>::insert_return_type inserted =
+        symbol->second.backing->bindings.insert(std::move(binding));
+      assert(inserted.inserted);
+      symbol->second.quarantined = true;
+    } catch (...) {
+      llvm::report_fatal_error
+        ("failed to attach preallocated host-global quarantine backing");
+    }
   }
 
   llvm::Error retry_quarantined_trackers(PureJit& jit)
@@ -462,73 +635,42 @@ struct CompilationUnitResources {
 #ifdef PURE_ENABLE_TEST_HOOKS
     const char *retry = getenv("PURE_TEST_TRACKER_RETRY");
     if (retry && *retry && batch_provider_retry_pending &&
-        quarantined_trackers.empty())
+        tracker_owners.empty())
       return llvm::createStringError
         ("batch bitcode provider tracker ownership was lost before retry");
 #endif
-    for (list<QuarantinedTracker>::iterator tracker =
-           quarantined_trackers.begin();
-         tracker != quarantined_trackers.end(); ) {
-      if (llvm::Error error = tracker->tracker->remove()) {
-        if (!tracker->reported) {
-          llvm::logAllUnhandledErrors
-            (std::move(error), llvm::errs(), tracker->label+": ");
-          tracker->reported = true;
-        } else {
-          llvm::consumeError(std::move(error));
-        }
-        ++tracker;
-      } else {
-        tracker = quarantined_trackers.erase(tracker);
-#ifdef PURE_ENABLE_TEST_HOOKS
-        batch_provider_retry_pending = false;
-#endif
-      }
-    }
-    for (list<QuarantinedHostSymbol>::iterator symbol =
-           quarantined_host_symbols.begin();
-         symbol != quarantined_host_symbols.end(); ) {
-      map<string, HostSymbol>::iterator current =
-        host_symbols.find(symbol->name);
-      bool same_registration = current != host_symbols.end() &&
-        current->second.address == symbol->address &&
-        current->second.flags == symbol->flags &&
-        current->second.tracker.get() == symbol->tracker.get();
-      if (!same_registration) {
-        bool restored_registration = current != host_symbols.end() &&
-          current->second.address == symbol->address &&
-          current->second.flags == symbol->flags;
-        if (restored_registration && !current->second.backing)
-          current->second.backing = std::move(symbol->backing);
-#ifdef PURE_ENABLE_TEST_HOOKS
-        if (getenv("PURE_TEST_HOST_REPLACEMENT")) {
-          if (current == host_symbols.end())
-            return llvm::createStringError
-              ("replacement host symbol disappeared before stale cleanup retry");
-          llvm::Expected<llvm::orc::ExecutorAddr> address =
-            jit.lookup(symbol->name);
-          if (!address) return address.takeError();
-          if (address->toPtr<void*>() != current->second.address)
-            return llvm::createStringError
-              ("replacement host symbol lookup returned stale storage");
-        }
-#endif
-        symbol = quarantined_host_symbols.erase(symbol);
+    for (map<string, HostSymbol>::iterator symbol = host_symbols.begin();
+         symbol != host_symbols.end(); ) {
+      if (!symbol->second.quarantined) {
+        ++symbol;
         continue;
       }
-      if (llvm::Error error = remove_host_tracker(symbol->tracker)) {
-        if (!symbol->reported) {
+      if (llvm::Error error = remove_tracker(symbol->second.tracker)) {
+        if (!symbol->second.tracker->reported) {
           llvm::logAllUnhandledErrors
             (std::move(error), llvm::errs(),
-             "failed to retire quarantined host symbol: ");
-          symbol->reported = true;
+             symbol->second.tracker->label+": ");
+          symbol->second.tracker->reported = true;
         } else {
           llvm::consumeError(std::move(error));
         }
         ++symbol;
       } else {
-        host_symbols.erase(current);
-        symbol = quarantined_host_symbols.erase(symbol);
+        symbol = host_symbols.erase(symbol);
+      }
+    }
+    for (list<TrackerOwnerSP>::iterator current = tracker_owners.begin();
+         current != tracker_owners.end(); ) {
+      TrackerOwnerSP owner = *current++;
+      if (!owner->cleanup_pending || owner->kind == host_removal) continue;
+      if (llvm::Error error = remove_tracker(owner)) {
+        if (!owner->reported) {
+          llvm::logAllUnhandledErrors
+            (std::move(error), llvm::errs(), owner->label+": ");
+          owner->reported = true;
+        } else {
+          llvm::consumeError(std::move(error));
+        }
       }
     }
 #ifdef PURE_ENABLE_TEST_HOOKS
@@ -536,7 +678,8 @@ struct CompilationUnitResources {
         !batch_reregistered_name.empty()) {
       map<string, HostSymbol>::iterator restored =
         host_symbols.find(batch_reregistered_name);
-      if (restored == host_symbols.end() || !restored->second.backing)
+      if (restored == host_symbols.end() ||
+          !restored->second.backing)
         return llvm::createStringError
           ("rollback re-registration lost quarantined host backing");
       llvm::Expected<llvm::orc::ExecutorAddr> address =
@@ -556,21 +699,18 @@ struct CompilationUnitResources {
   vector<std::shared_ptr<void> > host_backings() const
   {
     vector<std::shared_ptr<void> > backings;
-    backings.reserve(quarantined_host_symbols.size()+host_symbols.size());
-    for (list<QuarantinedHostSymbol>::const_iterator symbol =
-           quarantined_host_symbols.begin();
-         symbol != quarantined_host_symbols.end(); ++symbol)
-      if (symbol->backing) backings.push_back(symbol->backing);
+    backings.reserve(host_symbols.size());
     for (map<string, HostSymbol>::const_iterator symbol = host_symbols.begin();
          symbol != host_symbols.end(); ++symbol)
-      if (symbol->second.backing)
+      if (symbol->second.backing &&
+          !symbol->second.backing->bindings.empty())
         backings.push_back(symbol->second.backing);
     return backings;
   }
 
   void *host_symbol_address(llvm::StringRef name) const
   {
-    map<string, HostSymbol>::const_iterator it = host_symbols.find(name.str());
+    map<string, HostSymbol>::const_iterator it = find_host_symbol(name);
     return it == host_symbols.end() ? 0 : it->second.address;
   }
 
@@ -583,25 +723,30 @@ struct CompilationUnitResources {
 
   llvm::orc::ResourceTrackerSP replace_function
   (const llvm::Function *function, void *address,
-   llvm::orc::ResourceTrackerSP tracker)
+   TrackerOwnerSP tracker)
   {
     assert(function && address && tracker);
     llvm::orc::ResourceTrackerSP previous_tracker;
     map<const llvm::Function*, CompiledFunction>::iterator previous =
       functions.find(function);
     if (previous != functions.end()) {
-      previous_tracker = std::move(previous->second.tracker);
-      functions.erase(previous);
+      previous_tracker = previous->second.tracker->tracker;
+      previous->second.address = address;
+      previous->second.tracker = std::move(tracker);
+    } else {
+      functions.emplace
+        (function, CompiledFunction(address, std::move(tracker)));
     }
-    functions.emplace
-      (function, CompiledFunction(address, std::move(tracker)));
     return previous_tracker;
   }
 
-  void retain_bitcode(string key, llvm::orc::ResourceTrackerSP tracker)
+  void publish_bitcode(BitcodeModules::node_type record) noexcept
   {
-    assert(!key.empty() && tracker && bitcode_modules.find(key) == bitcode_modules.end());
-    bitcode_modules.emplace(std::move(key), std::move(tracker));
+    assert(!record.empty() && record.mapped() &&
+           bitcode_modules.find(record.key()) == bitcode_modules.end());
+    BitcodeModules::insert_return_type inserted =
+      bitcode_modules.insert(std::move(record));
+    assert(inserted.inserted);
   }
 
   uint64_t next_faust_generation(const string& module_name)
@@ -711,6 +856,13 @@ struct CompilationUnitResources {
           ++generation;
           continue;
         }
+        if (llvm::Error error = remove_tracker(generation->tracker)) {
+          llvm::logAllUnhandledErrors
+            (std::move(error), llvm::errs(),
+             "failed to collect ORC Faust generation: ");
+          ++generation;
+          continue;
+        }
         for (list<llvm::Function*>::iterator value =
                generation->functions.begin();
              value != generation->functions.end(); ++value)
@@ -747,13 +899,7 @@ struct CompilationUnitResources {
         generation->variables.clear();
         generation->aliases.clear();
         generation->ifuncs.clear();
-        if (llvm::Error error = generation->tracker->remove()) {
-          llvm::logAllUnhandledErrors(std::move(error), llvm::errs(),
-                                      "failed to collect ORC Faust generation: ");
-          ++generation;
-        } else {
-          generation = module->second.erase(generation);
-        }
+        generation = module->second.erase(generation);
       }
       if (module->second.empty())
         module = faust_modules.erase(module);
@@ -777,7 +923,7 @@ struct CompilationUnitResources {
                          uint32_t key,
                          uint32_t *refp, string symbol,
                          std::unique_ptr<llvm::MemoryBuffer> snapshot,
-                         void *address, llvm::orc::ResourceTrackerSP tracker,
+                       void *address, TrackerOwnerSP tracker,
                          const map<uint32_t, uint32_t*>& closure_refs)
   {
     assert(tag > 0 && key && refp && !symbol.empty() &&
@@ -812,7 +958,8 @@ struct CompilationUnitResources {
         implementation->second.current || !unused(implementation->second))
       return;
     if (implementation->second.tracker)
-      if (llvm::Error error = implementation->second.tracker->remove()) {
+      if (llvm::Error error = remove_tracker
+            (implementation->second.tracker)) {
         llvm::logAllUnhandledErrors
           (std::move(error), llvm::errs(),
            "failed to collect ORC function generation: ");
@@ -917,7 +1064,7 @@ struct CompilationUnitResources {
     return implementation;
   }
 
-  void retain(const Env *environment, llvm::orc::ResourceTrackerSP tracker,
+  void retain(const Env *environment, TrackerOwnerSP tracker,
               const char *failure_mode = 0)
   {
     assert(environment && tracker && trackers.find(environment) == trackers.end());
@@ -925,10 +1072,11 @@ struct CompilationUnitResources {
 #ifdef PURE_ENABLE_TEST_HOOKS
     static bool persistent_failure_assigned = false;
     if (!persistent_failure_assigned && failure_mode &&
-        string(failure_mode) == "dodefn-remove" &&
+        std::strcmp(failure_mode, "dodefn-remove") == 0 &&
         orc_failure_requested("dodefn-remove-persistent")) {
       persistent_failure = true;
       persistent_failure_assigned = true;
+      tracker->persistent_failure = true;
     }
 #endif
     environment_units.push_back
@@ -962,11 +1110,12 @@ struct CompilationUnitResources {
     static bool injected = false;
     if (failure_mode && inject_orc_failure(failure_mode, injected)) {
       temporary_tracker_retry_pending = true;
+      unit->tracker->cleanup_pending = true;
       return llvm::createStringError
         ("injected "+string(failure_mode)+" ORC tracker removal failure");
     }
 #endif
-    llvm::Error error = unit->tracker->remove();
+    llvm::Error error = remove_tracker(unit->tracker);
 #ifdef PURE_ENABLE_TEST_HOOKS
     if (!error && failure_mode) temporary_tracker_retry_pending = false;
 #endif
@@ -997,71 +1146,37 @@ struct CompilationUnitResources {
   llvm::Error remove_all()
   {
     llvm::Error errors = llvm::Error::success();
-    while (!quarantined_trackers.empty()) {
-      llvm::orc::ResourceTrackerSP tracker =
-        std::move(quarantined_trackers.front().tracker);
-      quarantined_trackers.pop_front();
-      errors = llvm::joinErrors(std::move(errors), tracker->remove());
+    for (list<TrackerOwnerSP>::iterator current = tracker_owners.begin();
+         current != tracker_owners.end(); ) {
+      TrackerOwnerSP owner = *current++;
+      if (!owner->tracker) continue;
+      errors = llvm::joinErrors
+        (std::move(errors), remove_tracker(owner));
     }
     trackers.clear();
-    while (!environment_units.empty()) {
-      EnvironmentUnits::iterator unit = environment_units.begin();
-      llvm::Error error = llvm::Error::success();
-#ifdef PURE_ENABLE_TEST_HOOKS
-      if (unit->persistent_failure)
-        error = llvm::createStringError
-          ("injected dodefn-remove persistent ORC tracker removal failure");
-      else
-#endif
-        error = unit->tracker->remove();
-      environment_units.erase(unit);
-      errors = llvm::joinErrors(std::move(errors), std::move(error));
-    }
-    while (!functions.empty()) {
-      map<const llvm::Function*, CompiledFunction>::iterator it =
-        functions.begin();
-      llvm::orc::ResourceTrackerSP tracker = std::move(it->second.tracker);
-      functions.erase(it);
-      errors = llvm::joinErrors(std::move(errors), tracker->remove());
-    }
+    environment_units.clear();
+    functions.clear();
     current_implementations.clear();
     latest_implementations.clear();
     pending_implementations.clear();
     key_implementations.clear();
-    while (!implementations.empty()) {
-      map<uint32_t, FunctionGeneration>::iterator it = implementations.begin();
-      llvm::orc::ResourceTrackerSP tracker = std::move(it->second.tracker);
-      implementations.erase(it);
-      if (tracker)
-        errors = llvm::joinErrors(std::move(errors), tracker->remove());
-    }
-    while (!faust_modules.empty()) {
-      map<string, list<FaustGeneration> >::iterator module =
-        faust_modules.begin();
-      while (!module->second.empty()) {
-        llvm::orc::ResourceTrackerSP tracker =
-          std::move(module->second.front().tracker);
-        module->second.pop_front();
-        errors = llvm::joinErrors(std::move(errors), tracker->remove());
-      }
-      faust_modules.erase(module);
-    }
-    while (!bitcode_modules.empty()) {
-      map<string, llvm::orc::ResourceTrackerSP>::iterator it =
-        bitcode_modules.begin();
-      llvm::orc::ResourceTrackerSP tracker = std::move(it->second);
-      bitcode_modules.erase(it);
-      errors = llvm::joinErrors(std::move(errors), tracker->remove());
-    }
-    while (!host_symbols.empty()) {
-      map<string, HostSymbol>::iterator symbol = host_symbols.begin();
-      llvm::orc::ResourceTrackerSP tracker = symbol->second.tracker;
-      host_symbols.erase(symbol);
-      errors = llvm::joinErrors(std::move(errors),
-                                remove_host_tracker(tracker));
-    }
-    quarantined_host_symbols.clear();
+    implementations.clear();
+    faust_modules.clear();
+    bitcode_modules.clear();
+    /* Failed removals deliberately remain in tracker_owners. Host symbols and
+       their backing allocations likewise stay alive until ORC is destroyed. */
     return errors;
+  }
+
+  void handoff_failed_trackers_to_orc_shutdown() noexcept
+  {
+    /* ResourceTracker objects point back into their ExecutionSession and must
+       not outlive it. Keep each last external reference through all bounded
+       removal attempts, then release it immediately before LLJIT performs its
+       authoritative session teardown. Host backing remains owned here. */
+    for (list<TrackerOwnerSP>::iterator owner = tracker_owners.begin();
+         owner != tracker_owners.end(); ++owner)
+      (*owner)->tracker.reset();
   }
 };
 
@@ -1787,7 +1902,7 @@ void *interpreter::compile_global_generation(Env& environment)
     to_string(generation);
   std::unique_ptr<llvm::MemoryBuffer> snapshot;
   void *address = 0;
-  llvm::orc::ResourceTrackerSP tracker;
+  CompilationUnitResources::TrackerOwnerSP tracker;
 #if DEFER_GLOBALS
   if (!eager_jit) {
     llvm::Expected<std::unique_ptr<llvm::MemoryBuffer> > pending =
@@ -1799,10 +1914,12 @@ void *interpreter::compile_global_generation(Env& environment)
   } else
 #endif
   {
-    tracker = ORC->create_resource_tracker();
+    tracker = compilation_units->prepare_tracker
+      (*ORC, "failed to retire ORC global function generation");
     if (llvm::Error error = ORC->add_module_copy
-          (tracker, *module, entry_name, exported_name)) {
-      if (llvm::Error cleanup_error = tracker->remove())
+          (tracker->tracker, *module, entry_name, exported_name)) {
+      if (llvm::Error cleanup_error = compilation_units->remove_tracker
+            (tracker, "generic-compile-remove"))
         error = llvm::joinErrors(std::move(error), std::move(cleanup_error));
       throw err("failed to add ORC global function module: "+
                 llvm::toString(std::move(error)));
@@ -1810,7 +1927,8 @@ void *interpreter::compile_global_generation(Env& environment)
     llvm::Expected<llvm::orc::ExecutorAddr> entry = ORC->lookup(exported_name);
     if (!entry) {
       llvm::Error error = entry.takeError();
-      if (llvm::Error cleanup_error = tracker->remove())
+      if (llvm::Error cleanup_error = compilation_units->remove_tracker
+            (tracker, "generic-compile-remove"))
         error = llvm::joinErrors(std::move(error), std::move(cleanup_error));
       throw err("failed to resolve ORC global function: "+
                 llvm::toString(std::move(error)));
@@ -1859,6 +1977,20 @@ static bool orc_failure_requested(const char *mode)
   if (!failure) return false;
   string failures = ","+string(failure)+",";
   return failures.find(","+string(mode)+",") != string::npos;
+}
+
+static void inject_second_declaration_failure
+(const char *mode, size_t declaration)
+{
+  if (declaration != 1) return;
+  const char *requested = getenv("PURE_TEST_DECLARATION_FAILURE");
+  static set<string> injected;
+  if (!requested || std::strcmp(requested, mode) != 0 ||
+      !injected.insert(mode).second)
+    return;
+  string description = std::strcmp(mode, "faust-loaded") == 0 ?
+    "Faust" : "bitcode";
+  throw err("injected second "+description+" declaration failure");
 }
 #endif
 
@@ -1952,10 +2084,13 @@ void *interpreter::materialize_global_generation_by_key
     return 0;
   }
   if (generation->snapshot) {
-    llvm::orc::ResourceTrackerSP tracker = ORC->create_resource_tracker();
+    CompilationUnitResources::TrackerOwnerSP tracker =
+      compilation_units->prepare_tracker
+        (*ORC, "failed to retire deferred ORC global function generation");
     if (llvm::Error error = add_deferred_snapshot
-          (*ORC, tracker, clone_snapshot(*generation->snapshot))) {
-      if (llvm::Error cleanup_error = tracker->remove())
+          (*ORC, tracker->tracker, clone_snapshot(*generation->snapshot))) {
+      if (llvm::Error cleanup_error = compilation_units->remove_tracker
+            (tracker, "deferred-snapshot-remove"))
         error = llvm::joinErrors(std::move(error), std::move(cleanup_error));
       if (error_message) *error_message = llvm::toString(std::move(error));
       else llvm::consumeError(std::move(error));
@@ -1965,7 +2100,8 @@ void *interpreter::materialize_global_generation_by_key
       lookup_deferred_snapshot(*ORC, generation->symbol);
     if (!entry) {
       llvm::Error error = entry.takeError();
-      if (llvm::Error cleanup_error = tracker->remove())
+      if (llvm::Error cleanup_error = compilation_units->remove_tracker
+            (tracker, "deferred-snapshot-remove"))
         error = llvm::joinErrors(std::move(error), std::move(cleanup_error));
       if (error_message) *error_message = llvm::toString(std::move(error));
       else llvm::consumeError(std::move(error));
@@ -2077,13 +2213,16 @@ void *interpreter::compile_orc_function
     if (void *address = compilation_units->function_address(function))
       return address;
 
-  llvm::orc::ResourceTrackerSP tracker = ORC->create_resource_tracker();
+  CompilationUnitResources::TrackerOwnerSP tracker =
+    compilation_units->prepare_tracker
+      (*ORC, "failed to retire ORC "+category.str()+" function");
   string entry_name = function->getName().str();
   string exported_name = "$$orc."+category.str()+"."+
     to_string(orc_unit_counter++);
   if (llvm::Error error = ORC->add_module_copy
-        (tracker, *module, entry_name, exported_name)) {
-    if (llvm::Error cleanup_error = tracker->remove())
+        (tracker->tracker, *module, entry_name, exported_name)) {
+    if (llvm::Error cleanup_error = compilation_units->remove_tracker
+          (tracker, "generic-compile-remove"))
       error = llvm::joinErrors(std::move(error), std::move(cleanup_error));
     throw err("failed to add ORC "+category.str()+" module: "+
               llvm::toString(std::move(error)));
@@ -2091,7 +2230,8 @@ void *interpreter::compile_orc_function
   llvm::Expected<llvm::orc::ExecutorAddr> entry = ORC->lookup(exported_name);
   if (!entry) {
     llvm::Error error = entry.takeError();
-    if (llvm::Error cleanup_error = tracker->remove())
+    if (llvm::Error cleanup_error = compilation_units->remove_tracker
+          (tracker, "generic-compile-remove"))
       error = llvm::joinErrors(std::move(error), std::move(cleanup_error));
     throw err("failed to resolve ORC "+category.str()+" function: "+
               llvm::toString(std::move(error)));
@@ -2284,24 +2424,21 @@ interpreter::~interpreter()
 
 void interpreter::shutdown_orc_resources() noexcept
 {
-  // A quarantined absolute symbol may still point into detached GlobalVar
-  // storage after its bounded removal fails. Keep that storage alive until
-  // ORC itself has been destroyed.
-  vector<std::shared_ptr<void> > retained_host_backings;
-  if (compilation_units)
-    retained_host_backings =
-      compilation_units->host_backings();
   delete pass_state;
   pass_state = 0;
   if (compilation_units) {
     if (llvm::Error error = compilation_units->remove_all())
       llvm::logAllUnhandledErrors(std::move(error), llvm::errs(),
                                   "failed to remove ORC compilation unit: ");
-    delete compilation_units;
-    compilation_units = 0;
+    compilation_units->handoff_failed_trackers_to_orc_shutdown();
   }
+  /* Failed-removal owners and absolute-symbol backing stay alive here. Their
+     ResourceTrackerSPs were released only at the explicit handoff above, so
+     LLJIT's authoritative session teardown now owns the remaining resources. */
   delete ORC;
   ORC = 0;
+  delete compilation_units;
+  compilation_units = 0;
 }
 
 #ifdef PURE_ENABLE_TEST_HOOKS
@@ -3319,34 +3456,14 @@ bool interpreter::LoadFaustDSP(bool priv, const char *name, string *msg,
     // Check whether there's anything to do.
     if (declared && !modified) return true;
     if (!modified && !compiling) {
-      // The interactive provider is immutable and lives in ORC. A declaration
-      // in another namespace only needs another Pure wrapper around the same
-      // stable logical declarations and dispatch slots.
       bcdata_t& data = loaded_dsps[modname];
-      for (list<Function*>::const_iterator it = data.funptrs.begin();
-           it != data.funptrs.end(); ++it) {
-        Function *f = *it;
-        string prefix = "$$faust$"+modname+"$";
-        assert(f && f->isDeclaration() && f->getName().starts_with(prefix));
-        string operation = f->getName().drop_front(prefix.size()).str();
-        FunctionType *ft = f->getFunctionType();
-        string restype = dsptype_name
-          (operation, ft->getReturnType(), 0, true, data.dbl);
-        list<string> argtypes;
-        for (size_t i = 0; i < ft->getNumParams(); ++i)
-          argtypes.push_back(dsptype_name
-            (operation, ft->getParamType(i), i, false, data.dbl));
-        declare_extern(priv, f->getName().str(), restype, argtypes, false, 0,
-                       modname+"::"+operation, false, false);
-        symbol *sym = symtab.sym(modname+"::"+operation);
-        assert(sym);
-        required.push_back(sym->f);
+      string declaration_error;
+      if (!declare_loaded_faust_namespace
+            (data, modname, priv, declaration_error)) {
+        if (msg) *msg = declaration_error;
+        dsp_errmsg(name, msg);
+        return false;
       }
-      if (symtab.current_namespace->empty())
-        namespaces.insert(modname);
-      else
-        namespaces.insert(*symtab.current_namespace+"::"+modname);
-      data.declare(*symtab.current_namespace, priv);
       return true;
     }
   }
@@ -3580,6 +3697,10 @@ bool interpreter::LoadFaustDSP(bool priv, const char *name, string *msg,
     compilation_units->next_faust_generation(modname) : 0;
   string generation_suffix = faust_generation ?
     "$g"+to_string(faust_generation)+"$" : "$";
+  if (faust_generation)
+    M->setModuleIdentifier
+      (M->getModuleIdentifier()+"#pure-faust-"+modname+"-"+
+       to_string(faust_generation));
   list<string> funs;
   map<Function*, string> export_names;
   for (map<string, Function*>::iterator it = faust_exports.begin();
@@ -3611,6 +3732,7 @@ bool interpreter::LoadFaustDSP(bool priv, const char *name, string *msg,
        it != end; ++it) {
     GlobalVariable &v = *it;
     if (v.isDeclaration() || !v.hasName()) continue;
+    if (v.getName().starts_with("llvm.")) continue;
     string source_name = v.getName().str();
     rename_plan.push_back(make_pair
       (&v, "$$__faust__$"+modname+generation_suffix+source_name));
@@ -4238,6 +4360,19 @@ static const char *incompatible_triple_component
   return 0;
 }
 
+static bool existing_extern_matches
+(const ExternInfo& existing, llvm_const_Type *result_type,
+ const vector<llvm_const_Type*>& argument_types,
+ const CAbiType& abi_result_type,
+ const vector<CAbiType>& abi_argument_types, bool varargs)
+{
+  return result_type == existing.type &&
+    argument_types == existing.argtypes &&
+    abi_result_type == existing.abi_type &&
+    abi_argument_types == existing.abi_argtypes &&
+    varargs == existing.varargs;
+}
+
 class batch_bitcode_transaction {
   struct binding_snapshot {
     llvm::GlobalVariable *variable;
@@ -4290,20 +4425,12 @@ class batch_bitcode_transaction {
             owner.host_global_address(binding->second.v) ==
               &binding->second.x &&
             !owner.remove_host_global_and_report(binding->second.v)) {
-          string symbol_name = binding->second.v->getName().str();
+          llvm::GlobalVariable *failed_variable = binding->second.v;
           typedef map<int32_t, GlobalVar>::node_type binding_node;
           map<int32_t, GlobalVar>::iterator failed = binding++;
-          binding_node *held =
-            new binding_node(owner.globalvars.extract(failed));
-          held->mapped().v = 0;
-          std::shared_ptr<void> backing
-            (held, [](void *value) {
-              binding_node *node = static_cast<binding_node*>(value);
-              if (node->mapped().x) pure_free(node->mapped().x);
-              delete node;
-            });
+          binding_node held = owner.globalvars.extract(failed);
           owner.compilation_units->quarantine_host_symbol
-            (symbol_name, std::move(backing));
+            (failed_variable, std::move(held));
           continue;
         }
         if (binding->second.x) pure_free(binding->second.x);
@@ -4314,8 +4441,8 @@ class batch_bitcode_transaction {
           binding->second.v && owner.host_global_address(binding->second.v) ==
             &binding->second.x &&
           !owner.remove_host_global_and_report(binding->second.v))
-        owner.compilation_units->quarantine_host_symbol
-          (binding->second.v->getName().str(), std::shared_ptr<void>());
+        owner.compilation_units->restore_host_symbol
+          (binding->second.v->getName());
       binding->second.v = previous->second.variable;
       if (binding->second.x != previous->second.value) {
         if (binding->second.x) pure_free(binding->second.x);
@@ -4432,6 +4559,71 @@ public:
   void commit() noexcept { committed = true; }
 };
 
+bool interpreter::declare_loaded_faust_namespace
+(bcdata_t& data, const string& module_name, bool priv, string& error)
+{
+  using namespace llvm;
+  /* Everything that can allocate is staged before publication. The provider
+     and dispatch slots remain authoritative until the final swaps/splices. */
+  map<string, bool> prepared_visibility = data.priv;
+  prepared_visibility[*symtab.current_namespace] = priv;
+  set<string> prepared_namespace;
+  prepared_namespace.insert
+    (symtab.current_namespace->empty() ? module_name :
+     *symtab.current_namespace+"::"+module_name);
+  list<string> wrapper_symbols;
+  string prefix = "$$faust$"+module_name+"$";
+  for (list<Function*>::const_iterator function = data.funptrs.begin();
+       function != data.funptrs.end(); ++function) {
+    assert(*function && (*function)->isDeclaration() &&
+           (*function)->getName().starts_with(prefix));
+    wrapper_symbols.push_back
+      (module_name+"::"+
+       (*function)->getName().drop_front(prefix.size()).str());
+  }
+
+  batch_bitcode_transaction transaction
+    (*this, wrapper_symbols, "faust-host-global");
+  list<int> prepared_required;
+  try {
+    size_t declaration = 0;
+    for (list<Function*>::const_iterator function = data.funptrs.begin();
+         function != data.funptrs.end(); ++function, ++declaration) {
+#ifdef PURE_ENABLE_TEST_HOOKS
+      inject_second_declaration_failure("faust-loaded", declaration);
+#endif
+      string operation =
+        (*function)->getName().drop_front(prefix.size()).str();
+      FunctionType *type = (*function)->getFunctionType();
+      string result_type = dsptype_name
+        (operation, type->getReturnType(), 0, true, data.dbl);
+      list<string> argument_types;
+      for (size_t i = 0; i < type->getNumParams(); ++i)
+        argument_types.push_back(dsptype_name
+          (operation, type->getParamType(i), i, false, data.dbl));
+      declare_extern
+        (priv, (*function)->getName().str(), result_type, argument_types,
+         false, 0, module_name+"::"+operation, false, false);
+      symbol *entry = symtab.sym(module_name+"::"+operation);
+      assert(entry);
+      prepared_required.push_back(entry->f);
+    }
+  } catch (const err& declaration_error) {
+    error = declaration_error.what();
+    return false;
+  }
+
+  data.priv.swap(prepared_visibility);
+  if (!prepared_namespace.empty()) {
+    set<string>::node_type node = prepared_namespace.extract
+      (prepared_namespace.begin());
+    namespaces.insert(std::move(node));
+  }
+  required.splice(required.end(), prepared_required);
+  transaction.commit();
+  return true;
+}
+
 static std::unique_ptr<llvm::Module> prepare_linked_module
 (const llvm::Module& live, std::unique_ptr<llvm::Module> imported,
  string& error, const char *description = "bitcode",
@@ -4447,6 +4639,7 @@ static std::unique_ptr<llvm::Module> prepare_linked_module
     PointerType *pointer_type = PointerType::get(imported->getContext(), 0);
     for (GlobalValue& value : imported->global_values()) {
       if (value.isDeclaration()) continue;
+      if (value.hasName() && value.getName().starts_with("llvm.")) continue;
       if (value.getAddressSpace() != 0) {
         error = "Cannot retain "+string(description)+" definition '"+
           value.getName().str()+"' from a non-default address space";
@@ -4532,6 +4725,8 @@ struct prepared_faust_reload {
   int tag;
   std::unique_ptr<batch_bitcode_transaction> wrapper_transaction;
   std::unique_ptr<llvm::Module> linked_candidate;
+  std::unique_ptr<llvm::Module> appending_holder;
+  list<string> appending_names;
   vector<pair<llvm::GlobalValue*, llvm::GlobalValue*> > declaration_bindings;
   vector<named_metadata_snapshot> named_metadata;
   map<string, void*> addresses;
@@ -4539,7 +4734,7 @@ struct prepared_faust_reload {
   vector<pair<void**, void*> > bindings;
   vector<pair<llvm::GlobalVariable*, llvm::Function*> > batch_initializers;
   list<int> required_symbols;
-  llvm::orc::ResourceTrackerSP tracker;
+  CompilationUnitResources::TrackerOwnerSP tracker;
   CompilationUnitResources::FaustModules generation_holder;
   bcmap entry_holder;
   map<int, bcmap::iterator> dsp_entry_holder;
@@ -4555,7 +4750,7 @@ struct prepared_faust_reload {
   prepared_faust_reload(const prepared_faust_reload&) = delete;
   prepared_faust_reload& operator=(const prepared_faust_reload&) = delete;
 
-  llvm::orc::ResourceTrackerSP *owned_tracker() noexcept
+  CompilationUnitResources::TrackerOwnerSP *owned_tracker() noexcept
   {
     if (tracker) return &tracker;
     if (generation_holder.empty() ||
@@ -4563,19 +4758,20 @@ struct prepared_faust_reload {
       return 0;
     assert(generation_holder.size() == 1 &&
            generation_holder.begin()->second.size() == 1);
-    llvm::orc::ResourceTrackerSP& retained =
+    CompilationUnitResources::TrackerOwnerSP& retained =
       generation_holder.begin()->second.front().tracker;
     return retained ? &retained : 0;
   }
 
   void discard_tracker(string *message = 0)
   {
-    llvm::orc::ResourceTrackerSP *candidate = owned_tracker();
+    CompilationUnitResources::TrackerOwnerSP *candidate = owned_tracker();
     if (!candidate) return;
-    if (llvm::Error cleanup_error = (*candidate)->remove()) {
+    if (llvm::Error cleanup_error = owner.compilation_units->remove_tracker
+          (*candidate, "faust-prepared-remove")) {
       string detail = llvm::toString(std::move(cleanup_error));
       owner.compilation_units->quarantine_tracker
-        (*candidate, "failed to retire prepared Faust reload");
+        ((*candidate)->tracker);
       if (message) *message += ": "+detail;
       candidate->reset();
     } else {
@@ -4585,18 +4781,16 @@ struct prepared_faust_reload {
 
   ~prepared_faust_reload()
   {
-    llvm::orc::ResourceTrackerSP *candidate = owned_tracker();
+    CompilationUnitResources::TrackerOwnerSP *candidate = owned_tracker();
     if (!candidate) return;
-    if (llvm::Error cleanup_error = (*candidate)->remove()) {
-      string detail = llvm::toString(std::move(cleanup_error));
-      try {
-        owner.compilation_units->quarantine_tracker
-          (*candidate, "failed to retire prepared Faust reload");
-      } catch (...) {
-      }
+    if (llvm::Error cleanup_error = owner.compilation_units->remove_tracker
+          (*candidate, "faust-prepared-remove")) {
+      owner.compilation_units->quarantine_tracker
+        ((*candidate)->tracker);
       candidate->reset();
-      llvm::errs() << "failed to retire prepared Faust reload: "
-                   << detail << '\n';
+      llvm::logAllUnhandledErrors
+        (std::move(cleanup_error), llvm::errs(),
+         "failed to retire prepared Faust reload: ");
     } else {
       candidate->reset();
     }
@@ -4734,6 +4928,167 @@ static void collect_faust_metadata_globals
       (*operand, visited_metadata, visited_values, globals);
 }
 
+static bool is_faust_appending_global(llvm::StringRef name)
+{
+  return name == "llvm.global_ctors" || name == "llvm.global_dtors" ||
+    name == "llvm.used" || name == "llvm.compiler.used";
+}
+
+static llvm::GlobalVariable *replace_faust_appending_global
+(llvm::Module& module, llvm::GlobalVariable& previous,
+ const vector<llvm::Constant*>& elements)
+{
+  using namespace llvm;
+  ArrayType *previous_type = dyn_cast<ArrayType>(previous.getValueType());
+  assert(previous_type);
+  ArrayType *replacement_type =
+    ArrayType::get(previous_type->getElementType(), elements.size());
+  Constant *initializer = ConstantArray::get(replacement_type, elements);
+  string name = previous.getName().str();
+  previous.setName(name+".retiring");
+  GlobalVariable *replacement = new GlobalVariable
+    (module, replacement_type, previous.isConstant(),
+     GlobalValue::AppendingLinkage, initializer, name, 0,
+     previous.getThreadLocalMode(), previous.getAddressSpace(),
+     previous.isExternallyInitialized());
+  replacement->copyAttributesFrom(&previous);
+  replacement->setLinkage(GlobalValue::AppendingLinkage);
+  replacement->setInitializer(initializer);
+  previous.replaceAllUsesWith(replacement);
+  previous.eraseFromParent();
+  return replacement;
+}
+
+static bool prepare_faust_appending_transfer
+(llvm::Module& live, llvm::Module& provider, llvm::Module& candidate,
+ const set<const llvm::GlobalValue*>& superseded_values,
+ std::unique_ptr<llvm::Module>& holder, list<string>& prepared_names,
+ string& error)
+{
+  using namespace llvm;
+  holder.reset(new Module("prepared Faust appending globals",
+                          live.getContext()));
+  holder->setDataLayout(live.getDataLayout());
+  holder->setTargetTriple(live.getTargetTriple());
+
+  ValueToValueMapTy exact_values;
+  for (GlobalValue& candidate_value : candidate.global_values()) {
+    if (!candidate_value.hasName() ||
+        is_faust_appending_global(candidate_value.getName()))
+      continue;
+    GlobalValue *exact = live.getNamedValue(candidate_value.getName());
+    if (!exact) exact = provider.getNamedValue(candidate_value.getName());
+    if (!exact || candidate_value.getValueID() != exact->getValueID() ||
+        candidate_value.getType() != exact->getType() ||
+        candidate_value.getValueType() != exact->getValueType()) {
+      error = "Prepared batch Faust appending value '"+
+        candidate_value.getName().str()+"' has no exact live identity";
+      return false;
+    }
+    exact_values[&candidate_value] = exact;
+  }
+
+  static const char *const names[] = {
+    "llvm.global_ctors", "llvm.global_dtors",
+    "llvm.used", "llvm.compiler.used"
+  };
+  for (size_t name_index = 0;
+       name_index < sizeof(names)/sizeof(names[0]); ++name_index) {
+    GlobalVariable *aggregate = candidate.getNamedGlobal(names[name_index]);
+    if (!aggregate) continue;
+    if (aggregate->getLinkage() != GlobalValue::AppendingLinkage ||
+        !aggregate->hasInitializer()) {
+      error = "Reserved Faust global '"+string(names[name_index])+
+        "' does not have appending linkage and an initializer";
+      return false;
+    }
+    ArrayType *array_type = dyn_cast<ArrayType>(aggregate->getValueType());
+    if (!array_type) {
+      error = "Reserved Faust global '"+string(names[name_index])+
+        "' is not an array";
+      return false;
+    }
+    vector<Constant*> retained_candidate;
+    vector<Constant*> retained_exact;
+    retained_candidate.reserve(array_type->getNumElements());
+    retained_exact.reserve(array_type->getNumElements());
+    for (uint64_t i = 0; i < array_type->getNumElements(); ++i) {
+      Constant *element = aggregate->getInitializer()->getAggregateElement(i);
+      if (!element) {
+        error = "Cannot inspect reserved Faust global '"+
+          string(names[name_index])+"' element";
+        return false;
+      }
+      SmallPtrSet<const Value*, 16> visited;
+      SmallPtrSet<const GlobalValue*, 8> globals;
+      collect_faust_value_globals(*element, visited, globals);
+      bool superseded = false;
+      for (const GlobalValue *global : globals) {
+        ValueToValueMapTy::const_iterator exact = exact_values.find(global);
+        const GlobalValue *installed = exact == exact_values.end() ? 0 :
+          dyn_cast_or_null<GlobalValue>(exact->second);
+        if (!installed) {
+          error = "Reserved Faust global '"+string(names[name_index])+
+            "' retains an unmapped candidate value '"+
+            global->getName().str()+"'";
+          return false;
+        }
+        superseded |= superseded_values.count(installed) != 0;
+      }
+      if (superseded) continue;
+      Constant *mapped = dyn_cast_or_null<Constant>
+        (MapValue(element, exact_values));
+      if (!mapped) {
+        error = "Cannot map reserved Faust global '"+
+          string(names[name_index])+"' element onto live values";
+        return false;
+      }
+      SmallPtrSet<const Value*, 16> mapped_visited;
+      SmallPtrSet<const GlobalValue*, 8> mapped_globals;
+      collect_faust_value_globals(*mapped, mapped_visited, mapped_globals);
+      for (const GlobalValue *global : mapped_globals)
+        if (global->getParent() != &live && global->getParent() != &provider) {
+          error = "Reserved Faust global '"+string(names[name_index])+
+            "' maps outside the live/provider modules";
+          return false;
+        }
+      retained_candidate.push_back(element);
+      retained_exact.push_back(mapped);
+    }
+
+    if (retained_candidate.empty()) {
+      if (!aggregate->use_empty()) {
+        error = "Cannot retire all entries of referenced Faust global '"+
+          string(names[name_index])+"'";
+        return false;
+      }
+      aggregate->eraseFromParent();
+    } else {
+      aggregate = replace_faust_appending_global
+        (candidate, *aggregate, retained_candidate);
+      ArrayType *exact_type = ArrayType::get
+        (array_type->getElementType(), retained_exact.size());
+      Constant *exact_initializer =
+        ConstantArray::get(exact_type, retained_exact);
+      GlobalVariable *replacement = new GlobalVariable
+        (*holder, exact_type, aggregate->isConstant(),
+         GlobalValue::AppendingLinkage, exact_initializer,
+         names[name_index], 0, aggregate->getThreadLocalMode(),
+         aggregate->getAddressSpace(), aggregate->isExternallyInitialized());
+      replacement->copyAttributesFrom(aggregate);
+      replacement->setLinkage(GlobalValue::AppendingLinkage);
+      replacement->setInitializer(exact_initializer);
+    }
+    prepared_names.push_back(names[name_index]);
+  }
+  string verification_error;
+  if (!verify_module(candidate, verification_error)) {
+    error = "Invalid batch Faust appending merge: "+verification_error;
+    return false;
+  }
+  return true;
+}
+
 static bool prepare_faust_metadata_transfer
 (llvm::Module& live, llvm::Module& provider, llvm::Module& candidate,
  const set<const llvm::GlobalValue*>& superseded_values,
@@ -4853,6 +5208,7 @@ static bool prepare_faust_metadata_transfer
   ValueToValueMapTy exact_values;
   for (GlobalValue& candidate_value : candidate.global_values()) {
     if (!candidate_value.hasName()) continue;
+    if (is_faust_appending_global(candidate_value.getName())) continue;
     GlobalValue *exact = live.getNamedValue(candidate_value.getName());
     if (!exact) exact = provider.getNamedValue(candidate_value.getName());
     if (!exact) continue;
@@ -5048,6 +5404,22 @@ static bool prepare_faust_module_transfer
   auto prepare_value = [&](GlobalValue& source) {
     if (!source.hasName()) return true;
     GlobalValue *destination = live.getNamedValue(source.getName());
+    if (GlobalVariable *source_variable = dyn_cast<GlobalVariable>(&source))
+      if (is_faust_appending_global(source.getName())) {
+        GlobalVariable *destination_variable =
+          dyn_cast_or_null<GlobalVariable>(destination);
+        if (source_variable->getLinkage() !=
+              GlobalValue::AppendingLinkage ||
+            (destination &&
+             (!destination_variable ||
+              destination_variable->getLinkage() !=
+                GlobalValue::AppendingLinkage))) {
+          error = "Reserved Faust global '"+source.getName().str()+
+            "' conflicts with a non-appending live symbol";
+          return false;
+        }
+        return true;
+      }
     if (!source.isDeclaration()) {
       if (!destination) return true;
       error = "Prepared batch Faust definition collides with live symbol '"+
@@ -5106,6 +5478,7 @@ static void commit_faust_module_transfer
 (llvm::Module& live, llvm::Module& provider,
  const llvm::Module& linked_candidate,
  const vector<pair<llvm::GlobalValue*, llvm::GlobalValue*> >& declarations,
+ llvm::Module& appending_holder, const list<string>& appending_names,
  const vector<prepared_faust_reload::named_metadata_snapshot>& named_metadata)
 {
   using namespace llvm;
@@ -5131,6 +5504,34 @@ static void commit_faust_module_transfer
   for (GlobalVariable& variable : provider.globals())
     if (!variable.isDeclaration()) bind_comdat(variable);
 
+  /* The linked candidate is authoritative for appending globals. Retire the
+     prior/provider aggregates before ordinary transfer, while their exact
+     referenced definitions remain alive, then install the prebuilt merge. */
+  for (list<string>::const_iterator name = appending_names.begin();
+       name != appending_names.end(); ++name) {
+    GlobalVariable *replacement = appending_holder.getNamedGlobal(*name);
+    GlobalVariable *previous = live.getNamedGlobal(*name);
+    GlobalVariable *incoming = provider.getNamedGlobal(*name);
+    if (previous) {
+      if (replacement)
+        previous->replaceAllUsesWith(replacement);
+      else if (!previous->use_empty())
+        report_fatal_error
+          (Twine("referenced retired Faust appending global '")+*name+"'");
+      previous->dropAllReferences();
+      previous->eraseFromParent();
+    }
+    if (incoming) {
+      if (replacement)
+        incoming->replaceAllUsesWith(replacement);
+      else if (!incoming->use_empty())
+        report_fatal_error
+          (Twine("referenced incoming Faust appending global '")+*name+"'");
+      incoming->dropAllReferences();
+      incoming->eraseFromParent();
+    }
+  }
+
   live.getFunctionList().splice(live.getFunctionList().end(),
                                 provider.getFunctionList());
   while (!provider.global_empty()) {
@@ -5147,6 +5548,11 @@ static void commit_faust_module_transfer
     GlobalIFunc *ifunc = &*provider.ifunc_begin();
     provider.removeIFunc(ifunc);
     live.insertIFunc(ifunc);
+  }
+  while (!appending_holder.global_empty()) {
+    GlobalVariable *variable = &*appending_holder.global_begin();
+    appending_holder.removeGlobalVariable(variable);
+    live.insertGlobalVariable(variable);
   }
 
   vector<NamedMDNode*> previous_metadata;
@@ -5326,6 +5732,11 @@ static std::unique_ptr<prepared_faust_reload> prepare_faust_reload
     set<const GlobalValue*> superseded_values;
     owner.compilation_units->collect_faust_generation_values
       (reload.module_name, superseded_values);
+    if (!prepare_faust_appending_transfer
+          (*owner.module, *reload.provider, *prepared->linked_candidate,
+           superseded_values, prepared->appending_holder,
+           prepared->appending_names, error))
+      return 0;
     if (!prepare_faust_metadata_transfer
           (*owner.module, *reload.provider, *prepared->linked_candidate,
            superseded_values, prepared->named_metadata, error))
@@ -5335,7 +5746,8 @@ static std::unique_ptr<prepared_faust_reload> prepare_faust_reload
       if (!function.isDeclaration())
         prepared->generation_functions.push_back(&function);
     for (GlobalVariable& variable : reload.provider->globals())
-      if (!variable.isDeclaration())
+      if (!variable.isDeclaration() &&
+          !variable.getName().starts_with("llvm."))
         prepared->generation_variables.push_back(&variable);
     for (GlobalAlias& alias : reload.provider->aliases())
       if (!alias.isDeclaration())
@@ -5345,7 +5757,8 @@ static std::unique_ptr<prepared_faust_reload> prepare_faust_reload
         prepared->generation_ifuncs.push_back(&ifunc);
   }
 
-  prepared->tracker = owner.ORC->create_resource_tracker();
+  prepared->tracker = owner.compilation_units->prepare_tracker
+    (*owner.ORC, "failed to retire prepared Faust reload");
   if (owner.compiling) {
     vector<StringRef> retained_globals;
     retained_globals.reserve(reload.owned_variables.size());
@@ -5360,7 +5773,7 @@ static std::unique_ptr<prepared_faust_reload> prepare_faust_reload
       string physical_name =
         reload.exported_functions.find(*operation)->second;
       if (Error add_error = owner.ORC->add_module_copy
-            (prepared->tracker, *materialization_module, physical_name,
+            (prepared->tracker->tracker, *materialization_module, physical_name,
              exported_name, retained_globals)) {
         error = "Failed to submit batch ORC Faust export '"+*operation+
           "': "+toString(std::move(add_error));
@@ -5379,7 +5792,7 @@ static std::unique_ptr<prepared_faust_reload> prepare_faust_reload
     }
   } else {
     if (Error add_error = owner.ORC->add_module_copy
-          (prepared->tracker, *materialization_module)) {
+          (prepared->tracker->tracker, *materialization_module)) {
       error = "Failed to submit ORC Faust module: "+
         toString(std::move(add_error));
       prepared->discard_tracker(&error);
@@ -5463,12 +5876,15 @@ static bool commit_faust_reload(prepared_faust_reload&& prepared,
   }
 
   if (owner.compiling && reload.modified) {
-    assert(prepared.linked_candidate && reload.provider);
+    assert(prepared.linked_candidate && prepared.appending_holder &&
+           reload.provider);
     commit_faust_module_transfer
       (*owner.module, *reload.provider, *prepared.linked_candidate,
-       prepared.declaration_bindings, prepared.named_metadata);
+       prepared.declaration_bindings, *prepared.appending_holder,
+       prepared.appending_names, prepared.named_metadata);
     assert(reload.provider->empty() && reload.provider->global_empty() &&
-           reload.provider->alias_empty() && reload.provider->ifunc_empty());
+           reload.provider->alias_empty() && reload.provider->ifunc_empty() &&
+           prepared.appending_holder->global_empty());
     for (vector<pair<GlobalVariable*, Function*> >::const_iterator binding =
            prepared.batch_initializers.begin();
          binding != prepared.batch_initializers.end(); ++binding)
@@ -5702,20 +6118,6 @@ static void commit_prepared_bitcode
   }
 }
 
-static llvm::Error remove_batch_bitcode_provider_tracker
-(llvm::orc::ResourceTrackerSP tracker)
-{
-#ifdef PURE_ENABLE_TEST_HOOKS
-  static bool injected = false;
-  if (inject_orc_failure("batch-bitcode-provider-remove", injected)) {
-    batch_provider_retry_pending = true;
-    return llvm::createStringError
-      ("injected batch-bitcode-provider-remove ORC tracker removal failure");
-  }
-#endif
-  return tracker->remove();
-}
-
 static bool prepare_linked_bitcode_exports
 (PureJit& jit, CompilationUnitResources& resources,
  const llvm::Module& candidate, const bcdata_t& bitcode,
@@ -5726,18 +6128,19 @@ static bool prepare_linked_bitcode_exports
   for (list<string>::const_iterator symbol = data_symbols.begin();
        symbol != data_symbols.end(); ++symbol)
     retained_mutable_globals.push_back(*symbol);
-  llvm::orc::ResourceTrackerSP tracker = jit.create_resource_tracker();
+  CompilationUnitResources::TrackerOwnerSP tracker = resources.prepare_tracker
+    (jit, "failed to retire prepared batch bitcode providers",
+     CompilationUnitResources::provider_removal);
   for (list<bc_export_t>::const_iterator it = bitcode.exports.begin();
        it != bitcode.exports.end(); ++it) {
     string exported_name = "$$orc.batch-bitcode."+
       to_string(unit_counter++);
     if (llvm::Error add_error = jit.add_module_copy
-          (tracker, candidate, it->linked_name, exported_name,
+          (tracker->tracker, candidate, it->linked_name, exported_name,
            retained_mutable_globals)) {
       if (llvm::Error cleanup_error =
-            remove_batch_bitcode_provider_tracker(tracker)) {
-        resources.quarantine_tracker
-          (tracker, "failed to retire prepared batch bitcode providers");
+            resources.remove_tracker(tracker)) {
+        resources.quarantine_tracker(tracker->tracker);
         add_error = llvm::joinErrors(std::move(add_error),
                                     std::move(cleanup_error));
       }
@@ -5749,9 +6152,8 @@ static bool prepare_linked_bitcode_exports
     if (!address) {
       llvm::Error lookup_error = address.takeError();
       if (llvm::Error cleanup_error =
-            remove_batch_bitcode_provider_tracker(tracker)) {
-        resources.quarantine_tracker
-          (tracker, "failed to retire prepared batch bitcode providers");
+            resources.remove_tracker(tracker)) {
+        resources.quarantine_tracker(tracker->tracker);
         lookup_error = llvm::joinErrors(std::move(lookup_error),
                                        std::move(cleanup_error));
       }
@@ -5761,9 +6163,8 @@ static bool prepare_linked_bitcode_exports
     }
   }
   if (llvm::Error cleanup_error =
-        remove_batch_bitcode_provider_tracker(tracker)) {
-    resources.quarantine_tracker
-      (tracker, "failed to retire prepared batch bitcode providers");
+        resources.remove_tracker(tracker)) {
+    resources.quarantine_tracker(tracker->tracker);
     error = "Failed to retire prepared batch bitcode exports: "+
       llvm::toString(std::move(cleanup_error));
     return false;
@@ -5799,12 +6200,27 @@ bool interpreter::LoadBitcode(bool priv, const char *name, string *msg)
     if (declared) return true;
     // The linked module is immutable. Recreate namespace declarations solely
     // from the ABI metadata captured from the module that was actually linked.
-    for (list<bc_export_t>::const_iterator
-           it = loaded_entry->second.exports.begin();
-         it != loaded_entry->second.exports.end(); ++it)
-      declare_extern(priv, it->linked_name, it->restype, it->argtypes,
-                     it->varargs, 0, it->source_name, false);
-    loaded_entry->second.declare(*symtab.current_namespace, priv);
+    map<string, bool> prepared_visibility = loaded_entry->second.priv;
+    prepared_visibility[*symtab.current_namespace] = priv;
+    batch_bitcode_transaction transaction(*this, loaded_entry->second);
+    try {
+      size_t declaration = 0;
+      for (list<bc_export_t>::const_iterator
+             it = loaded_entry->second.exports.begin();
+           it != loaded_entry->second.exports.end(); ++it, ++declaration) {
+#ifdef PURE_ENABLE_TEST_HOOKS
+        inject_second_declaration_failure("bitcode-loaded", declaration);
+#endif
+        declare_extern(priv, it->linked_name, it->restype, it->argtypes,
+                       it->varargs, 0, it->source_name, false);
+      }
+    } catch (const err& declaration_error) {
+      if (msg) *msg = declaration_error.what();
+      bc_errmsg(name, msg);
+      return false;
+    }
+    loaded_entry->second.priv.swap(prepared_visibility);
+    transaction.commit();
     return true;
   }
   std::unique_ptr<MemoryBuffer> buf = get_membuf(name, msg);
@@ -5939,22 +6355,47 @@ bool interpreter::LoadBitcode(bool priv, const char *name, string *msg)
       bc_errmsg(name, msg);
       return false;
     }
-    llvm::orc::ResourceTrackerSP tracker = ORC->create_resource_tracker();
-    if (llvm::Error error = ORC->add_module_copy(tracker, *M)) {
-      if (llvm::Error cleanup_error = tracker->remove())
+
+    /* Preallocate both publication nodes before ORC registration. Neither the
+       loaded-module record nor its tracker becomes authoritative until every
+       declaration has succeeded. */
+    bitcode.declare(*symtab.current_namespace, priv);
+    bcmap prepared_loaded_modules;
+    prepared_loaded_modules.emplace(module_key, std::move(bitcode));
+    bcmap::node_type prepared_loaded =
+      prepared_loaded_modules.extract(module_key);
+    bcdata_t& prepared_bitcode = prepared_loaded.mapped();
+    CompilationUnitResources::TrackerOwnerSP tracker =
+      compilation_units->prepare_tracker
+        (*ORC, "failed to retire interactive bitcode module");
+    CompilationUnitResources::BitcodeModules prepared_tracker_modules;
+    try {
+      prepared_tracker_modules.emplace(module_key, tracker);
+    } catch (...) {
+      compilation_units->discard_unused_tracker(tracker);
+      throw;
+    }
+    CompilationUnitResources::BitcodeModules::node_type prepared_tracker =
+      prepared_tracker_modules.extract(module_key);
+    batch_bitcode_transaction transaction(*this, prepared_bitcode);
+    if (llvm::Error error = ORC->add_module_copy(tracker->tracker, *M)) {
+      if (llvm::Error cleanup_error = compilation_units->remove_tracker
+            (tracker, "bitcode-first-remove"))
         error = llvm::joinErrors(std::move(error), std::move(cleanup_error));
       if (msg) *msg = "Failed to submit ORC bitcode module: "+
         llvm::toString(std::move(error));
       bc_errmsg(name, msg);
       return false;
     }
-    for (list<bc_export_t>::const_iterator it = bitcode.exports.begin();
-         it != bitcode.exports.end(); ++it) {
+    for (list<bc_export_t>::const_iterator
+           it = prepared_bitcode.exports.begin();
+         it != prepared_bitcode.exports.end(); ++it) {
       llvm::Expected<llvm::orc::ExecutorAddr> address =
         ORC->lookup(it->linked_name);
       if (!address) {
         llvm::Error error = address.takeError();
-        if (llvm::Error cleanup_error = tracker->remove())
+        if (llvm::Error cleanup_error = compilation_units->remove_tracker
+              (tracker, "bitcode-first-remove"))
           error = llvm::joinErrors(std::move(error), std::move(cleanup_error));
         if (msg) *msg = "Failed to materialize bitcode export '"+
           it->source_name+"': "+llvm::toString(std::move(error));
@@ -5962,16 +6403,35 @@ bool interpreter::LoadBitcode(bool priv, const char *name, string *msg)
         return false;
       }
     }
-    for (list<bc_export_t>::const_iterator it = bitcode.exports.begin();
-         it != bitcode.exports.end(); ++it) {
-      declare_extern(priv, it->linked_name, it->restype, it->argtypes,
-                     it->varargs, 0, it->source_name, false);
-      Function *declaration = module->getFunction(it->linked_name);
-      assert(declaration && declaration->isDeclaration());
+    try {
+      size_t declaration_index = 0;
+      for (list<bc_export_t>::const_iterator
+             it = prepared_bitcode.exports.begin();
+           it != prepared_bitcode.exports.end();
+           ++it, ++declaration_index) {
+#ifdef PURE_ENABLE_TEST_HOOKS
+        inject_second_declaration_failure
+          ("bitcode-first", declaration_index);
+#endif
+        declare_extern(priv, it->linked_name, it->restype, it->argtypes,
+                       it->varargs, 0, it->source_name, false);
+        Function *declaration = module->getFunction(it->linked_name);
+        assert(declaration && declaration->isDeclaration());
+      }
+    } catch (const err& declaration_error) {
+      string detail = declaration_error.what();
+      if (llvm::Error cleanup_error = compilation_units->remove_tracker
+            (tracker, "bitcode-first-remove"))
+        detail += ": "+llvm::toString(std::move(cleanup_error));
+      if (msg) *msg = detail;
+      bc_errmsg(name, msg);
+      return false;
     }
-    bitcode.declare(*symtab.current_namespace, priv);
-    compilation_units->retain_bitcode(module_key, std::move(tracker));
-    loaded_bcs.emplace(module_key, std::move(bitcode));
+    bcmap::insert_return_type loaded_result =
+      loaded_bcs.insert(std::move(prepared_loaded));
+    assert(loaded_result.inserted);
+    compilation_units->publish_bitcode(std::move(prepared_tracker));
+    transaction.commit();
     return true;
   }
 
@@ -6039,10 +6499,9 @@ bool interpreter::LoadBitcode(bool priv, const char *name, string *msg)
       }
       llvm_const_Type *result_type = named_type(it->restype);
       CAbiType abi_result_type(it->restype);
-      if (result_type != info.type || argument_types != info.argtypes ||
-          abi_result_type != info.abi_type ||
-          abi_argument_types != info.abi_argtypes ||
-          it->varargs != info.varargs ||
+      if (!existing_extern_matches
+            (info, result_type, argument_types, abi_result_type,
+             abi_argument_types, it->varargs) ||
           provider->getFunctionType()->getReturnType() != result_type ||
           provider->getFunctionType()->params() !=
             ArrayRef<llvm_const_Type*>(argument_types)) {
@@ -6529,7 +6988,6 @@ void interpreter::inline_code(bool priv, string &code)
     bool vflag = (verbose&verbosity::compiler) != 0;
     if (vflag) std::cerr << cmd << '\n';
     int status = system(cmd.c_str());
-    unlink(nm.c_str());
     if (remove_intermediate) {
       string intermediate_name = string(fnm)+intermediate_ext;
       unlink(intermediate_name.c_str());
@@ -7939,7 +8397,8 @@ void interpreter::compile()
           (type_function.h, "type", &previous_tracker);
         pure_add_rtty(ftag, type_function.n, fp);
         if (previous_tracker)
-          if (llvm::Error error = previous_tracker->remove())
+          if (llvm::Error error = compilation_units->remove_tracker
+                (previous_tracker, "type-generation-remove"))
             llvm::logAllUnhandledErrors
               (std::move(error), llvm::errs(),
                "failed to retire previous ORC type generation: ");
@@ -16186,8 +16645,8 @@ Function *interpreter::declare_extern(int priv, string name, string restype,
     // Already declared under the same name, check that declarations
     // match. Here we require the types to be literally the same.
     const ExternInfo& info = it->second;
-    if (type != info.type || argt != info.argtypes ||
-        abi_type != info.abi_type || abi_argtypes != info.abi_argtypes) {
+    if (!existing_extern_matches
+          (info, type, argt, abi_type, abi_argtypes, varargs)) {
       ostringstream msg;
       msg << "declaration of extern function '" << name
 	  << "' does not match previous declaration: " << info;
@@ -17387,7 +17846,7 @@ class temporary_eval_guard {
   map<int32_t,GlobalVar> *global_variables;
   pure_expr *&temporaries;
   pure_aframe *&activation_stack;
-  llvm::orc::ResourceTrackerSP tracker;
+  CompilationUnitResources::TrackerOwnerSP tracker;
   vector<int32_t> new_globals;
   list<cached_binding> cached_values;
   size_t environment_stack_boundary;
@@ -17404,7 +17863,8 @@ class temporary_eval_guard {
       error = compilation_units->remove
         (temporary_environment, tracker_failure_mode);
     else if (tracker)
-      error = tracker->remove();
+      error = compilation_units->remove_tracker
+        (tracker, "generic-compile-remove");
     if (!error) {
       tracker_retained = false;
       tracker.reset();
@@ -17435,6 +17895,7 @@ class temporary_eval_guard {
       if (value && value->hasName()) {
         if (llvm::Error error =
               compilation_units->remove_host_symbol(value->getName())) {
+          compilation_units->restore_host_symbol(value->getName());
           llvm::logAllUnhandledErrors
             (std::move(error), llvm::errs(),
              "failed to roll back temporary host global: ");
@@ -17518,12 +17979,15 @@ public:
     }
   }
 
-  void own_tracker(llvm::orc::ResourceTrackerSP value) noexcept
+  void own_tracker(CompilationUnitResources::TrackerOwnerSP value) noexcept
   {
     tracker = std::move(value);
   }
 
-  llvm::orc::ResourceTrackerSP get_tracker() const noexcept { return tracker; }
+  llvm::orc::ResourceTrackerSP get_tracker() const noexcept
+  {
+    return tracker ? tracker->tracker : llvm::orc::ResourceTrackerSP();
+  }
 
   void retain_tracker()
   {
@@ -17536,7 +18000,8 @@ public:
   {
     llvm::Error error = tracker_retained
       ? compilation_units->remove(temporary_environment, tracker_failure_mode)
-      : tracker ? tracker->remove() : llvm::Error::success();
+      : tracker ? compilation_units->remove_tracker
+          (tracker, "generic-compile-remove") : llvm::Error::success();
     if (!error) tracker_retained = false;
     if (!error) tracker.reset();
     return error;
@@ -17635,7 +18100,8 @@ pure_expr *interpreter::doeval(expr x, pure_expr*& e, bool keep)
     if (!verify_module(*module, verification_error))
       throw err("invalid LLVM module before ORC evaluation: "+
                 verification_error);
-    guard.own_tracker(ORC->create_resource_tracker());
+    guard.own_tracker(compilation_units->prepare_tracker
+      (*ORC, "failed to retire temporary ORC evaluation module"));
     string entry_name = f.f->getName().str();
     string exported_name = "$$orc.eval."+to_string(orc_unit_counter++);
     if (llvm::Error error = add_temporary_eval_module
@@ -17871,7 +18337,8 @@ pure_expr *interpreter::dodefn(env vars, const vinfo& vi,
   if (!verify_module(*module, verification_error))
     throw err("invalid LLVM module before ORC definition: "+
               verification_error);
-  guard.own_tracker(ORC->create_resource_tracker());
+  guard.own_tracker(compilation_units->prepare_tracker
+    (*ORC, "failed to retire temporary ORC definition module"));
   string entry_name = f.f->getName().str();
   string category = keep ? "batch-defn" : "defn";
   string exported_name = "$$orc."+category+"."+

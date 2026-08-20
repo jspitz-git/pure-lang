@@ -8,6 +8,9 @@
    option) any later version. */
 
 #include "pure_jit.hh"
+#ifdef _WIN32
+#include "coff_jitlink.hh"
+#endif
 
 #include <llvm/ADT/SmallPtrSet.h>
 #include <llvm/ADT/SmallVector.h>
@@ -183,6 +186,25 @@ static void collect_comdat_dependencies
   } while (changed);
 }
 
+static bool is_semantic_appending_global(llvm::StringRef name)
+{
+  return name == "llvm.global_ctors" || name == "llvm.global_dtors" ||
+    name == "llvm.used" || name == "llvm.compiler.used";
+}
+
+static void collect_semantic_appending_dependencies
+(const llvm::Module& module,
+ llvm::SmallPtrSetImpl<llvm::GlobalValue*>& reachable)
+{
+  static const char *const names[] = {
+    "llvm.global_ctors", "llvm.global_dtors",
+    "llvm.used", "llvm.compiler.used"
+  };
+  for (size_t i = 0; i < sizeof(names)/sizeof(names[0]); ++i)
+    if (llvm::GlobalVariable *variable = module.getGlobalVariable(names[i]))
+      collect_dependencies(variable, reachable);
+}
+
 static llvm::Error verify_module(const llvm::Module& module,
                                  llvm::StringRef stage)
 {
@@ -229,6 +251,7 @@ static llvm::Error reduce_to_entry(llvm::Module& module,
 
   llvm::SmallPtrSet<llvm::GlobalValue*, 32> reachable;
   collect_dependencies(entry, reachable);
+  collect_semantic_appending_dependencies(module, reachable);
   collect_comdat_dependencies(module, reachable);
 
   for (llvm::Function& function : module) {
@@ -250,7 +273,8 @@ static llvm::Error reduce_to_entry(llvm::Module& module,
     if (!keep_definition && variable.hasInitializer()) {
       variable.setInitializer(0);
       variable.setLinkage(llvm::GlobalValue::ExternalLinkage);
-    } else if (keep_definition) {
+    } else if (keep_definition &&
+               !is_semantic_appending_global(variable.getName())) {
       variable.setLinkage(llvm::GlobalValue::InternalLinkage);
     }
   }
@@ -282,6 +306,9 @@ static llvm::Error reduce_to_entry(llvm::Module& module,
 
   if (!exported_name.empty()) entry->setName(exported_name);
   entry->setLinkage(llvm::GlobalValue::ExternalLinkage);
+  if (!exported_name.empty())
+    module.setModuleIdentifier
+      (module.getModuleIdentifier()+"#"+exported_name.str());
   return verify_module(module, "reduced");
 }
 
@@ -300,11 +327,25 @@ llvm::Expected<std::unique_ptr<PureJit> > PureJit::create()
     llvm::orc::JITTargetMachineBuilder::detectHost();
   if (!target) return target.takeError();
   target->setCodeModel(llvm::CodeModel::Large);
+#ifdef _WIN32
+  // Large PIC MinGW objects emit weak .refptr.* COMDAT helpers. Those are
+  // unsafe across independently unloadable ResourceTrackers: a later graph
+  // can bind to a helper retired with an earlier graph. Static large-model
+  // code uses direct 64-bit fixups and can still reach arbitrary host symbols.
+  target->setRelocationModel(llvm::Reloc::Static);
+#else
   target->setRelocationModel(llvm::Reloc::PIC_);
+#endif
 
   llvm::orc::LLJITBuilder builder;
   builder.setJITTargetMachineBuilder(std::move(*target));
-#ifdef PURE_JIT_ELF_DEBUG_OBJECTS
+#ifdef _WIN32
+  builder.setObjectLinkingLayerCreator
+    ([](llvm::orc::ExecutionSession& session)
+       -> llvm::Expected<std::unique_ptr<llvm::orc::ObjectLayer> > {
+      return create_windows_coff_object_linking_layer(session);
+    });
+#elif defined(PURE_JIT_ELF_DEBUG_OBJECTS)
   builder.setObjectLinkingLayerCreator
     ([](llvm::orc::ExecutionSession& session)
        -> llvm::Expected<std::unique_ptr<llvm::orc::ObjectLayer> > {
@@ -392,6 +433,7 @@ PureJit::snapshot_module(const llvm::Module& module,
                                      entry_symbol.str().c_str());
     llvm::SmallPtrSet<llvm::GlobalValue*, 32> reachable;
     collect_dependencies(entry, reachable);
+    collect_semantic_appending_dependencies(module, reachable);
     collect_comdat_dependencies(module, reachable);
     llvm::ValueToValueMapTy values;
     reduced = llvm::CloneModule
@@ -407,7 +449,8 @@ PureJit::snapshot_module(const llvm::Module& module,
         for (llvm::StringRef name : retained_mutable_globals)
           retained_mutable |= variable->getName() == name;
         return variable->hasInitializer() &&
-          (variable->isConstant() || retained_mutable);
+          (variable->isConstant() || retained_mutable ||
+           is_semantic_appending_global(variable->getName()));
        });
     for (llvm::Function& function : *reduced)
       if (function.isDeclaration() && function.hasComdat())
@@ -428,7 +471,7 @@ PureJit::snapshot_module(const llvm::Module& module,
   llvm::raw_svector_ostream out(bitcode);
   llvm::WriteBitcodeToFile(*source, out);
   return llvm::MemoryBuffer::getMemBufferCopy
-    (llvm::StringRef(bitcode.data(), bitcode.size()), module.getName());
+    (llvm::StringRef(bitcode.data(), bitcode.size()), source->getName());
 }
 
 llvm::Error PureJit::add_module_snapshot
