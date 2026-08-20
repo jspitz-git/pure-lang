@@ -10,6 +10,7 @@
 #ifndef PURE_JIT_HH
 #define PURE_JIT_HH
 
+#include <llvm/ADT/ArrayRef.h>
 #include <llvm/ADT/StringRef.h>
 #include <llvm/ExecutionEngine/JITSymbol.h>
 #include <llvm/ExecutionEngine/Orc/Core.h>
@@ -70,14 +71,17 @@ public:
                          llvm::orc::ThreadSafeModule module);
   llvm::Expected<std::unique_ptr<llvm::MemoryBuffer> > snapshot_module
     (const llvm::Module& module, llvm::StringRef entry_symbol = "",
-     llvm::StringRef exported_symbol = "");
+     llvm::StringRef exported_symbol = "",
+     llvm::ArrayRef<llvm::StringRef> retained_mutable_globals = {});
   llvm::Error add_module_snapshot
     (llvm::orc::ResourceTrackerSP tracker,
      std::unique_ptr<llvm::MemoryBuffer> snapshot);
   llvm::Error add_module_copy(llvm::orc::ResourceTrackerSP tracker,
                               const llvm::Module& module,
                               llvm::StringRef entry_symbol = "",
-                              llvm::StringRef exported_symbol = "");
+                              llvm::StringRef exported_symbol = "",
+                              llvm::ArrayRef<llvm::StringRef>
+                                retained_mutable_globals = {});
 
   llvm::Expected<llvm::orc::ExecutorAddr> lookup(llvm::StringRef name);
 

@@ -217,6 +217,42 @@ void symtable::restore(const string& s)
   }
 }
 
+void symtable::rollback(int32_t checkpoint)
+{
+  assert(checkpoint >= 0 && checkpoint <= fno);
+  clear_symbol_caches();
+  while (fno > checkpoint) {
+    symbol *entry = rtab[fno];
+    if (entry) {
+      string name = entry->s;
+      rtab[fno] = 0;
+      tab.erase(name);
+    }
+    --fno;
+  }
+  if (__show__sym > checkpoint) __show__sym = 0;
+}
+
+void symtable::clear_symbol_caches()
+{
+  __gensym_sym = __namespace_sym = __dir_sym = __file_sym = 0;
+  __locals_sym = __func_sym = __list_sym = __nil_sym = __cons_sym = 0;
+  __void_sym = __pair_sym = __mapsto_sym = __seq_sym = __flip_sym = 0;
+  __neg_sym = __not_sym = __bitnot_sym = __or_sym = __and_sym = 0;
+  __bitor_sym = __bitand_sym = __shl_sym = __shr_sym = 0;
+  __less_sym = __greater_sym = __lesseq_sym = __greatereq_sym = 0;
+  __equal_sym = __notequal_sym = __plus_sym = __minus_sym = __mult_sym = 0;
+  __fdiv_sym = __div_sym = __mod_sym = __quote_sym = __catch_sym = 0;
+  __catmap_sym = __rowcatmap_sym = __colmap_sym = __listmap_sym = 0;
+  __rowmap_sym = __colmap_sym = __failed_match_sym = __failed_cond_sym = 0;
+  __signal_sym = __segfault_sym = __bad_matrix_sym = __amp_sym = 0;
+  __quoteop_sym = __complex_rect_sym = __complex_polar_sym = 0;
+  __rational_xdiv_sym = __int_sym = __bigint_sym = __double_sym = 0;
+  __string_sym = __pointer_sym = __matrix_sym = __if_sym = __ifelse_sym = 0;
+  __lambda_sym = __case_sym = __when_sym = __with_sym = __eqn_sym = 0;
+  __ttag_sym = __astag_sym = __eval_sym = 0;
+}
+
 /* These operations are used internally to look up and create symbols exactly
    as specified (no namespace search). */
 

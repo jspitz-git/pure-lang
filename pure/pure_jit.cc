@@ -193,7 +193,9 @@ static llvm::Error optimize_module(llvm::Module& module)
 
 static llvm::Error reduce_to_entry(llvm::Module& module,
                                    llvm::StringRef entry_name,
-                                   llvm::StringRef exported_name)
+                                   llvm::StringRef exported_name,
+                                   llvm::ArrayRef<llvm::StringRef>
+                                     retained_mutable_globals)
 {
   llvm::Function *entry = module.getFunction(entry_name);
   if (!entry)
@@ -213,8 +215,12 @@ static llvm::Error reduce_to_entry(llvm::Module& module,
     }
   }
   for (llvm::GlobalVariable& variable : module.globals()) {
+    bool retained_mutable = false;
+    for (llvm::StringRef name : retained_mutable_globals)
+      retained_mutable |= variable.getName() == name;
     bool keep_definition = reachable.contains(&variable) &&
-      variable.isConstant() && variable.hasInitializer();
+      variable.hasInitializer() &&
+      (variable.isConstant() || retained_mutable);
     if (!keep_definition && variable.hasInitializer()) {
       variable.setInitializer(0);
       variable.setLinkage(llvm::GlobalValue::ExternalLinkage);
@@ -338,7 +344,9 @@ llvm::Error PureJit::add_module(llvm::orc::ResourceTrackerSP tracker,
 llvm::Expected<std::unique_ptr<llvm::MemoryBuffer> >
 PureJit::snapshot_module(const llvm::Module& module,
                          llvm::StringRef entry_symbol,
-                         llvm::StringRef exported_symbol)
+                         llvm::StringRef exported_symbol,
+                         llvm::ArrayRef<llvm::StringRef>
+                           retained_mutable_globals)
 {
   const llvm::Module *source = &module;
   std::unique_ptr<llvm::Module> reduced;
@@ -351,16 +359,23 @@ PureJit::snapshot_module(const llvm::Module& module,
     collect_dependencies(entry, reachable);
     llvm::ValueToValueMapTy values;
     reduced = llvm::CloneModule
-      (module, values, [&reachable](const llvm::GlobalValue *global) {
+      (module, values,
+       [&reachable, retained_mutable_globals]
+       (const llvm::GlobalValue *global) {
         if (!reachable.contains(const_cast<llvm::GlobalValue*>(global)))
           return false;
         const llvm::GlobalVariable *variable =
           llvm::dyn_cast<llvm::GlobalVariable>(global);
-        return !variable ||
-          (variable->isConstant() && variable->hasInitializer());
+        if (!variable) return true;
+        bool retained_mutable = false;
+        for (llvm::StringRef name : retained_mutable_globals)
+          retained_mutable |= variable->getName() == name;
+        return variable->hasInitializer() &&
+          (variable->isConstant() || retained_mutable);
       });
     if (llvm::Error error =
-          reduce_to_entry(*reduced, entry_symbol, exported_symbol))
+          reduce_to_entry(*reduced, entry_symbol, exported_symbol,
+                          retained_mutable_globals))
       return std::move(error);
     if (llvm::Error error = verify_module(*reduced, "reduced"))
       return std::move(error);
@@ -399,10 +414,13 @@ llvm::Error PureJit::add_module_snapshot
 llvm::Error PureJit::add_module_copy(llvm::orc::ResourceTrackerSP tracker,
                                      const llvm::Module& module,
                                      llvm::StringRef entry_symbol,
-                                     llvm::StringRef exported_symbol)
+                                     llvm::StringRef exported_symbol,
+                                     llvm::ArrayRef<llvm::StringRef>
+                                       retained_mutable_globals)
 {
   llvm::Expected<std::unique_ptr<llvm::MemoryBuffer> > snapshot =
-    snapshot_module(module, entry_symbol, exported_symbol);
+    snapshot_module(module, entry_symbol, exported_symbol,
+                    retained_mutable_globals);
   if (!snapshot) return snapshot.takeError();
   return add_module_snapshot(std::move(tracker), std::move(*snapshot));
 }

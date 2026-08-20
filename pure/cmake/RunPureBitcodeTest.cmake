@@ -48,8 +48,33 @@ if(DEFINED PURE_BATCH_OBJECT OR DEFINED PURE_BATCH_EXECUTABLE)
     message(FATAL_ERROR "Missing Pure bitcode batch recovery arguments")
   endif()
   file(REMOVE "${PURE_BATCH_OBJECT}" "${PURE_BATCH_EXECUTABLE}")
+  set(batch_environment)
+  set(batch_compile_loader_path "${PURE_RUNTIME_DIR}")
+  if(DEFINED ENV{${PURE_LD_LIB_PATH}} AND
+     NOT "$ENV{${PURE_LD_LIB_PATH}}" STREQUAL "")
+    if(CMAKE_HOST_WIN32)
+      string(APPEND batch_compile_loader_path ";$ENV{${PURE_LD_LIB_PATH}}")
+    else()
+      string(APPEND batch_compile_loader_path ":$ENV{${PURE_LD_LIB_PATH}}")
+    endif()
+  endif()
+  string(REPLACE ";" "\\;" batch_compile_loader_path
+    "${batch_compile_loader_path}")
+  list(APPEND batch_environment
+    "${PURE_LD_LIB_PATH}=${batch_compile_loader_path}")
+  if(DEFINED PURE_FAILURE_MODE AND NOT "${PURE_FAILURE_MODE}" STREQUAL "")
+    list(APPEND batch_environment
+      "PURE_TEST_ORC_FAILURE=${PURE_FAILURE_MODE}")
+    if(PURE_FAILURE_MODE STREQUAL "batch-bitcode-host-global")
+      list(APPEND batch_environment
+        "PURE_TEST_ORC_FAILURE_SKIP=${PURE_FAILURE_MODE}")
+    elseif(PURE_FAILURE_MODE STREQUAL "batch-bitcode-provider-remove")
+      list(APPEND batch_environment "PURE_TEST_TRACKER_RETRY=1")
+    endif()
+  endif()
   execute_process(
     COMMAND
+      "${CMAKE_COMMAND}" -E env ${batch_environment} --
       "${PURE_SH_EXECUTABLE}" "${PURE_RUN_TEST}" -L "${PURE_FIXTURE_DIR}"
       --noprelude -c "${PURE_SCRIPT}" -o "${PURE_BATCH_OBJECT}"
     RESULT_VARIABLE result
@@ -60,6 +85,12 @@ if(DEFINED PURE_BATCH_OBJECT OR DEFINED PURE_BATCH_EXECUTABLE)
   if(NOT result EQUAL 0 OR NOT EXISTS "${PURE_BATCH_OBJECT}")
     message(FATAL_ERROR
       "Pure bitcode batch compilation exited with status ${result}"
+    )
+  endif()
+  if(DEFINED PURE_EXPECTED_DIAGNOSTIC AND
+     NOT "${output}" MATCHES "${PURE_EXPECTED_DIAGNOSTIC}")
+    message(FATAL_ERROR
+      "Pure bitcode batch compilation omitted the expected failure diagnostic"
     )
   endif()
   set(batch_link_options)

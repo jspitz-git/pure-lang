@@ -63,6 +63,7 @@ char *alloca ();
 #include <llvm/Linker/Linker.h>
 #include <llvm/Support/DynamicLibrary.h>
 #include <llvm/Support/Error.h>
+#include <llvm/Support/ErrorHandling.h>
 #include <llvm/Support/FileSystem.h>
 #include <llvm/Support/MemoryBuffer.h>
 #include <llvm/Support/raw_ostream.h>
@@ -96,6 +97,7 @@ bool interpreter::g_init = false;
 static bool inject_orc_failure(const char *mode, bool& injected);
 static bool orc_failure_requested(const char *mode);
 static bool temporary_tracker_retry_pending = false;
+static bool batch_provider_retry_pending = false;
 #endif
 
 static string encode_abi_dump_token(const string& type)
@@ -240,10 +242,34 @@ struct CompilationUnitResources {
     {}
   };
 
+  struct QuarantinedTracker {
+    llvm::orc::ResourceTrackerSP tracker;
+    string label;
+    bool reported;
+
+    QuarantinedTracker(llvm::orc::ResourceTrackerSP tracker, string label,
+                       bool reported)
+      : tracker(std::move(tracker)), label(std::move(label)),
+        reported(reported) {}
+  };
+
+  struct QuarantinedHostSymbol {
+    string name;
+    std::shared_ptr<void> backing;
+    bool reported;
+
+    QuarantinedHostSymbol(string name, std::shared_ptr<void> backing,
+                          bool reported)
+      : name(std::move(name)), backing(std::move(backing)),
+        reported(reported) {}
+  };
+
   typedef list<EnvironmentUnit> EnvironmentUnits;
   typedef map<const Env*, EnvironmentUnits::iterator> EnvironmentIndex;
   EnvironmentUnits environment_units;
   EnvironmentIndex trackers;
+  list<QuarantinedTracker> quarantined_trackers;
+  list<QuarantinedHostSymbol> quarantined_host_symbols;
   map<const llvm::Function*, CompiledFunction> functions;
   map<string, llvm::orc::ResourceTrackerSP> bitcode_modules;
   map<string, list<FaustGeneration> > faust_modules;
@@ -303,9 +329,74 @@ struct CompilationUnitResources {
   {
     map<string, HostSymbol>::iterator it = host_symbols.find(name.str());
     if (it == host_symbols.end()) return llvm::Error::success();
-    llvm::orc::ResourceTrackerSP tracker = std::move(it->second.tracker);
+    llvm::Error error = it->second.tracker->remove();
+    if (error) return error;
     host_symbols.erase(it);
-    return tracker->remove();
+    return llvm::Error::success();
+  }
+
+  void quarantine_tracker(llvm::orc::ResourceTrackerSP tracker,
+                          string label, bool reported = true)
+  {
+    assert(tracker);
+    quarantined_trackers.emplace_back
+      (std::move(tracker), std::move(label), reported);
+  }
+
+  void quarantine_host_symbol(string name, std::shared_ptr<void> backing,
+                              bool reported = true)
+  {
+    assert(!name.empty());
+    quarantined_host_symbols.emplace_back
+      (std::move(name), std::move(backing), reported);
+  }
+
+  llvm::Error retry_quarantined_trackers()
+  {
+#ifdef PURE_ENABLE_TEST_HOOKS
+    const char *retry = getenv("PURE_TEST_TRACKER_RETRY");
+    if (retry && *retry && batch_provider_retry_pending &&
+        quarantined_trackers.empty())
+      return llvm::createStringError
+        ("batch bitcode provider tracker ownership was lost before retry");
+#endif
+    for (list<QuarantinedTracker>::iterator tracker =
+           quarantined_trackers.begin();
+         tracker != quarantined_trackers.end(); ) {
+      if (llvm::Error error = tracker->tracker->remove()) {
+        if (!tracker->reported) {
+          llvm::logAllUnhandledErrors
+            (std::move(error), llvm::errs(), tracker->label+": ");
+          tracker->reported = true;
+        } else {
+          llvm::consumeError(std::move(error));
+        }
+        ++tracker;
+      } else {
+        tracker = quarantined_trackers.erase(tracker);
+#ifdef PURE_ENABLE_TEST_HOOKS
+        batch_provider_retry_pending = false;
+#endif
+      }
+    }
+    for (list<QuarantinedHostSymbol>::iterator symbol =
+           quarantined_host_symbols.begin();
+         symbol != quarantined_host_symbols.end(); ) {
+      if (llvm::Error error = remove_host_symbol(symbol->name)) {
+        if (!symbol->reported) {
+          llvm::logAllUnhandledErrors
+            (std::move(error), llvm::errs(),
+             "failed to retire quarantined host symbol: ");
+          symbol->reported = true;
+        } else {
+          llvm::consumeError(std::move(error));
+        }
+        ++symbol;
+      } else {
+        symbol = quarantined_host_symbols.erase(symbol);
+      }
+    }
+    return llvm::Error::success();
   }
 
   void *host_symbol_address(llvm::StringRef name) const
@@ -662,6 +753,12 @@ struct CompilationUnitResources {
   llvm::Error remove_all()
   {
     llvm::Error errors = llvm::Error::success();
+    while (!quarantined_trackers.empty()) {
+      llvm::orc::ResourceTrackerSP tracker =
+        std::move(quarantined_trackers.front().tracker);
+      quarantined_trackers.pop_front();
+      errors = llvm::joinErrors(std::move(errors), tracker->remove());
+    }
     trackers.clear();
     while (!environment_units.empty()) {
       EnvironmentUnits::iterator unit = environment_units.begin();
@@ -713,9 +810,12 @@ struct CompilationUnitResources {
       errors = llvm::joinErrors(std::move(errors), tracker->remove());
     }
     while (!host_symbols.empty()) {
-      string name = host_symbols.begin()->first;
-      errors = llvm::joinErrors(std::move(errors), remove_host_symbol(name));
+      map<string, HostSymbol>::iterator symbol = host_symbols.begin();
+      llvm::orc::ResourceTrackerSP tracker = symbol->second.tracker;
+      host_symbols.erase(symbol);
+      errors = llvm::joinErrors(std::move(errors), tracker->remove());
     }
+    quarantined_host_symbols.clear();
     return errors;
   }
 };
@@ -1358,6 +1458,13 @@ void interpreter::register_host_global(llvm::GlobalVariable *variable,
                                        void *address)
 {
   assert(variable && variable->hasName() && address);
+#ifdef PURE_ENABLE_TEST_HOOKS
+  static bool batch_failure_injected = false;
+  if (host_global_failure_mode &&
+      inject_orc_failure(host_global_failure_mode, batch_failure_injected))
+    throw err("injected "+string(host_global_failure_mode)+
+              " ORC host global registration failure");
+#endif
   if (llvm::Error error = compilation_units->retain_host_symbol
         (*ORC, variable->getName(), address))
     throw err("failed to register ORC host global '"+
@@ -1770,7 +1877,7 @@ interpreter::interpreter(int _argc, char **_argv)
     nerrs(0), modno(-1), modctr(0), source_s(0), output(0),
     result(0), lastres(0), mem(0), exps(0), tmps(0), freectr(0),
     orc_unit_counter(0), specials_only(false), module(0),
-    ORC(0), compilation_units(0), pass_state(0),
+    ORC(0), compilation_units(0), pass_state(0), host_global_failure_mode(0),
     active_jit_calls(0), astk(0), sstk(__sstk),
     stoplevel(0), tracelevel(-1), debug_skip(false), trace_skip(false),
     fptr(__fptr), tags(0), line(0), column(0), tags_init(false),
@@ -1801,7 +1908,7 @@ interpreter::interpreter(int32_t nsyms, char *syms,
     nerrs(0), modno(-1), modctr(0), source_s(0), output(0),
     result(0), lastres(0), mem(0), exps(0), tmps(0), freectr(0),
     orc_unit_counter(0), specials_only(false), module(0),
-    ORC(0), compilation_units(0), pass_state(0),
+    ORC(0), compilation_units(0), pass_state(0), host_global_failure_mode(0),
     active_jit_calls(0), astk(0), sstk(*_sstk),
     stoplevel(0), tracelevel(-1), debug_skip(false), trace_skip(false),
     fptr(*(Env**)_fptr), tags(0), line(0), column(0), tags_init(false),
@@ -4046,6 +4153,178 @@ static const char *incompatible_triple_component
   return 0;
 }
 
+class batch_bitcode_transaction {
+  struct binding_snapshot {
+    llvm::GlobalVariable *variable;
+    pure_expr *value;
+    bool retained;
+
+    binding_snapshot(llvm::GlobalVariable *variable, pure_expr *value)
+      : variable(variable), value(value), retained(value != 0)
+    {
+      if (value) pure_new(value);
+    }
+  };
+
+  struct symbol_snapshot {
+    int32_t tag;
+    bool private_symbol;
+    bool unresolved;
+  };
+
+  interpreter& owner;
+  int32_t symbol_checkpoint;
+  int32_t last_tag;
+  set<int> defined;
+  set<int> nodefined;
+  map<int32_t, ExternInfo> externals;
+  map<int32_t, binding_snapshot> bindings;
+  vector<symbol_snapshot> symbols;
+  set<const llvm::GlobalValue*> globals;
+  set<string> pointer_types;
+  bool committed;
+
+  void release_snapshots() noexcept
+  {
+    for (map<int32_t, binding_snapshot>::iterator binding = bindings.begin();
+         binding != bindings.end(); ++binding)
+      if (binding->second.retained) {
+        pure_free(binding->second.value);
+        binding->second.retained = false;
+      }
+  }
+
+  void rollback_bindings() noexcept
+  {
+    for (map<int32_t, GlobalVar>::iterator binding = owner.globalvars.begin();
+         binding != owner.globalvars.end(); ) {
+      map<int32_t, binding_snapshot>::iterator previous =
+        bindings.find(binding->first);
+      if (previous == bindings.end()) {
+        if (binding->second.v &&
+            owner.host_global_address(binding->second.v) &&
+            !owner.remove_host_global_and_report(binding->second.v)) {
+          string symbol_name = binding->second.v->getName().str();
+          typedef map<int32_t, GlobalVar>::node_type binding_node;
+          map<int32_t, GlobalVar>::iterator failed = binding++;
+          binding_node *held =
+            new binding_node(owner.globalvars.extract(failed));
+          held->mapped().v = 0;
+          std::shared_ptr<void> backing
+            (held, [](void *value) {
+              binding_node *node = static_cast<binding_node*>(value);
+              if (node->mapped().x) pure_free(node->mapped().x);
+              delete node;
+            });
+          owner.compilation_units->quarantine_host_symbol
+            (symbol_name, std::move(backing));
+          continue;
+        }
+        if (binding->second.x) pure_free(binding->second.x);
+        binding = owner.globalvars.erase(binding);
+        continue;
+      }
+      if (binding->second.v != previous->second.variable &&
+          binding->second.v && owner.host_global_address(binding->second.v) &&
+          !owner.remove_host_global_and_report(binding->second.v))
+        owner.compilation_units->quarantine_host_symbol
+          (binding->second.v->getName().str(), std::shared_ptr<void>());
+      binding->second.v = previous->second.variable;
+      if (binding->second.x != previous->second.value) {
+        if (binding->second.x) pure_free(binding->second.x);
+        binding->second.x = previous->second.value;
+        previous->second.retained = false;
+      }
+      ++binding;
+    }
+    release_snapshots();
+  }
+
+  void rollback_module() noexcept
+  {
+    vector<llvm::GlobalValue*> added;
+    for (llvm::Function& function : *owner.module)
+      if (!globals.count(&function)) added.push_back(&function);
+    for (llvm::GlobalVariable& variable : owner.module->globals())
+      if (!globals.count(&variable)) added.push_back(&variable);
+    for (llvm::GlobalAlias& alias : owner.module->aliases())
+      if (!globals.count(&alias)) added.push_back(&alias);
+    for (llvm::GlobalIFunc& ifunc : owner.module->ifuncs())
+      if (!globals.count(&ifunc)) added.push_back(&ifunc);
+    for (vector<llvm::GlobalValue*>::iterator value = added.begin();
+         value != added.end(); ++value)
+      (*value)->dropAllReferences();
+    for (vector<llvm::GlobalValue*>::reverse_iterator value = added.rbegin();
+         value != added.rend(); ++value)
+      (*value)->eraseFromParent();
+  }
+
+public:
+  batch_bitcode_transaction(interpreter& owner, const bcdata_t& bitcode)
+    : owner(owner), symbol_checkpoint(owner.symtab.nsyms()),
+      last_tag(owner.last_tag), defined(owner.defined),
+      nodefined(owner.nodefined), externals(owner.externals), committed(false)
+  {
+    for (map<int32_t, GlobalVar>::const_iterator binding =
+           owner.globalvars.begin(); binding != owner.globalvars.end();
+         ++binding)
+      bindings.emplace
+        (binding->first,
+         binding_snapshot(binding->second.v, binding->second.x));
+    for (list<bc_export_t>::const_iterator export_ = bitcode.exports.begin();
+         export_ != bitcode.exports.end(); ++export_) {
+      symbol *entry = owner.symtab.lookup(owner.make_absid(export_->source_name));
+      if (entry)
+        symbols.push_back
+          ({entry->f, entry->priv, entry->unresolved});
+    }
+    for (const llvm::Function& function : *owner.module)
+      globals.insert(&function);
+    for (const llvm::GlobalVariable& variable : owner.module->globals())
+      globals.insert(&variable);
+    for (const llvm::GlobalAlias& alias : owner.module->aliases())
+      globals.insert(&alias);
+    for (const llvm::GlobalIFunc& ifunc : owner.module->ifuncs())
+      globals.insert(&ifunc);
+    for (map<string, int>::const_iterator type = owner.pointer_tags.begin();
+         type != owner.pointer_tags.end(); ++type)
+      pointer_types.insert(type->first);
+    owner.host_global_failure_mode = "batch-bitcode-host-global";
+  }
+
+  ~batch_bitcode_transaction() noexcept
+  {
+    owner.host_global_failure_mode = 0;
+    if (committed) {
+      release_snapshots();
+      return;
+    }
+    owner.defined = defined;
+    owner.nodefined = nodefined;
+    owner.externals = externals;
+    rollback_bindings();
+    rollback_module();
+    for (vector<symbol_snapshot>::const_iterator entry = symbols.begin();
+         entry != symbols.end(); ++entry) {
+      symbol& restored = owner.symtab.sym(entry->tag);
+      restored.priv = entry->private_symbol;
+      restored.unresolved = entry->unresolved;
+    }
+    owner.symtab.rollback(symbol_checkpoint);
+    for (map<string, int>::iterator type = owner.pointer_tags.begin();
+         type != owner.pointer_tags.end(); )
+      if (!pointer_types.count(type->first)) {
+        owner.pointer_type_with_tag.erase(type->second);
+        type = owner.pointer_tags.erase(type);
+      } else {
+        ++type;
+      }
+    owner.last_tag = last_tag;
+  }
+
+  void commit() noexcept { committed = true; }
+};
+
 static std::unique_ptr<llvm::Module> prepare_linked_module
 (const llvm::Module& live, std::unique_ptr<llvm::Module> imported,
  string& error)
@@ -4123,20 +4402,138 @@ static bool finalize_linked_bitcode
   return true;
 }
 
-static bool prepare_linked_bitcode_exports
-(PureJit& jit, const llvm::Module& candidate, const bcdata_t& bitcode,
- uint64_t& unit_counter, string& error)
+static bool prepare_bitcode_source
+(llvm::Module& source, const list<string>& function_symbols,
+ const list<string>& data_symbols, const list<string>& alias_symbols,
+ const list<string>& ifunc_symbols, const bcdata_t& bitcode,
+ NewPassManagerState& pass_state, string& error)
 {
+  using namespace llvm;
+  for (list<string>::const_iterator symbol = function_symbols.begin();
+       symbol != function_symbols.end(); ++symbol)
+    if (!source.getFunction(*symbol) ||
+        source.getFunction(*symbol)->isDeclaration()) {
+      error = "Imported function symbol '"+*symbol+"' is missing";
+      return false;
+    }
+  for (list<string>::const_iterator symbol = data_symbols.begin();
+       symbol != data_symbols.end(); ++symbol)
+    if (!source.getGlobalVariable(*symbol) ||
+        source.getGlobalVariable(*symbol)->isDeclaration()) {
+      error = "Imported data symbol '"+*symbol+"' is missing";
+      return false;
+    }
+  for (list<string>::const_iterator symbol = alias_symbols.begin();
+       symbol != alias_symbols.end(); ++symbol)
+    if (!source.getNamedAlias(*symbol)) {
+      error = "Imported alias symbol '"+*symbol+"' is missing";
+      return false;
+    }
+  for (list<string>::const_iterator symbol = ifunc_symbols.begin();
+       symbol != ifunc_symbols.end(); ++symbol)
+    if (!source.getNamedIFunc(*symbol)) {
+      error = "Imported ifunc symbol '"+*symbol+"' is missing";
+      return false;
+    }
+  for (list<bc_export_t>::const_iterator export_ = bitcode.exports.begin();
+       export_ != bitcode.exports.end(); ++export_) {
+    Function *function = source.getFunction(export_->linked_name);
+    if (!function || function->isDeclaration()) {
+      error = "Imported export '"+export_->source_name+"' is missing";
+      return false;
+    }
+    pass_state.optimize(*function);
+  }
+  string verification_error;
+  if (!verify_module(source, verification_error)) {
+    error = "Invalid prepared bitcode module: "+verification_error;
+    return false;
+  }
+  return true;
+}
+
+static void commit_prepared_bitcode
+(llvm::Module& live, std::unique_ptr<llvm::Module> imported,
+ const list<string>& function_symbols, const list<string>& data_symbols,
+ const list<string>& alias_symbols, const list<string>& ifunc_symbols)
+{
+  using namespace llvm;
+  if (Linker::linkModules(live, std::move(imported)))
+    report_fatal_error
+      ("batch bitcode commit diverged from its verified replay link");
+  for (list<string>::const_iterator symbol = function_symbols.begin();
+       symbol != function_symbols.end(); ++symbol) {
+    Function *function = live.getFunction(*symbol);
+    if (!function || function->isDeclaration())
+      report_fatal_error
+        ("prepared batch bitcode function disappeared during commit");
+    function->setLinkage(Function::InternalLinkage);
+  }
+  for (list<string>::const_iterator symbol = data_symbols.begin();
+       symbol != data_symbols.end(); ++symbol) {
+    GlobalVariable *variable = live.getGlobalVariable(*symbol);
+    if (!variable || variable->isDeclaration())
+      report_fatal_error
+        ("prepared batch bitcode global disappeared during commit");
+    variable->setLinkage(GlobalVariable::InternalLinkage);
+  }
+  for (list<string>::const_iterator symbol = alias_symbols.begin();
+       symbol != alias_symbols.end(); ++symbol) {
+    GlobalAlias *alias = live.getNamedAlias(*symbol);
+    if (!alias)
+      report_fatal_error
+        ("prepared batch bitcode alias disappeared during commit");
+    alias->setLinkage(GlobalAlias::InternalLinkage);
+  }
+  for (list<string>::const_iterator symbol = ifunc_symbols.begin();
+       symbol != ifunc_symbols.end(); ++symbol) {
+    GlobalIFunc *ifunc = live.getNamedIFunc(*symbol);
+    if (!ifunc)
+      report_fatal_error
+        ("prepared batch bitcode ifunc disappeared during commit");
+    ifunc->setLinkage(GlobalIFunc::InternalLinkage);
+  }
+}
+
+static llvm::Error remove_batch_bitcode_provider_tracker
+(llvm::orc::ResourceTrackerSP tracker)
+{
+#ifdef PURE_ENABLE_TEST_HOOKS
+  static bool injected = false;
+  if (inject_orc_failure("batch-bitcode-provider-remove", injected)) {
+    batch_provider_retry_pending = true;
+    return llvm::createStringError
+      ("injected batch-bitcode-provider-remove ORC tracker removal failure");
+  }
+#endif
+  return tracker->remove();
+}
+
+static bool prepare_linked_bitcode_exports
+(PureJit& jit, CompilationUnitResources& resources,
+ const llvm::Module& candidate, const bcdata_t& bitcode,
+ const list<string>& data_symbols, uint64_t& unit_counter, string& error)
+{
+  vector<llvm::StringRef> retained_mutable_globals;
+  retained_mutable_globals.reserve(data_symbols.size());
+  for (list<string>::const_iterator symbol = data_symbols.begin();
+       symbol != data_symbols.end(); ++symbol)
+    retained_mutable_globals.push_back(*symbol);
   llvm::orc::ResourceTrackerSP tracker = jit.create_resource_tracker();
   for (list<bc_export_t>::const_iterator it = bitcode.exports.begin();
        it != bitcode.exports.end(); ++it) {
     string exported_name = "$$orc.batch-bitcode."+
       to_string(unit_counter++);
     if (llvm::Error add_error = jit.add_module_copy
-          (tracker, candidate, it->linked_name, exported_name)) {
-      if (llvm::Error cleanup_error = tracker->remove())
+          (tracker, candidate, it->linked_name, exported_name,
+           retained_mutable_globals)) {
+      if (llvm::Error cleanup_error =
+            remove_batch_bitcode_provider_tracker(tracker)) {
+        resources.quarantine_tracker
+          (tracker, "failed to retire prepared batch bitcode providers");
         add_error = llvm::joinErrors(std::move(add_error),
                                     std::move(cleanup_error));
+      }
       error = "Failed to submit batch bitcode export '"+it->source_name+
         "': "+llvm::toString(std::move(add_error));
       return false;
@@ -4144,27 +4541,24 @@ static bool prepare_linked_bitcode_exports
     llvm::Expected<llvm::orc::ExecutorAddr> address = jit.lookup(exported_name);
     if (!address) {
       llvm::Error lookup_error = address.takeError();
-      if (llvm::Error cleanup_error = tracker->remove())
+      if (llvm::Error cleanup_error =
+            remove_batch_bitcode_provider_tracker(tracker)) {
+        resources.quarantine_tracker
+          (tracker, "failed to retire prepared batch bitcode providers");
         lookup_error = llvm::joinErrors(std::move(lookup_error),
                                        std::move(cleanup_error));
+      }
       error = "Failed to materialize bitcode export '"+it->source_name+
         "': "+llvm::toString(std::move(lookup_error));
       return false;
     }
   }
-  if (llvm::Error cleanup_error = tracker->remove()) {
+  if (llvm::Error cleanup_error =
+        remove_batch_bitcode_provider_tracker(tracker)) {
+    resources.quarantine_tracker
+      (tracker, "failed to retire prepared batch bitcode providers");
     error = "Failed to retire prepared batch bitcode exports: "+
       llvm::toString(std::move(cleanup_error));
-    return false;
-  }
-  return true;
-}
-
-static bool commit_module_candidate
-(llvm::Module& live, std::unique_ptr<llvm::Module> imported, string& error)
-{
-  if (llvm::Linker::linkModules(live, std::move(imported))) {
-    error = "Error committing bitcode module";
     return false;
   }
   return true;
@@ -4173,6 +4567,13 @@ static bool commit_module_candidate
 bool interpreter::LoadBitcode(bool priv, const char *name, string *msg)
 {
   using namespace llvm;
+  if (llvm::Error cleanup_error =
+        compilation_units->retry_quarantined_trackers()) {
+    if (msg) *msg = "Failed to retry quarantined ORC resources: "+
+      llvm::toString(std::move(cleanup_error));
+    bc_errmsg(name, msg);
+    return false;
+  }
   string module_key = name;
   bcmap::iterator loaded_entry = loaded_bcs.find(module_key);
   bool loaded = loaded_entry != loaded_bcs.end();
@@ -4363,10 +4764,17 @@ bool interpreter::LoadBitcode(bool priv, const char *name, string *msg)
   // and wrapped expressions retain raw pointers into it. Prepare the complete
   // result privately, including provider materialization, then repeat only the
   // already-proven deterministic link as the commit step.
-  std::unique_ptr<Module> commit_source = CloneModule(*M);
   string candidate_error;
+  std::unique_ptr<Module> commit_source = std::move(M);
+  if (!prepare_bitcode_source
+        (*commit_source, function_symbols, data_symbols, alias_symbols,
+         ifunc_symbols, bitcode, *pass_state, candidate_error)) {
+    if (msg) *msg = candidate_error;
+    bc_errmsg(name, msg);
+    return false;
+  }
   std::unique_ptr<Module> candidate = prepare_linked_module
-    (*module, std::move(M), candidate_error);
+    (*module, CloneModule(*commit_source), candidate_error);
   if (!candidate || !finalize_linked_bitcode
         (*candidate, function_symbols, data_symbols, alias_symbols,
          ifunc_symbols, bitcode, *pass_state, candidate_error)) {
@@ -4430,27 +4838,52 @@ bool interpreter::LoadBitcode(bool priv, const char *name, string *msg)
     }
   }
   if (!candidate_error.empty() || !prepare_linked_bitcode_exports
-        (*ORC, *candidate, bitcode, orc_unit_counter, candidate_error)) {
+        (*ORC, *compilation_units, *candidate, bitcode, data_symbols,
+         orc_unit_counter, candidate_error)) {
     if (msg) *msg = candidate_error;
     bc_errmsg(name, msg);
     return false;
   }
-  if (!commit_module_candidate(*module, std::move(commit_source),
-                               candidate_error) ||
-      !finalize_linked_bitcode
-        (*module, function_symbols, data_symbols, alias_symbols,
+
+  // Wrapper construction and host registration are live side effects because
+  // their metadata retains stable pointers into the interpreter Module. Keep
+  // all of them under a complete rollback guard, then verify the exact replay
+  // link before the non-recoverable commit boundary.
+  batch_bitcode_transaction transaction(*this, bitcode);
+  try {
+    for (list<bc_export_t>::const_iterator it = bitcode.exports.begin();
+         it != bitcode.exports.end(); ++it)
+      declare_extern(priv, it->linked_name, it->restype, it->argtypes,
+                     it->varargs, 0, it->source_name, false, false);
+  } catch (const err& wrapper_error) {
+    if (msg) *msg = wrapper_error.what();
+    bc_errmsg(name, msg);
+    return false;
+  }
+
+  std::unique_ptr<Module> replay = prepare_linked_module
+    (*module, CloneModule(*commit_source), candidate_error);
+  if (!replay || !finalize_linked_bitcode
+        (*replay, function_symbols, data_symbols, alias_symbols,
          ifunc_symbols, bitcode, *pass_state, candidate_error)) {
     if (msg) *msg = candidate_error;
     bc_errmsg(name, msg);
     return false;
   }
-  // Metadata publication happens only after the candidate has linked,
-  // verified, optimized, and materialized every imported provider.
-  for (list<bc_export_t>::const_iterator it = bitcode.exports.begin();
-       it != bitcode.exports.end(); ++it) {
-    declare_extern(priv, it->linked_name, it->restype, it->argtypes,
-                   it->varargs, 0, it->source_name, false, false);
+#ifdef PURE_ENABLE_TEST_HOOKS
+  static bool precommit_failure_injected = false;
+  if (inject_orc_failure
+        ("batch-bitcode-precommit", precommit_failure_injected)) {
+    if (msg) *msg = "injected batch-bitcode-precommit failure";
+    bc_errmsg(name, msg);
+    return false;
   }
+#endif
+  commit_prepared_bitcode
+    (*module, std::move(commit_source), function_symbols, data_symbols,
+     alias_symbols, ifunc_symbols);
+  transaction.commit();
+  // Namespace and load-record publication are non-fallible and remain last.
   bitcode.declare(*symtab.current_namespace, priv);
   loaded_bcs.emplace(module_key, std::move(bitcode));
   return true;

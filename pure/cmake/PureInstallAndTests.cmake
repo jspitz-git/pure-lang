@@ -597,6 +597,48 @@ if(BUILD_TESTING)
         "AddressSanitizer;LeakSanitizer;runtime error:"
   )
 
+  set(transaction_prepare_invalid_bc
+      "${PURE_BITCODE_FIXTURE_OUTPUT_DIR}/transaction-prepare-failure.bc")
+  set(transaction_prepare_batch_timeout 180)
+  if(PURE_SANITIZERS)
+    set(transaction_prepare_batch_timeout 480)
+  endif()
+  add_test(
+    NAME pure-bitcode-transaction-prepare-failures
+    COMMAND
+      "${CMAKE_COMMAND}"
+      -DPURE_TEST_DRIVER=${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunPureBitcodeTest.cmake
+      -DPURE_BINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}
+      -DPURE_EXECUTABLE_SUFFIX=${CMAKE_EXECUTABLE_SUFFIX}
+      -DPURE_SH_EXECUTABLE=${PURE_SH_EXECUTABLE}
+      -DPURE_RUN_TEST=${CMAKE_CURRENT_BINARY_DIR}/run-test
+      -DPURE_FIXTURE_DIR=${PURE_BITCODE_FIXTURE_OUTPUT_DIR}
+      -DPURE_SCRIPT=${CMAKE_CURRENT_SOURCE_DIR}/test/bitcode/transaction-prepare-recovery.pure
+      -DPURE_C_COMPILER=${CMAKE_C_COMPILER}
+      -DPURE_C_SOURCE=${CMAKE_CURRENT_SOURCE_DIR}/test/bitcode/transaction-prepare-failure.c
+      -DPURE_BITCODE_OUTPUT=${transaction_prepare_invalid_bc}
+      -DPURE_SECOND_C_SOURCE=${CMAKE_CURRENT_SOURCE_DIR}/test/bitcode/transaction-valid.c
+      -DPURE_SECOND_BITCODE_OUTPUT=${transaction_valid_bc}
+      -DPURE_CXX_COMPILER=${CMAKE_CXX_COMPILER}
+      -DPURE_MAIN_OBJECT=$<TARGET_OBJECTS:pure-main-object>
+      -DPURE_RUNTIME_DIR=${CMAKE_CURRENT_BINARY_DIR}
+      -DPURE_LD_LIB_PATH=${LD_LIB_PATH}
+      -DPURE_SANITIZERS=${PURE_SANITIZERS}
+      -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunPureBitcodeTransactionFailures.cmake"
+  )
+  set_tests_properties(
+    pure-bitcode-transaction-prepare-failures
+    PROPERTIES
+      LABELS "bitcode;batch;integration"
+      REQUIRED_FILES
+        "${CMAKE_CURRENT_SOURCE_DIR}/test/bitcode/transaction-prepare-failure.c;${CMAKE_CURRENT_SOURCE_DIR}/test/bitcode/transaction-valid.c;${CMAKE_CURRENT_SOURCE_DIR}/test/bitcode/transaction-prepare-recovery.pure"
+      TIMEOUT ${transaction_prepare_batch_timeout}
+      PASS_REGULAR_EXPRESSION
+        "Pure bitcode transaction failure recovery passed"
+      FAIL_REGULAR_EXPRESSION
+        "AddressSanitizer;LeakSanitizer;runtime error:"
+  )
+
   if(PURE_FAUST_EXECUTABLE)
     add_test(
       NAME pure-faust-lifecycle

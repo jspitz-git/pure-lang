@@ -86,6 +86,7 @@ class symtable {
   symbol* sym_p(const char *s, symbol*& cache, bool priv = false);
   symbol* sym_p(const char *s, symbol*& cache,
 		prec_t prec, fix_t fix, bool priv = false);
+  void clear_symbol_caches();
   // these are cached here to speed up predefined symbol lookups
   symbol* __gensym_sym;
   symbol* __namespace_sym;
@@ -191,6 +192,9 @@ public:
   // get current number of symbols in table (symbols are always numbered
   // consecutively from 1 to nsyms())
   int32_t nsyms() { return fno; }
+  // Discard symbols allocated after a transactional checkpoint. Existing
+  // entries retain their addresses, so cached symbol pointers remain valid.
+  void rollback(int32_t checkpoint);
   /* The following operations look up a symbol in the table and possibly
      create it if necessary. Unqualified symbols are first searched for in the
      current namespace and all search namespaces (if any), and finally also in

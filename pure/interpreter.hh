@@ -571,6 +571,7 @@ struct cvector_data {
 
 class interpreter
 {
+  friend class batch_bitcode_transaction;
 public:
   int argc; char **argv; // saved command line of the interpreter
   interpreter(int argc, char **argv);
@@ -996,6 +997,7 @@ public:
   PureJit *ORC;
   CompilationUnitResources *compilation_units;
   NewPassManagerState *pass_state;
+  const char *host_global_failure_mode;
   llvm::StructType  *ExprTy, *IntExprTy, *DblExprTy, *StrExprTy, *PtrExprTy;
   llvm::StructType  *ComplexTy, *GSLMatrixTy, *GSLDoubleMatrixTy,
     *GSLComplexMatrixTy, *GSLIntMatrixTy;
