@@ -108,11 +108,15 @@ if(DEFINED PURE_BATCH_OBJECT OR DEFINED PURE_BATCH_EXECUTABLE)
       list(APPEND batch_environment "PURE_TEST_TRACKER_RETRY=1")
     endif()
   endif()
+  set(batch_compile_options --noprelude -c)
+  if(DEFINED PURE_BATCH_MAIN AND NOT "${PURE_BATCH_MAIN}" STREQUAL "")
+    list(APPEND batch_compile_options "--main=${PURE_BATCH_MAIN}")
+  endif()
   execute_process(
     COMMAND
       "${CMAKE_COMMAND}" -E env ${batch_environment} --
       "${PURE_SH_EXECUTABLE}" "${PURE_RUN_TEST}" -L "${PURE_FIXTURE_DIR}"
-      --noprelude -c "${PURE_SCRIPT}" -o "${PURE_BATCH_OBJECT}"
+      ${batch_compile_options} "${PURE_SCRIPT}" -o "${PURE_BATCH_OBJECT}"
     RESULT_VARIABLE result
     OUTPUT_VARIABLE output
     ERROR_VARIABLE output

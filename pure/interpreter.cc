@@ -13431,7 +13431,8 @@ int interpreter::compiler(string out, list<string> libnames, string llcopts)
       var_to_be_deleted.push_back(&v);
       continue;
     }
-    if (!v.isDeclaration() && !mainname.empty())
+    if (!v.isDeclaration() && !mainname.empty() &&
+        !v.getName().starts_with("llvm."))
       v.setLinkage(GlobalVariable::InternalLinkage);
     // While we're at it, also check for variables pointing to Faust functions
     // and update their initializations.

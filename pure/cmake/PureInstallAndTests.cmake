@@ -41,6 +41,10 @@ file(
 if(BUILD_TESTING)
   target_compile_definitions(pure-runtime PRIVATE PURE_ENABLE_TEST_HOOKS=1)
   target_compile_definitions(pure PRIVATE PURE_ENABLE_TEST_HOOKS=1)
+  add_library(
+    pure-bitcode-transaction-custom-main-object OBJECT
+    test/bitcode/transaction-custom-main.c
+  )
 
   find_program(PURE_SH_EXECUTABLE NAMES sh REQUIRED)
   find_program(
@@ -590,6 +594,46 @@ if(BUILD_TESTING)
       LABELS "bitcode;batch;integration"
       REQUIRED_FILES
         "${CMAKE_CURRENT_SOURCE_DIR}/test/bitcode/transaction-invalid.c;${CMAKE_CURRENT_SOURCE_DIR}/test/bitcode/transaction-valid.c;${CMAKE_CURRENT_SOURCE_DIR}/test/bitcode/transaction-recovery.pure"
+      TIMEOUT ${transaction_test_timeout}
+      PASS_REGULAR_EXPRESSION
+        "pure_transaction_missing(.|\n)*42"
+      FAIL_REGULAR_EXPRESSION
+        "AddressSanitizer;LeakSanitizer;runtime error:"
+  )
+
+  set(transaction_custom_main_batch_object
+      "${CMAKE_CURRENT_BINARY_DIR}/test/bitcode/transaction-custom-main.o")
+  set(transaction_custom_main_batch_executable
+      "${CMAKE_CURRENT_BINARY_DIR}/test/bitcode/transaction-custom-main${CMAKE_EXECUTABLE_SUFFIX}")
+  add_test(
+    NAME pure-bitcode-transaction-custom-main
+    COMMAND
+      "${CMAKE_COMMAND}"
+      -DPURE_SH_EXECUTABLE=${PURE_SH_EXECUTABLE}
+      -DPURE_RUN_TEST=${CMAKE_CURRENT_BINARY_DIR}/run-test
+      -DPURE_FIXTURE_DIR=${PURE_BITCODE_FIXTURE_OUTPUT_DIR}
+      -DPURE_SCRIPT=${CMAKE_CURRENT_SOURCE_DIR}/test/bitcode/transaction-recovery.pure
+      -DPURE_C_COMPILER=${CMAKE_C_COMPILER}
+      -DPURE_C_SOURCE=${CMAKE_CURRENT_SOURCE_DIR}/test/bitcode/transaction-invalid.c
+      -DPURE_BITCODE_OUTPUT=${transaction_invalid_bc}
+      -DPURE_SECOND_C_SOURCE=${CMAKE_CURRENT_SOURCE_DIR}/test/bitcode/transaction-valid.c
+      -DPURE_SECOND_BITCODE_OUTPUT=${transaction_valid_bc}
+      -DPURE_BATCH_OBJECT=${transaction_custom_main_batch_object}
+      -DPURE_BATCH_EXECUTABLE=${transaction_custom_main_batch_executable}
+      -DPURE_BATCH_MAIN=pure_transaction_custom_main
+      -DPURE_CXX_COMPILER=${CMAKE_CXX_COMPILER}
+      -DPURE_MAIN_OBJECT=$<TARGET_OBJECTS:pure-bitcode-transaction-custom-main-object>
+      -DPURE_RUNTIME_DIR=${CMAKE_CURRENT_BINARY_DIR}
+      -DPURE_LD_LIB_PATH=${LD_LIB_PATH}
+      -DPURE_SANITIZERS=${PURE_SANITIZERS}
+      -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunPureBitcodeTest.cmake"
+  )
+  set_tests_properties(
+    pure-bitcode-transaction-custom-main
+    PROPERTIES
+      LABELS "bitcode;batch;integration"
+      REQUIRED_FILES
+        "${CMAKE_CURRENT_SOURCE_DIR}/test/bitcode/transaction-custom-main.c;${CMAKE_CURRENT_SOURCE_DIR}/test/bitcode/transaction-invalid.c;${CMAKE_CURRENT_SOURCE_DIR}/test/bitcode/transaction-valid.c;${CMAKE_CURRENT_SOURCE_DIR}/test/bitcode/transaction-recovery.pure"
       TIMEOUT ${transaction_test_timeout}
       PASS_REGULAR_EXPRESSION
         "pure_transaction_missing(.|\n)*42"
