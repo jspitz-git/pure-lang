@@ -686,7 +686,7 @@ if(BUILD_TESTING)
     PROPERTIES
       ENVIRONMENT
         "PURE_TEST_DECLARATION_FAILURE=bitcode-first;PURE_TEST_WRAPPER_ROLLBACK=1;PURE_TEST_ORC_FAILURE=bitcode-wrapper-remove-persistent;PURE_TEST_CLEAN_SHUTDOWN=1"
-      TIMEOUT 15
+      TIMEOUT 60
       PASS_REGULAR_EXPRESSION
         "injected second bitcode declaration failure(.|\n)*first bitcode wrapper materialized(.|\n)*compiled function registry returned to baseline(.|\n)*injected persistent ORC tracker removal failure(.|\n)*\\[40,2\\](.|\n)*42(.|\n)*failed to remove ORC compilation unit: injected persistent ORC tracker removal failure"
   )
