@@ -6,7 +6,7 @@ endif()
 
 set(summary "")
 set(failures)
-foreach(mode doeval-add doeval-lookup doeval-nested-lookup dodefn-add dodefn-lookup dodefn-remove dodefn-publish)
+foreach(mode doeval-add doeval-lookup doeval-nested-lookup dodefn-add dodefn-lookup dodefn-remove dodefn-remove-persistent dodefn-publish)
   set(failure_mode "${mode}")
   if(mode STREQUAL "doeval-nested-lookup")
     set(failure_mode "doeval-lookup")
@@ -15,6 +15,13 @@ foreach(mode doeval-add doeval-lookup doeval-nested-lookup dodefn-add dodefn-loo
   if(mode STREQUAL "dodefn-remove")
     list(APPEND failure_environment
       "PURE_TEST_TRACKER_RETRY=1")
+  endif()
+  if(mode STREQUAL "dodefn-remove-persistent")
+    list(APPEND failure_environment "PURE_TEST_CLEAN_SHUTDOWN=1")
+  endif()
+  set(child_timeout 30)
+  if(mode STREQUAL "dodefn-remove-persistent")
+    set(child_timeout 8)
   endif()
   if(mode MATCHES "^doeval-")
     list(APPEND failure_environment "PURE_TEST_ORC_FAILURE_SKIP=${failure_mode}")
@@ -30,14 +37,20 @@ foreach(mode doeval-add doeval-lookup doeval-nested-lookup dodefn-add dodefn-loo
       --disable=doeval-add --disable=doeval-lookup
       --disable=doeval-nested-lookup --disable=dodefn-add
       --disable=dodefn-lookup --disable=dodefn-remove
-      --disable=dodefn-publish "--enable=${mode}"
+      --disable=dodefn-remove-persistent --disable=dodefn-publish
+      "--enable=${mode}"
     INPUT_FILE "${PURE_SCRIPT}"
     RESULT_VARIABLE result
     OUTPUT_VARIABLE stdout
     ERROR_VARIABLE stderr
+    TIMEOUT ${child_timeout}
   )
   set(output "${stdout}${stderr}")
-  message("[${mode}]\n${output}")
+  if(mode STREQUAL "dodefn-remove-persistent")
+    message("[${mode}] persistent cleanup output captured")
+  else()
+    message("[${mode}]\n${output}")
+  endif()
 
   if(NOT result EQUAL 0)
     list(APPEND failures "Pure ${mode} child exited with status ${result}")
@@ -55,7 +68,34 @@ foreach(mode doeval-add doeval-lookup doeval-nested-lookup dodefn-add dodefn-loo
       "Pure ${mode} child did not recover with literal 42")
   endif()
 
-  if(mode STREQUAL "dodefn-publish")
+  if(mode STREQUAL "dodefn-remove-persistent")
+    if(NOT output MATCHES "(^|[\r\n])7([\r\n]|$)")
+      list(APPEND failures
+        "Pure ${mode} child did not restore the previous definition value")
+    endif()
+    string(REGEX MATCHALL
+      "failed to roll back temporary ORC unit" rollback_diagnostics
+      "${output}")
+    list(LENGTH rollback_diagnostics rollback_count)
+    string(REGEX MATCHALL
+      "failed to remove ORC compilation unit" shutdown_diagnostics
+      "${output}")
+    list(LENGTH shutdown_diagnostics shutdown_count)
+    if(NOT rollback_count EQUAL 1)
+      list(APPEND failures
+        "Pure ${mode} child did not report exactly one guard cleanup failure")
+    endif()
+    if(NOT shutdown_count EQUAL 1)
+      list(APPEND failures
+        "Pure ${mode} child did not report exactly one bounded shutdown failure")
+    endif()
+    if(output MATCHES "failed to remove ORC environment unit")
+      list(APPEND failures
+        "Pure ${mode} child retried cleanup through a freed Env key")
+    endif()
+    string(APPEND summary
+      "${mode}: orphaned tracker cleaned once; shutdown returned\n")
+  elseif(mode STREQUAL "dodefn-publish")
     foreach(symbol publish_first publish_second)
       if(NOT output MATCHES "(^|[\r\n])${symbol}([\r\n]|$)")
         list(APPEND failures

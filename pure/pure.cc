@@ -1022,6 +1022,9 @@ _|                       for license information.)\n\
   }
   interp.run("", false, true);
   if (interp.ttymode) cout << endl;
+#ifdef PURE_ENABLE_TEST_HOOKS
+  if (getenv("PURE_TEST_CLEAN_SHUTDOWN")) return 0;
+#endif
   /* Take the quick way out. There's really no need to clean up the
      interpreter instance if we're exiting anyway. */
   pure_finalize();

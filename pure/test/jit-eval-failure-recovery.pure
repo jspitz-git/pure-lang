@@ -75,6 +75,23 @@ int pure_test_dodefn_remove(void)
   return pure_test_fptr == before && recovered;
 }
 
+int pure_test_dodefn_remove_persistent(void)
+{
+  void *before = pure_test_fptr;
+  pure_expr *result = pure_eval("let persistent_value = 7");
+  if (result) pure_freenew(result);
+  result = pure_eval("let persistent_value = eval_probe 9");
+  const char *message = lasterr();
+  if (message && *message) puts(message);
+  if (result) pure_freenew(result);
+  result = pure_eval("let persistent_retry_probe = (\\x->x) 42");
+  message = lasterr();
+  if (message && *message) puts(message);
+  int recovered = result != NULL;
+  if (result) pure_freenew(result);
+  return pure_test_fptr == before && recovered;
+}
+
 int pure_test_dodefn_publish(void)
 {
   void *before = pure_test_fptr;
@@ -93,6 +110,7 @@ extern int pure_test_doeval_nested_lookup();
 extern int pure_test_dodefn_add();
 extern int pure_test_dodefn_lookup();
 extern int pure_test_dodefn_remove();
+extern int pure_test_dodefn_remove_persistent();
 extern int pure_test_dodefn_publish();
 
 infixl 2200 +;
@@ -117,6 +135,12 @@ publish_first;
 publish_second;
 let publish_first,publish_second = eval_probe 21,eval_probe 22;
 publish_first+publish_second;
+(\x->x) 42;
+#! --endif
+
+#! --if dodefn-remove-persistent
+pure_test_dodefn_remove_persistent;
+persistent_value;
 (\x->x) 42;
 #! --endif
 

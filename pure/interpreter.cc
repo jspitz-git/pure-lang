@@ -93,6 +93,7 @@ bool interpreter::g_init = false;
 
 #ifdef PURE_ENABLE_TEST_HOOKS
 static bool inject_orc_failure(const char *mode, bool& injected);
+static bool orc_failure_requested(const char *mode);
 static bool temporary_tracker_retry_pending = false;
 #endif
 
@@ -225,7 +226,23 @@ struct CompilationUnitResources {
         closure_refs(closure_refs), current(false) {}
   };
 
-  map<const Env*, llvm::orc::ResourceTrackerSP> trackers;
+  struct EnvironmentUnit {
+    const Env *environment;
+    llvm::orc::ResourceTrackerSP tracker;
+    bool persistent_failure;
+
+    EnvironmentUnit(const Env *environment,
+                    llvm::orc::ResourceTrackerSP tracker,
+                    bool persistent_failure = false)
+      : environment(environment), tracker(std::move(tracker)),
+        persistent_failure(persistent_failure)
+    {}
+  };
+
+  typedef list<EnvironmentUnit> EnvironmentUnits;
+  typedef map<const Env*, EnvironmentUnits::iterator> EnvironmentIndex;
+  EnvironmentUnits environment_units;
+  EnvironmentIndex trackers;
   map<const llvm::Function*, CompiledFunction> functions;
   map<string, llvm::orc::ResourceTrackerSP> bitcode_modules;
   map<string, list<FaustGeneration> > faust_modules;
@@ -564,15 +581,34 @@ struct CompilationUnitResources {
     return implementation;
   }
 
-  void retain(const Env *environment, llvm::orc::ResourceTrackerSP tracker)
+  void retain(const Env *environment, llvm::orc::ResourceTrackerSP tracker,
+              const char *failure_mode = 0)
   {
     assert(environment && tracker && trackers.find(environment) == trackers.end());
-    trackers[environment] = std::move(tracker);
+    bool persistent_failure = false;
+#ifdef PURE_ENABLE_TEST_HOOKS
+    static bool persistent_failure_assigned = false;
+    if (!persistent_failure_assigned && failure_mode &&
+        string(failure_mode) == "dodefn-remove" &&
+        orc_failure_requested("dodefn-remove-persistent")) {
+      persistent_failure = true;
+      persistent_failure_assigned = true;
+    }
+#endif
+    environment_units.push_back
+      (EnvironmentUnit(environment, std::move(tracker), persistent_failure));
+    EnvironmentUnits::iterator unit = --environment_units.end();
+    try {
+      trackers.insert(make_pair(environment, unit));
+    } catch (...) {
+      environment_units.erase(unit);
+      throw;
+    }
   }
 
   llvm::Error remove(const Env *environment, const char *failure_mode = 0)
   {
-    map<const Env*, llvm::orc::ResourceTrackerSP>::iterator it =
+    EnvironmentIndex::iterator it =
       trackers.find(environment);
     if (it == trackers.end()) {
 #ifdef PURE_ENABLE_TEST_HOOKS
@@ -582,7 +618,11 @@ struct CompilationUnitResources {
 #endif
       return llvm::Error::success();
     }
+    EnvironmentUnits::iterator unit = it->second;
 #ifdef PURE_ENABLE_TEST_HOOKS
+    if (unit->persistent_failure)
+      return llvm::createStringError
+        ("injected dodefn-remove persistent ORC tracker removal failure");
     static bool injected = false;
     if (failure_mode && inject_orc_failure(failure_mode, injected)) {
       temporary_tracker_retry_pending = true;
@@ -590,27 +630,50 @@ struct CompilationUnitResources {
         ("injected "+string(failure_mode)+" ORC tracker removal failure");
     }
 #endif
-    llvm::Error error = it->second->remove();
+    llvm::Error error = unit->tracker->remove();
 #ifdef PURE_ENABLE_TEST_HOOKS
     if (!error && failure_mode) temporary_tracker_retry_pending = false;
 #endif
-    if (!error) trackers.erase(it);
+    if (!error) {
+      trackers.erase(it);
+      environment_units.erase(unit);
+    }
     return error;
+  }
+
+  void orphan(const Env *environment) noexcept
+  {
+    EnvironmentIndex::iterator it = trackers.find(environment);
+    if (it == trackers.end()) return;
+    it->second->environment = 0;
+    trackers.erase(it);
   }
 
   void remove_and_report(const Env *environment)
   {
-    if (llvm::Error error = remove(environment))
+    if (llvm::Error error = remove(environment)) {
+      orphan(environment);
       llvm::logAllUnhandledErrors(std::move(error), llvm::errs(),
                                   "failed to remove ORC environment unit: ");
+    }
   }
 
   llvm::Error remove_all()
   {
     llvm::Error errors = llvm::Error::success();
-    while (!trackers.empty()) {
-      const Env *environment = trackers.begin()->first;
-      errors = llvm::joinErrors(std::move(errors), remove(environment));
+    trackers.clear();
+    while (!environment_units.empty()) {
+      EnvironmentUnits::iterator unit = environment_units.begin();
+      llvm::Error error = llvm::Error::success();
+#ifdef PURE_ENABLE_TEST_HOOKS
+      if (unit->persistent_failure)
+        error = llvm::createStringError
+          ("injected dodefn-remove persistent ORC tracker removal failure");
+      else
+#endif
+        error = unit->tracker->remove();
+      environment_units.erase(unit);
+      errors = llvm::joinErrors(std::move(errors), std::move(error));
     }
     while (!functions.empty()) {
       map<const llvm::Function*, CompiledFunction>::iterator it =
@@ -1423,10 +1486,7 @@ void *interpreter::materialize_global_generation(int32_t tag, string *error_mess
 static bool inject_orc_failure(const char *mode, bool& injected)
 {
   if (injected) return false;
-  const char *failure = getenv("PURE_TEST_ORC_FAILURE");
-  if (!failure) return false;
-  string failures = ","+string(failure)+",";
-  if (failures.find(","+string(mode)+",") == string::npos) return false;
+  if (!orc_failure_requested(mode)) return false;
   const char *skip = getenv("PURE_TEST_ORC_FAILURE_SKIP");
   static set<string> skipped;
   if (skip) {
@@ -1437,6 +1497,14 @@ static bool inject_orc_failure(const char *mode, bool& injected)
   }
   injected = true;
   return true;
+}
+
+static bool orc_failure_requested(const char *mode)
+{
+  const char *failure = getenv("PURE_TEST_ORC_FAILURE");
+  if (!failure) return false;
+  string failures = ","+string(failure)+",";
+  return failures.find(","+string(mode)+",") != string::npos;
 }
 #endif
 
@@ -15332,9 +15400,15 @@ class temporary_eval_guard {
       tracker_retained = false;
       tracker.reset();
     }
-    if (error)
+    if (error) {
+      if (tracker_retained && temporary_environment) {
+        compilation_units->orphan(temporary_environment);
+        tracker_retained = false;
+        tracker.reset();
+      }
       llvm::logAllUnhandledErrors(std::move(error), llvm::errs(),
                                   "failed to roll back temporary ORC unit: ");
+    }
   }
 
   void rollback_globals() noexcept
@@ -15444,7 +15518,8 @@ public:
 
   void retain_tracker()
   {
-    compilation_units->retain(temporary_environment, tracker);
+    compilation_units->retain
+      (temporary_environment, tracker, tracker_failure_mode);
     tracker_retained = true;
   }
 

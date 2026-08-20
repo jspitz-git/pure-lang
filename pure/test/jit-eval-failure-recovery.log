@@ -4,4 +4,5 @@ doeval-nested-lookup: recovered 42
 dodefn-add: failed definition hidden; recovered 42
 dodefn-lookup: failed definition hidden; recovered 42
 dodefn-remove: restored previous value; retried cleanup; recovered 42
+dodefn-remove-persistent: orphaned tracker cleaned once; shutdown returned
 dodefn-publish: partial publication hidden; redefined both bindings
