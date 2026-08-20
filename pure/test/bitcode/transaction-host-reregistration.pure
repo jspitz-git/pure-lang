@@ -1,0 +1,6 @@
+using "bc:transaction-host-old";
+using "bc:transaction-host-new";
+using "bc:transaction-after";
+
+main = pure_transaction_after;
+main;

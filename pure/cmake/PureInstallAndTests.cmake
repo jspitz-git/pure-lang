@@ -643,13 +643,31 @@ if(BUILD_TESTING)
       "${PURE_BITCODE_FIXTURE_OUTPUT_DIR}/transaction-host-old.bc")
   set(transaction_host_invalid_bc
       "${PURE_BITCODE_FIXTURE_OUTPUT_DIR}/transaction-host-invalid.bc")
-  foreach(host_case replacement shutdown)
+  foreach(host_case replacement reregistration shutdown)
     set(host_batch_object
         "${CMAKE_CURRENT_BINARY_DIR}/test/bitcode/transaction-host-${host_case}.o")
     set(host_batch_executable
         "${CMAKE_CURRENT_BINARY_DIR}/test/bitcode/transaction-host-${host_case}${CMAKE_EXECUTABLE_SUFFIX}")
     set(host_extra_arguments)
     set(host_expected_diagnostic injected.batch-bitcode-host-remove)
+    set(host_second_source
+        ${CMAKE_CURRENT_SOURCE_DIR}/test/bitcode/transaction-valid.c)
+    set(host_second_bitcode ${transaction_valid_bc})
+    set(host_third_source
+        ${CMAKE_CURRENT_SOURCE_DIR}/test/bitcode/transaction-invalid.c)
+    set(host_third_bitcode ${transaction_host_invalid_bc})
+    if(host_case STREQUAL "reregistration")
+      set(host_second_source
+          ${CMAKE_CURRENT_SOURCE_DIR}/test/bitcode/transaction-host-new.c)
+      set(host_second_bitcode
+          ${PURE_BITCODE_FIXTURE_OUTPUT_DIR}/transaction-host-new.bc)
+      set(host_third_source
+          ${CMAKE_CURRENT_SOURCE_DIR}/test/bitcode/transaction-after.c)
+      set(host_third_bitcode
+          ${PURE_BITCODE_FIXTURE_OUTPUT_DIR}/transaction-after.bc)
+      set(host_expected_diagnostic
+          "injected.batch-bitcode-host-reregister(.|\\n)*failed.to.remove.ORC.compilation.unit")
+    endif()
     if(host_case STREQUAL "shutdown")
       list(APPEND host_extra_arguments -DPURE_SKIP_BATCH_RUN=TRUE)
       set(host_expected_diagnostic failed.to.remove.ORC.compilation.unit)
@@ -665,10 +683,10 @@ if(BUILD_TESTING)
         -DPURE_C_COMPILER=${CMAKE_C_COMPILER}
         -DPURE_C_SOURCE=${CMAKE_CURRENT_SOURCE_DIR}/test/bitcode/transaction-host-old.c
         -DPURE_BITCODE_OUTPUT=${transaction_host_old_bc}
-        -DPURE_SECOND_C_SOURCE=${CMAKE_CURRENT_SOURCE_DIR}/test/bitcode/transaction-valid.c
-        -DPURE_SECOND_BITCODE_OUTPUT=${transaction_valid_bc}
-        -DPURE_THIRD_C_SOURCE=${CMAKE_CURRENT_SOURCE_DIR}/test/bitcode/transaction-invalid.c
-        -DPURE_THIRD_BITCODE_OUTPUT=${transaction_host_invalid_bc}
+        -DPURE_SECOND_C_SOURCE=${host_second_source}
+        -DPURE_SECOND_BITCODE_OUTPUT=${host_second_bitcode}
+        -DPURE_THIRD_C_SOURCE=${host_third_source}
+        -DPURE_THIRD_BITCODE_OUTPUT=${host_third_bitcode}
         -DPURE_BATCH_OBJECT=${host_batch_object}
         -DPURE_BATCH_EXECUTABLE=${host_batch_executable}
         -DPURE_CXX_COMPILER=${CMAKE_CXX_COMPILER}

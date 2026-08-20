@@ -98,6 +98,8 @@ static bool inject_orc_failure(const char *mode, bool& injected);
 static bool orc_failure_requested(const char *mode);
 static bool temporary_tracker_retry_pending = false;
 static bool batch_provider_retry_pending = false;
+static llvm::orc::ResourceTracker *batch_reregistered_tracker = 0;
+static string batch_reregistered_name;
 #endif
 
 static string encode_abi_dump_token(const string& type)
@@ -178,10 +180,13 @@ struct CompilationUnitResources {
     void *address;
     llvm::JITSymbolFlags flags;
     llvm::orc::ResourceTrackerSP tracker;
+    std::shared_ptr<void> backing;
 
     HostSymbol(void *address, llvm::JITSymbolFlags flags,
-               llvm::orc::ResourceTrackerSP tracker)
-      : address(address), flags(flags), tracker(std::move(tracker)) {}
+               llvm::orc::ResourceTrackerSP tracker,
+               std::shared_ptr<void> backing = std::shared_ptr<void>())
+      : address(address), flags(flags), tracker(std::move(tracker)),
+        backing(std::move(backing)) {}
   };
 
   struct CompiledFunction {
@@ -310,13 +315,56 @@ struct CompilationUnitResources {
       return llvm::createStringError
         ("injected batch-bitcode-host-remove ORC tracker removal failure");
     }
+    if (orc_failure_requested("batch-bitcode-host-reregister-shutdown") &&
+        batch_reregistered_tracker == tracker.get())
+      return llvm::createStringError
+        ("injected batch-bitcode-host-reregister-shutdown ORC tracker removal failure");
 #endif
     return tracker->remove();
   }
 
+  static llvm::Error register_host_symbol
+  (PureJit& jit, llvm::orc::ResourceTrackerSP tracker, llvm::StringRef name,
+   void *address, llvm::JITSymbolFlags flags, const char *failure_mode,
+   bool rollback = false)
+  {
+#ifdef PURE_ENABLE_TEST_HOOKS
+    static bool reregister_failure_injected = false;
+    if (!rollback && failure_mode &&
+        inject_orc_failure("batch-bitcode-host-reregister",
+                           reregister_failure_injected))
+      return llvm::createStringError
+        ("injected batch-bitcode-host-reregister ORC registration failure");
+#endif
+    llvm::Error error =
+      jit.register_absolute_symbol(tracker, name, address, flags);
+#ifdef PURE_ENABLE_TEST_HOOKS
+    if (!error && rollback &&
+        orc_failure_requested("batch-bitcode-host-reregister-shutdown")) {
+      batch_reregistered_tracker = tracker.get();
+      batch_reregistered_name = name.str();
+    }
+#endif
+    return error;
+  }
+
+  bool has_quarantined_host_registration
+  (llvm::StringRef name, void *address, llvm::JITSymbolFlags flags,
+   const llvm::orc::ResourceTrackerSP& tracker) const
+  {
+    for (list<QuarantinedHostSymbol>::const_iterator symbol =
+           quarantined_host_symbols.begin();
+         symbol != quarantined_host_symbols.end(); ++symbol)
+      if (symbol->name == name && symbol->address == address &&
+          symbol->flags == flags && symbol->tracker.get() == tracker.get())
+        return true;
+    return false;
+  }
+
   llvm::Error retain_host_symbol
   (PureJit& jit, llvm::StringRef name, void *address,
-   llvm::JITSymbolFlags flags = llvm::JITSymbolFlags::Exported)
+   llvm::JITSymbolFlags flags = llvm::JITSymbolFlags::Exported,
+   const char *failure_mode = 0)
   {
     string symbol_name = name.str();
     map<string, HostSymbol>::iterator old = host_symbols.find(symbol_name);
@@ -325,22 +373,28 @@ struct CompilationUnitResources {
         return llvm::Error::success();
       void *old_address = old->second.address;
       llvm::JITSymbolFlags old_flags = old->second.flags;
-      if (llvm::Error error = remove_host_tracker(old->second.tracker))
+      llvm::orc::ResourceTrackerSP old_tracker = old->second.tracker;
+      std::shared_ptr<void> old_backing = old->second.backing;
+      bool quarantined_old = has_quarantined_host_registration
+        (name, old_address, old_flags, old_tracker);
+      if (llvm::Error error = remove_host_tracker(old_tracker))
         return error;
       host_symbols.erase(old);
 
       llvm::orc::ResourceTrackerSP tracker = jit.create_resource_tracker();
       if (llvm::Error error =
-            jit.register_absolute_symbol(tracker, name, address, flags)) {
+            register_host_symbol(jit, tracker, name, address, flags,
+                                 quarantined_old ? failure_mode : 0)) {
         llvm::orc::ResourceTrackerSP rollback_tracker =
           jit.create_resource_tracker();
-        if (llvm::Error rollback_error = jit.register_absolute_symbol
-              (rollback_tracker, name, old_address, old_flags))
+        if (llvm::Error rollback_error = register_host_symbol
+              (jit, rollback_tracker, name, old_address, old_flags, 0, true))
           return llvm::joinErrors(std::move(error),
                                   std::move(rollback_error));
         host_symbols.emplace
           (symbol_name, HostSymbol(old_address, old_flags,
-                                   std::move(rollback_tracker)));
+                                   std::move(rollback_tracker),
+                                   std::move(old_backing)));
         return error;
       }
       host_symbols.emplace
@@ -350,7 +404,8 @@ struct CompilationUnitResources {
 
     llvm::orc::ResourceTrackerSP tracker = jit.create_resource_tracker();
     if (llvm::Error error =
-          jit.register_absolute_symbol(tracker, name, address, flags))
+          register_host_symbol(jit, tracker, name, address, flags,
+                               0))
       return error;
     host_symbols.emplace
       (symbol_name, HostSymbol(address, flags, std::move(tracker)));
@@ -424,6 +479,11 @@ struct CompilationUnitResources {
         current->second.flags == symbol->flags &&
         current->second.tracker.get() == symbol->tracker.get();
       if (!same_registration) {
+        bool restored_registration = current != host_symbols.end() &&
+          current->second.address == symbol->address &&
+          current->second.flags == symbol->flags;
+        if (restored_registration && !current->second.backing)
+          current->second.backing = std::move(symbol->backing);
 #ifdef PURE_ENABLE_TEST_HOOKS
         if (getenv("PURE_TEST_HOST_REPLACEMENT")) {
           if (current == host_symbols.end())
@@ -455,17 +515,40 @@ struct CompilationUnitResources {
         symbol = quarantined_host_symbols.erase(symbol);
       }
     }
+#ifdef PURE_ENABLE_TEST_HOOKS
+    if (getenv("PURE_TEST_HOST_REREGISTRATION") &&
+        !batch_reregistered_name.empty()) {
+      map<string, HostSymbol>::iterator restored =
+        host_symbols.find(batch_reregistered_name);
+      if (restored == host_symbols.end() || !restored->second.backing)
+        return llvm::createStringError
+          ("rollback re-registration lost quarantined host backing");
+      llvm::Expected<llvm::orc::ExecutorAddr> address =
+        jit.lookup(batch_reregistered_name);
+      if (!address) return address.takeError();
+      if (address->toPtr<void*>() != restored->second.address)
+        return llvm::createStringError
+          ("rollback re-registration lookup returned the wrong storage");
+      if (!*static_cast<void**>(restored->second.address))
+        return llvm::createStringError
+          ("rollback re-registration restored unreadable storage");
+    }
+#endif
     return llvm::Error::success();
   }
 
-  vector<std::shared_ptr<void> > quarantined_host_backings() const
+  vector<std::shared_ptr<void> > host_backings() const
   {
     vector<std::shared_ptr<void> > backings;
-    backings.reserve(quarantined_host_symbols.size());
+    backings.reserve(quarantined_host_symbols.size()+host_symbols.size());
     for (list<QuarantinedHostSymbol>::const_iterator symbol =
            quarantined_host_symbols.begin();
          symbol != quarantined_host_symbols.end(); ++symbol)
       if (symbol->backing) backings.push_back(symbol->backing);
+    for (map<string, HostSymbol>::const_iterator symbol = host_symbols.begin();
+         symbol != host_symbols.end(); ++symbol)
+      if (symbol->second.backing)
+        backings.push_back(symbol->second.backing);
     return backings;
   }
 
@@ -1537,7 +1620,8 @@ void interpreter::register_host_global(llvm::GlobalVariable *variable,
               " ORC host global registration failure");
 #endif
   if (llvm::Error error = compilation_units->retain_host_symbol
-        (*ORC, variable->getName(), address))
+        (*ORC, variable->getName(), address,
+         llvm::JITSymbolFlags::Exported, host_global_failure_mode))
     throw err("failed to register ORC host global '"+
               variable->getName().str()+"': "+
               llvm::toString(std::move(error)));
@@ -2112,10 +2196,10 @@ void interpreter::shutdown_orc_resources() noexcept
   // A quarantined absolute symbol may still point into detached GlobalVar
   // storage after its bounded removal fails. Keep that storage alive until
   // ORC itself has been destroyed.
-  vector<std::shared_ptr<void> > quarantined_host_backings;
+  vector<std::shared_ptr<void> > retained_host_backings;
   if (compilation_units)
-    quarantined_host_backings =
-      compilation_units->quarantined_host_backings();
+    retained_host_backings =
+      compilation_units->host_backings();
   delete pass_state;
   pass_state = 0;
   if (compilation_units) {
@@ -4294,7 +4378,8 @@ class batch_bitcode_transaction {
         bindings.find(binding->first);
       if (previous == bindings.end()) {
         if (binding->second.v &&
-            owner.host_global_address(binding->second.v) &&
+            owner.host_global_address(binding->second.v) ==
+              &binding->second.x &&
             !owner.remove_host_global_and_report(binding->second.v)) {
           string symbol_name = binding->second.v->getName().str();
           typedef map<int32_t, GlobalVar>::node_type binding_node;
@@ -4317,7 +4402,8 @@ class batch_bitcode_transaction {
         continue;
       }
       if (binding->second.v != previous->second.variable &&
-          binding->second.v && owner.host_global_address(binding->second.v) &&
+          binding->second.v && owner.host_global_address(binding->second.v) ==
+            &binding->second.x &&
           !owner.remove_host_global_and_report(binding->second.v))
         owner.compilation_units->quarantine_host_symbol
           (binding->second.v->getName().str(), std::shared_ptr<void>());
@@ -4791,6 +4877,7 @@ bool interpreter::LoadBitcode(bool priv, const char *name, string *msg)
   for (Module::global_iterator it = M->global_begin(), end = M->global_end();
        it != end; ++it) {
     if (it->isDeclaration()) continue;
+    if (it->hasName() && it->getName().starts_with("llvm.")) continue;
     bool public_data = it->getLinkage() == GlobalVariable::ExternalLinkage;
     string source_name = it->hasName() ? it->getName().str() :
       "$anon."+to_string(anonymous_global++);
@@ -13039,6 +13126,27 @@ static string& quote(string& s)
 #define DEBUG_USED 0
 #define DEBUG_UNUSED 0
 
+static void collect_reserved_functions
+(llvm::Value *value, set<llvm::Function*>& functions,
+ llvm::SmallPtrSetImpl<llvm::Value*>& visited)
+{
+  if (!value || !visited.insert(value).second) return;
+  if (llvm::Function *function = llvm::dyn_cast<llvm::Function>(value)) {
+    functions.insert(function);
+    return;
+  }
+  if (llvm::GlobalVariable *variable =
+        llvm::dyn_cast<llvm::GlobalVariable>(value)) {
+    if (variable->hasInitializer())
+      collect_reserved_functions(variable->getInitializer(), functions,
+                                 visited);
+    return;
+  }
+  if (llvm::User *user = llvm::dyn_cast<llvm::User>(value))
+    for (llvm::Use& operand : user->operands())
+      collect_reserved_functions(operand.get(), functions, visited);
+}
+
 
 
 void interpreter::check_used(set<Function*>& used,
@@ -13058,6 +13166,12 @@ void interpreter::check_used(set<Function*>& used,
      variable. At the same time we also determine all the roots in the
      dependency graph (initialization code and what's in 'used' initially). */
   set<Function*> roots = used;
+  for (GlobalVariable& variable : module->globals())
+    if (variable.hasName() && variable.getName().starts_with("llvm.") &&
+        variable.hasInitializer()) {
+      llvm::SmallPtrSet<llvm::Value*, 32> visited;
+      collect_reserved_functions(variable.getInitializer(), roots, visited);
+    }
 #if DEBUG_USED||DEBUG_UNUSED
   map<Function*, set<Function*> > callers;
 #endif

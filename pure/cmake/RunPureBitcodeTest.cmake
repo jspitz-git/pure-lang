@@ -88,6 +88,11 @@ if(DEFINED PURE_BATCH_OBJECT OR DEFINED PURE_BATCH_EXECUTABLE)
         "PURE_TEST_ORC_FAILURE=batch-bitcode-precommit,batch-bitcode-host-remove"
         "PURE_TEST_HOST_REPLACEMENT=1"
         "PURE_TEST_CLEAN_SHUTDOWN=1")
+    elseif(PURE_FAILURE_MODE STREQUAL "batch-bitcode-host-reregistration")
+      list(APPEND batch_environment
+        "PURE_TEST_ORC_FAILURE=batch-bitcode-precommit,batch-bitcode-host-remove,batch-bitcode-host-reregister,batch-bitcode-host-reregister-shutdown"
+        "PURE_TEST_HOST_REREGISTRATION=1"
+        "PURE_TEST_CLEAN_SHUTDOWN=1")
     elseif(PURE_FAILURE_MODE STREQUAL "batch-bitcode-host-shutdown")
       list(APPEND batch_environment
         "PURE_TEST_ORC_FAILURE=batch-bitcode-precommit,batch-bitcode-host-remove-persistent"
