@@ -202,11 +202,21 @@ struct CompilationUnitResources {
     size_t live_instances;
     bool current;
     llvm::orc::ResourceTrackerSP tracker;
+    list<llvm::Function*> functions;
+    list<llvm::GlobalVariable*> variables;
+    list<llvm::GlobalAlias*> aliases;
+    list<llvm::GlobalIFunc*> ifuncs;
 
     FaustGeneration(uint64_t generation,
-                    llvm::orc::ResourceTrackerSP tracker)
+                    llvm::orc::ResourceTrackerSP tracker,
+                    list<llvm::Function*> functions = {},
+                    list<llvm::GlobalVariable*> variables = {},
+                    list<llvm::GlobalAlias*> aliases = {},
+                    list<llvm::GlobalIFunc*> ifuncs = {})
       : generation(generation), live_instances(0), current(false),
-        tracker(std::move(tracker)) {}
+        tracker(std::move(tracker)), functions(std::move(functions)),
+        variables(std::move(variables)), aliases(std::move(aliases)),
+        ifuncs(std::move(ifuncs)) {}
   };
 
   struct FunctionGeneration {
@@ -594,11 +604,20 @@ struct CompilationUnitResources {
     return ++next_faust_generations[module_name];
   }
 
-  void retain_faust(string module_name, uint64_t generation,
-                    llvm::orc::ResourceTrackerSP tracker)
+  FaustGeneration *retain_faust
+  (string module_name, uint64_t generation,
+   llvm::orc::ResourceTrackerSP tracker,
+   list<llvm::Function*> functions = {},
+   list<llvm::GlobalVariable*> variables = {},
+   list<llvm::GlobalAlias*> aliases = {},
+   list<llvm::GlobalIFunc*> ifuncs = {})
   {
     assert(!module_name.empty() && generation && tracker);
-    faust_modules[module_name].emplace_back(generation, std::move(tracker));
+    list<FaustGeneration>& generations = faust_modules[module_name];
+    generations.emplace_back
+      (generation, std::move(tracker), std::move(functions),
+       std::move(variables), std::move(aliases), std::move(ifuncs));
+    return &generations.back();
   }
 
   FaustGeneration *current_faust(const string& module_name)
@@ -656,6 +675,42 @@ struct CompilationUnitResources {
           ++generation;
           continue;
         }
+        for (list<llvm::Function*>::iterator value =
+               generation->functions.begin();
+             value != generation->functions.end(); ++value)
+          if (*value) (*value)->dropAllReferences();
+        for (list<llvm::GlobalVariable*>::iterator value =
+               generation->variables.begin();
+             value != generation->variables.end(); ++value)
+          if (*value) (*value)->dropAllReferences();
+        for (list<llvm::GlobalAlias*>::iterator value =
+               generation->aliases.begin();
+             value != generation->aliases.end(); ++value)
+          if (*value) (*value)->dropAllReferences();
+        for (list<llvm::GlobalIFunc*>::iterator value =
+               generation->ifuncs.begin();
+             value != generation->ifuncs.end(); ++value)
+          if (*value) (*value)->dropAllReferences();
+        for (list<llvm::GlobalAlias*>::iterator value =
+               generation->aliases.begin();
+             value != generation->aliases.end(); ++value)
+          if (*value) (*value)->eraseFromParent();
+        for (list<llvm::GlobalIFunc*>::iterator value =
+               generation->ifuncs.begin();
+             value != generation->ifuncs.end(); ++value)
+          if (*value) (*value)->eraseFromParent();
+        for (list<llvm::Function*>::iterator value =
+               generation->functions.begin();
+             value != generation->functions.end(); ++value)
+          if (*value) (*value)->eraseFromParent();
+        for (list<llvm::GlobalVariable*>::iterator value =
+               generation->variables.begin();
+             value != generation->variables.end(); ++value)
+          if (*value) (*value)->eraseFromParent();
+        generation->functions.clear();
+        generation->variables.clear();
+        generation->aliases.clear();
+        generation->ifuncs.clear();
         if (llvm::Error error = generation->tracker->remove()) {
           llvm::logAllUnhandledErrors(std::move(error), llvm::errs(),
                                       "failed to collect ORC Faust generation: ");
@@ -3150,6 +3205,47 @@ static bool verify_module(const llvm::Module& module, string& message)
   return !invalid;
 }
 
+struct faust_reload_input {
+  bool priv;
+  bool loaded;
+  bool active_loaded;
+  bool declared;
+  bool modified;
+  bool is_double;
+  string module_name;
+  time_t modification_time;
+  uint64_t generation;
+  std::unique_ptr<llvm::Module> provider;
+  list<string> operations;
+  map<string, string> exported_functions;
+  list<string> owned_functions;
+  list<string> owned_variables;
+  list<string> owned_aliases;
+  list<string> owned_ifuncs;
+
+  faust_reload_input
+  (bool priv, bool loaded, bool active_loaded, bool declared, bool modified,
+   bool is_double, string module_name, time_t modification_time,
+   uint64_t generation, std::unique_ptr<llvm::Module> provider,
+   list<string> operations, map<string, string> exported_functions,
+   list<string> owned_functions, list<string> owned_variables,
+   list<string> owned_aliases, list<string> owned_ifuncs)
+    : priv(priv), loaded(loaded), active_loaded(active_loaded),
+      declared(declared), modified(modified), is_double(is_double),
+      module_name(std::move(module_name)),
+      modification_time(modification_time), generation(generation),
+      provider(std::move(provider)), operations(std::move(operations)),
+      exported_functions(std::move(exported_functions)),
+      owned_functions(std::move(owned_functions)),
+      owned_variables(std::move(owned_variables)),
+      owned_aliases(std::move(owned_aliases)),
+      owned_ifuncs(std::move(owned_ifuncs)) {}
+};
+
+static bool execute_faust_reload(interpreter& owner,
+                                 faust_reload_input input,
+                                 string& error);
+
 static const char *incompatible_triple_component
 (const llvm::Triple& module_triple, const llvm::Triple& target_triple);
 
@@ -3236,8 +3332,6 @@ bool interpreter::LoadFaustDSP(bool priv, const char *name, string *msg,
   if (!compiling && active_loaded && modified) {
     if (active_jit_calls != 0 || astk)
       return fail("Cannot reload Faust module during an active JIT call");
-    if (compilation_units->faust_has_live_instances(modname))
-      return fail("Cannot reload Faust module while DSP instances are live");
   }
   // Faust bitcode follows the same target ABI rules as generic bitcode.
   // Assigning target metadata only canonicalizes compatible or unspecified
@@ -3448,9 +3542,9 @@ bool interpreter::LoadFaustDSP(bool priv, const char *name, string *msg,
   // cosmetic purposes.
   uint64_t faust_generation = modified ?
     compilation_units->next_faust_generation(modname) : 0;
-  string generation_suffix = !compiling && faust_generation ?
+  string generation_suffix = faust_generation ?
     "$g"+to_string(faust_generation)+"$" : "$";
-  list<string> funs, aux_funs, vars;
+  list<string> funs;
   map<Function*, string> export_names;
   for (map<string, Function*>::iterator it = faust_exports.begin();
        it != faust_exports.end(); ++it)
@@ -3474,7 +3568,6 @@ bool interpreter::LoadFaustDSP(bool priv, const char *name, string *msg,
     else {
       rename_plan.push_back(make_pair
         (&f, "$$__faust__$"+modname+generation_suffix+source_name));
-      aux_funs.push_back(source_name);
     }
   }
   for (Module::global_iterator it = M->global_begin(), end = M->global_end();
@@ -3484,7 +3577,6 @@ bool interpreter::LoadFaustDSP(bool priv, const char *name, string *msg,
     string source_name = v.getName().str();
     rename_plan.push_back(make_pair
       (&v, "$$__faust__$"+modname+generation_suffix+source_name));
-    vars.push_back(source_name);
   }
   for (Module::alias_iterator it = M->alias_begin(), end = M->alias_end();
        it != end; ++it)
@@ -3513,40 +3605,9 @@ bool interpreter::LoadFaustDSP(bool priv, const char *name, string *msg,
     if (it->first->getName() != it->second)
       return fail("Failed to mangle Faust symbol as '"+it->second+"'");
   }
-  if (compiling && loaded && modified) {
-    // Get rid of all globals of the old module.
-    bcdata_t& data = loaded_dsps[modname];
-    list<Function*>& funptrs = data.funptrs;
-    list<GlobalVariable*>& varptrs = data.varptrs;
-    for (list<Function*>::iterator f = funptrs.begin();
-	 f != funptrs.end(); ++f) {
-      string fname = (*f)->getName().str();
-      (*f)->dropAllReferences();
-      // ORC resource trackers will reclaim the corresponding machine code.
-    }
-    for (list<GlobalVariable*>::iterator v = varptrs.begin();
-	 v != varptrs.end(); ++v)
-      (*v)->dropAllReferences();
-    for (list<Function*>::iterator f = funptrs.begin();
-	 f != funptrs.end(); ++f) (*f)->eraseFromParent();
-    for (list<GlobalVariable*>::iterator v = varptrs.begin();
-	 v != varptrs.end(); ++v) (*v)->eraseFromParent();
-  }
-  // Batch output still needs provider definitions in the emitted module.
-  // Interactive generations remain isolated in the staged module and are
-  // submitted to ORC as one resource-tracked unit below.
-  Module *faust_module = 0;
-  if (compiling) {
-    if (modified && Linker::linkModules(*module, std::move(M))) {
-      if (msg && msg->empty()) *msg = "Error linking dsp module";
-      dsp_errmsg(name, msg);
-      return false;
-    }
-    faust_module = module;
-  } else {
-    assert(modified && M);
-    faust_module = M.get();
-  }
+  // Build the complete provider privately. Batch mode links this source only
+  // after every wrapper, materialization, lookup, and slot has been prepared.
+  Module *faust_module = M.get();
   auto faust_name = [&](const string& operation) {
     return "$$faust$"+modname+generation_suffix+operation;
   };
@@ -3569,7 +3630,7 @@ bool interpreter::LoadFaustDSP(bool priv, const char *name, string *msg,
   list<string> myfuns;
   myfuns.push_back("newinit");
   myfuns.push_back("info");
-  if (modified) {
+  if (modified || compiling) {
     // The newinit function calls new then init, yielding a properly
     // initialized dsp instance. It takes one i32 argument, the samplerate.
     {
@@ -3732,312 +3793,51 @@ bool interpreter::LoadFaustDSP(bool priv, const char *name, string *msg,
       b.CreateRet(v);
     }
   }
-  if (modified) {
-    string wrapper_verification_error;
-    if (!verify_module(*faust_module, wrapper_verification_error))
-      return fail("Invalid linked dsp module: "+wrapper_verification_error);
-  }
+  // Optimize and verify the complete private provider before any live state is
+  // changed. Batch mode also verifies the exact live-module replay after
+  // stable wrappers have been prepared under rollback ownership.
   funs.insert(funs.end(), myfuns.begin(), myfuns.end());
-  if (!compiling && active_loaded) {
-    const list<Function*>& stable_exports = loaded_dsps[modname].funptrs;
-    if (stable_exports.size() != funs.size())
-      return fail("Faust reload changes the exported operation set");
-    list<Function*>::const_iterator stable = stable_exports.begin();
-    for (list<string>::const_iterator operation = funs.begin();
-         operation != funs.end(); ++operation, ++stable) {
-      string logical_name = "$$faust$"+modname+"$"+*operation;
-      Function *physical = faust_module->getFunction(faust_name(*operation));
-      if (!*stable || (*stable)->getName() != logical_name || !physical ||
-          (*stable)->getFunctionType() != physical->getFunctionType())
-        return fail("Faust reload changes the ABI of operation '"+
-                    *operation+"'");
-    }
-  }
-  if (!compiling && !declared) {
-    // Preflight all long-lived declarations before provider submission so a
-    // normal symbol/privacy conflict cannot leave a partially prepared import.
-    for (list<string>::const_iterator operation = funs.begin();
-         operation != funs.end(); ++operation) {
-      Function *physical = faust_module->getFunction(faust_name(*operation));
-      assert(physical);
-      string logical_name = "$$faust$"+modname+"$"+*operation;
-      Function *stable = module->getFunction(logical_name);
-      if (stable && (!stable->isDeclaration() ||
-                     stable->getFunctionType() != physical->getFunctionType()))
-        return fail("Conflicting stable Faust declaration '"+logical_name+"'");
-      string asname = modname+"::"+*operation;
-      symbol *existing = symtab.lookup(make_absid(asname));
-      if (!existing) continue;
-      if (existing->priv != priv)
-        return fail("Faust symbol '"+asname+"' has conflicting visibility");
-      if (globenv.find(existing->f) != globenv.end() &&
-          externals.find(existing->f) == externals.end())
-        return fail("Faust symbol '"+asname+"' is already defined in Pure");
-    }
-  }
-  if (compiling) {
-    // Definitions and convenience functions remain embedded in the output
-    // module. A modified provider is materialized as reduced ORC snapshots so
-    // compile-time wrappers can use stable host dispatch slots.
-    list<Function*> funptrs;
-    list<GlobalVariable*> varptrs;
-    for (list<string>::iterator f = funs.begin(); f != funs.end(); ++f) {
-      Function *g = module->getFunction(faust_name(*f));
-      assert(g);
-      funptrs.push_back(g);
-    }
-    for (list<string>::iterator f = aux_funs.begin();
-         f != aux_funs.end(); ++f) {
-      Function *g = module->getFunction(faust_aux_name(*f));
-      assert(g);
-      funptrs.push_back(g);
-    }
-    for (list<string>::iterator v = vars.begin(); v != vars.end(); ++v) {
-      GlobalVariable *u = module->getGlobalVariable(faust_aux_name(*v), true);
-      assert(u);
-      varptrs.push_back(u);
-    }
-    for (list<string>::const_iterator it = funs.begin();
-         it != funs.end(); ++it) {
-      Function *f = module->getFunction(faust_name(*it));
-      assert(f && !f->isDeclaration());
-      pass_state->optimize(*f);
-    }
-    map<string, void*> addresses;
-    llvm::orc::ResourceTrackerSP tracker;
-    if (modified) {
-      string batch_verification_error;
-      if (!verify_module(*module, batch_verification_error))
-        return fail("Invalid linked batch dsp module: "+
-                    batch_verification_error);
-      tracker = ORC->create_resource_tracker();
-      for (list<string>::const_iterator it = funs.begin();
-           it != funs.end(); ++it) {
-        string fname = faust_name(*it);
-        string exported_name = "$$orc.batch-faust."+
-          to_string(orc_unit_counter++);
-        if (Error error = ORC->add_module_copy
-              (tracker, *module, fname, exported_name)) {
-          if (Error cleanup_error = tracker->remove())
-            error = joinErrors(std::move(error), std::move(cleanup_error));
-          return fail("Failed to submit batch ORC Faust export '"+*it+"': "+
-                      toString(std::move(error)));
-        }
-        Expected<orc::ExecutorAddr> address = ORC->lookup(exported_name);
-        if (!address) {
-          Error error = address.takeError();
-          if (Error cleanup_error = tracker->remove())
-            error = joinErrors(std::move(error), std::move(cleanup_error));
-          return fail("Failed to materialize batch Faust export '"+*it+"': "+
-                      toString(std::move(error)));
-        }
-        addresses[*it] = reinterpret_cast<void*>
-          (static_cast<uintptr_t>(address->getValue()));
-      }
-    }
-    auto fail_batch = [&](const string& message) {
-      string detail = message;
-      if (tracker)
-        if (Error cleanup_error = tracker->remove())
-          detail += ": "+toString(std::move(cleanup_error));
-      return fail(detail);
-    };
-
-    bcdata_t& data = loaded_dsps[modname];
-    if (data.tag == 0) data.tag = pure_make_tag();
-    try {
-      for (list<string>::iterator it = funs.begin(), end = funs.end();
-           it != end; ++it) {
-        string fname = faust_name(*it);
-        Function *f = module->getFunction(fname);
-        assert(f);
-        string asname = modname+"::"+*it;
-        FunctionType *ft = f->getFunctionType();
-        string restype = dsptype_name
-          (*it, ft->getReturnType(), 0, true, is_double);
-        list<string> argtypes;
-        for (size_t i = 0; i < ft->getNumParams(); ++i)
-          argtypes.push_back(dsptype_name
-            (*it, ft->getParamType(i), i, false, is_double));
-        if (!declared) {
-          declare_extern(priv, fname, restype, argtypes, false, 0, asname,
-                         false, false);
-          symbol *sym = symtab.sym(asname);
-          assert(sym);
-          required.push_back(sym->f);
-        }
-      }
-    } catch (const err& error) {
-      return fail_batch("Failed to prepare batch Faust wrappers: "+
-                        string(error.what()));
-    }
-    string dispatch_verification_error;
-    if (!verify_module(*module, dispatch_verification_error))
-      return fail_batch("Invalid Faust wrapper module: "+
-                        dispatch_verification_error);
-    vector<pair<void**, void*> > bindings;
-    if (modified) {
-      for (list<string>::const_iterator it = funs.begin();
-           it != funs.end(); ++it) {
-        string fname = faust_name(*it);
-        GlobalVariable *slot = module->getNamedGlobal("$"+fname);
-        void **target = slot ? (void**)host_global_address(slot) : 0;
-        if (!target)
-          return fail_batch("Missing Faust dispatch slot for '"+fname+"'");
-        bindings.push_back(make_pair(target, addresses[*it]));
-      }
-      try {
-        compilation_units->retain_faust
-          (modname, faust_generation, tracker);
-      } catch (const std::exception& error) {
-        return fail_batch("Failed to retain batch Faust generation: "+
-                          string(error.what()));
-      }
-      for (vector<pair<void**, void*> >::const_iterator it = bindings.begin();
-           it != bindings.end(); ++it)
-        *it->first = it->second;
-      compilation_units->publish_faust(modname, faust_generation);
-    }
-
-    if (symtab.current_namespace->empty())
-      namespaces.insert(modname);
-    else
-      namespaces.insert(*symtab.current_namespace+"::"+modname);
-    data.declare(*symtab.current_namespace, priv);
-    bcmap::iterator mod = loaded_dsps.find(modname);
-    assert(mod != loaded_dsps.end());
-    data.t = mtime;
-    data.dbl = is_double;
-    data.funptrs = funptrs;
-    data.varptrs = varptrs;
-    dsp_mods[data.tag] = mod;
-    collect_pending_generations();
-    return true;
-  }
-
-  // Optimize and verify the complete staged generation before ORC sees it.
-  for (list<string>::const_iterator it = funs.begin(); it != funs.end(); ++it) {
-    Function *f = faust_module->getFunction(faust_name(*it));
-    assert(f && !f->isDeclaration());
-    pass_state->optimize(*f);
+  for (list<string>::const_iterator operation = funs.begin();
+       operation != funs.end(); ++operation) {
+    Function *function = faust_module->getFunction(faust_name(*operation));
+    assert(function && !function->isDeclaration());
+    pass_state->optimize(*function);
   }
   string staged_verification_error;
   if (!verify_module(*faust_module, staged_verification_error))
     return fail("Invalid staged dsp module: "+staged_verification_error);
 
-  llvm::orc::ResourceTrackerSP tracker = ORC->create_resource_tracker();
-  if (Error error = ORC->add_module_copy(tracker, *faust_module)) {
-    if (Error cleanup_error = tracker->remove())
-      error = joinErrors(std::move(error), std::move(cleanup_error));
-    return fail("Failed to submit ORC Faust module: "+
-                toString(std::move(error)));
-  }
-  auto fail_submitted = [&](const string& message) {
-    string detail = message;
-    if (Error cleanup_error = tracker->remove())
-      detail += ": "+toString(std::move(cleanup_error));
-    return fail(detail);
-  };
+  map<string, string> exported_functions;
+  for (list<string>::const_iterator operation = funs.begin();
+       operation != funs.end(); ++operation)
+    exported_functions[*operation] = faust_name(*operation);
+  list<string> owned_functions, owned_variables, owned_aliases, owned_ifuncs;
+  for (Module::iterator function = faust_module->begin();
+       function != faust_module->end(); ++function)
+    if (!function->isDeclaration())
+      owned_functions.push_back(function->getName().str());
+  for (Module::global_iterator variable = faust_module->global_begin();
+       variable != faust_module->global_end(); ++variable)
+    if (!variable->isDeclaration())
+      owned_variables.push_back(variable->getName().str());
+  for (Module::alias_iterator alias = faust_module->alias_begin();
+       alias != faust_module->alias_end(); ++alias)
+    if (!alias->isDeclaration())
+      owned_aliases.push_back(alias->getName().str());
+  for (Module::ifunc_iterator ifunc = faust_module->ifunc_begin();
+       ifunc != faust_module->ifunc_end(); ++ifunc)
+    if (!ifunc->isDeclaration())
+      owned_ifuncs.push_back(ifunc->getName().str());
 
-  // Force every Pure-visible physical export and all its dependencies ready
-  // before preparing or changing any stable binding.
-  map<string, void*> addresses;
-  for (list<string>::const_iterator it = funs.begin(); it != funs.end(); ++it) {
-    string physical_name = faust_name(*it);
-    Expected<orc::ExecutorAddr> address = ORC->lookup(physical_name);
-    if (!address)
-      return fail_submitted
-        ("Failed to materialize Faust export '"+*it+"': "+
-         toString(address.takeError()));
-    addresses[*it] = reinterpret_cast<void*>
-      (static_cast<uintptr_t>(address->getValue()));
-  }
-
-  // The Faust tag is needed while declare_extern builds wrappers. On reload
-  // this is the existing entry; a new entry is not published until below.
-  bcdata_t& data = loaded_dsps[modname];
-  if (data.tag == 0) data.tag = pure_make_tag();
-  list<Function*> stable_functions;
-  try {
-    for (list<string>::const_iterator it = funs.begin();
-         it != funs.end(); ++it) {
-      Function *physical = faust_module->getFunction(faust_name(*it));
-      assert(physical);
-      FunctionType *ft = physical->getFunctionType();
-      string logical_name = "$$faust$"+modname+"$"+*it;
-      string asname = modname+"::"+*it;
-      string restype = dsptype_name
-        (*it, ft->getReturnType(), 0, true, is_double);
-      list<string> argtypes;
-      for (size_t i = 0; i < ft->getNumParams(); ++i)
-        argtypes.push_back(dsptype_name
-          (*it, ft->getParamType(i), i, false, is_double));
-      if (!declared) {
-        declare_extern(priv, logical_name, restype, argtypes, false, 0,
-                       asname, false, false);
-        symbol *sym = symtab.sym(asname);
-        assert(sym);
-        required.push_back(sym->f);
-      }
-      Function *stable = module->getFunction(logical_name);
-      if (!stable || !stable->isDeclaration())
-        return fail_submitted
-          ("Missing stable Faust declaration for '"+logical_name+"'");
-      if (stable->getFunctionType() != ft)
-        return fail_submitted
-          ("Incompatible Faust reload signature for '"+logical_name+"'");
-      stable_functions.push_back(stable);
-    }
-  } catch (const err& error) {
-    return fail_submitted
-      ("Failed to prepare Faust wrappers: "+string(error.what()));
-  }
-
-  string dispatch_verification_error;
-  if (!verify_module(*module, dispatch_verification_error))
-    return fail_submitted
-      ("Invalid Faust wrapper module: "+dispatch_verification_error);
-
-  vector<pair<void**, void*> > bindings;
-  list<string>::const_iterator operation = funs.begin();
-  for (list<Function*>::const_iterator it = stable_functions.begin();
-       it != stable_functions.end(); ++it, ++operation) {
-    string logical_name = (*it)->getName().str();
-    GlobalVariable *slot = module->getNamedGlobal("$"+logical_name);
-    void **target = slot ? (void**)host_global_address(slot) : 0;
-    if (!target)
-      return fail_submitted
-        ("Missing Faust dispatch slot for '"+logical_name+"'");
-    bindings.push_back(make_pair(target, addresses[*operation]));
-  }
-
-  try {
-    compilation_units->retain_faust
-      (modname, faust_generation, tracker);
-  } catch (const std::exception& error) {
-    return fail_submitted
-      ("Failed to retain Faust generation: "+string(error.what()));
-  }
-  // Publication cannot fail. All bindings switch only after the complete new
-  // generation and every wrapper/slot have been prepared successfully.
-  for (vector<pair<void**, void*> >::const_iterator it = bindings.begin();
-       it != bindings.end(); ++it)
-    *it->first = it->second;
-  compilation_units->publish_faust(modname, faust_generation);
-
-  if (symtab.current_namespace->empty())
-    namespaces.insert(modname);
-  else
-    namespaces.insert(*symtab.current_namespace+"::"+modname);
-  data.declare(*symtab.current_namespace, priv);
-  data.t = mtime;
-  data.dbl = is_double;
-  data.funptrs = stable_functions;
-  data.varptrs.clear();
-  bcmap::iterator mod = loaded_dsps.find(modname);
-  assert(mod != loaded_dsps.end());
-  dsp_mods[data.tag] = mod;
-  collect_pending_generations();
+  string reload_error;
+  faust_reload_input input
+    (priv, loaded, active_loaded, declared, modified, is_double, modname,
+     mtime, faust_generation, std::move(M), std::move(funs),
+     std::move(exported_functions), std::move(owned_functions),
+     std::move(owned_variables), std::move(owned_aliases),
+     std::move(owned_ifuncs));
+  if (!execute_faust_reload(*this, std::move(input), reload_error))
+    return fail(reload_error);
   return true;
 }
 
@@ -4438,7 +4238,7 @@ class batch_bitcode_transaction {
   }
 
 public:
-  batch_bitcode_transaction(interpreter& owner, const bcdata_t& bitcode)
+  explicit batch_bitcode_transaction(interpreter& owner)
     : owner(owner), symbol_checkpoint(owner.symtab.nsyms()),
       last_tag(owner.last_tag), defined(owner.defined),
       nodefined(owner.nodefined), externals(owner.externals), committed(false)
@@ -4449,13 +4249,6 @@ public:
       bindings.emplace
         (binding->first,
          binding_snapshot(binding->second.v, binding->second.x));
-    for (list<bc_export_t>::const_iterator export_ = bitcode.exports.begin();
-         export_ != bitcode.exports.end(); ++export_) {
-      symbol *entry = owner.symtab.lookup(owner.make_absid(export_->source_name));
-      if (entry)
-        symbols.push_back
-          ({entry->f, entry->priv, entry->unresolved});
-    }
     for (const llvm::Function& function : *owner.module)
       globals.insert(&function);
     for (const llvm::GlobalVariable& variable : owner.module->globals())
@@ -4467,7 +4260,34 @@ public:
     for (map<string, int>::const_iterator type = owner.pointer_tags.begin();
          type != owner.pointer_tags.end(); ++type)
       pointer_types.insert(type->first);
+  }
+
+  batch_bitcode_transaction(interpreter& owner, const bcdata_t& bitcode)
+    : batch_bitcode_transaction(owner)
+  {
+    for (list<bc_export_t>::const_iterator export_ = bitcode.exports.begin();
+         export_ != bitcode.exports.end(); ++export_) {
+      symbol *entry = owner.symtab.lookup(owner.make_absid(export_->source_name));
+      if (entry)
+        symbols.push_back
+          ({entry->f, entry->priv, entry->unresolved});
+    }
     owner.host_global_failure_mode = "batch-bitcode-host-global";
+  }
+
+  batch_bitcode_transaction(interpreter& owner,
+                            const list<string>& symbol_names,
+                            const char *failure_mode)
+    : batch_bitcode_transaction(owner)
+  {
+    for (list<string>::const_iterator name = symbol_names.begin();
+         name != symbol_names.end(); ++name) {
+      symbol *entry = owner.symtab.lookup(owner.make_absid(*name));
+      if (entry)
+        symbols.push_back
+          ({entry->f, entry->priv, entry->unresolved});
+    }
+    owner.host_global_failure_mode = failure_mode;
   }
 
   ~batch_bitcode_transaction() noexcept
@@ -4505,19 +4325,491 @@ public:
 
 static std::unique_ptr<llvm::Module> prepare_linked_module
 (const llvm::Module& live, std::unique_ptr<llvm::Module> imported,
- string& error)
+ string& error, const char *description = "bitcode")
 {
   std::unique_ptr<llvm::Module> candidate = llvm::CloneModule(live);
   if (llvm::Linker::linkModules(*candidate, std::move(imported))) {
-    error = "Error linking bitcode module";
+    error = "Error linking "+string(description)+" module";
     return 0;
   }
   string verification_error;
   if (!verify_module(*candidate, verification_error)) {
-    error = "Invalid linked bitcode module: "+verification_error;
+    error = "Invalid linked "+string(description)+" module: "+
+      verification_error;
     return 0;
   }
   return candidate;
+}
+
+struct faust_wrapper_tag_context {
+  interpreter *owner;
+  string module_name;
+  int tag;
+
+  faust_wrapper_tag_context(interpreter& owner, string module_name, int tag)
+    : owner(&owner), module_name(std::move(module_name)), tag(tag) {}
+};
+
+static thread_local const faust_wrapper_tag_context
+  *current_faust_wrapper_tag = 0;
+
+class scoped_faust_wrapper_tag {
+  const faust_wrapper_tag_context *previous;
+
+public:
+  explicit scoped_faust_wrapper_tag
+  (const faust_wrapper_tag_context& context)
+    : previous(current_faust_wrapper_tag)
+  {
+    current_faust_wrapper_tag = &context;
+  }
+
+  ~scoped_faust_wrapper_tag()
+  {
+    current_faust_wrapper_tag = previous;
+  }
+};
+
+struct prepared_faust_reload {
+  interpreter& owner;
+  faust_reload_input input;
+  int tag;
+  std::unique_ptr<batch_bitcode_transaction> wrapper_transaction;
+  std::unique_ptr<llvm::Module> linked_candidate;
+  map<string, void*> addresses;
+  list<llvm::Function*> stable_functions;
+  vector<pair<void**, void*> > bindings;
+  list<int> required_symbols;
+  llvm::orc::ResourceTrackerSP tracker;
+  bcmap entry_holder;
+  map<int, bcmap::iterator> dsp_entry_holder;
+  set<string> namespace_holder;
+  list<llvm::Function*> generation_functions;
+  list<llvm::GlobalVariable*> generation_variables;
+  list<llvm::GlobalAlias*> generation_aliases;
+  list<llvm::GlobalIFunc*> generation_ifuncs;
+
+  prepared_faust_reload(interpreter& owner, faust_reload_input input)
+    : owner(owner), input(std::move(input)), tag(0) {}
+
+  prepared_faust_reload(const prepared_faust_reload&) = delete;
+  prepared_faust_reload& operator=(const prepared_faust_reload&) = delete;
+
+  void discard_tracker(string *message = 0)
+  {
+    if (!tracker) return;
+    if (llvm::Error cleanup_error = tracker->remove()) {
+      string detail = llvm::toString(std::move(cleanup_error));
+      owner.compilation_units->quarantine_tracker
+        (tracker, "failed to retire prepared Faust reload");
+      if (message) *message += ": "+detail;
+      tracker.reset();
+    } else {
+      tracker.reset();
+    }
+  }
+
+  ~prepared_faust_reload()
+  {
+    if (!tracker) return;
+    if (llvm::Error cleanup_error = tracker->remove()) {
+      string detail = llvm::toString(std::move(cleanup_error));
+      try {
+        owner.compilation_units->quarantine_tracker
+          (tracker, "failed to retire prepared Faust reload");
+        tracker.reset();
+      } catch (...) {
+      }
+      llvm::errs() << "failed to retire prepared Faust reload: "
+                   << detail << '\n';
+    } else {
+      tracker.reset();
+    }
+  }
+};
+
+static string faust_logical_name(const string& module_name,
+                                 const string& operation)
+{
+  return "$$faust$"+module_name+"$"+operation;
+}
+
+static std::unique_ptr<prepared_faust_reload> prepare_faust_reload
+(interpreter& owner, faust_reload_input input, string& error)
+{
+  using namespace llvm;
+  if (Error cleanup_error =
+        owner.compilation_units->retry_quarantined_trackers(*owner.ORC)) {
+    error = "Failed to retry quarantined ORC resources: "+
+      toString(std::move(cleanup_error));
+    return 0;
+  }
+
+  std::unique_ptr<prepared_faust_reload> prepared
+    (new prepared_faust_reload(owner, std::move(input)));
+  faust_reload_input& reload = prepared->input;
+  list<string> wrapper_symbols;
+
+  if (reload.active_loaded) {
+    const bcdata_t& current = owner.loaded_dsps.find(reload.module_name)->second;
+    if (current.funptrs.size() != reload.operations.size()) {
+      error = "Faust reload changes the exported operation set";
+      return 0;
+    }
+    list<Function*>::const_iterator stable = current.funptrs.begin();
+    for (list<string>::const_iterator operation = reload.operations.begin();
+         operation != reload.operations.end(); ++operation, ++stable) {
+      Function *physical = reload.provider->getFunction
+        (reload.exported_functions.find(*operation)->second);
+      string logical_name = faust_logical_name(reload.module_name, *operation);
+      if (!*stable || (*stable)->getName() != logical_name || !physical ||
+          (*stable)->getFunctionType() != physical->getFunctionType()) {
+        error = "Faust reload changes the ABI of operation '"+
+          *operation+"'";
+        return 0;
+      }
+    }
+  }
+
+  for (list<string>::const_iterator operation = reload.operations.begin();
+       operation != reload.operations.end(); ++operation) {
+    map<string, string>::const_iterator exported =
+      reload.exported_functions.find(*operation);
+    assert(exported != reload.exported_functions.end());
+    Function *physical = reload.provider->getFunction(exported->second);
+    assert(physical);
+    string logical_name = faust_logical_name(reload.module_name, *operation);
+    Function *stable = owner.module->getFunction(logical_name);
+    if (stable && (!stable->isDeclaration() ||
+                   stable->getFunctionType() != physical->getFunctionType())) {
+      error = "Conflicting stable Faust declaration '"+logical_name+"'";
+      return 0;
+    }
+    string source_name = reload.module_name+"::"+*operation;
+    wrapper_symbols.push_back(source_name);
+    string absolute_name = owner.symtab.current_namespace->empty() ?
+      "::"+source_name :
+      "::"+*owner.symtab.current_namespace+"::"+source_name;
+    symbol *existing = owner.symtab.lookup(absolute_name);
+    if (!existing) continue;
+    if (existing->priv != reload.priv) {
+      error = "Faust symbol '"+source_name+"' has conflicting visibility";
+      return 0;
+    }
+    if (owner.globenv.find(existing->f) != owner.globenv.end() &&
+        owner.externals.find(existing->f) == owner.externals.end()) {
+      error = "Faust symbol '"+source_name+"' is already defined in Pure";
+      return 0;
+    }
+  }
+
+  prepared->wrapper_transaction.reset
+    (new batch_bitcode_transaction
+       (owner, wrapper_symbols, "faust-host-global"));
+  if (reload.active_loaded) {
+    prepared->tag = owner.loaded_dsps.find(reload.module_name)->second.tag;
+  } else {
+    prepared->tag = pure_make_tag();
+  }
+  faust_wrapper_tag_context tag_context
+    (owner, reload.module_name, prepared->tag);
+  try {
+    scoped_faust_wrapper_tag tag_scope(tag_context);
+    for (list<string>::const_iterator operation = reload.operations.begin();
+         operation != reload.operations.end(); ++operation) {
+      Function *physical = reload.provider->getFunction
+        (reload.exported_functions.find(*operation)->second);
+      assert(physical);
+      FunctionType *type = physical->getFunctionType();
+      string logical_name = faust_logical_name(reload.module_name, *operation);
+      string source_name = reload.module_name+"::"+*operation;
+      string result_type = owner.dsptype_name
+        (*operation, type->getReturnType(), 0, true, reload.is_double);
+      list<string> argument_types;
+      for (size_t i = 0; i < type->getNumParams(); ++i)
+        argument_types.push_back(owner.dsptype_name
+          (*operation, type->getParamType(i), i, false, reload.is_double));
+      if (!reload.declared) {
+        owner.declare_extern
+          (reload.priv, logical_name, result_type, argument_types, false, 0,
+           source_name, false, false);
+        symbol *entry = owner.symtab.sym(source_name);
+        assert(entry);
+        prepared->required_symbols.push_back(entry->f);
+      }
+      Function *stable = owner.module->getFunction(logical_name);
+      if (!stable || !stable->isDeclaration()) {
+        error = "Missing stable Faust declaration for '"+logical_name+"'";
+        return 0;
+      }
+      if (stable->getFunctionType() != type) {
+        error = "Incompatible Faust reload signature for '"+
+          logical_name+"'";
+        return 0;
+      }
+      prepared->stable_functions.push_back(stable);
+    }
+  } catch (const err& wrapper_error) {
+    error = "Failed to prepare Faust wrappers: "+
+      string(wrapper_error.what());
+    return 0;
+  }
+
+  string dispatch_verification_error;
+  if (!verify_module(*owner.module, dispatch_verification_error)) {
+    error = "Invalid Faust wrapper module: "+dispatch_verification_error;
+    return 0;
+  }
+
+  bcdata_t replacement;
+  if (reload.loaded)
+    replacement = owner.loaded_dsps.find(reload.module_name)->second;
+  replacement.t = reload.modification_time;
+  replacement.dbl = reload.is_double;
+  replacement.tag = prepared->tag;
+  replacement.funptrs = prepared->stable_functions;
+  replacement.varptrs.clear();
+  replacement.declare(*owner.symtab.current_namespace, reload.priv);
+  prepared->entry_holder.emplace(reload.module_name, std::move(replacement));
+  prepared->dsp_entry_holder.emplace(prepared->tag,
+                                     owner.loaded_dsps.end());
+  string namespace_name = owner.symtab.current_namespace->empty() ?
+    reload.module_name :
+    *owner.symtab.current_namespace+"::"+reload.module_name;
+  prepared->namespace_holder.insert(std::move(namespace_name));
+
+  if (!reload.modified) return prepared;
+
+  const Module *materialization_module = reload.provider.get();
+  if (owner.compiling) {
+    prepared->linked_candidate = prepare_linked_module
+      (*owner.module, CloneModule(*reload.provider), error, "Faust");
+    if (!prepared->linked_candidate) return 0;
+    materialization_module = prepared->linked_candidate.get();
+    prepared->generation_functions.assign
+      (reload.owned_functions.size(), (Function*)0);
+    prepared->generation_variables.assign
+      (reload.owned_variables.size(), (GlobalVariable*)0);
+    prepared->generation_aliases.assign
+      (reload.owned_aliases.size(), (GlobalAlias*)0);
+    prepared->generation_ifuncs.assign
+      (reload.owned_ifuncs.size(), (GlobalIFunc*)0);
+  }
+
+  prepared->tracker = owner.ORC->create_resource_tracker();
+  if (owner.compiling) {
+    vector<StringRef> retained_globals;
+    retained_globals.reserve(reload.owned_variables.size());
+    for (list<string>::const_iterator variable =
+           reload.owned_variables.begin();
+         variable != reload.owned_variables.end(); ++variable)
+      retained_globals.push_back(*variable);
+    for (list<string>::const_iterator operation = reload.operations.begin();
+         operation != reload.operations.end(); ++operation) {
+      string exported_name = "$$orc.batch-faust."+
+        to_string(owner.orc_unit_counter++);
+      string physical_name =
+        reload.exported_functions.find(*operation)->second;
+      if (Error add_error = owner.ORC->add_module_copy
+            (prepared->tracker, *materialization_module, physical_name,
+             exported_name, retained_globals)) {
+        error = "Failed to submit batch ORC Faust export '"+*operation+
+          "': "+toString(std::move(add_error));
+        prepared->discard_tracker(&error);
+        return 0;
+      }
+      Expected<orc::ExecutorAddr> address = owner.ORC->lookup(exported_name);
+      if (!address) {
+        error = "Failed to materialize batch Faust export '"+*operation+
+          "': "+toString(address.takeError());
+        prepared->discard_tracker(&error);
+        return 0;
+      }
+      prepared->addresses[*operation] = reinterpret_cast<void*>
+        (static_cast<uintptr_t>(address->getValue()));
+    }
+  } else {
+    if (Error add_error = owner.ORC->add_module_copy
+          (prepared->tracker, *materialization_module)) {
+      error = "Failed to submit ORC Faust module: "+
+        toString(std::move(add_error));
+      prepared->discard_tracker(&error);
+      return 0;
+    }
+    for (list<string>::const_iterator operation = reload.operations.begin();
+         operation != reload.operations.end(); ++operation) {
+      string physical_name =
+        reload.exported_functions.find(*operation)->second;
+      Expected<orc::ExecutorAddr> address = owner.ORC->lookup(physical_name);
+      if (!address) {
+        error = "Failed to materialize Faust export '"+*operation+
+          "': "+toString(address.takeError());
+        prepared->discard_tracker(&error);
+        return 0;
+      }
+      prepared->addresses[*operation] = reinterpret_cast<void*>
+        (static_cast<uintptr_t>(address->getValue()));
+    }
+  }
+
+  list<string>::const_iterator operation = reload.operations.begin();
+  for (list<Function*>::const_iterator stable =
+         prepared->stable_functions.begin();
+       stable != prepared->stable_functions.end(); ++stable, ++operation) {
+    string logical_name = (*stable)->getName().str();
+    GlobalVariable *slot = owner.module->getNamedGlobal("$"+logical_name);
+    void **target = slot ? (void**)owner.host_global_address(slot) : 0;
+    if (!target) {
+      error = "Missing Faust dispatch slot for '"+logical_name+"'";
+      prepared->discard_tracker(&error);
+      return 0;
+    }
+    prepared->bindings.push_back
+      (make_pair(target, prepared->addresses.find(*operation)->second));
+  }
+  return prepared;
+}
+
+static bool commit_faust_reload(prepared_faust_reload&& prepared,
+                                string& error)
+{
+  using namespace llvm;
+  interpreter& owner = prepared.owner;
+  faust_reload_input& reload = prepared.input;
+
+  if (reload.modified && !owner.compiling && reload.active_loaded) {
+    if (owner.active_jit_calls != 0 || owner.astk) {
+      error = "Cannot reload Faust module during an active JIT call";
+      prepared.discard_tracker(&error);
+      return false;
+    }
+    if (owner.compilation_units->faust_has_live_instances
+          (reload.module_name)) {
+      error = "Cannot reload Faust module while DSP instances are live";
+      prepared.discard_tracker(&error);
+      return false;
+    }
+  }
+
+  CompilationUnitResources::FaustGeneration *generation = 0;
+  if (reload.modified) {
+    try {
+      generation = owner.compilation_units->retain_faust
+        (reload.module_name, reload.generation, prepared.tracker,
+         std::move(prepared.generation_functions),
+         std::move(prepared.generation_variables),
+         std::move(prepared.generation_aliases),
+         std::move(prepared.generation_ifuncs));
+    } catch (const std::exception& retain_error) {
+      error = "Failed to retain Faust generation: "+
+        string(retain_error.what());
+      prepared.discard_tracker(&error);
+      return false;
+    }
+    prepared.tracker.reset();
+  }
+
+  if (owner.compiling && reload.modified) {
+    if (Linker::linkModules(*owner.module, std::move(reload.provider)))
+      report_fatal_error
+        ("batch Faust commit diverged from its verified replay link");
+
+    list<string>::const_iterator function_name =
+      reload.owned_functions.begin();
+    for (list<Function*>::iterator function = generation->functions.begin();
+         function != generation->functions.end();
+         ++function, ++function_name) {
+      *function = owner.module->getFunction(*function_name);
+      if (!*function || (*function)->isDeclaration())
+        report_fatal_error
+          ("prepared batch Faust function disappeared during commit");
+    }
+    list<string>::const_iterator variable_name =
+      reload.owned_variables.begin();
+    for (list<GlobalVariable*>::iterator variable =
+           generation->variables.begin();
+         variable != generation->variables.end();
+         ++variable, ++variable_name) {
+      *variable = owner.module->getGlobalVariable(*variable_name, true);
+      if (!*variable || (*variable)->isDeclaration())
+        report_fatal_error
+          ("prepared batch Faust global disappeared during commit");
+    }
+    list<string>::const_iterator alias_name = reload.owned_aliases.begin();
+    for (list<GlobalAlias*>::iterator alias = generation->aliases.begin();
+         alias != generation->aliases.end(); ++alias, ++alias_name) {
+      *alias = owner.module->getNamedAlias(*alias_name);
+      if (!*alias)
+        report_fatal_error
+          ("prepared batch Faust alias disappeared during commit");
+    }
+    list<string>::const_iterator ifunc_name = reload.owned_ifuncs.begin();
+    for (list<GlobalIFunc*>::iterator ifunc = generation->ifuncs.begin();
+         ifunc != generation->ifuncs.end(); ++ifunc, ++ifunc_name) {
+      *ifunc = owner.module->getNamedIFunc(*ifunc_name);
+      if (!*ifunc)
+        report_fatal_error
+          ("prepared batch Faust ifunc disappeared during commit");
+    }
+    string committed_verification_error;
+    if (!verify_module(*owner.module, committed_verification_error))
+      report_fatal_error
+        (Twine("prepared batch Faust module became invalid during commit: ")+
+         committed_verification_error);
+  }
+
+  bcmap::iterator module_entry;
+  if (reload.loaded) {
+    module_entry = owner.loaded_dsps.find(reload.module_name);
+    assert(module_entry != owner.loaded_dsps.end());
+    std::swap(module_entry->second, prepared.entry_holder.begin()->second);
+  } else {
+    bcmap::node_type node = prepared.entry_holder.extract(reload.module_name);
+    bcmap::insert_return_type inserted = owner.loaded_dsps.insert
+      (std::move(node));
+    assert(inserted.inserted);
+    module_entry = inserted.position;
+  }
+
+  map<int,bcmap::iterator>::iterator dsp = owner.dsp_mods.find(prepared.tag);
+  if (dsp == owner.dsp_mods.end()) {
+    map<int,bcmap::iterator>::node_type node =
+      prepared.dsp_entry_holder.extract(prepared.tag);
+    node.mapped() = module_entry;
+    map<int,bcmap::iterator>::insert_return_type inserted =
+      owner.dsp_mods.insert(std::move(node));
+    assert(inserted.inserted);
+  } else {
+    dsp->second = module_entry;
+  }
+
+  for (vector<pair<void**, void*> >::const_iterator binding =
+         prepared.bindings.begin(); binding != prepared.bindings.end();
+       ++binding)
+    *binding->first = binding->second;
+  if (reload.modified)
+    owner.compilation_units->publish_faust
+      (reload.module_name, reload.generation);
+
+  if (!prepared.namespace_holder.empty()) {
+    set<string>::node_type node = prepared.namespace_holder.extract
+      (prepared.namespace_holder.begin());
+    owner.namespaces.insert(std::move(node));
+  }
+  owner.required.splice(owner.required.end(), prepared.required_symbols);
+  prepared.wrapper_transaction->commit();
+  owner.collect_pending_generations();
+  return true;
+}
+
+static bool execute_faust_reload(interpreter& owner,
+                                 faust_reload_input input,
+                                 string& error)
+{
+  std::unique_ptr<prepared_faust_reload> prepared =
+    prepare_faust_reload(owner, std::move(input), error);
+  if (!prepared) return false;
+  return commit_faust_reload(std::move(*prepared), error);
 }
 
 static bool finalize_linked_bitcode
@@ -15042,7 +15334,15 @@ Function *interpreter::declare_extern(int priv, string name, string restype,
   string faust_mod, faust_fun; int faust_tag = 0;
   if (is_faust_fun) {
     parse_faust_name(name, faust_mod, faust_fun);
-    faust_tag = loaded_dsps[faust_mod].tag;
+    if (current_faust_wrapper_tag &&
+        current_faust_wrapper_tag->owner == this &&
+        current_faust_wrapper_tag->module_name == faust_mod) {
+      faust_tag = current_faust_wrapper_tag->tag;
+    } else {
+      bcmap::const_iterator data = loaded_dsps.find(faust_mod);
+      assert(data != loaded_dsps.end());
+      faust_tag = data->second.tag;
+    }
   }
   // unbox arguments
   bool temps = false, vtemps = false;

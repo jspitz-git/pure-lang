@@ -8,33 +8,36 @@ reference::info reference_dsp;
 reference::meta;
 reference::delete reference_dsp;
 
-using "dsp:@PURE_FAUST_FIXTURE_OUTPUT_DIR@/reload";
-let first = reload::newinit 48000;
-reload::getNumInputs first;
-using "dsp:@PURE_FAUST_FIXTURE_OUTPUT_DIR@/reload";
-reload::getNumInputs first;
+using "dsp:@PURE_FAUST_FIXTURE_OUTPUT_DIR@/lifecycle_reload";
+let first = lifecycle_reload::newinit 48000;
+let a_before = lifecycle_reload::getNumInputs first;
+if a_before == 11 then () else throw "Faust A returned the wrong input count";
 
 system "sleep 1";
-system "cp @PURE_FAUST_FIXTURE_OUTPUT_DIR@/reload-b.bc @PURE_FAUST_FIXTURE_OUTPUT_DIR@/reload.bc";
-using "dsp:@PURE_FAUST_FIXTURE_OUTPUT_DIR@/reload";
-reload::getNumInputs first;
-reload::delete first;
-using "dsp:@PURE_FAUST_FIXTURE_OUTPUT_DIR@/reload";
-let second = reload::newinit 48000;
-reload::getNumInputs second;
-reload::delete second;
+system "cp @PURE_FAUST_FIXTURE_OUTPUT_DIR@/lifecycle-b-unresolved.bc @PURE_FAUST_FIXTURE_OUTPUT_DIR@/lifecycle_reload.bc";
+using "dsp:@PURE_FAUST_FIXTURE_OUTPUT_DIR@/lifecycle_reload";
+let a_after_failed_b = lifecycle_reload::getNumInputs first;
+if a_after_failed_b == 11 then ()
+else throw "failed Faust B reload damaged the live A instance";
+lifecycle_reload::delete first;
 
 system "sleep 1";
-system "cp @PURE_FAUST_FIXTURE_OUTPUT_DIR@/reload-float.bc @PURE_FAUST_FIXTURE_OUTPUT_DIR@/reload.bc";
-using "dsp:@PURE_FAUST_FIXTURE_OUTPUT_DIR@/reload";
-let after_float_rejection = reload::newinit 48000;
-reload::getNumInputs after_float_rejection;
-reload::delete after_float_rejection;
+system "cp @PURE_FAUST_FIXTURE_OUTPUT_DIR@/lifecycle-c.bc @PURE_FAUST_FIXTURE_OUTPUT_DIR@/lifecycle_reload.bc";
+using "dsp:@PURE_FAUST_FIXTURE_OUTPUT_DIR@/lifecycle_reload";
+let second = lifecycle_reload::newinit 48000;
+let c_after_failed_b = lifecycle_reload::getNumInputs second;
+if c_after_failed_b == 22 then ()
+else throw "valid Faust C did not replace A after failed B";
+lifecycle_reload::delete second;
+puts "FAUST-ABC 11 11 22";
 
 system "sleep 1";
-system "cp @PURE_FAUST_FIXTURE_OUTPUT_DIR@/reload-unresolved.bc @PURE_FAUST_FIXTURE_OUTPUT_DIR@/reload.bc";
-using "dsp:@PURE_FAUST_FIXTURE_OUTPUT_DIR@/reload";
-let after_unresolved_rejection = reload::newinit 48000;
-reload::getNumInputs after_unresolved_rejection;
-reload::delete after_unresolved_rejection;
+system "cp @PURE_FAUST_FIXTURE_OUTPUT_DIR@/lifecycle-float.bc @PURE_FAUST_FIXTURE_OUTPUT_DIR@/lifecycle_reload.bc";
+using "dsp:@PURE_FAUST_FIXTURE_OUTPUT_DIR@/lifecycle_reload";
+let after_float_rejection = lifecycle_reload::newinit 48000;
+let c_after_float = lifecycle_reload::getNumInputs after_float_rejection;
+if c_after_float == 22 then ()
+else throw "rejected float reload damaged Faust C";
+lifecycle_reload::delete after_float_rejection;
+puts "FAUST-FLOAT 22";
 42;

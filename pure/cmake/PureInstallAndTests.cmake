@@ -779,7 +779,7 @@ if(BUILD_TESTING)
           "${reference_bc};${PURE_FAUST_FIXTURE_OUTPUT_DIR}/reload-a.bc;${PURE_FAUST_FIXTURE_OUTPUT_DIR}/reload-b.bc;${PURE_FAUST_FIXTURE_OUTPUT_DIR}/reload-float.bc;${PURE_FAUST_FIXTURE_OUTPUT_DIR}/reload-unresolved.bc;${PURE_FAUST_FIXTURE_OUTPUT_DIR}/lifecycle.pure"
         TIMEOUT ${faust_test_timeout}
         PASS_REGULAR_EXPRESSION
-          "Cannot reload Faust module while DSP instances are live(.|\n)*11(.|\n)*22(.|\n)*Module was previously loaded with the double sample ABI(.|\n)*22(.|\n)*faust_missing_test_dependency(.|\n)*22(.|\n)*42"
+          "faust_missing_test_dependency(.|\n)*FAUST-ABC 11 11 22(.|\n)*Module was previously loaded with the double sample ABI(.|\n)*FAUST-FLOAT 22(.|\n)*42"
         FAIL_REGULAR_EXPRESSION
           "failed to remove ORC compilation unit;AddressSanitizer;LeakSanitizer;runtime error:"
     )
