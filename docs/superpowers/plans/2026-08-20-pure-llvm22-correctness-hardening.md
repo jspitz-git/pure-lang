@@ -389,10 +389,10 @@ Expected: all focused tests PASS with no AddressSanitizer or undefined-runtime d
 
 Verify no Pure/Faust/Clang child remains, remove only uniquely owned temporary fixtures after canonical containment checks, and preserve `_deps/` plus existing `build/`. Run `git diff --check`, inspect every changed hunk, and confirm the documentation scan from Task 6.
 
-- [ ] **Step 7: Request independent code review**
+- [x] **Step 7: Request independent code review**
 
 Dispatch a read-only reviewer over the complete implementation range. Require it to inspect transactional commit boundaries, retry ownership, exception paths, test mutation strength, actual Faust tool commands, and all unsupported claims. Address every Critical or Important finding with a fresh RED/GREEN cycle before proceeding.
 
-- [ ] **Step 8: Final verification and commit**
+- [x] **Step 8: Final verification and commit**
 
 After review fixes, rerun every affected focused test and the complete sequential Release suite. Commit the final review corrections and evidence documentation without pushing or merging unless the user explicitly requests it.
