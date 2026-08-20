@@ -107,8 +107,12 @@ if(object_machine STREQUAL "")
   message(FATAL_ERROR "Pure batch object is not x86-64/AMD64")
 endif()
 
-if(DEFINED PURE_EXPECTED_MODULE_FLAG_KEY AND
-   NOT "${PURE_EXPECTED_MODULE_FLAG_KEY}" STREQUAL "")
+if((DEFINED PURE_EXPECTED_MODULE_FLAG_KEY AND
+    NOT "${PURE_EXPECTED_MODULE_FLAG_KEY}" STREQUAL "") OR
+   (DEFINED PURE_FORBIDDEN_METADATA_KEY AND
+    NOT "${PURE_FORBIDDEN_METADATA_KEY}" STREQUAL "") OR
+   (DEFINED PURE_FORBIDDEN_GLOBAL_FRAGMENT AND
+    NOT "${PURE_FORBIDDEN_GLOBAL_FRAGMENT}" STREQUAL ""))
   set(llvm_ir "${PURE_BUILD_DIR}/test/${PURE_OUTPUT_NAME}.ll")
   file(REMOVE "${llvm_ir}")
   if(DEFINED PURE_FIXTURE_SOURCE)
@@ -133,26 +137,65 @@ if(DEFINED PURE_EXPECTED_MODULE_FLAG_KEY AND
     )
   endif()
   assert_compile_output("${llvm_ir_output}")
-  file(READ "${llvm_ir}" llvm_ir_text)
-  string(
-    REGEX MATCH
-    "!\\{i32 1, !\"${PURE_EXPECTED_MODULE_FLAG_KEY}\", ptr @\"([^\"]+)\"\\}"
-    module_flag_record
-    "${llvm_ir_text}"
-  )
-  if(module_flag_record STREQUAL "")
-    message(FATAL_ERROR
-      "Pure batch LLVM IR module flag does not reference a global value"
+  if(DEFINED PURE_IR_VERIFIER AND NOT "${PURE_IR_VERIFIER}" STREQUAL "")
+    execute_process(
+      COMMAND "${PURE_IR_VERIFIER}" -passes=verify -disable-output "${llvm_ir}"
+      RESULT_VARIABLE llvm_ir_verify_result
+      OUTPUT_VARIABLE llvm_ir_verify_stdout
+      ERROR_VARIABLE llvm_ir_verify_stderr
     )
+    message("${llvm_ir_verify_stdout}${llvm_ir_verify_stderr}")
+    if(NOT llvm_ir_verify_result EQUAL 0)
+      message(FATAL_ERROR
+        "Pure batch LLVM IR verification failed with status ${llvm_ir_verify_result}"
+      )
+    endif()
   endif()
-  set(module_flag_symbol "${CMAKE_MATCH_1}")
-  string(FIND
-    "${llvm_ir_text}" "@\"${module_flag_symbol}\" =" module_flag_definition
-  )
-  if(module_flag_definition EQUAL -1)
-    message(FATAL_ERROR
-      "Pure batch LLVM IR module flag references a missing global definition"
+  file(READ "${llvm_ir}" llvm_ir_text)
+  if(DEFINED PURE_EXPECTED_MODULE_FLAG_KEY AND
+     NOT "${PURE_EXPECTED_MODULE_FLAG_KEY}" STREQUAL "")
+    string(
+      REGEX MATCH
+      "!\\{i32 1, !\"${PURE_EXPECTED_MODULE_FLAG_KEY}\", ptr @\"([^\"]+)\"\\}"
+      module_flag_record
+      "${llvm_ir_text}"
     )
+    if(module_flag_record STREQUAL "")
+      message(FATAL_ERROR
+        "Pure batch LLVM IR module flag does not reference a global value"
+      )
+    endif()
+    set(module_flag_symbol "${CMAKE_MATCH_1}")
+    string(FIND
+      "${llvm_ir_text}" "@\"${module_flag_symbol}\" =" module_flag_definition
+    )
+    if(module_flag_definition EQUAL -1)
+      message(FATAL_ERROR
+        "Pure batch LLVM IR module flag references a missing global definition"
+      )
+    endif()
+  endif()
+  if(DEFINED PURE_FORBIDDEN_METADATA_KEY AND
+     NOT "${PURE_FORBIDDEN_METADATA_KEY}" STREQUAL "")
+    string(FIND
+      "${llvm_ir_text}" "${PURE_FORBIDDEN_METADATA_KEY}" forbidden_metadata
+    )
+    if(NOT forbidden_metadata EQUAL -1)
+      message(FATAL_ERROR
+        "Pure batch LLVM IR retained forbidden metadata key ${PURE_FORBIDDEN_METADATA_KEY}"
+      )
+    endif()
+  endif()
+  if(DEFINED PURE_FORBIDDEN_GLOBAL_FRAGMENT AND
+     NOT "${PURE_FORBIDDEN_GLOBAL_FRAGMENT}" STREQUAL "")
+    string(FIND
+      "${llvm_ir_text}" "${PURE_FORBIDDEN_GLOBAL_FRAGMENT}" forbidden_global
+    )
+    if(NOT forbidden_global EQUAL -1)
+      message(FATAL_ERROR
+        "Pure batch LLVM IR retained retired Faust global fragment ${PURE_FORBIDDEN_GLOBAL_FRAGMENT}"
+      )
+    endif()
   endif()
 endif()
 

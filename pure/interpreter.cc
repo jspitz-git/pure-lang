@@ -647,6 +647,32 @@ struct CompilationUnitResources {
     return generation && generation->live_instances != 0;
   }
 
+  void collect_faust_generation_values
+  (const string& module_name, set<const llvm::GlobalValue*>& values) const
+  {
+    FaustModules::const_iterator module = faust_modules.find(module_name);
+    if (module == faust_modules.end()) return;
+    for (FaustGenerations::const_iterator generation = module->second.begin();
+         generation != module->second.end(); ++generation) {
+      for (list<llvm::Function*>::const_iterator value =
+             generation->functions.begin();
+           value != generation->functions.end(); ++value)
+        if (*value) values.insert(*value);
+      for (list<llvm::GlobalVariable*>::const_iterator value =
+             generation->variables.begin();
+           value != generation->variables.end(); ++value)
+        if (*value) values.insert(*value);
+      for (list<llvm::GlobalAlias*>::const_iterator value =
+             generation->aliases.begin();
+           value != generation->aliases.end(); ++value)
+        if (*value) values.insert(*value);
+      for (list<llvm::GlobalIFunc*>::const_iterator value =
+             generation->ifuncs.begin();
+           value != generation->ifuncs.end(); ++value)
+        if (*value) values.insert(*value);
+    }
+  }
+
   void publish_faust(const string& module_name, uint64_t generation)
   {
     map<string, list<FaustGeneration> >::iterator module =
@@ -4673,8 +4699,44 @@ static bool faust_metadata_references_global
   return false;
 }
 
+static void collect_faust_value_globals
+(const llvm::Value& value,
+ llvm::SmallPtrSetImpl<const llvm::Value*>& visited,
+ llvm::SmallPtrSetImpl<const llvm::GlobalValue*>& globals)
+{
+  using namespace llvm;
+  if (const GlobalValue *global = dyn_cast<GlobalValue>(&value)) {
+    globals.insert(global);
+    return;
+  }
+  if (!visited.insert(&value).second) return;
+  if (const User *user = dyn_cast<User>(&value))
+    for (const Value *operand : user->operand_values())
+      if (operand) collect_faust_value_globals(*operand, visited, globals);
+}
+
+static void collect_faust_metadata_globals
+(const llvm::Metadata& metadata,
+ llvm::SmallPtrSetImpl<const llvm::Metadata*>& visited_metadata,
+ llvm::SmallPtrSetImpl<const llvm::Value*>& visited_values,
+ llvm::SmallPtrSetImpl<const llvm::GlobalValue*>& globals)
+{
+  using namespace llvm;
+  if (!visited_metadata.insert(&metadata).second) return;
+  if (const ValueAsMetadata *value = dyn_cast<ValueAsMetadata>(&metadata)) {
+    collect_faust_value_globals(*value->getValue(), visited_values, globals);
+    return;
+  }
+  const MDNode *node = dyn_cast<MDNode>(&metadata);
+  if (!node) return;
+  for (const MDOperand& operand : node->operands())
+    if (operand) collect_faust_metadata_globals
+      (*operand, visited_metadata, visited_values, globals);
+}
+
 static bool prepare_faust_metadata_transfer
 (llvm::Module& live, llvm::Module& provider, llvm::Module& candidate,
+ const set<const llvm::GlobalValue*>& superseded_values,
  vector<prepared_faust_reload::named_metadata_snapshot>& prepared,
  string& error)
 {
@@ -4767,15 +4829,27 @@ static bool prepare_faust_metadata_transfer
       candidate_flags->addOperand(flag->get());
     }
   }
-  string candidate_verification_error;
-  if (!verify_module(candidate, candidate_verification_error)) {
-    error = "Invalid remapped batch Faust metadata: "+
-      candidate_verification_error;
-    return false;
-  }
 
-  // Project the now-authoritative candidate metadata onto the exact nodes that
-  // will remain after the non-reporting live-module ownership transfer.
+  // Record where each authoritative candidate operand came from. Metadata
+  // uniquing can make an operand appear in both sets; that is deliberately
+  // treated as provider-owned below rather than silently dropping a new
+  // provider requirement.
+  typedef map<string, set<const MDNode*> > metadata_origins;
+  metadata_origins inherited_origins, provider_origins;
+  auto collect_origins = [&](const Module& source, metadata_origins& origins) {
+    for (const NamedMDNode& metadata : source.named_metadata()) {
+      set<const MDNode*>& operands = origins[metadata.getName().str()];
+      for (unsigned i = 0; i < metadata.getNumOperands(); ++i) {
+        MDNode *mapped = candidate_mapper.mapMDNode(*metadata.getOperand(i));
+        if (mapped) operands.insert(mapped);
+      }
+    }
+  };
+  collect_origins(live, inherited_origins);
+  collect_origins(provider, provider_origins);
+
+  // Establish the exact live/provider identity of every candidate global
+  // before pruning metadata. The same map is reused for the commit snapshot.
   ValueToValueMapTy exact_values;
   for (GlobalValue& candidate_value : candidate.global_values()) {
     if (!candidate_value.hasName()) continue;
@@ -4792,6 +4866,157 @@ static bool prepare_faust_metadata_transfer
     exact_values[&candidate_value] = exact;
   }
 
+  // The LLVM linker may replace a named-metadata reference to a definition in
+  // the live module with a null operand. Classify provider source operands
+  // through both explicit value maps instead of trusting that lossy candidate
+  // representation. A new provider is never allowed to make its metadata
+  // depend on a generation that publication will supersede.
+  for (const NamedMDNode& metadata : provider.named_metadata()) {
+    string metadata_name = metadata.getName().str();
+    for (unsigned i = 0; i < metadata.getNumOperands(); ++i) {
+      SmallPtrSet<const Metadata*, 16> visited_metadata;
+      SmallPtrSet<const Value*, 16> visited_values;
+      SmallPtrSet<const GlobalValue*, 8> globals;
+      collect_faust_metadata_globals
+        (*metadata.getOperand(i), visited_metadata, visited_values, globals);
+      bool references_superseded = false;
+      bool references_retained = false;
+      for (const GlobalValue *global : globals) {
+        ValueToValueMapTy::const_iterator candidate_value =
+          candidate_values.find(global);
+        const GlobalValue *mapped_candidate =
+          candidate_value == candidate_values.end() ? 0 :
+          dyn_cast_or_null<GlobalValue>(candidate_value->second);
+        ValueToValueMapTy::const_iterator exact = mapped_candidate ?
+          exact_values.find(mapped_candidate) : exact_values.end();
+        const GlobalValue *installed = exact == exact_values.end() ? 0 :
+          dyn_cast_or_null<GlobalValue>(exact->second);
+        if (!installed) {
+          string operand;
+          raw_string_ostream out(operand);
+          global->printAsOperand(out, false);
+          out.flush();
+          error = "Prepared batch Faust metadata '"+metadata_name+
+            "' retains unmapped provider value "+operand;
+          return false;
+        }
+        if (superseded_values.count(installed))
+          references_superseded = true;
+        else
+          references_retained = true;
+      }
+      if (!references_superseded) {
+        if (globals.empty()) continue;
+        MDNode *mapped =
+          candidate_mapper.mapMDNode(*metadata.getOperand(i));
+        const NamedMDNode *linked_metadata =
+          candidate.getNamedMetadata(metadata.getName());
+        bool preserved = false;
+        if (mapped && linked_metadata)
+          for (unsigned j = 0; j < linked_metadata->getNumOperands(); ++j)
+            preserved |= linked_metadata->getOperand(j) == mapped;
+        if (!preserved) {
+          error = "Cannot preserve batch Faust metadata '"+metadata_name+
+            "' provider value references in linked candidate";
+          return false;
+        }
+        continue;
+      }
+      if (references_retained) {
+        error = "Cannot preserve batch Faust metadata '"+metadata_name+
+          "' across retiring and retained generations";
+      } else {
+        error = "Cannot preserve new batch Faust metadata '"+metadata_name+
+          "' that depends on a retiring generation";
+      }
+      return false;
+    }
+  }
+
+  // A successful publication makes every older generation eligible for
+  // retirement, immediately or after its last instance is released. Never
+  // install metadata which would then retain a raw pointer to one of those
+  // nodes. Inherited operands owned wholly by the retiring generation are
+  // omitted when the new provider does not repeat them. Mixed or provider-
+  // requested dependencies are rejected before any live-module mutation.
+  vector<pair<NamedMDNode*, vector<TrackingMDNodeRef> > > retained_metadata;
+  for (NamedMDNode& metadata : candidate.named_metadata()) {
+    retained_metadata.push_back
+      (make_pair(&metadata, vector<TrackingMDNodeRef>()));
+    vector<TrackingMDNodeRef>& retained = retained_metadata.back().second;
+    retained.reserve(metadata.getNumOperands());
+    string metadata_name = metadata.getName().str();
+    metadata_origins::const_iterator inherited =
+      inherited_origins.find(metadata_name);
+    metadata_origins::const_iterator provided =
+      provider_origins.find(metadata_name);
+    for (unsigned i = 0; i < metadata.getNumOperands(); ++i) {
+      MDNode *operand = metadata.getOperand(i);
+      SmallPtrSet<const Metadata*, 16> visited_metadata;
+      SmallPtrSet<const Value*, 16> visited_values;
+      SmallPtrSet<const GlobalValue*, 8> globals;
+      collect_faust_metadata_globals
+        (*operand, visited_metadata, visited_values, globals);
+      bool references_superseded = false;
+      bool references_retained = false;
+      for (const GlobalValue *global : globals) {
+        ValueToValueMapTy::const_iterator exact = exact_values.find(global);
+        const GlobalValue *installed = exact == exact_values.end() ? 0 :
+          dyn_cast_or_null<GlobalValue>(exact->second);
+        if (installed && superseded_values.count(installed))
+          references_superseded = true;
+        else
+          references_retained = true;
+      }
+      if (!references_superseded) {
+        retained.push_back(TrackingMDNodeRef(operand));
+        continue;
+      }
+      if (references_retained) {
+        error = "Cannot preserve batch Faust metadata '"+metadata_name+
+          "' across retiring and retained generations";
+        return false;
+      }
+      bool inherited_operand = inherited != inherited_origins.end() &&
+        inherited->second.count(operand);
+      bool provider_operand = provided != provider_origins.end() &&
+        provided->second.count(operand);
+      if (provider_operand) {
+        error = "Cannot preserve new batch Faust metadata '"+metadata_name+
+          "' that depends on a retiring generation";
+        return false;
+      }
+      if (!inherited_operand) {
+        error = "Cannot determine retiring batch Faust metadata ownership for '"+
+          metadata_name+"'";
+        return false;
+      }
+    }
+  }
+  for (vector<pair<NamedMDNode*, vector<TrackingMDNodeRef> > >::iterator
+         metadata = retained_metadata.begin();
+       metadata != retained_metadata.end(); ++metadata) {
+    metadata->first->clearOperands();
+    if (metadata->second.empty()) {
+      candidate.eraseNamedMetadata(metadata->first);
+      continue;
+    }
+    for (vector<TrackingMDNodeRef>::const_iterator operand =
+           metadata->second.begin();
+         operand != metadata->second.end(); ++operand) {
+      assert(operand->get());
+      metadata->first->addOperand(operand->get());
+    }
+  }
+  string candidate_verification_error;
+  if (!verify_module(candidate, candidate_verification_error)) {
+    error = "Invalid remapped batch Faust metadata: "+
+      candidate_verification_error;
+    return false;
+  }
+
+  // Project the now-authoritative candidate metadata onto the exact nodes that
+  // will remain after the non-reporting live-module ownership transfer.
   ValueMapper mapper(exact_values);
   SmallPtrSet<const Metadata*, 32> visited_metadata;
   SmallPtrSet<const Value*, 32> visited_values;
@@ -5098,9 +5323,12 @@ static std::unique_ptr<prepared_faust_reload> prepare_faust_reload
           (*owner.module, *reload.provider,
            prepared->declaration_bindings, error))
       return 0;
+    set<const GlobalValue*> superseded_values;
+    owner.compilation_units->collect_faust_generation_values
+      (reload.module_name, superseded_values);
     if (!prepare_faust_metadata_transfer
           (*owner.module, *reload.provider, *prepared->linked_candidate,
-           prepared->named_metadata, error))
+           superseded_values, prepared->named_metadata, error))
       return 0;
     materialization_module = prepared->linked_candidate.get();
     for (Function& function : *reload.provider)
@@ -5301,6 +5529,13 @@ static bool commit_faust_reload(prepared_faust_reload&& prepared,
   }
   owner.required.splice(owner.required.end(), prepared.required_symbols);
   owner.collect_pending_generations();
+  if (owner.compiling && reload.modified) {
+    string retired_verification_error;
+    if (!verify_module(*owner.module, retired_verification_error))
+      report_fatal_error
+        (Twine("retired batch Faust generation invalidated live metadata: ")+
+         retired_verification_error);
+  }
   return true;
 }
 

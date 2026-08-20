@@ -1,0 +1,28 @@
+extern int system(char *command);
+extern int printf(char *format, int a, int b, int c);
+
+using "dsp:@PURE_FAUST_FIXTURE_OUTPUT_DIR@/metadata_retirement_reload";
+const metadata_a = metadata_retirement_reload::getNumInputs
+  (metadata_retirement_reload::newinit 48000);
+const 41 = metadata_a;
+
+const system "sleep 1";
+const system "cp @PURE_FAUST_FIXTURE_OUTPUT_DIR@/reload-metadata-conflict.bc @PURE_FAUST_FIXTURE_OUTPUT_DIR@/metadata_retirement_reload.bc";
+const system "touch @PURE_FAUST_FIXTURE_OUTPUT_DIR@/metadata_retirement_reload.bc";
+using "dsp:@PURE_FAUST_FIXTURE_OUTPUT_DIR@/metadata_retirement_reload";
+const metadata_after_conflict = metadata_retirement_reload::getNumInputs
+  (metadata_retirement_reload::newinit 48000);
+
+const system "sleep 1";
+const system "cp @PURE_FAUST_FIXTURE_OUTPUT_DIR@/reload-metadata-c.bc @PURE_FAUST_FIXTURE_OUTPUT_DIR@/metadata_retirement_reload.bc";
+const system "touch @PURE_FAUST_FIXTURE_OUTPUT_DIR@/metadata_retirement_reload.bc";
+using "dsp:@PURE_FAUST_FIXTURE_OUTPUT_DIR@/metadata_retirement_reload";
+const metadata_c = metadata_retirement_reload::getNumInputs
+  (metadata_retirement_reload::newinit 48000);
+const 43 = metadata_c;
+
+const printf "FAUST-METADATA-RETIRE-COMPILE %d %d %d\n"
+  metadata_a metadata_after_conflict metadata_c;
+main = printf "FAUST-METADATA-RETIRE-RUNTIME %d %d %d\n"
+  metadata_a metadata_after_conflict metadata_c;
+main;
