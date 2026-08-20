@@ -256,6 +256,29 @@ if(BUILD_TESTING)
       list(APPEND PURE_FAUST_FIXTURE_OUTPUTS "${output}")
     endforeach()
 
+    foreach(fixture reload-comdat-a reload-comdat-c reload-metadata)
+      set(source "${CMAKE_CURRENT_SOURCE_DIR}/test/faust/${fixture}.ll")
+      set(output "${PURE_FAUST_FIXTURE_OUTPUT_DIR}/${fixture}.bc")
+      set(disassembly "${PURE_FAUST_FIXTURE_OUTPUT_DIR}/${fixture}.ll")
+      add_custom_command(
+        OUTPUT "${output}"
+        BYPRODUCTS "${disassembly}"
+        COMMAND
+          "${CMAKE_COMMAND}" -E make_directory
+          "${PURE_FAUST_FIXTURE_OUTPUT_DIR}"
+        COMMAND
+          "${PURE_LLVM_AS_EXECUTABLE}" "${source}" -o "${output}"
+        COMMAND
+          "${PURE_LLVM_DIS_EXECUTABLE}" "${output}" -o "${disassembly}"
+        COMMAND
+          "${PURE_OPT_EXECUTABLE}" -passes=verify -disable-output "${output}"
+        DEPENDS "${source}"
+        COMMENT "Generating Faust COMDAT fixture ${fixture}.bc"
+        VERBATIM
+      )
+      list(APPEND PURE_FAUST_FIXTURE_OUTPUTS "${output}")
+    endforeach()
+
     add_custom_target(
       pure-faust-fixtures ALL
       DEPENDS ${PURE_FAUST_FIXTURE_OUTPUTS}
@@ -269,6 +292,16 @@ if(BUILD_TESTING)
     configure_file(
       "${CMAKE_CURRENT_SOURCE_DIR}/test/faust/batch.pure.in"
       "${PURE_FAUST_FIXTURE_OUTPUT_DIR}/batch.pure"
+      @ONLY
+    )
+    configure_file(
+      "${CMAKE_CURRENT_SOURCE_DIR}/test/faust/batch-comdat.pure.in"
+      "${PURE_FAUST_FIXTURE_OUTPUT_DIR}/batch-comdat.pure"
+      @ONLY
+    )
+    configure_file(
+      "${CMAKE_CURRENT_SOURCE_DIR}/test/faust/batch-metadata.pure.in"
+      "${PURE_FAUST_FIXTURE_OUTPUT_DIR}/batch-metadata.pure"
       @ONLY
     )
   endif()
@@ -906,6 +939,75 @@ if(BUILD_TESTING)
         LABELS "batch;faust;integration"
         REQUIRED_FILES
           "${reference_bc};${PURE_FAUST_FIXTURE_OUTPUT_DIR}/reload-a.bc;${PURE_FAUST_FIXTURE_OUTPUT_DIR}/reload-b.bc;${PURE_FAUST_FIXTURE_OUTPUT_DIR}/reload-unresolved.bc;${PURE_FAUST_FIXTURE_OUTPUT_DIR}/batch.pure"
+        TIMEOUT ${batch_test_timeout}
+        FAIL_REGULAR_EXPRESSION
+          "failed to retire prepared Faust reload;failed to collect ORC Faust generation;AddressSanitizer;LeakSanitizer;runtime error:"
+    )
+
+    add_test(
+      NAME pure-batch-faust-comdat
+      COMMAND
+        "${CMAKE_COMMAND}"
+        -DPURE_EXECUTABLE=$<TARGET_FILE:pure>
+        -DPURE_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
+        -DPURE_BUILD_DIR=${CMAKE_CURRENT_BINARY_DIR}
+        -DPURE_LD_LIB_PATH=${LD_LIB_PATH}
+        -DPURE_SCRIPT=${PURE_FAUST_FIXTURE_OUTPUT_DIR}/batch-comdat.pure
+        -DPURE_OUTPUT_NAME=pure-batch-faust-comdat.o
+        -DPURE_FIXTURE_SOURCE=${PURE_FAUST_FIXTURE_OUTPUT_DIR}/reload-comdat-a.bc
+        -DPURE_FIXTURE_DESTINATION=${PURE_FAUST_FIXTURE_OUTPUT_DIR}/comdat_reload.bc
+        "-DPURE_EXPECTED_OUTPUT=FAUST-COMDAT-RUNTIME 31 32\n"
+        "-DPURE_EXPECTED_COMPILE_SENTINEL=FAUST-COMDAT-COMPILE 31 32"
+        -DPURE_OBJECT_INSPECTOR=${LLVM_TOOLS_BINARY_DIR}/llvm-readobj
+        -DPURE_RUN_EXECUTABLE=ON
+        -DPURE_BATCH_EXECUTABLE_NAME=pure-batch-faust-comdat
+        -DPURE_EXPECTED_CXX_COMPILER=${PURE_EXPECTED_BATCH_CXX}
+        -DPURE_MAIN_OBJECT=$<TARGET_OBJECTS:pure-main-object>
+        -DPURE_EXECUTABLE_SUFFIX=${CMAKE_EXECUTABLE_SUFFIX}
+        -DPURE_SANITIZERS=${PURE_SANITIZERS}
+        -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunPureBatchTest.cmake"
+    )
+    set_tests_properties(
+      pure-batch-faust-comdat
+      PROPERTIES
+        LABELS "batch;faust;integration"
+        REQUIRED_FILES
+          "${PURE_FAUST_FIXTURE_OUTPUT_DIR}/reload-comdat-a.bc;${PURE_FAUST_FIXTURE_OUTPUT_DIR}/reload-comdat-c.bc;${PURE_FAUST_FIXTURE_OUTPUT_DIR}/batch-comdat.pure"
+        TIMEOUT ${batch_test_timeout}
+        FAIL_REGULAR_EXPRESSION
+          "failed to retire prepared Faust reload;failed to collect ORC Faust generation;AddressSanitizer;LeakSanitizer;runtime error:"
+    )
+
+    add_test(
+      NAME pure-batch-faust-metadata
+      COMMAND
+        "${CMAKE_COMMAND}"
+        -DPURE_EXECUTABLE=$<TARGET_FILE:pure>
+        -DPURE_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
+        -DPURE_BUILD_DIR=${CMAKE_CURRENT_BINARY_DIR}
+        -DPURE_LD_LIB_PATH=${LD_LIB_PATH}
+        -DPURE_SCRIPT=${PURE_FAUST_FIXTURE_OUTPUT_DIR}/batch-metadata.pure
+        -DPURE_OUTPUT_NAME=pure-batch-faust-metadata.o
+        -DPURE_FIXTURE_SOURCE=${PURE_FAUST_FIXTURE_OUTPUT_DIR}/reload-metadata.bc
+        -DPURE_FIXTURE_DESTINATION=${PURE_FAUST_FIXTURE_OUTPUT_DIR}/metadata_reload.bc
+        "-DPURE_EXPECTED_OUTPUT=FAUST-METADATA-RUNTIME 41\n"
+        "-DPURE_EXPECTED_COMPILE_SENTINEL=FAUST-METADATA-COMPILE 41"
+        -DPURE_EXPECTED_MODULE_FLAG_KEY=faust.metadata.anchor
+        -DPURE_OBJECT_INSPECTOR=${LLVM_TOOLS_BINARY_DIR}/llvm-readobj
+        -DPURE_RUN_EXECUTABLE=ON
+        -DPURE_BATCH_EXECUTABLE_NAME=pure-batch-faust-metadata
+        -DPURE_EXPECTED_CXX_COMPILER=${PURE_EXPECTED_BATCH_CXX}
+        -DPURE_MAIN_OBJECT=$<TARGET_OBJECTS:pure-main-object>
+        -DPURE_EXECUTABLE_SUFFIX=${CMAKE_EXECUTABLE_SUFFIX}
+        -DPURE_SANITIZERS=${PURE_SANITIZERS}
+        -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunPureBatchTest.cmake"
+    )
+    set_tests_properties(
+      pure-batch-faust-metadata
+      PROPERTIES
+        LABELS "batch;faust;integration"
+        REQUIRED_FILES
+          "${PURE_FAUST_FIXTURE_OUTPUT_DIR}/reload-metadata.bc;${PURE_FAUST_FIXTURE_OUTPUT_DIR}/batch-metadata.pure"
         TIMEOUT ${batch_test_timeout}
         FAIL_REGULAR_EXPRESSION
           "failed to retire prepared Faust reload;failed to collect ORC Faust generation;AddressSanitizer;LeakSanitizer;runtime error:"

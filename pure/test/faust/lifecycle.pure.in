@@ -15,6 +15,7 @@ if a_before == 11 then () else throw "Faust A returned the wrong input count";
 
 system "sleep 1";
 system "cp @PURE_FAUST_FIXTURE_OUTPUT_DIR@/lifecycle-b-unresolved.bc @PURE_FAUST_FIXTURE_OUTPUT_DIR@/lifecycle_reload.bc";
+system "touch @PURE_FAUST_FIXTURE_OUTPUT_DIR@/lifecycle_reload.bc";
 using "dsp:@PURE_FAUST_FIXTURE_OUTPUT_DIR@/lifecycle_reload";
 let a_after_failed_b = lifecycle_reload::getNumInputs first;
 if a_after_failed_b == 11 then ()
@@ -22,6 +23,7 @@ else throw "failed Faust B reload damaged the live A instance";
 
 system "sleep 1";
 system "cp @PURE_FAUST_FIXTURE_OUTPUT_DIR@/lifecycle-c.bc @PURE_FAUST_FIXTURE_OUTPUT_DIR@/lifecycle_reload.bc";
+system "touch @PURE_FAUST_FIXTURE_OUTPUT_DIR@/lifecycle_reload.bc";
 using "dsp:@PURE_FAUST_FIXTURE_OUTPUT_DIR@/lifecycle_reload";
 let a_after_rejected_c = lifecycle_reload::getNumInputs first;
 if a_after_rejected_c == 11 then ()
@@ -38,6 +40,7 @@ puts "FAUST-LIVE-C 11 11 11 22";
 
 system "sleep 1";
 system "cp @PURE_FAUST_FIXTURE_OUTPUT_DIR@/lifecycle-float.bc @PURE_FAUST_FIXTURE_OUTPUT_DIR@/lifecycle_reload.bc";
+system "touch @PURE_FAUST_FIXTURE_OUTPUT_DIR@/lifecycle_reload.bc";
 using "dsp:@PURE_FAUST_FIXTURE_OUTPUT_DIR@/lifecycle_reload";
 let after_float_rejection = lifecycle_reload::newinit 48000;
 let c_after_float = lifecycle_reload::getNumInputs after_float_rejection;

@@ -1,0 +1,17 @@
+extern int system(char *command);
+extern int printf(char *format, int a, int c);
+
+using "dsp:@PURE_FAUST_FIXTURE_OUTPUT_DIR@/comdat_reload";
+const comdat_a = comdat_reload::getNumInputs (comdat_reload::newinit 48000);
+const 31 = comdat_a;
+
+const system "sleep 1";
+const system "cp @PURE_FAUST_FIXTURE_OUTPUT_DIR@/reload-comdat-c.bc @PURE_FAUST_FIXTURE_OUTPUT_DIR@/comdat_reload.bc";
+const system "touch @PURE_FAUST_FIXTURE_OUTPUT_DIR@/comdat_reload.bc";
+using "dsp:@PURE_FAUST_FIXTURE_OUTPUT_DIR@/comdat_reload";
+const comdat_c = comdat_reload::getNumInputs (comdat_reload::newinit 48000);
+const 32 = comdat_c;
+
+const printf "FAUST-COMDAT-COMPILE %d %d\n" comdat_a comdat_c;
+main = printf "FAUST-COMDAT-RUNTIME %d %d\n" comdat_a comdat_c;
+main;

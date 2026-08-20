@@ -158,6 +158,31 @@ static void collect_dependencies
   }
 }
 
+static void collect_comdat_dependencies
+(const llvm::Module& module,
+ llvm::SmallPtrSetImpl<llvm::GlobalValue*>& reachable)
+{
+  bool changed;
+  do {
+    changed = false;
+    llvm::SmallPtrSet<const llvm::Comdat*, 8> groups;
+    for (llvm::GlobalValue *global : reachable)
+      if (llvm::GlobalObject *object = llvm::dyn_cast<llvm::GlobalObject>(global))
+        if (object->hasComdat()) groups.insert(object->getComdat());
+    if (groups.empty()) return;
+    for (const llvm::GlobalValue& global : module.global_values()) {
+      const llvm::GlobalObject *object =
+        llvm::dyn_cast<llvm::GlobalObject>(&global);
+      if (!object || !object->hasComdat() ||
+          !groups.contains(object->getComdat()) ||
+          reachable.contains(const_cast<llvm::GlobalValue*>(&global)))
+        continue;
+      collect_dependencies(const_cast<llvm::GlobalValue*>(&global), reachable);
+      changed = true;
+    }
+  } while (changed);
+}
+
 static llvm::Error verify_module(const llvm::Module& module,
                                  llvm::StringRef stage)
 {
@@ -204,6 +229,7 @@ static llvm::Error reduce_to_entry(llvm::Module& module,
 
   llvm::SmallPtrSet<llvm::GlobalValue*, 32> reachable;
   collect_dependencies(entry, reachable);
+  collect_comdat_dependencies(module, reachable);
 
   for (llvm::Function& function : module) {
     if (function.isDeclaration()) continue;
@@ -244,6 +270,15 @@ static llvm::Error reduce_to_entry(llvm::Module& module,
     else
       current.setLinkage(llvm::GlobalValue::InternalLinkage);
   }
+
+  // COMDAT selection has already happened in the complete source module.
+  // This reduced snapshot is an isolated materialization unit whose entry is
+  // renamed below, so retaining the source group would either name a missing
+  // leader or duplicate the group across per-entry snapshots.
+  for (llvm::Function& function : module)
+    if (function.hasComdat()) function.setComdat(nullptr);
+  for (llvm::GlobalVariable& variable : module.globals())
+    if (variable.hasComdat()) variable.setComdat(nullptr);
 
   if (!exported_name.empty()) entry->setName(exported_name);
   entry->setLinkage(llvm::GlobalValue::ExternalLinkage);
@@ -357,6 +392,7 @@ PureJit::snapshot_module(const llvm::Module& module,
                                      entry_symbol.str().c_str());
     llvm::SmallPtrSet<llvm::GlobalValue*, 32> reachable;
     collect_dependencies(entry, reachable);
+    collect_comdat_dependencies(module, reachable);
     llvm::ValueToValueMapTy values;
     reduced = llvm::CloneModule
       (module, values,
@@ -372,7 +408,13 @@ PureJit::snapshot_module(const llvm::Module& module,
           retained_mutable |= variable->getName() == name;
         return variable->hasInitializer() &&
           (variable->isConstant() || retained_mutable);
-      });
+       });
+    for (llvm::Function& function : *reduced)
+      if (function.isDeclaration() && function.hasComdat())
+        function.setComdat(nullptr);
+    for (llvm::GlobalVariable& variable : reduced->globals())
+      if (variable.isDeclaration() && variable.hasComdat())
+        variable.setComdat(nullptr);
     if (llvm::Error error =
           reduce_to_entry(*reduced, entry_symbol, exported_symbol,
                           retained_mutable_globals))

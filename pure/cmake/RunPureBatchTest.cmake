@@ -107,6 +107,55 @@ if(object_machine STREQUAL "")
   message(FATAL_ERROR "Pure batch object is not x86-64/AMD64")
 endif()
 
+if(DEFINED PURE_EXPECTED_MODULE_FLAG_KEY AND
+   NOT "${PURE_EXPECTED_MODULE_FLAG_KEY}" STREQUAL "")
+  set(llvm_ir "${PURE_BUILD_DIR}/test/${PURE_OUTPUT_NAME}.ll")
+  file(REMOVE "${llvm_ir}")
+  if(DEFINED PURE_FIXTURE_SOURCE)
+    file(COPY_FILE "${PURE_FIXTURE_SOURCE}" "${PURE_FIXTURE_DESTINATION}")
+  endif()
+  execute_process(
+    COMMAND
+      "${CMAKE_COMMAND}" -E env
+      "${PURE_LD_LIB_PATH}=${loader_path}"
+      "PURELIB=${PURE_SOURCE_DIR}/lib"
+      "${PURE_EXECUTABLE}" --norc --noprelude -c
+      "${PURE_SCRIPT}" -o "${llvm_ir}"
+    RESULT_VARIABLE llvm_ir_result
+    OUTPUT_VARIABLE llvm_ir_stdout
+    ERROR_VARIABLE llvm_ir_stderr
+  )
+  set(llvm_ir_output "${llvm_ir_stdout}${llvm_ir_stderr}")
+  message("${llvm_ir_output}")
+  if(NOT llvm_ir_result EQUAL 0 OR NOT EXISTS "${llvm_ir}")
+    message(FATAL_ERROR
+      "Pure batch LLVM IR emission failed with status ${llvm_ir_result}"
+    )
+  endif()
+  assert_compile_output("${llvm_ir_output}")
+  file(READ "${llvm_ir}" llvm_ir_text)
+  string(
+    REGEX MATCH
+    "!\\{i32 1, !\"${PURE_EXPECTED_MODULE_FLAG_KEY}\", ptr @\"([^\"]+)\"\\}"
+    module_flag_record
+    "${llvm_ir_text}"
+  )
+  if(module_flag_record STREQUAL "")
+    message(FATAL_ERROR
+      "Pure batch LLVM IR module flag does not reference a global value"
+    )
+  endif()
+  set(module_flag_symbol "${CMAKE_MATCH_1}")
+  string(FIND
+    "${llvm_ir_text}" "@\"${module_flag_symbol}\" =" module_flag_definition
+  )
+  if(module_flag_definition EQUAL -1)
+    message(FATAL_ERROR
+      "Pure batch LLVM IR module flag references a missing global definition"
+    )
+  endif()
+endif()
+
 if(PURE_RUN_EXECUTABLE)
   if(NOT DEFINED PURE_EXECUTABLE_SUFFIX OR
      NOT DEFINED PURE_EXPECTED_CXX_COMPILER OR

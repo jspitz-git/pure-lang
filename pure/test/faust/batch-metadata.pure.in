@@ -1,0 +1,10 @@
+extern int printf(char *format, int value);
+
+using "dsp:@PURE_FAUST_FIXTURE_OUTPUT_DIR@/metadata_reload";
+const metadata_value =
+  metadata_reload::getNumInputs (metadata_reload::newinit 48000);
+const 41 = metadata_value;
+
+const printf "FAUST-METADATA-COMPILE %d\n" metadata_value;
+main = printf "FAUST-METADATA-RUNTIME %d\n" metadata_value;
+main;

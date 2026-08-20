@@ -57,9 +57,11 @@ char *alloca ();
 
 #include <llvm/Bitcode/BitcodeReader.h>
 #include <llvm/Bitcode/BitcodeWriter.h>
+#include <llvm/ADT/SmallPtrSet.h>
 #include <llvm/Analysis/ValueTracking.h>
 #include <llvm/IR/CallingConv.h>
 #include <llvm/IR/Metadata.h>
+#include <llvm/IR/TrackingMDRef.h>
 #include <llvm/Linker/Linker.h>
 #include <llvm/Support/DynamicLibrary.h>
 #include <llvm/Support/Error.h>
@@ -72,6 +74,7 @@ char *alloca ();
 #include <llvm/TargetParser/Triple.h>
 #include <llvm/Transforms/Utils/BasicBlockUtils.h>
 #include <llvm/Transforms/Utils/Cloning.h>
+#include <llvm/Transforms/Utils/ValueMapper.h>
 
 #include "config.h"
 
@@ -3564,6 +3567,7 @@ bool interpreter::LoadFaustDSP(bool priv, const char *name, string *msg,
     if (it->first != "delete") funs.push_back(it->first);
 
   vector<pair<GlobalValue*, string> > rename_plan;
+  map<GlobalValue*, string> renamed_values;
   for (Module::iterator it = M->begin(), end = M->end(); it != end; ++it) {
     Function &f = *it;
     if (f.isDeclaration()) continue;
@@ -3601,10 +3605,69 @@ bool interpreter::LoadFaustDSP(bool priv, const char *name, string *msg,
   set<string> destination_names;
   for (vector<pair<GlobalValue*, string> >::iterator it = rename_plan.begin();
        it != rename_plan.end(); ++it) {
+    renamed_values[it->first] = it->second;
     GlobalValue *existing = M->getNamedValue(it->second);
     if (!destination_names.insert(it->second).second ||
         (existing && existing != it->first))
       return fail("Faust symbol mangling collision for '"+it->second+"'");
+  }
+
+  struct comdat_rename_t {
+    string source_name, destination_name;
+    Comdat::SelectionKind selection;
+    vector<GlobalObject*> members;
+    bool owned, shared;
+
+    comdat_rename_t(const Comdat& source)
+      : source_name(source.getName().str()),
+        selection(source.getSelectionKind()), owned(false), shared(false) {}
+  };
+  vector<comdat_rename_t> comdat_renames;
+  map<const Comdat*, size_t> comdat_indices;
+  auto plan_comdat = [&](GlobalObject& object) {
+    if (!object.hasComdat()) return;
+    const Comdat *source = object.getComdat();
+    map<const Comdat*, size_t>::iterator found = comdat_indices.find(source);
+    if (found == comdat_indices.end()) {
+      size_t index = comdat_renames.size();
+      comdat_indices[source] = index;
+      comdat_renames.push_back(comdat_rename_t(*source));
+      found = comdat_indices.find(source);
+    }
+    comdat_rename_t& plan = comdat_renames[found->second];
+    plan.members.push_back(&object);
+    map<GlobalValue*, string>::const_iterator renamed =
+      renamed_values.find(&object);
+    if (renamed == renamed_values.end()) {
+      plan.shared = true;
+      return;
+    }
+    plan.owned = true;
+    if (plan.destination_name.empty() ||
+        object.getName() == source->getName())
+      plan.destination_name = renamed->second;
+  };
+  for (Function& function : *M)
+    if (!function.isDeclaration()) plan_comdat(function);
+  for (GlobalVariable& variable : M->globals())
+    if (!variable.isDeclaration()) plan_comdat(variable);
+  set<string> comdat_destinations;
+  for (vector<comdat_rename_t>::const_iterator plan = comdat_renames.begin();
+       plan != comdat_renames.end(); ++plan) {
+    if (plan->owned && plan->shared)
+      return fail("Faust COMDAT group '"+plan->source_name+
+                  "' mixes generation-owned and shared definitions");
+    if (!plan->owned) continue;
+    if (plan->destination_name.empty() ||
+        !comdat_destinations.insert(plan->destination_name).second)
+      return fail("Cannot generation-qualify Faust COMDAT group '"+
+                  plan->source_name+"'");
+    Module::ComdatSymTabType::const_iterator existing =
+      M->getComdatSymbolTable().find(plan->destination_name);
+    if (existing != M->getComdatSymbolTable().end() &&
+        existing->first() != plan->source_name)
+      return fail("Faust COMDAT qualification collides with group '"+
+                  plan->destination_name+"'");
   }
   for (vector<pair<GlobalValue*, string> >::iterator it = rename_plan.begin();
        it != rename_plan.end(); ++it) {
@@ -3612,6 +3675,19 @@ bool interpreter::LoadFaustDSP(bool priv, const char *name, string *msg,
     if (it->first->getName() != it->second)
       return fail("Failed to mangle Faust symbol as '"+it->second+"'");
   }
+  for (vector<comdat_rename_t>::iterator plan = comdat_renames.begin();
+       plan != comdat_renames.end(); ++plan) {
+    if (!plan->owned) continue;
+    Comdat *destination = M->getOrInsertComdat(plan->destination_name);
+    destination->setSelectionKind(plan->selection);
+    for (vector<GlobalObject*>::iterator member = plan->members.begin();
+         member != plan->members.end(); ++member)
+      (*member)->setComdat(destination);
+  }
+  for (vector<comdat_rename_t>::const_iterator plan = comdat_renames.begin();
+       plan != comdat_renames.end(); ++plan)
+    if (plan->owned && plan->source_name != plan->destination_name)
+      M->getComdatSymbolTable().erase(plan->source_name);
   // Build the complete provider privately. Batch mode links this source only
   // after every wrapper, materialization, lookup, and slot has been prepared.
   Module *faust_module = M.get();
@@ -4332,12 +4408,52 @@ public:
 
 static std::unique_ptr<llvm::Module> prepare_linked_module
 (const llvm::Module& live, std::unique_ptr<llvm::Module> imported,
- string& error, const char *description = "bitcode")
+ string& error, const char *description = "bitcode",
+ bool retain_imported_definitions = false)
 {
+  using namespace llvm;
+  string retain_name;
+  if (retain_imported_definitions) {
+    // The linker can omit an internal definition referenced only by named
+    // metadata. Keep the verified candidate's definition set identical to the
+    // provider set that the batch commit will transfer, then remove this root.
+    vector<Constant*> definitions;
+    PointerType *pointer_type = PointerType::get(imported->getContext(), 0);
+    for (GlobalValue& value : imported->global_values()) {
+      if (value.isDeclaration()) continue;
+      if (value.getAddressSpace() != 0) {
+        error = "Cannot retain "+string(description)+" definition '"+
+          value.getName().str()+"' from a non-default address space";
+        return 0;
+      }
+      definitions.push_back(ConstantExpr::getPointerCast(&value, pointer_type));
+    }
+    if (!definitions.empty()) {
+      retain_name = "$$pure$faust$link$retain";
+      unsigned suffix = 0;
+      while (live.getNamedValue(retain_name) ||
+             imported->getNamedValue(retain_name))
+        retain_name = "$$pure$faust$link$retain."+to_string(++suffix);
+      ArrayType *retain_type =
+        ArrayType::get(pointer_type, definitions.size());
+      new GlobalVariable
+        (*imported, retain_type, true, GlobalValue::ExternalLinkage,
+         ConstantArray::get(retain_type, definitions), retain_name);
+    }
+  }
   std::unique_ptr<llvm::Module> candidate = llvm::CloneModule(live);
   if (llvm::Linker::linkModules(*candidate, std::move(imported))) {
     error = "Error linking "+string(description)+" module";
     return 0;
+  }
+  if (!retain_name.empty()) {
+    GlobalVariable *retain = candidate->getNamedGlobal(retain_name);
+    if (!retain) {
+      error = "Linked "+string(description)+
+        " module lost its definition retention root";
+      return 0;
+    }
+    retain->eraseFromParent();
   }
   string verification_error;
   if (!verify_module(*candidate, verification_error)) {
@@ -4378,12 +4494,20 @@ public:
 };
 
 struct prepared_faust_reload {
+  struct named_metadata_snapshot {
+    string name;
+    vector<llvm::TrackingMDNodeRef> operands;
+
+    explicit named_metadata_snapshot(string name) : name(std::move(name)) {}
+  };
+
   interpreter& owner;
   faust_reload_input input;
   int tag;
   std::unique_ptr<batch_bitcode_transaction> wrapper_transaction;
   std::unique_ptr<llvm::Module> linked_candidate;
   vector<pair<llvm::GlobalValue*, llvm::GlobalValue*> > declaration_bindings;
+  vector<named_metadata_snapshot> named_metadata;
   map<string, void*> addresses;
   list<llvm::Function*> stable_functions;
   vector<pair<void**, void*> > bindings;
@@ -4459,6 +4583,237 @@ static string faust_logical_name(const string& module_name,
   return "$$faust$"+module_name+"$"+operation;
 }
 
+static bool validate_faust_metadata_value
+(const llvm::Value& value, const llvm::Module& live,
+ const llvm::Module& provider, llvm::StringRef metadata_name,
+ llvm::SmallPtrSetImpl<const llvm::Value*>& visited, string& error)
+{
+  using namespace llvm;
+  if (!visited.insert(&value).second) return true;
+  if (const GlobalValue *global = dyn_cast<GlobalValue>(&value)) {
+    if (global->getParent() == &live || global->getParent() == &provider)
+      return true;
+    string operand;
+    raw_string_ostream out(operand);
+    global->printAsOperand(out, false);
+    out.flush();
+    error = "Prepared batch Faust metadata '"+metadata_name.str()+
+      "' retains unmapped cross-module value "+operand;
+    return false;
+  }
+  if (!isa<Constant>(&value)) {
+    error = "Prepared batch Faust metadata '"+metadata_name.str()+
+      "' references an unsupported local value";
+    return false;
+  }
+  if (const User *user = dyn_cast<User>(&value))
+    for (const Value *operand : user->operand_values())
+      if (operand && !validate_faust_metadata_value
+            (*operand, live, provider, metadata_name, visited, error))
+        return false;
+  return true;
+}
+
+static bool validate_faust_metadata
+(const llvm::Metadata& metadata, const llvm::Module& live,
+ const llvm::Module& provider, llvm::StringRef metadata_name,
+ llvm::SmallPtrSetImpl<const llvm::Metadata*>& visited_metadata,
+ llvm::SmallPtrSetImpl<const llvm::Value*>& visited_values, string& error)
+{
+  using namespace llvm;
+  if (!visited_metadata.insert(&metadata).second) return true;
+  if (const ValueAsMetadata *value = dyn_cast<ValueAsMetadata>(&metadata))
+    return validate_faust_metadata_value
+      (*value->getValue(), live, provider, metadata_name,
+       visited_values, error);
+  if (isa<MDString>(metadata)) return true;
+  const MDNode *node = dyn_cast<MDNode>(&metadata);
+  if (!node) {
+    error = "Prepared batch Faust metadata '"+metadata_name.str()+
+      "' contains an unsupported operand";
+    return false;
+  }
+  for (const MDOperand& operand : node->operands())
+    if (operand && !validate_faust_metadata
+          (*operand, live, provider, metadata_name,
+           visited_metadata, visited_values, error))
+      return false;
+  return true;
+}
+
+static bool faust_value_references_global
+(const llvm::Value& value,
+ llvm::SmallPtrSetImpl<const llvm::Value*>& visited)
+{
+  using namespace llvm;
+  if (isa<GlobalValue>(value)) return true;
+  if (!visited.insert(&value).second) return false;
+  if (const User *user = dyn_cast<User>(&value))
+    for (const Value *operand : user->operand_values())
+      if (operand && faust_value_references_global(*operand, visited))
+        return true;
+  return false;
+}
+
+static bool faust_metadata_references_global
+(const llvm::Metadata& metadata,
+ llvm::SmallPtrSetImpl<const llvm::Metadata*>& visited_metadata,
+ llvm::SmallPtrSetImpl<const llvm::Value*>& visited_values)
+{
+  using namespace llvm;
+  if (!visited_metadata.insert(&metadata).second) return false;
+  if (const ValueAsMetadata *value = dyn_cast<ValueAsMetadata>(&metadata))
+    return faust_value_references_global(*value->getValue(), visited_values);
+  const MDNode *node = dyn_cast<MDNode>(&metadata);
+  if (!node) return false;
+  for (const MDOperand& operand : node->operands())
+    if (operand && faust_metadata_references_global
+          (*operand, visited_metadata, visited_values))
+      return true;
+  return false;
+}
+
+static bool prepare_faust_metadata_transfer
+(llvm::Module& live, llvm::Module& provider, llvm::Module& candidate,
+ vector<prepared_faust_reload::named_metadata_snapshot>& prepared,
+ string& error)
+{
+  using namespace llvm;
+  // LLVM's module-flag merge can null-map a GlobalValue operand even when the
+  // linked definition is retained. Repair unambiguous source flags onto exact
+  // candidate nodes before ORC sees the module; ambiguous merges are rejected.
+  ValueToValueMapTy candidate_values;
+  auto map_candidate_values = [&](Module& source) {
+    for (GlobalValue& value : source.global_values()) {
+      if (!value.hasName()) continue;
+      GlobalValue *destination = candidate.getNamedValue(value.getName());
+      if (!destination || value.getValueID() != destination->getValueID() ||
+          value.getType() != destination->getType() ||
+          value.getValueType() != destination->getValueType())
+        continue;
+      candidate_values[&value] = destination;
+    }
+  };
+  map_candidate_values(live);
+  map_candidate_values(provider);
+  ValueMapper candidate_mapper(candidate_values);
+
+  map<string, vector<const MDNode*> > live_flags, provider_flags;
+  auto collect_flags = [](const Module& module,
+                          map<string, vector<const MDNode*> >& flags) {
+    const NamedMDNode *metadata =
+      module.getNamedMetadata("llvm.module.flags");
+    if (!metadata) return;
+    for (unsigned i = 0; i < metadata->getNumOperands(); ++i) {
+      const MDNode *flag = metadata->getOperand(i);
+      const MDString *key = flag->getNumOperands() == 3 ?
+        dyn_cast_or_null<MDString>(flag->getOperand(1).get()) : 0;
+      if (key) flags[key->getString().str()].push_back(flag);
+    }
+  };
+  collect_flags(live, live_flags);
+  collect_flags(provider, provider_flags);
+
+  NamedMDNode *candidate_flags =
+    candidate.getNamedMetadata("llvm.module.flags");
+  vector<TrackingMDNodeRef> repaired_flags;
+  if (candidate_flags) {
+    repaired_flags.reserve(candidate_flags->getNumOperands());
+    for (unsigned i = 0; i < candidate_flags->getNumOperands(); ++i) {
+      MDNode *candidate_flag = candidate_flags->getOperand(i);
+      const MDString *key = candidate_flag->getNumOperands() == 3 ?
+        dyn_cast_or_null<MDString>(candidate_flag->getOperand(1).get()) : 0;
+      string key_name = key ? key->getString().str() : string();
+      const vector<const MDNode*>& live_sources = live_flags[key_name];
+      const vector<const MDNode*>& provider_sources = provider_flags[key_name];
+      size_t source_count = live_sources.size()+provider_sources.size();
+      MDNode *repaired = candidate_flag;
+      if (source_count == 1) {
+        const MDNode *source = live_sources.empty() ?
+          provider_sources.front() : live_sources.front();
+        repaired = candidate_mapper.mapMDNode(*source);
+      } else if (source_count > 1) {
+        bool references_global = false;
+        for (const MDNode *source : live_sources) {
+          SmallPtrSet<const Metadata*, 16> metadata;
+          SmallPtrSet<const Value*, 8> values;
+          references_global |=
+            faust_metadata_references_global(*source, metadata, values);
+        }
+        for (const MDNode *source : provider_sources) {
+          SmallPtrSet<const Metadata*, 16> metadata;
+          SmallPtrSet<const Value*, 8> values;
+          references_global |=
+            faust_metadata_references_global(*source, metadata, values);
+        }
+        if (references_global) {
+          error = "Cannot preserve merged batch Faust module flag '"+
+            key_name+"' with cross-module value references";
+          return false;
+        }
+      }
+      SmallPtrSet<const Metadata*, 32> candidate_metadata;
+      SmallPtrSet<const Value*, 32> candidate_value_set;
+      if (!repaired || !validate_faust_metadata
+            (*repaired, candidate, candidate, "llvm.module.flags",
+             candidate_metadata, candidate_value_set, error))
+        return false;
+      repaired_flags.push_back(TrackingMDNodeRef(repaired));
+    }
+    candidate_flags->clearOperands();
+    for (vector<TrackingMDNodeRef>::const_iterator flag = repaired_flags.begin();
+         flag != repaired_flags.end(); ++flag) {
+      assert(flag->get());
+      candidate_flags->addOperand(flag->get());
+    }
+  }
+  string candidate_verification_error;
+  if (!verify_module(candidate, candidate_verification_error)) {
+    error = "Invalid remapped batch Faust metadata: "+
+      candidate_verification_error;
+    return false;
+  }
+
+  // Project the now-authoritative candidate metadata onto the exact nodes that
+  // will remain after the non-reporting live-module ownership transfer.
+  ValueToValueMapTy exact_values;
+  for (GlobalValue& candidate_value : candidate.global_values()) {
+    if (!candidate_value.hasName()) continue;
+    GlobalValue *exact = live.getNamedValue(candidate_value.getName());
+    if (!exact) exact = provider.getNamedValue(candidate_value.getName());
+    if (!exact) continue;
+    if (candidate_value.getValueID() != exact->getValueID() ||
+        candidate_value.getType() != exact->getType() ||
+        candidate_value.getValueType() != exact->getValueType()) {
+      error = "Prepared batch Faust metadata value '"+
+        candidate_value.getName().str()+"' has no exact live identity";
+      return false;
+    }
+    exact_values[&candidate_value] = exact;
+  }
+
+  ValueMapper mapper(exact_values);
+  SmallPtrSet<const Metadata*, 32> visited_metadata;
+  SmallPtrSet<const Value*, 32> visited_values;
+  for (const NamedMDNode& source : candidate.named_metadata()) {
+    prepared.push_back
+      (prepared_faust_reload::named_metadata_snapshot
+         (source.getName().str()));
+    prepared_faust_reload::named_metadata_snapshot& destination =
+      prepared.back();
+    destination.operands.reserve(source.getNumOperands());
+    for (unsigned i = 0; i < source.getNumOperands(); ++i) {
+      MDNode *operand = mapper.mapMDNode(*source.getOperand(i));
+      if (!operand || !validate_faust_metadata
+            (*operand, live, provider, source.getName(),
+             visited_metadata, visited_values, error))
+        return false;
+      destination.operands.push_back(TrackingMDNodeRef(operand));
+    }
+  }
+  return true;
+}
+
 static bool prepare_faust_module_transfer
 (llvm::Module& live, llvm::Module& provider,
  vector<pair<llvm::GlobalValue*, llvm::GlobalValue*> >& declarations,
@@ -4525,29 +4880,13 @@ static bool prepare_faust_module_transfer
 static void commit_faust_module_transfer
 (llvm::Module& live, llvm::Module& provider,
  const llvm::Module& linked_candidate,
- const vector<pair<llvm::GlobalValue*, llvm::GlobalValue*> >& declarations)
+ const vector<pair<llvm::GlobalValue*, llvm::GlobalValue*> >& declarations,
+ const vector<prepared_faust_reload::named_metadata_snapshot>& named_metadata)
 {
   using namespace llvm;
-  // The candidate has already proved the module-level assembly and flags.
-  // Apply those non-reporting properties before transferring the exact
-  // provider nodes whose addresses are retained by the Faust generation.
+  // The candidate has already proved the merged module-level assembly. Its
+  // metadata was remapped during prepare to the exact live/provider values.
   live.setModuleInlineAsm(linked_candidate.getModuleInlineAsm());
-  if (NamedMDNode *flags = live.getNamedMetadata("llvm.module.flags"))
-    live.eraseNamedMetadata(flags);
-  if (const NamedMDNode *flags =
-        linked_candidate.getNamedMetadata("llvm.module.flags")) {
-    NamedMDNode *destination =
-      live.getOrInsertNamedMetadata("llvm.module.flags");
-    for (unsigned i = 0; i < flags->getNumOperands(); ++i)
-      destination->addOperand(flags->getOperand(i));
-  }
-  for (const NamedMDNode& metadata : provider.named_metadata()) {
-    if (metadata.getName() == "llvm.module.flags") continue;
-    NamedMDNode *destination =
-      live.getOrInsertNamedMetadata(metadata.getName());
-    for (unsigned i = 0; i < metadata.getNumOperands(); ++i)
-      destination->addOperand(metadata.getOperand(i));
-  }
 
   for (vector<pair<GlobalValue*, GlobalValue*> >::const_iterator binding =
          declarations.begin(); binding != declarations.end(); ++binding) {
@@ -4583,6 +4922,24 @@ static void commit_faust_module_transfer
     GlobalIFunc *ifunc = &*provider.ifunc_begin();
     provider.removeIFunc(ifunc);
     live.insertIFunc(ifunc);
+  }
+
+  vector<NamedMDNode*> previous_metadata;
+  for (NamedMDNode& metadata : live.named_metadata())
+    previous_metadata.push_back(&metadata);
+  for (vector<NamedMDNode*>::iterator metadata = previous_metadata.begin();
+       metadata != previous_metadata.end(); ++metadata)
+    live.eraseNamedMetadata(*metadata);
+  for (vector<prepared_faust_reload::named_metadata_snapshot>::const_iterator
+         metadata = named_metadata.begin();
+       metadata != named_metadata.end(); ++metadata) {
+    NamedMDNode *destination = live.getOrInsertNamedMetadata(metadata->name);
+    for (vector<TrackingMDNodeRef>::const_iterator operand =
+           metadata->operands.begin();
+         operand != metadata->operands.end(); ++operand) {
+      assert(operand->get());
+      destination->addOperand(operand->get());
+    }
   }
 }
 
@@ -4735,11 +5092,15 @@ static std::unique_ptr<prepared_faust_reload> prepare_faust_reload
   const Module *materialization_module = reload.provider.get();
   if (owner.compiling) {
     prepared->linked_candidate = prepare_linked_module
-      (*owner.module, CloneModule(*reload.provider), error, "Faust");
+      (*owner.module, CloneModule(*reload.provider), error, "Faust", true);
     if (!prepared->linked_candidate) return 0;
     if (!prepare_faust_module_transfer
           (*owner.module, *reload.provider,
            prepared->declaration_bindings, error))
+      return 0;
+    if (!prepare_faust_metadata_transfer
+          (*owner.module, *reload.provider, *prepared->linked_candidate,
+           prepared->named_metadata, error))
       return 0;
     materialization_module = prepared->linked_candidate.get();
     for (Function& function : *reload.provider)
@@ -4877,13 +5238,18 @@ static bool commit_faust_reload(prepared_faust_reload&& prepared,
     assert(prepared.linked_candidate && reload.provider);
     commit_faust_module_transfer
       (*owner.module, *reload.provider, *prepared.linked_candidate,
-       prepared.declaration_bindings);
+       prepared.declaration_bindings, prepared.named_metadata);
     assert(reload.provider->empty() && reload.provider->global_empty() &&
            reload.provider->alias_empty() && reload.provider->ifunc_empty());
     for (vector<pair<GlobalVariable*, Function*> >::const_iterator binding =
            prepared.batch_initializers.begin();
          binding != prepared.batch_initializers.end(); ++binding)
       binding->first->setInitializer(binding->second);
+    string committed_verification_error;
+    if (!verify_module(*owner.module, committed_verification_error))
+      report_fatal_error
+        (Twine("prevalidated batch Faust transfer became invalid: ")+
+         committed_verification_error);
   }
 
   // From this point onward every operation consumes a preallocated node,
