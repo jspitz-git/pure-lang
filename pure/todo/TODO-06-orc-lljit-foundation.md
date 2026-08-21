@@ -1,6 +1,6 @@
 # TODO-06 - ORC LLJIT Foundation
 
-Status: Complete
+Status: Closed on 2026-07-23; audited and corrected on 2026-08-21
 Branch: todo/06-orc-lljit-foundation
 
 ## Purpose
@@ -33,16 +33,54 @@ without exposing ORC details throughout the interpreter.
 
 ## Validation Plan
 
-- Add and run a focused `PureJit` smoke test through CTest.
-- Run the simplest constant and arithmetic interpreter tests.
-- Confirm missing-symbol and malformed-module errors do not abort the process.
+- Build `pure`, `pure-jit-smoke`, and the focused Release test fixtures with
+  LLVM 22.
+- Run `ctest --test-dir <build> -R '^pure-jit-smoke$'
+  --output-on-failure`; the smoke test covers typed execution, symbol lookup,
+  resource removal, missing symbols, and malformed modules submitted through
+  both snapshot and direct `ThreadSafeModule` paths.
+- Run `ctest --test-dir <build>
+  -R '^pure-jit-(smoke|eager|fresh-process-repeat)$' --output-on-failure` to
+  cover the basic interpreter and repeated fresh-process paths.
+- Confirm malformed modules return an actionable `invalid input ORC module`
+  error before entering the O1 pipeline or LLJIT.
 
-## Open Questions
+## Decisions
 
-- Should the initial ORC object layer use RuntimeDyld or JITLink on Linux?
-- What typed entry-point signature should replace untyped `void*` lookups?
+- Normal Linux builds retain LLVM 22 LLJIT's default RuntimeDyld object layer.
+  Linux Debug builds that enable `PURE_JIT_ELF_DEBUG_OBJECTS` use JITLink's
+  `ObjectLinkingLayer` so generated objects can be registered with debuggers.
+  Windows uses the dedicated COFF JITLink layer.
+- Callers resolve entry points through `lookup_function<FunctionType>()`, which
+  converts `ExecutorAddr` to a compile-time checked function pointer. Untyped
+  lookup remains available for symbol-management operations.
 
 ## Progress Log
+
+- 2026-08-21: Audited the closed TODO and corrected malformed-module handling.
+  - `add_module_snapshot` previously parsed bitcode and entered the module O1
+    pipeline before calling `verifyModule`. A focused Release regression caused
+    a segmentation fault, confirming that the documented non-aborting error
+    boundary was not implemented.
+  - Both direct `add_module(ThreadSafeModule)` overloads also accepted invalid
+    modules without verification.
+  - Added unconditional input verification after snapshot parsing and under the
+    `ThreadSafeModule` context lock before either direct overload submits IR to
+    LLJIT. Failures now return `invalid input ORC module` with the complete LLVM
+    diagnostic.
+  - Extended `pure-jit-smoke` with real malformed modules for the snapshot,
+    tracked direct, and untracked direct submission paths. Before the fixes, the
+    snapshot case segfaulted and both direct overloads accepted the module;
+    after their respective fixes, all three return the required error.
+  - Resolved the stale object-layer and typed-entry-point questions above, and
+    normalized the status to the repository's closed-TODO convention.
+  - Validation:
+    - MSYS2 CLANG64 Release build used Clang/LLVM 22.1.8.
+    - `ctest --test-dir build/audit-todo05-release -R '^pure-jit-smoke$'
+      --output-on-failure` passed 1/1 in 1.06 seconds.
+    - `ctest --test-dir build/audit-todo05-release
+      -R '^pure-jit-(smoke|invalid-function-verifier|eager|fresh-process-repeat)$'
+      --output-on-failure` passed 4/4 in 3.32 seconds.
 
 - 2026-07-23: Routed the first anonymous interpreter evaluation through ORC.
   - `doeval` verifies and snapshots the mutable module, promotes only the copied

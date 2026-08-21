@@ -1,6 +1,6 @@
 # TODO-11 - Faust Module Integration
 
-Status: Completed
+Status: Closed on 2026-07-24; batch ORC completed by TODO-14 on 2026-07-25; transactionally hardened through 2026-08-20; audited and corrected on 2026-08-21
 Branch: todo/11-faust-module-integration
 
 ## Purpose
@@ -29,17 +29,18 @@ released without stale function or global pointers.
 
 ### Reference toolchain
 
-- The canonical input is C emitted by Faust 2.70.3 with the bundled `pure.c`
-  architecture, compiled to bitcode by the selected Clang 22 toolchain. The reference
-  double fixture uses `faust -a pure.c -lang c` followed by
-  `clang-22 -emit-llvm -c`.
+- The original ABI reference is C emitted by Faust 2.70.3 with the bundled
+  `pure.c` architecture. The current Windows developer toolchain validated by
+  TODO-44 uses Faust 2.85.9. In both cases the generated C, rather than Faust's
+  direct LLVM backend, is compiled to bitcode by the selected Clang 22 toolchain.
+  The reference double fixture uses `faust -a pure.c -lang c` followed by the
+  configured Clang `-emit-llvm -c` invocation.
 - The Faust frontend and architecture source define the DSP API, while Clang 22 defines
   the accepted LLVM bitcode, target triple, data layout, and opaque-pointer IR. Bitcode
   from an arbitrary Faust LLVM backend is not a supported compatibility promise.
-- In particular, the direct LLVM backend in the available Faust 2.70.3 build uses LLVM
-  17 and emits only its internal `allocate`, `compute`, `destroy`, and JSON-oriented API;
-  it does not emit `new`, `init`, or `buildUserInterface` and is not a valid Pure DSP
-  module.
+- The direct LLVM backends inspected in the validated Faust toolchains use LLVM 17
+  and emit an internal API rather than the `pure.c` architecture interface. They
+  are not valid Pure DSP modules.
 - A module must pass the same target-triple and exact data-layout checks as generic
   bitcode before any symbols are published. Rewriting incompatible target metadata is
   not part of the supported ABI.
@@ -116,21 +117,70 @@ Symbol order in the LLVM module is not ABI-significant.
 
 ## Validation Plan
 
-- Generate test DSP bitcode with the documented compatible Faust toolchain.
-- Run load and reload tests under ASan and LLDB when failures involve code lifetime.
-- Verify wrapper modules with LLVM's verifier before ORC submission.
+- Configure with a compatible Faust executable and build the default target so all
+  generated C, bitcode, disassembly, verifier, and batch fixtures are available.
+- Run `ctest --test-dir <build>
+  -R '^(pure-faust-|pure-batch-faust)' --output-on-failure` in Release and ASan
+  configurations. The multi-process inline failure driver uses a 480-second ASan
+  timeout; single lifecycle tests retain their narrower limits.
+- Exercise inline compilation, failure cleanup, example GNU Make rules, the
+  repository pipeline contract, interactive lifecycle and cleanup retry, loaded
+  declaration retry, batch reload, COMDAT identity, and metadata ownership and
+  retirement.
+- Verify generated and wrapper modules with the configured LLVM verifier before ORC
+  submission, and use debugger inspection only for a reduced lifetime failure.
 
 ## Decisions
 
-- Faust 2.70.3 with its bundled `pure.c` architecture is the reference frontend; the
-  generated C is compiled to bitcode by the selected Clang 22 toolchain.
+- Faust 2.70.3 remains the original ABI reference. Faust 2.85.9 is the currently
+  validated Windows developer frontend from TODO-44; both use the `pure.c` C
+  pipeline and the selected Clang 22 toolchain.
 - The Faust compiler remains optional at configure time. Runtime loading is always built,
   while generated Faust fixtures and their lifecycle CTest are registered only when the
   compiler is available.
-- Interactive Faust lifecycle behavior completes this TODO. TODO-14 owns the retained
-  MCJIT batch implementation and complete batch-Faust execution validation.
+- TODO-14 completed batch Faust materialization and dispatch through ORC and removed
+  MCJIT. Interactive and batch paths now share tracked generation ownership while
+  retaining their distinct publication and output-module responsibilities.
 
 ## Progress Log
+
+Entries dated 2026-07-23 and 2026-07-24 describe the original migration state.
+TODO-14, TODO-44, and the 2026-08-20 transaction work subsequently extended the
+validated toolchain, batch path, reload atomicity, and test surface.
+
+- 2026-08-21: Audited current Faust integration, corrected two CTest configuration
+  defects, and reconciled this document with later ORC and packaging work.
+  - Selected GNU Make explicitly for the example Makefile test instead of passing
+    the main CMake generator, which is Ninja in the audited build.
+  - Raised only the multi-process inline failure driver's ASan timeout from 180 to
+    480 seconds. The unchanged driver completed successfully in 221.35 seconds
+    outside the former CTest limit.
+  - Recorded Faust 2.85.9 as the current Windows developer frontend while retaining
+    2.70.3 as the original ABI reference, and replaced the obsolete MCJIT deferral
+    with TODO-14's completed batch ORC disposition.
+  - Validation before the configuration fix:
+    - Nine of eleven ASan Faust CTests passed, including interactive lifecycle,
+      cleanup retry, batch reload, COMDAT, and metadata retirement.
+    - The example driver passed with GNU Make, and the unchanged inline failure
+      driver passed when allowed to run beyond 180 seconds. Neither failure came
+      from the production Faust loader.
+  - Validation after the configuration fix:
+    - The two original regressions passed 2/2 through CTest in 168.00 seconds.
+    - The complete ASan Faust family passed 11/11 in 363.98 seconds without a
+      sanitizer finding.
+
+- 2026-08-20: Completed post-closure Faust transaction and ownership hardening.
+  - Made reload preparation and publication atomic, retained failed cleanup for
+    retry, and stabilized inline Faust C source ownership across failure paths.
+  - Preserved COMDAT identity and remapped named metadata without retaining raw
+    references to retired generations.
+  - Added focused inline failure, cleanup retry, batch COMDAT, batch metadata, and
+    metadata-retirement coverage.
+
+- 2026-07-25: TODO-14 completed batch Faust migration to ORC.
+  - Materialized Pure-visible batch exports as reduced ORC snapshots, published
+    dispatch slots atomically, collected superseded generation trackers, and
+    removed the retained MCJIT materialization and mapping paths.
 
 - 2026-07-24: Completed automated Faust load, reload, rejection, and teardown coverage.
   - Generate a canonical reference DSP with Faust 2.70.3 and bundled `pure.c`, then compile

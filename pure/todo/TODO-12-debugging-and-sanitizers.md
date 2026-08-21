@@ -1,6 +1,6 @@
 # TODO-12 - Debugging and Sanitizers
 
-Status: Closed on 2026-07-24
+Status: Closed on 2026-07-24; audited on 2026-08-21
 Branch: todo/12-debugging-and-sanitizers
 
 ## Purpose
@@ -54,18 +54,27 @@ The `llvm22-asan` configure preset selects `address,undefined`. Its test preset
 stops on ASan and UBSan findings, requests UBSan stack traces, and keeps leak
 scanning disabled so broad ASan/UBSan runs remain separate from targeted leak
 checks. The `llvm22-lsan` test preset enables leak scanning against the same
-build. All five bitcode integration tests and the prelude-independent lifetime
-stress now pass in that mode. No sanitizer finding is suppressed; Clang's
-documented `function` exception for ORC-generated call targets remains scoped
-to `pure-jit-smoke`.
+build. At task closure, all five then-existing bitcode integration tests and the
+prelude-independent lifetime stress passed in that mode. The current suite
+registers 22 `pure-bitcode-*` integration tests, so validation should select the
+prefix rather than rely on the historical count. No sanitizer finding is
+suppressed. Clang's documented `function` instrumentation exception for
+ORC-generated call targets remains scoped to `pure-jit-smoke`. On Windows,
+`coff_jitlink.cc` additionally compiles with `-fno-sanitize=address`: the
+distributed LLVM libraries are not ASan-instrumented, and this narrow shim must
+retain an ABI-compatible `BumpPtrAllocator` instantiation. The rest of the Pure
+JIT and runtime remains instrumented.
 
 ## LLDB 22
 
+The checked-in Zed launch configuration is for the Linux LLVM 22 presets.
 Zed's `Pure JIT smoke (LLDB 22)` debug scenario builds the Debug preset with one
 parallel job and launches `build/llvm22-debug/pure-jit-smoke`. Project settings
 bind Zed's `CodeLLDB` adapter entry to `/usr/bin/lldb-dap-22`, so the DAP session
 uses the same LLVM 22 toolchain as the build. Start it from the debug panel or
-with `debugger: start` (`F4`). The equivalent command-line launch is:
+with `debugger: start` (`F4`). Windows users must provide a platform-appropriate
+adapter path and launch configuration. The equivalent Linux command-line launch
+is:
 
 ```text
 lldb-22 -- build/llvm22-debug/pure-jit-smoke
@@ -94,8 +103,10 @@ Linux Debug builds select ORC's JITLink `ObjectLinkingLayer` and install the
 LLVM 22 `ELFDebugObjectPlugin`. The plugin automatically publishes an ELF debug
 object through the GDB JIT interface whenever ORC materializes code. LLDB and
 GDB can therefore discover generated function names after materialization.
-Release and non-Linux builds retain LLJIT's default object layer and incur no
-plugin overhead.
+Linux Release builds and non-Windows, non-Linux builds retain LLJIT's default
+object layer and incur no plugin overhead. Windows builds instead use Pure's
+dedicated COFF JITLink layer for image-relative relocations and unwind data;
+that layer does not install the ELF debugger plugin.
 
 The interpreter's current generated IR has no source-level debug metadata. The
 plugin consequently emits symbol-only objects, which provide named JIT frames
@@ -163,12 +174,36 @@ so sanitizer builds do not disable it.
 
 - `cmake --preset llvm22-asan`
 - `cmake --build --preset llvm22-asan`
-- `ctest --preset llvm22-asan -R pure-jit-smoke --output-on-failure`
-- `ctest --preset llvm22-lsan -R pure-jit-smoke --output-on-failure`
+- `ctest --preset llvm22-asan -R
+  '^pure-jit-(smoke|invalid-function-verifier|ir-dump|object-dump|lifetime-stress|eval-failure-recovery)$'
+  --output-on-failure`
+- `ctest --preset llvm22-lsan -R
+  '^pure-jit-(smoke|lifetime-stress)$' --output-on-failure`
+- `ctest --preset llvm22-lsan -R '^pure-bitcode-' --output-on-failure`
 - Attempt to launch the smoke test under `lldb-22` and resolve a named JITed
   frame; record a reproducible host limitation if inferior launch is unavailable.
 
 ## Progress Log
+
+The entries from 2026-07-24 describe the original Linux LLVM 22 implementation
+and its then-current five-test bitcode surface. Later work added the Windows
+COFF JITLink layer and expanded the integration suite.
+
+- 2026-08-21: Audited the current debugging and sanitizer implementation and
+  reconciled this document with subsequent Windows and test-suite changes.
+  - Documented the dedicated Windows COFF JITLink layer and its narrow ASan
+    instrumentation exception; the ELF debugger plugin remains Linux Debug-only.
+  - Marked the checked-in Zed/LLDB configuration as Linux-specific and replaced
+    the obsolete current count of five bitcode tests with prefix-based guidance
+    for the 22 registered `pure-bitcode-*` tests.
+  - Expanded the validation plan to cover verifier rejection, IR and object
+    dumps, lifetime stress, recovery after evaluation failure, and the complete
+    bitcode family under targeted leak detection.
+  - Validation:
+    - The Windows CLANG64 ASan build registered 50 CTests, including 22
+      `pure-bitcode-*` integration tests.
+    - The six targeted JIT tests in the expanded ASan selection passed 6/6 in
+      8.58 seconds.
 
 - 2026-07-22: Initial debugging and sanitizer plan created.
   - Validation:

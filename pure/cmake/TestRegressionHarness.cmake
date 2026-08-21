@@ -24,10 +24,10 @@ if(NOT posix_contract STREQUAL
     "[${posix_contract}]")
 endif()
 
-if(WIN32 AND NOT PURE_CONFIGURED_TEST_JOBS STREQUAL "1")
+if(NOT PURE_CONFIGURED_TEST_JOBS MATCHES "^[1-9][0-9]*$")
   message(FATAL_ERROR
-    "Windows nested regression is configured with TEST_JOBS="
-    "${PURE_CONFIGURED_TEST_JOBS}, expected 1")
+    "Configured regression TEST_JOBS is not a positive integer: "
+    "${PURE_CONFIGURED_TEST_JOBS}")
 endif()
 
 set(test_name "test001")
@@ -90,4 +90,86 @@ string(FIND "${harness_output}${harness_error}"
        "interpreter exited with status 23" interpreter_failure_position)
 if(interpreter_failure_position EQUAL -1)
   message(FATAL_ERROR "Regression harness did not report the fake interpreter status")
+endif()
+
+file(MAKE_DIRECTORY "${fixture}/bin" "${fixture}/lib" "${fixture}/test")
+file(COPY_FILE "${PURE_RUN_TEST}" "${fixture}/run-test")
+file(READ "${PURE_REGRESSION_HARNESS}" scheduler_harness)
+string(REGEX REPLACE "srcdir=[^\n]*" "srcdir=\"${fixture}\""
+  scheduler_harness "${scheduler_harness}")
+file(WRITE "${fixture}/run-tests" "${scheduler_harness}")
+file(WRITE "${fixture}/lib/prelude.pure" "1:prelude\n")
+file(WRITE "${fixture}/test/prelude.log" "prelude\n")
+file(WRITE "${fixture}/test/test001.pure" "1:slow\n")
+file(WRITE "${fixture}/test/test001.log" "slow\n")
+file(WRITE "${fixture}/test/test002.pure" "1:fast\n")
+file(WRITE "${fixture}/test/test002.log" "fast\n")
+file(WRITE "${fixture}/bin/find" [=[#!/bin/sh
+printf '%s\n' '@FIXTURE@/test\test001.pure' '@FIXTURE@/test\test002.pure'
+]=])
+file(WRITE "${fixture}/pure" [=[#!/bin/sh
+IFS=: read delay payload
+if mkdir '@FIXTURE@/active' 2>/dev/null; then
+  owns_active=1
+else
+  : > '@FIXTURE@/overlap'
+  owns_active=0
+fi
+sleep "$delay"
+test "$owns_active" -eq 0 || rmdir '@FIXTURE@/active'
+printf '%s\n' "$payload"
+]=])
+file(READ "${fixture}/pure" scheduler_interpreter)
+string(REPLACE "@FIXTURE@" "${fixture}"
+  scheduler_interpreter "${scheduler_interpreter}")
+file(WRITE "${fixture}/pure" "${scheduler_interpreter}")
+file(READ "${fixture}/bin/find" scheduler_find)
+string(REPLACE "@FIXTURE@" "${fixture}" scheduler_find "${scheduler_find}")
+file(WRITE "${fixture}/bin/find" "${scheduler_find}")
+file(CHMOD
+  "${fixture}/bin/find" "${fixture}/run-test" "${fixture}/run-tests"
+  "${fixture}/pure"
+  PERMISSIONS
+    OWNER_READ OWNER_WRITE OWNER_EXECUTE
+    GROUP_READ GROUP_EXECUTE
+    WORLD_READ WORLD_EXECUTE)
+if(WIN32)
+  set(scheduler_harness_command
+    "${PURE_SH_EXECUTABLE}" "${fixture}/run-tests")
+else()
+  set(scheduler_harness_command "${fixture}/run-tests")
+endif()
+pure_prepend_path(scheduler_path "${fixture}/bin" "$ENV{PATH}" "${WIN32}")
+execute_process(
+  COMMAND "${CMAKE_COMMAND}" -E env "PATH=${scheduler_path}"
+    ${scheduler_harness_command} -j 2
+  WORKING_DIRECTORY "${fixture}"
+  RESULT_VARIABLE scheduler_result
+  OUTPUT_VARIABLE scheduler_output
+  ERROR_VARIABLE scheduler_error
+)
+set(scheduler_combined "${scheduler_output}${scheduler_error}")
+if(NOT scheduler_result EQUAL 0)
+  file(REMOVE_RECURSE "${fixture}")
+  message(FATAL_ERROR
+    "Two-worker regression fixture failed:\n${scheduler_combined}")
+endif()
+if(NOT EXISTS "${fixture}/overlap")
+  file(REMOVE_RECURSE "${fixture}")
+  message(FATAL_ERROR
+    "Two-worker regression fixture did not execute concurrently")
+endif()
+string(FIND "${scheduler_combined}" "prelude.pure: passed"
+  prelude_position)
+string(FIND "${scheduler_combined}" "test001.pure: passed"
+  slow_position)
+string(FIND "${scheduler_combined}" "test002.pure: passed"
+  fast_position)
+file(REMOVE_RECURSE "${fixture}")
+if(prelude_position EQUAL -1 OR slow_position EQUAL -1 OR
+   fast_position EQUAL -1 OR NOT prelude_position LESS slow_position OR
+   NOT slow_position LESS fast_position)
+  message(FATAL_ERROR
+    "Parallel regression results were not published in argument order:\n"
+    "${scheduler_combined}")
 endif()

@@ -277,9 +277,13 @@ The complete preset also runs the historical regression corpus::
   $ ctest --preset llvm22-asan --output-on-failure
 
 The regression runner starts a fresh interpreter for each script and keeps up to
-four processes active. CTest budgets the complete corpus for 10 minutes in Release,
-15 minutes in Debug, and 30 minutes under ASan/UBSan. Observed LLVM 22 validation
-times on a 12-CPU host were approximately 5, 8, and 22 minutes respectively.
+four processes active by default. Configure with
+``-DPURE_REGRESSION_JOBS=<positive-integer>`` to match the host's available memory;
+``-DPURE_REGRESSION_JOBS=1`` is appropriate for a memory-constrained machine which
+would otherwise spend most of the run swapping. CTest budgets the complete corpus
+for 10 minutes in Release, 15 minutes in Debug, and 30 minutes under ASan/UBSan.
+Observed LLVM 22 validation times with four workers on a 12-CPU host were
+approximately 5, 8, and 22 minutes respectively.
 Sanitizer regression runs disable Pure's address-difference stack heuristic because
 ASan detects actual stack overflow, and use a nonzero 64 MiB quarantine to retain
 use-after-free coverage without multiplying memory by the ASan default for every

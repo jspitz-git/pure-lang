@@ -42,6 +42,215 @@ defaults:
     working-directory: pure
 
 jobs:
+  windows-pure-core:
+    name: Windows 11 x86_64 Pure core
+    runs-on: windows-2025
+    timeout-minutes: 120
+    env:
+      CMAKE_EXE: C:/msys64/clang64/bin/cmake.exe
+      CTEST_EXE: C:/msys64/clang64/bin/ctest.exe
+      LLVM_READOBJ_EXE: C:/msys64/clang64/bin/llvm-readobj.exe
+      RELEASE_BUILD: build/windows-clang64-release
+      DEBUG_BUILD: build/windows-clang64-debug
+      INSTALL_PREFIX: build/windows-clang64-prefix
+      LOG_DIR: build/native-logs/windows-11-x86_64
+      FAUST_URL: https://github.com/grame-cncm/faust/releases/download/2.85.9/Faust-2.85.9-win64.exe
+      FAUST_SHA256: d0994eb444ab4b1e75e3ed7c31897da24013db0672e2c6be8f2ab09b73d16977
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Install the CLANG64 build prerequisites
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: CLANG64
+          update: true
+          release: false
+          install: >-
+            bison
+            diffutils
+            flex
+            mingw-w64-clang-x86_64-clang
+            mingw-w64-clang-x86_64-cmake
+            mingw-w64-clang-x86_64-flang
+            mingw-w64-clang-x86_64-gmp
+            mingw-w64-clang-x86_64-libiconv
+            mingw-w64-clang-x86_64-llvm
+            mingw-w64-clang-x86_64-mpfr
+            mingw-w64-clang-x86_64-ninja
+            mingw-w64-clang-x86_64-pcre
+            mingw-w64-clang-x86_64-pkgconf
+            mingw-w64-clang-x86_64-readline
+
+      - name: Initialize validation logs
+        run: New-Item -ItemType Directory -Path $env:LOG_DIR -Force | Out-Null
+
+      - name: Fetch and verify the official Faust 2.85.9 payload
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $asset = Join-Path $env:RUNNER_TEMP 'Faust-2.85.9-win64.exe'
+          $faustRoot = Join-Path $env:RUNNER_TEMP 'Faust 2.85.9 extracted'
+          Invoke-WebRequest -Uri $env:FAUST_URL -OutFile $asset
+          $actual = (Get-FileHash -LiteralPath $asset -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actual -ne $env:FAUST_SHA256) {
+            throw "Faust asset SHA-256 mismatch: $actual"
+          }
+          New-Item -ItemType Directory -Path $faustRoot -Force | Out-Null
+          & 7z.exe x $asset "-o$faustRoot" -y |
+            Tee-Object -FilePath "$env:LOG_DIR/faust-extract.log"
+          if ($LASTEXITCODE -ne 0) { throw 'Faust extraction failed' }
+          $faust = Join-Path $faustRoot 'bin/faust.exe'
+          & $faust --version | Tee-Object -FilePath "$env:LOG_DIR/faust-version.log"
+          if ($LASTEXITCODE -ne 0) { throw 'Faust version probe failed' }
+          "PURE_CI_FAUST=$($faust.Replace('\', '/'))" |
+            Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Record host and toolchain evidence
+        run: |
+          $ErrorActionPreference = 'Stop'
+          & {
+            $probes = @(
+              'C:/msys64/usr/bin/uname.exe -a',
+              'C:/Windows/System32/cmd.exe /c ver',
+              'C:/msys64/clang64/bin/clang.exe --version',
+              'C:/msys64/clang64/bin/clang.exe -dumpmachine',
+              'C:/msys64/clang64/bin/llvm-config.exe --version',
+              'C:/msys64/clang64/bin/llvm-config.exe --host-target',
+              'C:/msys64/clang64/bin/llvm-config.exe --bindir',
+              'C:/msys64/clang64/bin/pkgconf.exe --version',
+              'C:/msys64/clang64/bin/flang-new.exe --version'
+            )
+            foreach ($probe in $probes) {
+              Write-Host "> $probe"
+              & C:/Windows/System32/cmd.exe /d /s /c $probe
+              if ($LASTEXITCODE -ne 0) { throw "Toolchain probe failed: $probe" }
+            }
+            foreach ($package in @('gmp', 'mpfr', 'readline', 'libpcreposix')) {
+              & C:/msys64/clang64/bin/pkgconf.exe --modversion $package
+              if ($LASTEXITCODE -ne 0) { throw "pkgconf version probe failed: $package" }
+              & C:/msys64/clang64/bin/pkgconf.exe --variable=prefix $package
+              if ($LASTEXITCODE -ne 0) { throw "pkgconf prefix probe failed: $package" }
+            }
+          } 2>&1 | Tee-Object -FilePath "$env:LOG_DIR/host-toolchain.log"
+
+      - name: Reject a cross-target Windows configuration
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $negativeBuild = 'build/windows-negative-cross-target'
+          & $env:CMAKE_EXE --preset windows-clang64-release -B $negativeBuild `
+            -DCMAKE_SYSTEM_NAME=Generic `
+            "-DPURE_FAUST_EXECUTABLE=$env:PURE_CI_FAUST" `
+            2>&1 | Tee-Object -FilePath "$env:LOG_DIR/configure-negative-cross-target.log"
+          if ($LASTEXITCODE -eq 0) {
+            throw 'Cross-target strict-toolchain configure unexpectedly succeeded'
+          }
+          $negativeLog = Get-Content `
+            "$env:LOG_DIR/configure-negative-cross-target.log" -Raw
+          if ($negativeLog -notmatch 'requires matching host and target systems') {
+            throw 'Cross-target configure failed outside the expected strict-toolchain guard'
+          }
+
+      - name: Configure and build Release preset
+        run: |
+          $ErrorActionPreference = 'Stop'
+          & $env:CMAKE_EXE --preset windows-clang64-release `
+            "-DPURE_FAUST_EXECUTABLE=$env:PURE_CI_FAUST" `
+            2>&1 | Tee-Object -FilePath "$env:LOG_DIR/configure-release.log"
+          if ($LASTEXITCODE -ne 0) { throw 'Release configure failed' }
+          & $env:CMAKE_EXE --build --preset windows-clang64-release --parallel 1 `
+            2>&1 | Tee-Object -FilePath "$env:LOG_DIR/build-release.log"
+          if ($LASTEXITCODE -ne 0) { throw 'Release build failed' }
+
+      - name: Run focused and complete Release tests
+        run: |
+          $ErrorActionPreference = 'Stop'
+          & $env:CTEST_EXE --preset windows-clang64-release -E pure-regression `
+            2>&1 | Tee-Object -FilePath "$env:LOG_DIR/ctest-release-focused.log"
+          if ($LASTEXITCODE -ne 0) { throw 'Focused Release CTest failed' }
+          & $env:CTEST_EXE --preset windows-clang64-release `
+            2>&1 | Tee-Object -FilePath "$env:LOG_DIR/ctest-release-complete.log"
+          if ($LASTEXITCODE -ne 0) { throw 'Complete Release CTest failed' }
+
+      - name: Install and validate the portable runtime
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $prefix = [IO.Path]::GetFullPath($env:INSTALL_PREFIX)
+          & $env:CMAKE_EXE --install $env:RELEASE_BUILD `
+            2>&1 | Tee-Object -FilePath "$env:LOG_DIR/install.log"
+          if ($LASTEXITCODE -ne 0) { throw 'Release install failed' }
+          Copy-Item "$env:RELEASE_BUILD/install_manifest.txt" `
+            "$env:LOG_DIR/install_manifest.txt"
+
+          & {
+            $env:Path = "$prefix/bin;$env:SystemRoot/System32/WindowsPowerShell/v1.0;$env:SystemRoot/System32;$env:SystemRoot"
+            Remove-Item Env:PURELIB -ErrorAction SilentlyContinue
+            & "$prefix/bin/pure.exe" --version
+            if ($LASTEXITCODE -ne 0) { throw 'Installed version probe failed' }
+            & "$prefix/bin/pure.exe" examples/hello.pure
+            if ($LASTEXITCODE -ne 0) { throw 'Installed hello program failed' }
+            & $env:LLVM_READOBJ_EXE --file-headers --coff-exports "$prefix/bin/libpure.dll"
+            if ($LASTEXITCODE -ne 0) { throw 'Installed runtime COFF inspection failed' }
+            $env:PKG_CONFIG_PATH = "$prefix/lib/pkgconfig"
+            & C:/msys64/clang64/bin/pkgconf.exe --modversion pure
+            if ($LASTEXITCODE -ne 0) { throw 'Installed pkg-config probe failed' }
+          } 2>&1 | Tee-Object -FilePath "$env:LOG_DIR/installed-runtime.log"
+
+      - name: Audit the portable Windows prefix
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $prefix = (Resolve-Path $env:INSTALL_PREFIX).Path.Replace('\', '/')
+          $buildRoot = (Resolve-Path build).Path.Replace('\', '/')
+          & $env:CMAKE_EXE "-DPURE_PREFIX=$prefix" `
+            -DPURE_TOOL_DIR=C:/msys64/clang64/bin `
+            "-DPURE_FORBIDDEN_PATHS=$buildRoot" `
+            -P cmake/AuditWindowsPortableInstall.cmake `
+            2>&1 | Tee-Object -FilePath "$env:LOG_DIR/portable-audit.log"
+          if ($LASTEXITCODE -ne 0) { throw 'Portable prefix audit failed' }
+
+      - name: Configure, build, and test Debug preset
+        run: |
+          $ErrorActionPreference = 'Stop'
+          & $env:CMAKE_EXE --preset windows-clang64-debug `
+            "-DPURE_FAUST_EXECUTABLE=$env:PURE_CI_FAUST" `
+            2>&1 | Tee-Object -FilePath "$env:LOG_DIR/configure-debug.log"
+          if ($LASTEXITCODE -ne 0) { throw 'Debug configure failed' }
+          & $env:CMAKE_EXE --build --preset windows-clang64-debug --parallel 1 `
+            2>&1 | Tee-Object -FilePath "$env:LOG_DIR/build-debug.log"
+          if ($LASTEXITCODE -ne 0) { throw 'Debug build failed' }
+          & $env:CTEST_EXE --preset windows-clang64-debug -E pure-regression `
+            2>&1 | Tee-Object -FilePath "$env:LOG_DIR/ctest-debug-focused.log"
+          if ($LASTEXITCODE -ne 0) { throw 'Focused Debug CTest failed' }
+
+      - name: Validate manifest containment and idempotent uninstall
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $prefix = (Resolve-Path $env:INSTALL_PREFIX).Path
+          $manifest = @(Get-Content "$env:RELEASE_BUILD/install_manifest.txt")
+          foreach ($entry in $manifest) {
+            $nativeEntry = $entry.Replace('/', '\')
+            if (-not $nativeEntry.StartsWith("$prefix\", [StringComparison]::OrdinalIgnoreCase)) {
+              throw "Install manifest path escapes prefix: $entry"
+            }
+          }
+          & $env:CMAKE_EXE --build $env:RELEASE_BUILD --target uninstall `
+            2>&1 | Tee-Object -FilePath "$env:LOG_DIR/uninstall-first.log"
+          if ($LASTEXITCODE -ne 0) { throw 'First uninstall failed' }
+          foreach ($entry in $manifest) {
+            if (Test-Path -LiteralPath $entry) { throw "Installed path remains: $entry" }
+          }
+          & $env:CMAKE_EXE --build $env:RELEASE_BUILD --target uninstall `
+            2>&1 | Tee-Object -FilePath "$env:LOG_DIR/uninstall-second.log"
+          if ($LASTEXITCODE -ne 0) { throw 'Second uninstall failed' }
+
+      - name: Upload Windows native validation logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-native-validation
+          path: pure/build/native-logs/windows-11-x86_64
+          if-no-files-found: warn
+
   windows-pure-fastcgi:
     name: Windows PureFastCGI package
     runs-on: windows-2025

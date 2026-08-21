@@ -98,10 +98,31 @@ the module pipeline. Later bitcode and Faust fixtures also run `opt-22
 exercise arithmetic, calls, aggregates, matching, recursion, imported bitcode,
 and Faust providers through these boundaries.
 
-This closes generated-IR verification without weakening the explicit opaque
-pointer limitation: generic external bitcode functions with pointer parameters
-or results remain unwrappable until modules can provide semantic Pure ABI
-metadata. TODO-15 now owns the metadata format, validation, and loader coverage.
+At closure this completed generated-IR verification without weakening the
+explicit opaque-pointer limitation: generic external bitcode functions with
+pointer parameters or results remained unwrappable until modules could provide
+semantic Pure ABI metadata. TODO-15 subsequently implemented versioned
+`pure.abi` metadata, validation, publication, cache/batch preservation, and 11
+loader tests in Release, Debug, and ASan/UBSan. Pointer-bearing exports are now
+supported when they carry valid metadata; definitions without it remain
+unpublished rather than having their pointee semantics guessed.
+
+## Post-Closure Transactional Hardening
+
+The verifier integration added by `30b0c0467` detected invalid linked modules,
+but the original generic bitcode and Faust paths called `verifyModule` only
+after the destructive `Linker::linkModules` operation. A verification failure
+therefore reported the invalid IR without proving that every mutation to the
+live interpreter module had been rolled back. This did not invalidate the
+opaque-pointer API migration or successful-IR coverage, but it left failed
+imports without a complete atomicity guarantee.
+
+Later transaction work closed that gap. Commits `09509ab8` and `4762da09`
+introduced staged transactional bitcode import and failure recovery, and
+`8cd276ed` corrected wrapper rollback ownership. The current loader validates
+and verifies staged providers before publication and retains explicit rollback
+state for later failure boundaries. These changes are post-closure hardening,
+not evidence that the original TODO-04 rejection path was already atomic.
 
 ## Guardrails
 
@@ -117,14 +138,34 @@ metadata. TODO-15 now owns the metadata format, validation, and loader coverage.
 
 ## Decisions
 
-- Externally produced pointer-bearing bitcode requires a future explicit Pure C
-  ABI metadata format; LLVM opaque pointer types must never be guessed.
+- Externally produced pointer-bearing bitcode requires explicit Pure C ABI
+  metadata; LLVM opaque pointer types must never be guessed. TODO-15 implemented
+  version 1 of this format as `pure.abi`. Missing metadata remains compatible
+  only for scalar exports; pointer-bearing definitions without valid metadata
+  remain unpublished.
 - The generic-value Faust call site carries an explicit stored `FunctionType`.
   Other migrated indirect calls retain a concrete function type, and LLVM 22
   builds report no remaining untyped indirect-call API use.
 
 ## Progress Log
 
+- 2026-08-21: Audited the TODO-04 closure and recorded subsequent resolution.
+  - Distinguished the closure-time pointer ABI limitation from TODO-15's later
+    implementation of versioned `pure.abi` metadata and its 11-test
+    Release/Debug/ASan validation.
+  - Recorded that the original post-link verifier detected invalid IR without a
+    complete rollback guarantee.
+  - Identified commits `09509ab8`, `4762da09`, and `8cd276ed` as later
+    transactional import and wrapper-rollback hardening rather than attributing
+    that atomicity to TODO-04.
+  - Validation:
+    - Inspected verifier commit `30b0c0467` and confirmed its verification calls
+      followed destructive `Linker::linkModules` operations.
+    - Cross-checked TODO-15's pointer metadata schema and 11 passing bitcode tests
+      in Release, Debug, and ASan/UBSan.
+    - Inspected the three 2026-08-20 transaction commits and current staged
+      verifier/rollback paths; no executable test was run for this
+      documentation-only correction.
 - 2026-07-23: Reached the TODO-04 compilation boundary and recorded the runtime
   validation dependency.
   - Clang 22 reports zero warnings and no errors in IR generation, opaque-pointer

@@ -1,6 +1,6 @@
 # TODO-14 - Complete ORC Runtime and Batch Migration
 
-Status: Completed
+Status: Closed on 2026-07-25; audited on 2026-08-21
 Branch: todo/14-complete-orc-runtime-and-batch-migration
 
 ## Purpose
@@ -35,11 +35,13 @@ compatibility gates can be removed.
 
 ## Transitional Engine Inventory
 
-The remaining `ExecutionEngine` is created from the interpreter's mutable module by
-`EngineBuilder` during `interpreter::init`, configured for eager/lazy mode by
-`init_jit_mode`, given the `resolve_legacy_external` fallback, and deleted after global
-environments during interpreter shutdown. CMake links both `ExecutionEngine` and
-`MCJIT` solely for this path.
+This section records the pre-migration inventory from 2026-07-25. It is retained
+as implementation history and does not describe the current runtime. At that
+point, the remaining `ExecutionEngine` was created from the interpreter's
+mutable module by `EngineBuilder` during `interpreter::init`, configured for
+eager/lazy mode by `init_jit_mode`, given the `resolve_legacy_external`
+fallback, and deleted after global environments during interpreter shutdown.
+CMake linked both `ExecutionEngine` and `MCJIT` solely for this path.
 
 Runtime consumers fall into five migration groups:
 
@@ -68,12 +70,17 @@ The active compatibility/linkage residue is correspondingly bounded:
 - `LLVM_VERSION` is unrelated current version metadata and remains protected by the
   task guardrail.
 
-Migration order is therefore: add explicit eager ORC materialization and settle its
-native ABI, move retained initializers and batch Faust to ORC snapshots, remove mirrored
-legacy mappings/cleanup, then delete engine construction, resolver, linkage, headers,
-and compatibility branches. Interactive evaluation, definition units, lazy global
-snapshots, type generations, external wrappers, bitcode providers, and interactive
-Faust generations already use ORC and form the correctness baseline.
+The migration order identified by the inventory was therefore: add explicit
+eager ORC materialization and settle its native ABI, move retained initializers
+and batch Faust to ORC snapshots, remove mirrored legacy mappings and cleanup,
+then delete engine construction, resolver, linkage, headers, and compatibility
+branches. Interactive evaluation, definition units, lazy global snapshots, type
+generations, external wrappers, bitcode providers, and interactive Faust
+generations already used ORC and formed the correctness baseline.
+
+The migration completed all of these steps. The current runtime has no MCJIT or
+`ExecutionEngine` consumer, CMake links ORC/JITLink without the MCJIT component,
+and the historical LLVM compatibility gates are absent from production sources.
 
 ## Native Callable-Address ABI Policy
 
@@ -91,6 +98,20 @@ API, an ORC indirection stub with specified retargeting and teardown semantics, 
 none is introduced by this migration. Batch-compiled output symbols remain governed by
 the existing separate batch ABI.
 
+## Post-closure Hardening
+
+Later work extended two lifetime areas without changing the ORC-only architecture
+or the public callable-address policy:
+
+- TODO-50 corrected deferred generation capture. A retained, not-yet-invoked
+  global closure now resolves the newest generation in the definition epoch it
+  captured, while `clear` starts a new epoch. It never silently falls forward to
+  a generation from a later epoch. `pure-jit-deferred-generation` covers
+  materialized and never-materialized closures plus out-of-order release.
+- The 2026-08-20 transaction work recorded in TODO-11 hardened batch Faust
+  preparation, publication, rollback, cleanup retry, COMDAT preservation, and
+  metadata retirement. These paths remain owned by ORC generation trackers.
+
 ## Guardrails
 
 - Do not remove MCJIT while any runtime-reachable consumer remains.
@@ -105,7 +126,14 @@ the existing separate batch ABI.
 - Link and execute a complete batch-produced program, not only an object-file smoke test.
 - Search for `ExecutionEngine`, `EngineBuilder`, MCJIT mapping/materialization methods,
   `LLVM2`/`LLVM3` compatibility macros, and `NEW_USER_ITERATOR`.
+- Exercise `pure-jit-deferred-generation`, `pure-jit-deferred-retry`,
+  `pure-jit-type-retirement-retry`, `pure-jit-eval-failure-recovery`, and the
+  transactional bitcode host-replacement tests.
+- Exercise batch Faust cleanup retry, COMDAT preservation, metadata transfer,
+  and metadata retirement in addition to the basic batch Faust test.
 - Run the complete supported regression corpus after the runtime transition.
+- Execute the supported native Windows and macOS build, batch, test, install,
+  and shutdown runbooks defined by TODO-16.
 - Preserve TODO-18's reduced-helper localization and transactional type-generation
   replacement; stale type addresses and all initial duplicate-publication boundaries
   now pass their focused and corpus reproducers.
@@ -118,6 +146,22 @@ TODO-09. TODO-18 supplies 11 complete-corpus reproducers for duplicate ORC
 publication and invalid continuation after a failed materialization.
 
 ## Progress Log
+
+- 2026-08-21: Audited the completed ORC migration against the current runtime,
+  post-closure lifetime fixes, and expanded test surface.
+  - Marked the transitional engine inventory as a historical 2026-07-25
+    snapshot and recorded the current ORC-only runtime and linkage state.
+  - Reconciled TODO-50's deferred-generation epoch fix and the later
+    transactional batch Faust ownership hardening from TODO-11.
+  - Expanded validation guidance to cover deferred and failed materialization,
+    type retirement, transactional host replacement, Faust cleanup/metadata,
+    and the supported non-Linux hosts from TODO-16.
+  - Validation:
+    - Production-source searches found no MCJIT, `ExecutionEngine`, legacy
+      mapping/materialization API, or LLVM compatibility-gate consumer.
+    - The Windows CLANG64 ASan build passed the 13 selected ORC lifetime,
+      eager, transaction, batch executable, and batch Faust tests in 95.48
+      seconds without a sanitizer finding.
 
 - 2026-07-25: Completed the transitional engine and compatibility-gate inventory.
   - Classified engine ownership, host mappings, eager/C-API materialization, retained

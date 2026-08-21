@@ -1,0 +1,13 @@
+using "bc:metadata-missing-version";
+using "bc:metadata-duplicate-version";
+using "bc:metadata-non-string";
+using "bc:metadata-dangling";
+using "bc:metadata-declaration";
+using "bc:metadata-non-c";
+using "bc:metadata-arity";
+using "bc:metadata-address-space";
+using "bc:metadata-const-scalar";
+using "bc:metadata-void-argument";
+using "bc:metadata-custom-scalar";
+using "bc:basic";
+bc_add_one 41;

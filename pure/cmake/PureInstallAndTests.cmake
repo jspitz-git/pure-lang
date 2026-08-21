@@ -47,6 +47,10 @@ if(BUILD_TESTING)
   )
 
   find_program(PURE_SH_EXECUTABLE NAMES sh REQUIRED)
+  get_filename_component(PURE_SH_DIRECTORY "${PURE_SH_EXECUTABLE}" DIRECTORY)
+  set(PURE_TEST_RUNTIME_PATH
+    "PATH=path_list_prepend:${LLVM_TOOLS_BINARY_DIR};PATH=path_list_prepend:${PURE_SH_DIRECTORY}"
+  )
   find_program(
     PURE_LLVM_AS_EXECUTABLE
     NAMES llvm-as-22 llvm-as
@@ -94,7 +98,11 @@ if(BUILD_TESTING)
 
   foreach(fixture
       pointer-valid pointer-missing metadata-malformed metadata-mismatch
-      metadata-duplicate pointer-duplicate-a pointer-duplicate-b)
+      metadata-duplicate pointer-duplicate-a pointer-duplicate-b
+      pointer-qualified metadata-missing-version metadata-duplicate-version
+      metadata-non-string metadata-dangling metadata-declaration
+      metadata-non-c metadata-arity metadata-address-space
+      metadata-const-scalar metadata-void-argument metadata-custom-scalar)
     set(source "${CMAKE_CURRENT_SOURCE_DIR}/test/bitcode/${fixture}.ll")
     set(output "${PURE_BITCODE_FIXTURE_OUTPUT_DIR}/${fixture}.bc")
     set(disassembly "${PURE_BITCODE_FIXTURE_OUTPUT_DIR}/${fixture}.ll")
@@ -171,6 +179,7 @@ if(BUILD_TESTING)
   )
 
   if(PURE_FAUST_EXECUTABLE)
+    find_program(PURE_MAKE_EXECUTABLE NAMES gmake make REQUIRED)
     set(PURE_FAUST_FIXTURE_OUTPUT_DIR
         "${CMAKE_CURRENT_BINARY_DIR}/test/faust")
     set(PURE_FAUST_FIXTURE_OUTPUTS)
@@ -362,7 +371,43 @@ if(BUILD_TESTING)
       ${CMAKE_DL_LIBS}
   )
   add_test(NAME pure-jit-smoke COMMAND pure-jit-smoke)
-  set_tests_properties(pure-jit-smoke PROPERTIES LABELS "jit;smoke")
+  set_tests_properties(
+    pure-jit-smoke
+    PROPERTIES
+      ENVIRONMENT_MODIFICATION "${PURE_TEST_RUNTIME_PATH}"
+      LABELS "jit;smoke"
+  )
+  if(WIN32)
+    add_test(
+      NAME pure-windows-stack-reserve
+      COMMAND
+        "${CMAKE_COMMAND}"
+        -DPURE_EXECUTABLE=$<TARGET_FILE:pure>
+        -DPURE_OBJECT_INSPECTOR=${LLVM_TOOLS_BINARY_DIR}/llvm-readobj${CMAKE_EXECUTABLE_SUFFIX}
+        -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/TestPureWindowsStackReserve.cmake"
+    )
+    set_tests_properties(
+      pure-windows-stack-reserve
+      PROPERTIES
+        LABELS "windows;runtime"
+        TIMEOUT 30
+    )
+  endif()
+  add_test(
+    NAME pure-jit-invalid-function-verifier
+    COMMAND
+      "${CMAKE_COMMAND}"
+      -DPURE_EXECUTABLE=$<TARGET_FILE:pure>
+      -DPURE_SCRIPT=${CMAKE_CURRENT_SOURCE_DIR}/test/jit-invalid-function.pure
+      -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunPureInvalidFunctionVerifier.cmake"
+  )
+  set_tests_properties(
+    pure-jit-invalid-function-verifier
+    PROPERTIES
+      LABELS "jit;verifier"
+      REQUIRED_FILES "${CMAKE_CURRENT_SOURCE_DIR}/test/jit-invalid-function.pure"
+      TIMEOUT 30
+  )
   add_test(
     NAME pure-jit-ir-dump
     COMMAND
@@ -418,6 +463,7 @@ if(BUILD_TESTING)
   set_tests_properties(
     pure-jit-lifetime-stress
     PROPERTIES
+      ENVIRONMENT_MODIFICATION "${PURE_TEST_RUNTIME_PATH}"
       LABELS "jit;stress"
       REQUIRED_FILES
         "${CMAKE_CURRENT_SOURCE_DIR}/test/jit-lifetime-stress.pure;${CMAKE_CURRENT_SOURCE_DIR}/test/jit-lifetime-stress.log"
@@ -645,6 +691,41 @@ if(BUILD_TESTING)
   )
 
   add_pure_bitcode_test(
+    pointer-qualified pointer-qualified.pure pointer-qualified.bc
+  )
+  set_tests_properties(
+    pure-bitcode-pointer-qualified
+    PROPERTIES
+      PASS_REGULAR_EXPRESSION "42"
+      FAIL_REGULAR_EXPRESSION
+        "pointer-qualified.*(Invalid pure.abi|unsupported prototype)"
+  )
+
+  add_pure_bitcode_test(
+    metadata-validation metadata-validation.pure metadata-missing-version.bc
+  )
+  set_property(
+    TEST pure-bitcode-metadata-validation APPEND PROPERTY REQUIRED_FILES
+      "${PURE_BITCODE_FIXTURE_OUTPUT_DIR}/metadata-duplicate-version.bc"
+      "${PURE_BITCODE_FIXTURE_OUTPUT_DIR}/metadata-non-string.bc"
+      "${PURE_BITCODE_FIXTURE_OUTPUT_DIR}/metadata-dangling.bc"
+      "${PURE_BITCODE_FIXTURE_OUTPUT_DIR}/metadata-declaration.bc"
+      "${PURE_BITCODE_FIXTURE_OUTPUT_DIR}/metadata-non-c.bc"
+      "${PURE_BITCODE_FIXTURE_OUTPUT_DIR}/metadata-arity.bc"
+      "${PURE_BITCODE_FIXTURE_OUTPUT_DIR}/metadata-address-space.bc"
+      "${PURE_BITCODE_FIXTURE_OUTPUT_DIR}/metadata-const-scalar.bc"
+      "${PURE_BITCODE_FIXTURE_OUTPUT_DIR}/metadata-void-argument.bc"
+      "${PURE_BITCODE_FIXTURE_OUTPUT_DIR}/metadata-custom-scalar.bc"
+      "${PURE_BITCODE_FIXTURE_OUTPUT_DIR}/basic.bc"
+  )
+  set_tests_properties(
+    pure-bitcode-metadata-validation
+    PROPERTIES
+      PASS_REGULAR_EXPRESSION
+        "missing version record(.|\n)*malformed function record 1(.|\n)*malformed function record 1(.|\n)*does not name an external definition(.|\n)*does not name an external definition(.|\n)*unsupported LLVM calling convention(.|\n)*metadata has 1 fixed arguments, LLVM has 2(.|\n)*requires an address-space-zero LLVM pointer(.|\n)*const requires a pointer type(.|\n)*void is not permitted as an argument type(.|\n)*custom role 'widget' requires a pointer type(.|\n)*42"
+  )
+
+  add_pure_bitcode_test(
     declaration-first-retry declaration-first-retry.pure declaration-one.bc
   )
   set_tests_properties(
@@ -707,6 +788,49 @@ if(BUILD_TESTING)
   set_tests_properties(
     pure-bitcode-pointer-duplicate-exports
     PROPERTIES PASS_REGULAR_EXPRESSION "11(.|\n)*101"
+  )
+
+  set(pointer_abi_batch_object
+      "${CMAKE_CURRENT_BINARY_DIR}/test/bitcode/pointer-abi-batch.o")
+  set(pointer_abi_batch_executable
+      "${CMAKE_CURRENT_BINARY_DIR}/test/bitcode/pointer-abi-batch${CMAKE_EXECUTABLE_SUFFIX}")
+  set(pointer_abi_batch_ir
+      "${CMAKE_CURRENT_BINARY_DIR}/test/bitcode/pointer-abi-batch.ll")
+  if(PURE_SANITIZERS)
+    set(pointer_abi_batch_timeout 300)
+  else()
+    set(pointer_abi_batch_timeout 120)
+  endif()
+  add_test(
+    NAME pure-bitcode-pointer-batch-roundtrip
+    COMMAND
+      "${CMAKE_COMMAND}"
+      -DPURE_TEST_DRIVER=${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunPureBitcodeTest.cmake
+      -DPURE_SH_EXECUTABLE=${PURE_SH_EXECUTABLE}
+      -DPURE_RUN_TEST=${CMAKE_CURRENT_BINARY_DIR}/run-test
+      -DPURE_FIXTURE_DIR=${PURE_BITCODE_FIXTURE_OUTPUT_DIR}
+      -DPURE_SCRIPT=${CMAKE_CURRENT_SOURCE_DIR}/test/bitcode/pointer-batch.pure
+      -DPURE_BATCH_OBJECT=${pointer_abi_batch_object}
+      -DPURE_BATCH_EXECUTABLE=${pointer_abi_batch_executable}
+      -DPURE_BATCH_IR=${pointer_abi_batch_ir}
+      -DPURE_EXPECTED_ABI_TOKEN=%const%20char*
+      -DPURE_FORBIDDEN_ABI_METADATA=pure.abi
+      -DPURE_CXX_COMPILER=${CMAKE_CXX_COMPILER}
+      -DPURE_MAIN_OBJECT=$<TARGET_OBJECTS:pure-main-object>
+      -DPURE_RUNTIME_DIR=${CMAKE_CURRENT_BINARY_DIR}
+      -DPURE_LD_LIB_PATH=${LD_LIB_PATH}
+      -DPURE_SANITIZERS=${PURE_SANITIZERS}
+      -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunPurePointerAbiBatchTest.cmake"
+  )
+  set_tests_properties(
+    pure-bitcode-pointer-batch-roundtrip
+    PROPERTIES
+      LABELS "bitcode;batch;integration"
+      REQUIRED_FILES
+        "${PURE_BITCODE_FIXTURE_OUTPUT_DIR}/pointer-valid.bc;${CMAKE_CURRENT_SOURCE_DIR}/test/bitcode/pointer-batch.pure"
+      TIMEOUT ${pointer_abi_batch_timeout}
+      FAIL_REGULAR_EXPRESSION
+        "AddressSanitizer;LeakSanitizer;runtime error:"
   )
 
   set(transaction_invalid_bc
@@ -962,6 +1086,11 @@ if(BUILD_TESTING)
         -DPURE_WORK_ROOT=${CMAKE_CURRENT_BINARY_DIR}/test/faust
         -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunPureInlineFaustFailures.cmake"
     )
+    if(PURE_SANITIZERS)
+      set(inline_faust_failure_timeout 480)
+    else()
+      set(inline_faust_failure_timeout 180)
+    endif()
     set_tests_properties(
       pure-faust-inline-failures
       PROPERTIES
@@ -970,7 +1099,7 @@ if(BUILD_TESTING)
           "PATH=path_list_prepend:${LLVM_TOOLS_BINARY_DIR};PATH=path_list_prepend:${CMAKE_CURRENT_BINARY_DIR}"
         REQUIRED_FILES
           "${CMAKE_CURRENT_SOURCE_DIR}/test/faust/inline-dsp-failure.pure.in;${CMAKE_CURRENT_SOURCE_DIR}/test/faust/inline-source-lifetime.pure.in"
-        TIMEOUT 180
+        TIMEOUT ${inline_faust_failure_timeout}
         FAIL_REGULAR_EXPRESSION
           "failed to remove ORC compilation unit;failed to retire prepared Faust reload;failed to collect ORC Faust generation;AddressSanitizer;LeakSanitizer;runtime error:"
     )
@@ -1006,7 +1135,7 @@ if(BUILD_TESTING)
     NAME pure-faust-example-makefile
       COMMAND
         "${CMAKE_COMMAND}"
-        -DPURE_MAKE_EXECUTABLE=${CMAKE_MAKE_PROGRAM}
+        -DPURE_MAKE_EXECUTABLE=${PURE_MAKE_EXECUTABLE}
         -DPURE_SH_EXECUTABLE=${PURE_SH_EXECUTABLE}
         -DPURE_MAKEFILE=${CMAKE_CURRENT_SOURCE_DIR}/examples/bitcode/Makefile
         -DPURE_DSP_SOURCE=${CMAKE_CURRENT_SOURCE_DIR}/test/faust/reference.dsp
@@ -1110,6 +1239,7 @@ if(BUILD_TESTING)
   set_tests_properties(
     pure-formatted-io
     PROPERTIES
+      ENVIRONMENT_MODIFICATION "${PURE_TEST_RUNTIME_PATH}"
       LABELS "runtime;integration"
       REQUIRED_FILES "${CMAKE_CURRENT_SOURCE_DIR}/test/formatted-io-smoke.pure"
       TIMEOUT ${formatted_io_test_timeout}
@@ -1360,10 +1490,16 @@ if(BUILD_TESTING)
       "${PURE_SH_EXECUTABLE}" "${CMAKE_CURRENT_BINARY_DIR}/run-tests" -v
     WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
   )
-  # Keep the nested corpus serial in every generated test tree. This is
-  # especially important on Windows, where concurrent MSYS children can race
-  # signal-pipe and temporary-output ownership.
-  set(regression_test_jobs 1)
+  set(
+    PURE_REGRESSION_JOBS 4 CACHE STRING
+    "Maximum number of concurrent regression-corpus interpreter processes"
+  )
+  if(NOT PURE_REGRESSION_JOBS MATCHES "^[1-9][0-9]*$")
+    message(FATAL_ERROR
+      "PURE_REGRESSION_JOBS must be a positive integer; got '${PURE_REGRESSION_JOBS}'"
+    )
+  endif()
+  set(regression_test_jobs "${PURE_REGRESSION_JOBS}")
   add_test(
     NAME pure-regression-harness-contract
     COMMAND
@@ -1388,6 +1524,7 @@ if(BUILD_TESTING)
     pure-regression
     PROPERTIES
       ENVIRONMENT "${regression_environment}"
+      ENVIRONMENT_MODIFICATION "${PURE_TEST_RUNTIME_PATH}"
       LABELS "regression"
       TIMEOUT ${regression_timeout}
   )

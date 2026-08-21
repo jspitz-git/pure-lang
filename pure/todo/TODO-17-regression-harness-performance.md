@@ -1,6 +1,6 @@
 # TODO-17 - Regression Harness Performance
 
-Status: Closed
+Status: Closed on 2026-07-24
 Branch: todo/17-regression-harness-performance
 
 ## Purpose
@@ -28,7 +28,9 @@ release-validation budget in Debug, Release, and sanitizer configurations.
    - Post-fix Release, Debug, and ASan/UBSan runs all pass 97/97.
 6. [x] Set and document realistic CTest timeouts for complete release runs.
    - CTest uses four workers with 600s Release, 900s Debug, and 1800s sanitizer
-     timeouts; sanitizer runs also set `PURE_STACK=0` and a 64 MiB quarantine.
+     timeouts by default; sanitizer runs also set `PURE_STACK=0` and a 64 MiB
+     quarantine. `PURE_REGRESSION_JOBS` permits an explicit lower positive value
+     on memory-constrained hosts.
 
 ## Isolation Audit
 
@@ -283,3 +285,63 @@ Deterministic runtime/golden failures exposed by the completed runner belong to 
   - `test015` (333 s), `test025` (187 s), and `test020` (113 s) were the slowest inputs.
   - Stored the ordered output in `TODO-17-asan-timings.txt`; all tasks, behavior
     equivalence checks, and checked-in preset budgets are now complete.
+- 2026-08-21: Audited the closed performance policy on a higher-memory Windows host.
+  - Identified that a later correctness-hardening change had globally replaced the
+    measured four-worker CTest policy with `TEST_JOBS=1`. The serial setting came
+    from validation on a memory-constrained machine where four workers caused heavy
+    swapping; it was not a semantic Windows requirement.
+  - Added the positive-integer `PURE_REGRESSION_JOBS` cache setting with a default of
+    four, while retaining an explicit `-DPURE_REGRESSION_JOBS=1` escape hatch for
+    memory-constrained hosts.
+  - Replaced the Windows-only one-worker contract with configuration-independent
+    validation and added a real two-worker fixture which proves overlapping execution
+    and deterministic argument-order result publication. The fixture also exposed
+    and now guards Windows `find` output containing backslash-separated paths;
+    default discovery normalizes those separators before sorting and execution.
+  - Made the CTest regression environment self-contained by prepending both the LLVM
+    tools directory (runtime DLLs and compiler tools) and the configured shell
+    directory (MSYS2 utilities such as `sed`) to `PATH`.
+  - Updated `INSTALL` with the memory tradeoff and corrected the formal closure status.
+  - Validation:
+    - A pre-change CTest JSON assertion failed with the observed environment
+      `TEST_JOBS=1, PURE_STACK=0` instead of the required default `TEST_JOBS=4`.
+    - Configuring with `-DPURE_REGRESSION_JOBS=0` failed with
+      `PURE_REGRESSION_JOBS must be a positive integer`; reconfiguration with four
+      restored the build tree successfully.
+    - `cmake -DPURE_SH_EXECUTABLE=C:/msys64/usr/bin/sh.exe
+      -DPURE_REGRESSION_HARNESS=C:/pure-lang/pure/build/native-asan/run-tests
+      -DPURE_RUN_TEST=C:/pure-lang/pure/build/native-asan/run-test
+      -DPURE_SOURCE_DIR=C:/pure-lang/pure
+      -DPURE_PATH_LIST_MODULE=C:/pure-lang/pure/cmake/PurePathList.cmake
+      -DPURE_CONFIGURED_TEST_JOBS=4
+      -P C:/pure-lang/pure/cmake/TestRegressionHarness.cmake` passed outside the
+      filesystem sandbox; the controlled fake-interpreter failure was detected and
+      the two-worker scheduler fixture passed.
+    - A fresh four-worker Release build passed the complete corpus under CTest in
+      155.62 seconds (97/97 inputs reported `passed`).
+    - A fresh four-worker Debug build completed in 209.58 seconds with 96/97 inputs;
+      `test015` produced no output and the interpreter exited with status 127.
+    - The existing four-worker ASan build completed in 1064.78 seconds with 94/97
+      inputs; `test001`, `test015`, and `test020` exited with status 127. Repeating
+      those three inputs with `-j 1` reproduced all three failures, so this is not a
+      parallel-worker or memory-pressure regression. Debug/ASan follow-up remains
+      separate from the restored scheduler policy; this audit does not record those
+      configurations as passing.
+- 2026-08-21: Diagnosed and fixed the Windows Debug/ASan regression failures.
+  - Direct execution exposed the native Windows status hidden by MSYS2's status 127:
+    Debug `test015` and ASan `test001`/`test020` exited with `0xC00000FD`
+    (`STATUS_STACK_OVERFLOW`), while ASan explicitly diagnosed `test015` as a stack
+    overflow before its final access violation.
+  - `llvm-readobj --file-headers` showed that Release, Debug, and ASan `pure.exe`
+    binaries all reserved the PE default of 1 MiB. Debug deliberately preserves
+    C/C++ sibling-call frames and ASan enlarges them further, while Pure JIT tail
+    calls remain enabled through `fastcc` and the O1 JIT pipeline.
+  - A controlled relink with an 8 MiB reserve made Debug `test015` and all three ASan
+    reproductions exit successfully without any source change, confirming the root
+    cause. The `pure` Windows target now uses the same 8 MiB reserve already used by
+    Pure-generated Windows batch programs.
+  - Added `pure-windows-stack-reserve`, which inspects the actual PE header. Its RED
+    run rejected `SizeOfStackReserve: 1048576`; after the target fix it accepted the
+    required literal `8388608` in Release, Debug, and ASan builds.
+  - Fresh four-worker corpus validation passed 97/97 in all configurations: Release
+    in 153.09 seconds, Debug in 210.44 seconds, and ASan in 1122.10 seconds.

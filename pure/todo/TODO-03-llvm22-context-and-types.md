@@ -1,6 +1,6 @@
 # TODO-03 - LLVM 22 Context and Types
 
-Status: Done
+Status: Closed on 2026-07-22
 Branch: todo/03-llvm22-context-and-types
 
 ## Purpose
@@ -37,8 +37,11 @@ modern LLVM ownership and type APIs without historical preprocessor branches.
 - A direct `LLVMContext` is sufficient for the mutable pre-ORC stage. TODO-06 can
   transfer or wrap this ownership in `ThreadSafeContext` when modules begin moving
   across ORC boundaries.
-- All module, bitcode-reader, basic-block, and local-builder construction now uses
-  the interpreter-owned context; `getGlobalContext()` is no longer referenced.
+- All module, bitcode-reader, basic-block, and local-builder construction in the
+  migrated C++ and CMake paths now uses the interpreter-owned context;
+  `getGlobalContext()` is no longer referenced there. The retained Autoconf
+  fallback still contained historical feature probes using `getGlobalContext()`;
+  those probes were outside this CMake/LLVM 22 migration path.
 - Primitive, recursive structure, function, string-constant, and global-variable
   helpers now use the LLVM 22 APIs without LLVM 2.x/3.x alternatives.
 - LLVM headers now use their LLVM 22 paths directly. Nine CMake feature macros
@@ -50,6 +53,23 @@ modern LLVM ownership and type APIs without historical preprocessor branches.
 - Compilation now stops first at the mandatory opaque-pointer `CreateGEP` and
   `CreateLoad` signatures in `Env`; that instruction-level migration belongs to
   TODO-04.
+
+## Validation Boundary and Later Evidence
+
+TODO-03 did not complete the validation-plan item for explicit structure-layout
+assertions or a dedicated layout test. Its closure-time validation was limited to
+successful configuration and preprocessing plus compilation up to the six scoped
+opaque-pointer failures assigned to TODO-04. Consequently, the host ABI and GSL
+layout guardrail was not independently demonstrated when this TODO was closed.
+
+Later work supplied integration evidence without changing that historical fact.
+TODO-04 migrated the structure-sensitive GEP/load sites to explicit element types,
+and TODO-13/TODO-17 completed the full 97-input regression corpus in Release,
+Debug, and ASan/UBSan. That corpus includes the C ABI, matrix, serialization, and
+architecture-blob coverage identified in TODO-01 (`test018`, `test025`, `test041`,
+and `test042`). These runs provide broad subsequent evidence that the layouts
+remained compatible, but they are not a substitute for the dedicated layout
+assertion originally proposed in this TODO's validation plan.
 
 ## Guardrails
 
@@ -69,6 +89,22 @@ modern LLVM ownership and type APIs without historical preprocessor branches.
 
 ## Progress Log
 
+- 2026-08-21: Audited and clarified the TODO-03 closure record.
+  - Normalized the historical completion marker to `Closed on 2026-07-22`.
+  - Scoped the `getGlobalContext()` removal claim to the migrated C++ and CMake
+    paths; the intentionally retained Autoconf fallback still contained legacy
+    feature probes.
+  - Recorded that no dedicated structure-layout assertion ran before closure and
+    distinguished that missing direct check from the later successful full-corpus
+    Release, Debug, and ASan/UBSan evidence.
+  - Validation:
+    - Confirmed commits `147828abd`, `6168bfb33`, and `a622e5e60` are ancestors
+      of the current branch.
+    - Searched the TODO-03 tip for `getGlobalContext()`, obsolete type APIs, and
+      removed CMake feature macros; remaining `getGlobalContext()` references
+      were confined to `configure.ac` feature probes.
+    - Cross-checked the later complete-corpus results recorded by TODO-13 and
+      TODO-17; no executable test was run for this documentation-only correction.
 - 2026-07-22: Replaced historical LLVM header selection with direct LLVM 22
   includes and removed the corresponding CMake compatibility definitions.
   - Validation:

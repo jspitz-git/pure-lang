@@ -1,0 +1,4 @@
+using "bc:pointer-valid";
+extern int puts(char*);
+main = puts (bc_pointer_echo "42");
+main;

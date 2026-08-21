@@ -1,6 +1,6 @@
 # TODO-18 - Regression Behavior Compatibility
 
-Status: Closed
+Status: Closed on 2026-07-24
 Branch: todo/18-regression-behavior-compatibility
 
 ## Purpose
@@ -212,3 +212,19 @@ TODO-13 runs did not progress far enough to expose these deterministic differenc
 - 2026-07-24: Reconfirmed Debug behavior after the JIT startup optimization.
   - Validation:
     - `run-tests -j 4` passed all 97 inputs in 457.56 seconds with no golden diff.
+- 2026-08-21: Audited the closed behavior-compatibility work on Windows.
+  - Confirmed the ORC helper-localization, lifetime, and formatted-I/O fixes with
+    their focused Release and AddressSanitizer tests, and reconfirmed the complete
+    97-input Release, Debug, and AddressSanitizer corpus through the TODO-17 audit.
+  - Made `pure-jit-smoke`, `pure-jit-lifetime-stress`, and `pure-formatted-io`
+    self-contained when CTest is launched outside an MSYS2 shell by prepending the
+    LLVM runtime and configured shell directories to their test-local `PATH`.
+  - Reconfigured the Release and AddressSanitizer trees, then launched CTest
+    directly from PowerShell without an external `PATH` wrapper: all three focused
+    tests passed in both trees (5.46 and 53.01 seconds respectively).
+  - Built a fresh native CLANG64 Debug tree with
+    `PURE_SANITIZERS=address,undefined`; the same three tests passed with fail-fast
+    ASan/UBSan options in 57.88 seconds. This supplements the complete historical
+    ASan/UBSan corpus result above; the TODO-17 native sanitizer corpus used
+    AddressSanitizer only.
+  - Corrected the formal closure status to include its original completion date.

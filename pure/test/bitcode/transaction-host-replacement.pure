@@ -1,6 +1,6 @@
 using "bc:transaction-host-old";
 using "bc:transaction-valid";
-using "bc:transaction-invalid";
+using "bc:transaction-host-invalid";
 
 main = pure_transaction_print pure_transaction_value;
 main;

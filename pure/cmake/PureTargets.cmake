@@ -140,6 +140,9 @@ target_link_libraries(
 )
 
 add_executable(pure pure.cc)
+if(WIN32)
+  target_link_options(pure PRIVATE "-Wl,--stack=0x800000")
+endif()
 target_include_directories(
   pure
   PRIVATE

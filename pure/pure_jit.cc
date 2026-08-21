@@ -408,12 +408,22 @@ llvm::Error PureJit::register_absolute_symbol
 
 llvm::Error PureJit::add_module(llvm::orc::ThreadSafeModule module)
 {
+  if (llvm::Error error = module.withModuleDo
+        ([](const llvm::Module& input) {
+          return verify_module(input, "input");
+        }))
+    return error;
   return jit_->addIRModule(std::move(module));
 }
 
 llvm::Error PureJit::add_module(llvm::orc::ResourceTrackerSP tracker,
                                 llvm::orc::ThreadSafeModule module)
 {
+  if (llvm::Error error = module.withModuleDo
+        ([](const llvm::Module& input) {
+          return verify_module(input, "input");
+        }))
+    return error;
   return jit_->addIRModule(std::move(tracker), std::move(module));
 }
 
@@ -484,6 +494,7 @@ llvm::Error PureJit::add_module_snapshot
   llvm::Expected<std::unique_ptr<llvm::Module> > copy =
     llvm::parseBitcodeFile(snapshot->getMemBufferRef(), *context);
   if (!copy) return copy.takeError();
+  if (llvm::Error error = verify_module(**copy, "input")) return error;
   if (llvm::Error error = optimize_module(**copy)) return error;
   if (dump_ir_) {
     std::lock_guard<std::mutex> lock(jit_dump_mutex());
@@ -493,7 +504,7 @@ llvm::Error PureJit::add_module_snapshot
 
   llvm::orc::ThreadSafeModule thread_safe_module
     (std::move(*copy), std::move(context));
-  return add_module(std::move(tracker), std::move(thread_safe_module));
+  return jit_->addIRModule(std::move(tracker), std::move(thread_safe_module));
 }
 
 llvm::Error PureJit::add_module_copy(llvm::orc::ResourceTrackerSP tracker,

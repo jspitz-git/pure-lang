@@ -1,6 +1,6 @@
 # TODO-09 - Closures and Redefinition
 
-Status: Completed
+Status: Closed on 2026-07-23; corrected by TODO-50 on 2026-07-26; audited on 2026-08-21
 Branch: todo/09-closures-and-redefinition
 
 ## Purpose
@@ -74,10 +74,11 @@ updates new calls without invalidating closures that still reference earlier cod
   redefinition. Legacy cleanup therefore deletes function bodies but leaks or
   unmaps old machine code when closures remain; tests 052 and 068 guard against
   stale pointers and changed public bindings.
-- A deferred global closure whose `fp` is still null is different: its first call
-  resolves through the current `globalfuns` entry. Test 053 specifies that such a
-  closure executes the latest definition, not the definition visible when the
-  closure value was captured.
+- A deferred global closure whose `fp` is still null retains its definition epoch.
+  Its first call resolves the newest generation in that captured epoch. Rules added
+  without `clear` therefore remain visible, as required by test 053, while `clear`
+  starts a new epoch and a previously captured closure continues to denote its old
+  definition, as required by test 052 and the focused deferred-generation test.
 - The closure cached in the global host slot normally contributes one reference.
   During clear/redefinition, code is dead only when no external closure remains
   after discounting that cache reference.
@@ -86,8 +87,9 @@ updates new calls without invalidating closures that still reference earlier cod
 
 - Separate stable public bindings from immutable implementation generations.
 - Redirect only the public binding when publishing a new generation.
-- Keep each materialized generation tracker alive while any closure has its `fp`;
-  deferred closures may resolve to the current generation on first call.
+- Keep each materialized generation tracker alive while any closure references it;
+  deferred closures resolve to the newest generation in their captured definition
+  epoch on first call.
 - Remove a generation only after its closure references, nested environments, and
   dependent compilation units are gone.
 
@@ -116,16 +118,17 @@ FunctionBinding
 
 ### `FunctionGeneration`
 
-One immutable record for each successfully materialized global implementation:
+One immutable record for each successfully prepared global implementation:
 
 ```text
 FunctionGeneration
-  tag, generation        logical identity
+  tag, generation, epoch logical and definition-epoch identity
   key, refp              runtime closure identity and implementation references
-  tracker                all ORC code/data owned by this implementation
-  fast_symbol/address    internal fastcc entry when distinct
-  c_symbol/address       C-callable closure entry
-  state                  building, current, superseded, removable
+  symbol                 generation-qualified ORC entry name
+  snapshot               deferred bitcode before materialization, if any
+  address, tracker       materialized entry and its ORC resources, if any
+  closure_refs           root and nested closure reference counters
+  current                whether this is the public generation
 ```
 
 - Symbols use generation-qualified names such as `$$orc.fun.<tag>.<generation>`;
@@ -142,9 +145,15 @@ FunctionGeneration
 Extend the interpreter compilation-resource registry with:
 
 ```text
-bindings[tag]                 stable FunctionBinding
 implementations[key]          FunctionGeneration owning that closure key
+current_implementations[tag]  current generation key
+latest_implementations[tag, epoch]
+                              newest generation in a definition epoch
+key_implementations[key]      generations depending on a closure key
 ```
+
+The existing `GlobalVar` host slot remains the stable public binding; it does not
+require a separate native stub or duplicate binding registry.
 
 - `pure_clos` and closure copies already increment `*refp`. When `pure_free_clos`
   decrements it to zero, it must notify the interpreter by `key`; the registry can
@@ -167,9 +176,12 @@ implementations[key]          FunctionGeneration owning that closure key
   existing dynamic global-binding semantics.
 - First-class/global calls likewise continue through the stable closure slot and
   observe the newly published generation.
-- A deferred closure stores tag/key but no address reference. On first invocation it
-  resolves `bindings[tag].current`, stores that generation's callable address, and
-  acquires its implementation reference. This preserves test 053 semantics.
+- A deferred closure stores its key but no address. On first invocation it resolves
+  `latest_implementations[tag, captured_epoch]`, materializes that generation's
+  retained snapshot when necessary, stores its callable address, and transfers its
+  implementation reference only when moving to a newer generation in the same
+  epoch. This preserves both additive test 053 semantics and cross-`clear` test 052
+  isolation.
 - Build and verify a new generation completely before publication. On failure,
   remove its tracker and leave both `current` and the host slot unchanged.
 - Publish by retaining the new closure, swapping the host slot/current pointer, then
@@ -194,9 +206,16 @@ implementations[key]          FunctionGeneration owning that closure key
 
 ## Validation Plan
 
-- Run dedicated closure/redefinition regression tests repeatedly under ASan.
-- Test closures created before and after several redefinitions.
-- Exercise local functions, global functions, recursion, and exception paths.
+- Run the corpus cases directly through the configured harness:
+  `TEST_JOBS=1 ./run-tests -tv <source>/test/test052.pure
+  <source>/test/test053.pure <source>/test/test068.pure
+  <source>/test/test096.pure`.
+- Run `ctest --test-dir <build>
+  -R '^pure-jit-(smoke|lifetime-stress|deferred-generation|deferred-retry|eval-failure-recovery|eager)$'
+  --output-on-failure` in both Release and ASan builds.
+- Preserve coverage of materialized and never-materialized generations, additive
+  rules within one epoch, replacement across `clear`, retry after snapshot failure,
+  nested closures, recursion, reentrant clearing, and final-reference collection.
 
 ## Native Callable ABI Disposition
 
@@ -209,6 +228,23 @@ API; internal generation addresses remain valid only for their tracked closure l
 The symbol ABI of batch-compiled output modules is a separate contract.
 
 ## Progress Log
+
+Entries dated 2026-07-23 record the state and validation available during the
+original migration. Later TODO-50 work corrected deferred-generation semantics;
+historical failures and timeouts below are not claims about the current tree.
+
+- 2026-08-21: Audited closure-generation ownership and reconciled this document
+  with the epoch-aware deferred-generation fixes completed by TODO-50.
+  - Corrected the first-call policy: a deferred closure follows additive rules in
+    its captured epoch but never crosses a `clear` boundary into a new epoch.
+  - Updated `FunctionGeneration`, ownership indexes, and the validation plan to
+    match the current implementation and focused tests.
+  - Confirmed generation-qualified symbols, retained snapshots, closure-reference
+    ownership, deferred cleanup, and retryable materialization in current source.
+  - Validation:
+    - `test052.pure`, `test053.pure`, `test068.pure`, and `test096.pure` passed 4/4.
+    - The focused six-test JIT suite passed 6/6 in Release in 3.26 seconds and
+      6/6 under ASan in 10.45 seconds.
 
 - 2026-07-23: Covered nested, recursive, and mutually recursive redefinition.
   - Added regression test 096 for nested `when`/`case` `__func__`, escaped local

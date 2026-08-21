@@ -1,6 +1,6 @@
 # TODO-13 - Release Validation and Cleanup
 
-Status: Closed
+Status: Closed on 2026-07-24; audited on 2026-08-21
 Branch: todo/13-release-validation-and-cleanup
 
 ## Purpose
@@ -28,16 +28,26 @@ suite passes.
 5. [x] Remove superseded Autoconf and Makefile infrastructure after parity review.
 6. [x] Perform a clean-tree release build and close or create follow-up TODOs.
 
-TODO-13 is complete. TODO-17 and TODO-18 are closed, all 12 current focused tests
-pass, and complete corpus runs pass 97/97 in Release, Debug, and ASan/UBSan. Preset
-worker counts, sanitizer memory policy, CTest timeouts, and per-input timing captures
-are documented and checked in.
+TODO-13 completed its release baseline, and TODO-17 and TODO-18 subsequently
+closed the regression performance and compatibility work. At closure, all 12
+then-current focused tests passed and complete corpus runs passed 97/97 in
+Release, Debug, and ASan/UBSan. Preset worker counts, sanitizer memory policy,
+CTest timeouts, and per-input timing captures are documented and checked in.
+
+The current CTest surface has grown to 50 tests: 48 non-regression integration
+tests, one regression-harness contract test, and the complete `pure-regression`
+corpus. TODO-14 through TODO-16 subsequently completed the remaining ORC-only
+runtime migration, pointer bitcode ABI metadata, and native Windows/macOS
+release validation.
 
 ## Legacy LLVM Audit
 
-The runtime still has a hybrid ORC/MCJIT architecture. `PureJit` owns current
-interactive compilation units, but `interpreter::JIT` remains a live
-`ExecutionEngine` created by `EngineBuilder`. It cannot be removed as dead code.
+This section records the transitional state found on 2026-07-24. It is retained
+as implementation history rather than a description of the current runtime.
+At that point, the runtime still had a hybrid ORC/MCJIT architecture. `PureJit`
+owned interactive compilation units, but `interpreter::JIT` remained a live
+`ExecutionEngine` created by `EngineBuilder`. It could not be removed as dead
+code.
 
 ### Runtime-reachable MCJIT dependencies
 
@@ -90,18 +100,23 @@ compatibility gate, and must remain.
   The files remained through installation parity validation in task 3 and were
   removed in task 5.
 
-The remaining runtime cleanup order is: collapse dead version gates, preserve
-their LLVM 22 behavior, migrate live materialization and host mappings to ORC,
-and then remove the transitional engine and linked components. Retiring the
-independent legacy build files required installation parity, not completion of
-that runtime migration.
+The remaining runtime cleanup order identified at that time was: collapse dead
+version gates, preserve their LLVM 22 behavior, migrate live materialization
+and host mappings to ORC, and then remove the transitional engine and linked
+components. Retiring the independent legacy build files required installation
+parity, not completion of that runtime migration.
+
+TODO-14 later completed that sequence. The current runtime contains no MCJIT or
+`ExecutionEngine` consumer, the LLVM 2.x/3.x compatibility gates are gone, and
+`PureTargets.cmake` links the ORC/JITLink components without MCJIT.
 
 ## Full-test Classification
 
-All 12 current focused tests pass in Debug, Release, and ASan/UBSan. The sanitizer
-preset initially had the Faust lifecycle test disabled; its driver passed under the
-sanitizer environment and the test is now active. Later focused additions cover LLVM
-22 batch object output and formatted I/O.
+All 12 focused tests present at TODO-13 closure passed in Debug, Release, and
+ASan/UBSan. The sanitizer preset initially had the Faust lifecycle test
+disabled; its driver passed under the sanitizer environment and the test became
+active. Later focused additions covered LLVM 22 batch object output and
+formatted I/O.
 
 The initial `pure-regression` attempts exposed harness and performance blockers rather
 than a classified language or ORC behavior failure:
@@ -137,11 +152,18 @@ seconds in Debug, and 1351.16 seconds under ASan/UBSan. The sanitizer run uses
 CTest budgets of 600, 900, and 1800 seconds encode measured headroom for the three
 configurations.
 
+The current suite registers 50 tests and leaves none disabled. The 2026-08-21
+Windows CLANG64 ASan audit passed all 48 non-regression tests and the separate
+regression-harness contract test. The historical 97/97 corpus captures above
+remain the release-baseline evidence; later platform validation is recorded in
+TODO-16.
+
 ## Installation Validation
 
 A fresh out-of-tree Release configuration used an isolated configure-time
-prefix and built successfully with Ninja and one compile job. Its ten focused
-integration tests passed before installation. CMake installs 28 manifest entries
+prefix and built successfully with Ninja and one compile job. Its ten
+then-current focused integration tests passed before installation. CMake
+installed 28 manifest entries
 covering the executable, versioned runtime library and symlinks, public header,
 `pure_main.c` and `pure_main.o`, 19 Pure library scripts, pkg-config metadata,
 and the manual page. This matches the legacy build's core installation set.
@@ -149,9 +171,9 @@ and the manual page. This matches the legacy build's core installation set.
 The installed `pure --version` reports Pure 0.68 and LLVM 22.1.8. With the
 nonstandard temporary library directory supplied through `LD_LIBRARY_PATH`, the
 installed interpreter locates its configured library scripts and executes
-`examples/hello.pure`, printing `Hello, world!`. Its additional pragma output is
-the CRLF issue already classified in task 2. `pkg-config` reports version 0.68
-and the isolated include and library directories.
+`examples/hello.pure`, printing `Hello, world!`. The original run's additional
+pragma output was the CRLF issue later fixed by TODO-13. `pkg-config` reported
+version 0.68 and the isolated include and library directories.
 
 CMake now provides an `uninstall` target backed by `install_manifest.txt`. It
 removes all installed files and symlinks, tolerates already absent files, and a
@@ -191,20 +213,20 @@ script. Both options default to off so the verified core installation manifest
 is unchanged, and both destination roots are configurable.
 
 With this parity in place, `configure.ac`, `acinclude.m4`, `Makefile.in`, and
-`examples/Makefile.in` have been removed. Historical references in `ChangeLog`
-remain intact. Live MCJIT/`ExecutionEngine` dependencies and LLVM compatibility
-gates are outside this build-system cleanup and remain tracked for a dedicated
-runtime migration.
+`examples/Makefile.in` were removed. Historical references in `ChangeLog`
+remain intact. TODO-14 subsequently completed the dedicated runtime migration
+and removed the live MCJIT/`ExecutionEngine` dependencies and LLVM compatibility
+gates.
 
-## Retrospective TODO Audit
+## Retrospective TODO Audit Snapshot
 
-A second pass over TODO-01 through TODO-12 found prerequisites which later work
-satisfied but never reconciled in the originating documents, plus deliberate
-scope deferrals which still need explicit ownership. Historical progress-log
-entries remain unchanged; only their current status and follow-up implications
-need correction.
+This table is the 2026-07-24 ownership snapshot used to close TODO-13; its
+"current" wording refers to that date. A second pass over TODO-01 through
+TODO-12 found prerequisites which later work satisfied but never reconciled in
+the originating documents, plus deliberate scope deferrals which still needed
+explicit ownership. Historical progress-log entries remain unchanged.
 
-| TODO | Current audit result | Required disposition before task 6 |
+| TODO | Audit result on 2026-07-24 | Disposition assigned on 2026-07-24 |
 | --- | --- | --- |
 | TODO-01 | Retrospectively closed: the runner inventory, later coverage, smoke policy, golden oracle, and pre-port blockers are now explicit. | Complete; the historical branch lacked implementation commits, but downstream evidence satisfies the original baseline purpose. |
 | TODO-02 | Build/install blockers are resolved on Linux. Windows and macOS were deliberately not validated. | Keep the historical closure and assign non-Linux validation only after defining the supported release matrix. |
@@ -235,22 +257,27 @@ closure:
    repeatedly-started regression-harness performance problem to TODO-17. Do not
    claim a complete supported test-suite pass until TODO-17 completes it.
 
+All numbered follow-ups assigned by this snapshot are now complete: TODO-14
+removed MCJIT and completed batch ORC migration, TODO-15 implemented pointer ABI
+metadata, TODO-16 validated Windows 11 x86_64 and macOS 15 arm64, and TODO-17
+and TODO-18 closed the regression performance and behavior work.
+
 ## Release-build Result
 
 A fresh out-of-tree Release configuration in `build/todo13-release-final` used
 Clang/LLVM 22.1.8 and Ninja. Its serial 31-step build completed successfully, and
 all 11 focused tests then present passed in 193 seconds, including bitcode, Faust,
 JIT lifetime/debug-dump, and LLVM 22 batch object output. The subsequently added
-formatted-I/O test brings the current focused set to 12, all passing in Release,
-Debug, and ASan/UBSan. The complete corpus passes 97/97 in all three configurations.
+formatted-I/O test brought the closure set to 12, all passing in Release, Debug,
+and ASan/UBSan. The complete corpus passed 97/97 in all three configurations.
 
-The release cleanup produced five numbered follow-ups:
+The release cleanup produced five numbered follow-ups, all subsequently completed:
 
-- TODO-14: complete ORC runtime/batch migration and decide native callable ABI;
-- TODO-15: define pointer-bearing external bitcode ABI metadata;
-- TODO-16: define and validate the non-Linux release matrix;
-- TODO-17: bound the repeatedly-started complete regression harness;
-- TODO-18: resolve deterministic corpus behavior and golden differences.
+- TODO-14 completed ORC runtime/batch migration and decided the native callable ABI;
+- TODO-15 defined and implemented pointer-bearing external bitcode ABI metadata;
+- TODO-16 defined and validated the Windows and macOS release matrix;
+- TODO-17 bounded the repeatedly-started complete regression harness;
+- TODO-18 resolved deterministic corpus behavior and golden differences.
 
 ## Guardrails
 
@@ -260,17 +287,41 @@ The release cleanup produced five numbered follow-ups:
 
 ## Validation Plan
 
-- Configure and build from a fresh directory with each supported preset.
-- Run `ctest --preset llvm22-debug --output-on-failure` and release/ASan equivalents.
+- Configure and build Linux from fresh directories with the Debug, Release, and
+  ASan/UBSan presets; execute their complete CTest suites.
+- Execute the native Windows 11 x86_64 and macOS 15 arm64 configure, build,
+  focused/full-test, batch, install, execution, and uninstall runbooks from TODO-16.
+- Confirm the current CTest inventory has no unexplained disabled tests and run
+  the complete `pure-regression` corpus in each supported configuration.
 - Run installation into a temporary prefix and execute the installed binary and examples.
-- Search for `ExecutionEngine`, `freeMachineCodeForFunction`, and `LLVM2`/`LLVM3` macros.
+- Search production sources and LLVM component linkage for `ExecutionEngine`,
+  MCJIT, `freeMachineCodeForFunction`, and `LLVM2`/`LLVM3` compatibility gates.
 
-## Open Questions
+## Resolved Follow-ups
 
-- Which operating systems and architectures are required for the first LLVM 22 release?
-- Should any optional legacy feature be deferred to a separately numbered TODO?
+- TODO-16 resolved the first LLVM 22 release matrix as Linux x86_64, Windows 11
+  x86_64 under MSYS2 CLANG64, and macOS 15 arm64 with Homebrew LLVM 22.
+- TODO-14 through TODO-18 own and have completed the runtime, pointer ABI,
+  platform, regression-performance, and regression-compatibility deferrals.
 
 ## Progress Log
+
+- 2026-08-21: Audited TODO-13 against the completed TODO-14 through TODO-18
+  follow-ups and the current CMake test surface.
+  - Marked the MCJIT inventory and retrospective TODO table as historical
+    2026-07-24 snapshots, and recorded TODO-14's completed ORC-only runtime.
+  - Reconciled pointer ABI metadata and the validated Windows/macOS matrix with
+    TODO-15 and TODO-16, and replaced resolved open questions with their final
+    dispositions.
+  - Distinguished the original 12-test, 28-entry installation baseline from
+    the current 50-test CTest surface and corrected the resolved CRLF note.
+  - Validation:
+    - The Windows CLANG64 ASan build registered 50 tests with none disabled.
+    - All 48 non-regression tests passed in 974.27 seconds; the separate
+      regression-harness contract test passed 1/1 in 0.78 seconds.
+    - Production-source searches found no MCJIT, `ExecutionEngine`, or obsolete
+      LLVM version-gate consumer; current CMake linkage contains ORC/JITLink
+      components and no MCJIT component.
 
 - 2026-07-22: Initial final-validation and cleanup plan created.
   - Validation:

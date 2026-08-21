@@ -1,6 +1,6 @@
 # TODO-07 - Compilation Units and Resources
 
-Status: Completed
+Status: Closed on 2026-07-24; audited on 2026-08-21
 Branch: todo/07-compilation-units-and-resources
 
 ## Purpose
@@ -22,8 +22,10 @@ TODO-08 registered host-backed `GlobalVar`, `$$sstk$$`, and `$$fptr$$` storage a
 ORC absolute symbols. TODO-09 then supplied stable bindings, implementation
 generations, and old-closure ownership. Both original blockers are resolved:
 definition environments now use ORC trackers, and lifetime stress has passed
-under sanitizers. The transitional MCJIT cleanup formerly listed as task 5 has
-been transferred to TODO-14, which owns the complete hybrid-runtime migration.
+under sanitizers. The transitional MCJIT cleanup formerly listed as task 5 was
+transferred to TODO-14. TODO-14 is now complete, and the current source tree no
+longer contains `ExecutionEngine`, MCJIT, legacy global mappings, or legacy
+pointer-materialization calls.
 
 ## Task List
 
@@ -83,34 +85,29 @@ Global implementation generations remain available while old closures refer to
 them, and the prelude-independent lifetime stress exercises this behavior under
 Debug, Release, ASan/UBSan, and LeakSanitizer.
 
-The legacy cleanup remains real, but it is not unfinished ORC compilation-unit
-ownership. `Env::clear` retains mapping and body-deletion operations because eager
-JIT, batch definitions, and batch Faust still consume the transitional
-`ExecutionEngine`. TODO-14 now owns those consumers and the complete MCJIT removal.
+The interpreter still has a mutable source IR module, but submitted ORC modules
+are independent snapshots and are never mutated after ownership transfer.
+TODO-14 subsequently removed the transitional engine, mappings, and stale-module
+cleanup consumers; their absence is the current state rather than remaining
+TODO-07 work.
 
-## Remaining Transitional Runtime Work
+The historical 2026-07-23 sanitizer run below reported 1000 evaluations and a
+separate LeakSanitizer result. Its generated input and exact commands were not
+retained, so those counts are historical evidence rather than a reproducible
+repository test. The current retained lifetime fixture exercises eight explicit
+redefinition cycles plus recursive, typed, external-wrapper, cleanup-retry, and
+exceptional-evaluation cases. Future large-count or leak claims should retain the
+input and exact CTest command.
 
-TODO-14 explicitly owns completion of the hybrid-runtime migration:
+## Completed Follow-up Work
 
-1. Route eager `jit_now`/`pure_interp_compile` materialization through ORC.
-2. Route retained batch `dodefn(keep)` initializers and batch Faust dispatch
-   materialization through explicit ORC units.
-3. Remove synchronized `addGlobalMapping`/`updateGlobalMapping`,
-   `getPointerToFunction`/`getPointerToGlobal`, and the legacy external resolver
-   after their final consumers migrate.
-4. Replace legacy `Env::clear` unmapping and body deletion with tracker/generation
-   ownership, then remove `ExecutionEngine`, MCJIT linkage, and obsolete headers.
-5. Collapse `LLVM26` through `LLVM35` and `NEW_USER_ITERATOR` gates to their LLVM
-   22 behavior, retaining only `LLVM_VERSION` build metadata.
-6. Validate eager mode, retained definitions, complete batch executables, batch
-   Faust, redefinition lifetime, and clean shutdown in Debug, Release, and
-   sanitizer builds.
+- TODO-14 completed the eager, retained-definition, batch Faust, mapping, and
+  MCJIT migration that task 5 had intentionally transferred.
+- TODO-13 replaced the obsolete post-emission LLVM tool pipeline.
+- TODO-17 separately owns regression-harness startup performance; it is not a
+  compilation-unit lifetime requirement.
 
-The LLVM tool subprocess used after batch IR emission is no longer part of this
-legacy list: TODO-13 replaced `opt -std-compile-opts` and LLVM 3.x object-output
-branches with the LLVM 22 O1-to-`llc -filetype=obj` pipeline and added a focused
-no-prelude object test. Full batch execution and Faust batch validation remain in
-TODO-14; regression-harness startup performance is tracked by TODO-17.
+No hybrid-runtime action remains open in TODO-07.
 
 ## Guardrails
 
@@ -120,9 +117,16 @@ TODO-14; regression-harness startup performance is tracked by TODO-17.
 
 ## Validation Plan
 
-- Run repeated anonymous evaluations under ASan and LeakSanitizer.
-- Test successful and exceptional evaluation cleanup paths.
-- Inspect resource-removal errors and ensure they are reported rather than ignored.
+- Build `pure` in Release and Debug+ASan configurations.
+- Run `ctest --test-dir <release-build>
+  -R '^pure-jit-(lifetime-stress|deferred-generation|deferred-retry|type-retirement-retry|eval-failure-recovery)$'
+  --output-on-failure`.
+- Run the same expression against the Debug+ASan build with
+  `ASAN_OPTIONS=detect_leaks=0:halt_on_error=1:strict_string_checks=1:quarantine_size_mb=64`.
+- Run the targeted `llvm22-lsan` preset separately when a supported environment
+  is available; do not describe an ASan run with `detect_leaks=0` as LSan proof.
+- Require exact output from successful and exceptional evaluation cleanup paths,
+  and fail on tracker-removal or sanitizer diagnostics.
 
 ## Decisions
 
@@ -134,6 +138,25 @@ TODO-14; regression-harness startup performance is tracked by TODO-17.
   recreated as exact declarations; unreachable definitions are omitted.
 
 ## Progress Log
+
+- 2026-08-21: Audited the closed compilation-unit ownership work against the
+  current post-TODO-14 implementation.
+  - Confirmed environment-indexed tracker ownership, immediate cleanup for
+    non-escaping evaluations, escaped-closure retention, failed-removal retry
+    ownership, and shutdown ordering (`remove_all`, failed-tracker handoff,
+    LLJIT destruction, then resource-registry destruction).
+  - Confirmed that no `ExecutionEngine`, MCJIT, legacy global mapping, or legacy
+    pointer-materialization call remains in the current source tree.
+  - Replaced the stale hybrid-runtime work list with completed follow-up status
+    and documented the reproducibility limit of the historical 1000-evaluation
+    and LeakSanitizer claims.
+  - Validation:
+    - `ctest --test-dir build/audit-todo05-release
+      -R '^pure-jit-(lifetime-stress|deferred-generation|deferred-retry|type-retirement-retry|eval-failure-recovery)$'
+      --output-on-failure` passed 5/5 in 3.22 seconds.
+    - The same five tests passed 5/5 in 9.26 seconds in
+      `build/native-asan` with AddressSanitizer and `detect_leaks=0`.
+    - LeakSanitizer was not run during this audit.
 
 - 2026-07-23: Identified the prerequisite boundary for definition resources.
   - `dodefn` writes matched values through host-backed `GlobalVar` storage mapped

@@ -1257,9 +1257,16 @@ struct NewPassManagerState {
 
   void optimize(llvm::Function& function)
   {
-#ifndef NDEBUG
-    verify(function, "before");
+#ifdef PURE_ENABLE_TEST_HOOKS
+    static bool invalid_ir_injected = false;
+    if (!invalid_ir_injected && getenv("PURE_TEST_INVALID_FUNCTION_IR") &&
+        function.getName() == "invalid_function_ir") {
+      invalid_ir_injected = true;
+      llvm::ReturnInst::Create(function.getContext(),
+                               &function.getEntryBlock());
+    }
 #endif
+    verify(function, "before");
     functions.invalidate(function, llvm::PreservedAnalyses::none());
     llvm::FunctionPassManager pipeline = build_interactive_pipeline();
     pipeline.run(function, functions);

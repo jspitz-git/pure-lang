@@ -1,0 +1,6 @@
+// The focused CTest injects malformed IR after this function is completed and
+// before the interactive O1 pipeline runs. Release must reject it through the
+// actionable pre-optimization verifier instead of entering the pass pipeline.
+
+invalid_function_ir x = x;
+invalid_function_ir 41;

@@ -1,6 +1,6 @@
 # TODO-05 - Verifier and New Pass Manager
 
-Status: Closed on 2026-07-24
+Status: Closed on 2026-07-24; audited and corrected on 2026-08-21
 Branch: todo/05-verifier-and-pass-manager
 
 ## Purpose
@@ -21,7 +21,8 @@ fails with an actionable diagnostic before entering ORC.
 1. [x] Introduce reusable new-pass-manager analysis state.
 2. [x] Select an initial interactive pipeline, preferably standard `O1`.
 3. [x] Run function or module optimization at a clearly defined ownership boundary.
-4. [x] Add verification before and after optimization in debug builds.
+4. [x] Verify before optimization in every build and after optimization in debug
+   builds.
 5. [x] Surface verifier and pass errors through Pure diagnostics.
 6. [x] Compare representative optimized IR with unoptimized output for ABI changes.
 
@@ -34,12 +35,15 @@ correctness baseline and avoids unmeasured behavioral differences between
 interactive definitions, imported providers, and their submitted snapshots.
 
 Task 6 compared representative unoptimized and O1 IR directly and verified both
-forms. That offline comparison is the intended O0 side of the original
-validation plan; the interpreter has no supported runtime O0 mode. Adding one
-solely for a one-time smoke comparison would create a new configuration surface
-without a release requirement. A runtime optimization selector, custom pipeline,
-or lazy-JIT performance work requires profiling and belongs outside this
-correctness migration.
+forms. The temporary comparison files were removed, so the original experiment
+is recorded in the progress log but cannot be reproduced from this repository.
+That is an evidence-retention limitation, not a runtime O0 requirement: the
+interpreter has no supported runtime O0 mode. Adding one solely for a one-time
+smoke comparison would create a new configuration surface without a release
+requirement. A future ABI comparison should retain its input IR and command as a
+test fixture. A runtime optimization selector, custom pipeline, or lazy-JIT
+performance work requires profiling and belongs outside this correctness
+migration.
 
 ## Guardrails
 
@@ -49,10 +53,13 @@ correctness migration.
 
 ## Validation Plan
 
-- `cmake --build --preset llvm22-debug`
-- `opt-22 -passes=verify -disable-output` on emitted pre- and post-pass IR.
-- Compare representative unoptimized and `O1` IR, then run the supported `O1`
-  smoke path.
+- Configure and build a Release tree with LLVM 22 and `BUILD_TESTING=ON`.
+- Run `pure-jit-invalid-function-verifier`; its test-only hook injects malformed
+  function IR immediately before optimization and requires the actionable
+  `LLVM verifier failed before optimization` diagnostic.
+- Run `pure-jit-smoke` to cover the normal O1 JIT path without injection.
+- For a future O0/O1 ABI comparison, retain the representative IR as a fixture
+  and verify both forms rather than relying only on a historical log entry.
 
 ## Decisions
 
@@ -63,6 +70,27 @@ correctness migration.
   sequence. Performance tuning is not part of the LLVM 22 correctness release.
 
 ## Progress Log
+
+- 2026-08-21: Audited the completed implementation and corrected a Release-only
+  verifier gap.
+  - The pre-optimization `verifyFunction` call was guarded by `NDEBUG`. Release
+    therefore admitted malformed function IR into the O1 pass pipeline; only the
+    later reduced-module verifier reported it before ORC submission.
+  - Made function verification unconditional before O1. The post-optimization
+    verifier remains debug-only, and the existing module verifier still protects
+    the ORC submission boundary.
+  - Added `pure-jit-invalid-function-verifier`, using the existing
+    `PURE_ENABLE_TEST_HOOKS` mechanism to inject malformed IR at the precise
+    function/pipeline boundary.
+  - Red result before the production fix: the focused Release test failed because
+    it saw only `failed to snapshot deferred ORC global function: invalid reduced
+    ORC module`, not the required pre-optimization diagnostic.
+  - Green result after the fix: Release `pure-jit-smoke` and
+    `pure-jit-invalid-function-verifier` both passed (2/2, 1.23 seconds) with
+    Clang/LLVM 22.1.8 in the MSYS2 CLANG64 environment.
+  - The original task 6 comparison cannot be independently reproduced because
+    its temporary IR files were deleted. The historical ABI conclusions remain
+    documented, but a future repeat must retain a fixture and command.
 
 - 2026-07-23: Compared representative Pure-style opaque-pointer IR before and
   after LLVM 22 `default<O1>` optimization.

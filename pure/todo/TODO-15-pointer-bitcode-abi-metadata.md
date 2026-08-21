@@ -1,6 +1,6 @@
 # TODO-15 - Pointer Bitcode ABI Metadata
 
-Status: Completed
+Status: Closed on 2026-07-25; audited and extended on 2026-08-21
 Branch: todo/15-pointer-bitcode-abi-metadata
 
 ## Purpose
@@ -60,9 +60,11 @@ identifier   := [A-Za-z_][A-Za-z0-9_:.]*
 
 Pointer stars encode exact depth. `const` before the base qualifies the base object reached
 through the pointer chain; `const` after a star qualifies the pointer produced by that
-star. The loader preserves qualifiers in cached and emitted metadata even where the current
-wrapper needs only the unqualified role. Custom roles require at least one pointer level. Scalar `void`
-is permitted only as a result, and all other scalar entries must use a builtin.
+star. Qualifiers are valid only on pointer-bearing types; for example, `const
+int` without a `*` is rejected. The loader preserves qualifiers in cached and
+emitted metadata even where the current wrapper needs only the unqualified role.
+Custom roles require at least one pointer level. Scalar `void` is permitted only
+as a result, and all other scalar entries must use a builtin.
 
 A module may omit `pure.abi`; scalar-only exports then retain the existing inferred ABI,
 while pointer-bearing definitions without a valid record remain unpublished with the
@@ -79,6 +81,25 @@ new version because canonical strings are persisted in `bcdata_t` and batch bitc
 Readers reject unsupported versions rather than guessing; future versions may use a new
 record shape under the same `pure.abi` node.
 
+## Permanent Coverage
+
+The checked-in fixtures now exercise the complete version-1 validation boundary:
+
+- accepted `const char*` cache reuse and `const char* const*` pointer depth and
+  per-level qualification;
+- absent metadata, missing and duplicate version records, unsupported versions,
+  non-string operands, duplicate function records, and dangling records;
+- declarations instead of definitions, non-C calling conventions, arity
+  mismatch, nonzero address spaces, scalar `const`, `void` arguments, and custom
+  roles without a pointer;
+- LLVM scalar/pointer mismatch, duplicate namespaced exports, provider unload,
+  declaration rollback, and transaction recovery.
+
+`pure-bitcode-pointer-batch-roundtrip` compiles a metadata-backed `const char*`
+export to batch LLVM IR, native object, and executable. It requires the emitted
+extern table to contain `%const%20char*`, requires the renamed provider IR not to
+retain `pure.abi`, links the object, executes it, and compares stdout literally.
+
 ## Guardrails
 
 - Never infer pointer semantics from LLVM opaque `ptr` types.
@@ -90,13 +111,40 @@ record shape under the same `pure.abi` node.
 
 - Generate fixtures from C or LLVM IR source with Clang/LLVM 22.
 - Verify every fixture with LLVM's verifier.
-- Run loader success, rejection, rollback, and lifetime tests in Debug and sanitizer builds.
+- Run loader success, rejection, rollback, cache, unload, and lifetime tests in
+  Debug and sanitizer builds.
+- Run `pure-bitcode-pointer-qualified` and the consolidated
+  `pure-bitcode-metadata-validation` rejection matrix.
+- Run `pure-bitcode-pointer-batch-roundtrip` through LLVM IR, object, link, and
+  execution and inspect both the encoded extern ABI and removed source metadata.
+- Run the complete `bitcode` and `batch` CTest label families after changes to
+  metadata parsing, extern serialization, or the batch driver.
 
 ## Origin
 
 Created from TODO-04's explicit opaque-pointer deferral and TODO-13 retrospective gate 5.
 
 ## Progress Log
+
+- 2026-08-21: Audited and extended permanent pointer ABI coverage.
+  - Added a `const char* const*` positive fixture and one consolidated negative
+    driver covering missing/duplicate version records, non-string operands,
+    dangling/declaration/non-C records, arity, address space, scalar `const`,
+    `void` arguments, and a non-pointer custom role.
+  - Added a real metadata-backed batch IR/object/executable roundtrip which
+    checks `%const%20char*`, removal of source `pure.abi`, literal runtime output,
+    and clean shutdown.
+  - Extended the shared bitcode batch driver with opt-in LLVM IR emission; all
+    existing callers retain their original object/executable behavior.
+  - TDD validation:
+    - The batch test first failed because the driver did not create the required
+      LLVM IR artefact, then passed after opt-in IR emission was implemented.
+    - Removing the custom-role fixture made the consolidated rejection test fail
+      on its missing diagnostic; restoring it returned the test to green.
+  - Validation:
+    - The three new Windows CLANG64 ASan tests passed 3/3 in 69.06 seconds.
+    - The complete union of the `bitcode` and `batch` label families passed
+      39/39 in 1047.92 seconds without a sanitizer finding.
 
 - 2026-07-25: Specified version 1 of the generic bitcode Pure ABI metadata.
   - Chose a `pure.abi` named metadata node with one module version record and source-named

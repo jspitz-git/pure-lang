@@ -116,6 +116,24 @@ if(DEFINED PURE_BATCH_OBJECT OR DEFINED PURE_BATCH_EXECUTABLE)
   if(DEFINED PURE_BATCH_MAIN AND NOT "${PURE_BATCH_MAIN}" STREQUAL "")
     list(APPEND batch_compile_options "--main=${PURE_BATCH_MAIN}")
   endif()
+  if(DEFINED PURE_BATCH_IR AND NOT "${PURE_BATCH_IR}" STREQUAL "")
+    file(REMOVE "${PURE_BATCH_IR}")
+    execute_process(
+      COMMAND
+        "${CMAKE_COMMAND}" -E env ${batch_environment} --
+        "${PURE_SH_EXECUTABLE}" "${PURE_RUN_TEST}" -L "${PURE_FIXTURE_DIR}"
+        ${batch_compile_options} "${PURE_SCRIPT}" -o "${PURE_BATCH_IR}"
+      RESULT_VARIABLE ir_result
+      OUTPUT_VARIABLE ir_output
+      ERROR_VARIABLE ir_output
+    )
+    message("${ir_output}")
+    if(NOT ir_result EQUAL 0 OR NOT EXISTS "${PURE_BATCH_IR}")
+      message(FATAL_ERROR
+        "Pure bitcode batch LLVM IR compilation exited with status ${ir_result}"
+      )
+    endif()
+  endif()
   execute_process(
     COMMAND
       "${CMAKE_COMMAND}" -E env ${batch_environment} --

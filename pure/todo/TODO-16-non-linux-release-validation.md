@@ -1,6 +1,6 @@
 # TODO-16 - Non-Linux Release Validation
 
-Status: Completed
+Status: Closed on 2026-07-25
 Branch: todo/16-non-linux-release-validation
 
 ## Purpose
@@ -48,7 +48,8 @@ Release configure/build, focused and complete CTest runs, batch object/link exec
 staged install, installed-program execution, pkg-config where available, and two successful
 uninstall invocations. A Debug build and focused integration run are also required to catch
 configuration-dependent assertions; sanitizer availability is recorded but is not a support
-gate for this TODO.
+gate for this TODO. The native workflows archive these logs as
+`macos-15-arm64-native-validation` and `windows-native-validation` artifacts.
 
 The following combinations are outside the declared LLVM 22 release matrix: macOS x86_64,
 Windows arm64, MSVC/clang-cl, the Visual Studio and Xcode generators, Cygwin, non-Apple Unix
@@ -79,9 +80,14 @@ inventory, not evidence that these combinations currently pass.
 - Linux presets retain their compiler names and `/usr/lib/llvm-22`. The Windows presets use
   the standard `C:\msys64` CLANG64 prefix and an explicit standard Faust path;
   nonstandard installations should continue to use the explicit cache arguments below.
-- A manually dispatched `macos-15` arm64 workflow encodes the macOS runbook and uploads its
-  complete validation logs. GitHub Actions run 30167622744 passed every native gate; the
-  native Windows validation is recorded below.
+- The non-Linux workflow runs for relevant pushes and pull requests and can also be dispatched
+  manually. Its native macOS and Windows jobs encode the runbooks and upload their complete
+  validation logs. GitHub Actions run 30167622744 passed every original macOS gate; the
+  original native Windows validation is recorded below.
+- The closure counts below are historical evidence from 2026-07-25: macOS registered 20 tests
+  and Windows registered 22. After the LLVM migration follow-ups through TODO-15, the current
+  Windows development configuration registers 53 tests. A release claim for a newer revision
+  depends on fresh successful native workflow artifacts, not on the historical counts alone.
 
 ## Native Validation Runbook
 
@@ -179,9 +185,19 @@ round trips. Do not use `DESTDIR`; configure the disposable staging prefix direc
 
 ## Validation Plan
 
-- Preserve complete configure, build, CTest, install, execution, and uninstall logs for
-  every supported matrix entry.
-- Confirm no generated or installed path escapes the selected build or prefix.
+- Run strict native-toolchain configure probes for both supported entries and retain negative
+  checks which reject translated, cross-compiled, mixed-prefix, or wrong-architecture inputs.
+- Run the focused Debug suite plus focused and complete Release CTest suites. Treat the number
+  of registered tests as revision-specific evidence and record the exact count in each artifact.
+- Exercise batch object and executable output, installed `pure --version` and `hello.pure`,
+  pkg-config consumption, and the platform-native Mach-O or COFF inspection tools.
+- On Windows, install the portable runtime dependency closure, run it with a sanitized `PATH`
+  and no `PURELIB`, and apply `AuditWindowsPortableInstall.cmake` to its recursive PE imports
+  and forbidden build/MSYS2 prefixes.
+- Confirm every manifest path remains below the selected installation prefix, run uninstall
+  twice, and verify that no manifest entry remains after the first invocation.
+- Upload complete `macos-15-arm64-native-validation` and `windows-native-validation` artifacts
+  for every revision used as non-Linux release evidence.
 
 ## Origin
 
@@ -322,3 +338,21 @@ and TODO-13's unresolved release-matrix question.
   - The workflow uploaded its complete native validation logs as the
     `macos-15-arm64-native-validation` artifact. Together with the recorded native Windows
     run, this satisfies every task and required entry in the non-Linux release matrix.
+- 2026-08-21: Audited the closed matrix against the expanded LLVM migration test surface.
+  - Corrected the formal closure status and distinguished the original 20-test macOS and
+    22-test Windows results from the current 53-test development configuration.
+  - Updated the workflow description for its `push`, `pull_request`, and `workflow_dispatch`
+    triggers and expanded the validation plan with strict-toolchain, portable-runtime, PE,
+    manifest-containment, and artifact requirements.
+  - Added the `windows-pure-core` GitHub Actions job. It installs native CLANG64 LLVM 22 and
+    Flang plus the pinned official Faust payload, exercises the Windows Release and Debug
+    presets, confirms that a cross-target configure is rejected by the intended strict-toolchain
+    guard, runs focused and complete CTest, audits the installed portable runtime, validates
+    installed programs and COFF metadata, performs idempotent uninstall, and uploads the
+    `windows-native-validation` logs.
+  - Validation:
+    - The pre-change static acceptance check failed for the missing Windows job and artifact,
+      stale status and manual-only description, and absent current 53-test inventory.
+    - Local workflow syntax and static acceptance validation are recorded by the follow-up
+      audit. The new native job and the expanded current macOS suite require successful GitHub
+      Actions runs before their artifacts can be used as fresh release evidence.

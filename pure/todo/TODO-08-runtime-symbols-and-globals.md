@@ -1,6 +1,6 @@
 # TODO-08 - Runtime Symbols and Globals
 
-Status: Complete
+Status: Closed on 2026-07-23; audited and corrected on 2026-08-21
 Branch: todo/08-runtime-symbols-and-globals
 
 ## Purpose
@@ -25,9 +25,14 @@ resolves the Pure runtime, external functions, and mutable host-backed globals.
 5. [x] Replace `resolve_external` with an ORC-compatible failure strategy.
 6. [x] Test symbol visibility for executable, shared-library, and plugin builds.
 
-## Legacy Symbol Inventory
+## Historical Legacy Symbol Inventory
 
-| Category | Current mechanism | Storage and lifetime | ORC migration |
+The table below records the pre-migration mechanisms and intended ORC changes.
+It is historical context, not a description of the current implementation;
+TODO-14 subsequently removed `ExecutionEngine`, MCJIT, legacy mappings, and the
+lazy resolver.
+
+| Category | Legacy mechanism | Storage and lifetime | ORC migration |
 | --- | --- | --- | --- |
 | Runtime functions | `declare_extern(fp, ...)` adds each address with `DynamicLibrary::AddSymbol`; MCJIT also uses `resolve_external` | Functions and process symbols live for the process | Prefer LLJIT's current-process generator; define explicit absolute symbols for runtime addresses that are not exported reliably |
 | User C externals | `SearchForAddressOfSymbol`, external declarations, and direct calls from generated wrappers | Owned by permanently loaded libraries or the process | Resolve through the ORC process/library search order and report lookup failure as a Pure error |
@@ -70,18 +75,65 @@ resolves the Pure runtime, external functions, and mutable host-backed globals.
 
 ## Validation Plan
 
-- Run focused tests for globals, externals, wrappers, and unresolved symbols.
-- Validate both shared and non-shared runtime build variants if retained.
-- Use `llvm-nm-22` or debugger inspection when symbol visibility is ambiguous.
+- Build the required targets before targeted CTest execution:
+  `cmake --build <build> --target pure pure-main-object
+  pure-bitcode-fixtures pure-jit-smoke`.
+- Run `ctest --test-dir <build>
+  -R '^(pure-jit-smoke|pure-jit-eval-failure-recovery|pure-bitcode-unresolved-dependency|pure-bitcode-transaction-host-(replacement|reregistration|restore-fatal|shutdown))$'
+  --output-on-failure`.
+- Run the host-replacement test independently, without first running another
+  transaction test, to enforce fixture isolation.
+- Validate shared-runtime and plugin visibility with a retained source fixture
+  and exact command when that portability check is repeated.
+- Use `llvm-nm` or debugger inspection when symbol visibility is ambiguous.
 
-## Open Questions
+## Decisions
 
-- Why does LeakSanitizer's process-exit scan stall after an evaluated closure even
-  though the same ASan/UBSan run exits immediately with leak detection disabled?
-- Should mutable Pure globals remain absolute symbols or move to a runtime table API?
-- Which symbols must be exported from the main executable with linker options?
+- Mutable Pure globals remain host-backed absolute symbols. Their registry owns
+  backing storage and individual trackers, supports transactional replacement,
+  and preserves old storage while materialized code can still reference it.
+- Pure runtime addresses are registered explicitly and do not depend on executable
+  exports. libc and permanently loaded plugin symbols use LLJIT's process/library
+  search order.
+
+## Evidence Limitations
+
+- The 2026-07-23 LeakSanitizer exit-scan stall after an evaluated closure is a
+  historical observation. Its exact command and input were not retained, so it
+  is not currently reproducible from this repository. Future investigation must
+  use the separate `llvm22-lsan` preset and record its full command.
+- The original shared-plugin visibility check built a temporary plugin outside
+  the repository and then removed it. Its result remains historical evidence,
+  but repeating the claim requires a retained plugin fixture and exact commands.
 
 ## Progress Log
+
+- 2026-08-21: Audited host-symbol ownership and corrected an order-dependent
+  transaction test.
+  - `pure-bitcode-transaction-host-replacement` compiled its private invalid
+    fixture as `transaction-host-invalid.bc`, while its Pure script requested
+    `transaction-invalid.bc`. The latter was an artifact of the earlier
+    `pure-bitcode-transaction-recovery` test, so the host test passed only when
+    CTest order or stale build output supplied that unrelated file.
+  - Updated the script to load its own `transaction-host-invalid.bc` fixture.
+    The isolated test now exercises the real replacement rollback path without
+    another test's output.
+  - Confirmed that current source contains no `ExecutionEngine`, MCJIT, legacy
+    mapping API, or lazy external resolver. Remaining `DynamicLibrary` lookups
+    serve process and loaded-library symbol discovery.
+  - Reclassified the legacy inventory as historical, resolved the absolute-symbol
+    and export-policy questions, and documented the non-retained plugin and LSan
+    evidence.
+  - Validation:
+    - Before the fix, isolated host replacement failed with
+      `transaction-invalid.bc: No such file or directory`; it passed after the
+      unrelated transaction-recovery test created that file.
+    - After the fix, `ctest --test-dir build/audit-todo05-release
+      -R '^pure-bitcode-transaction-host-replacement$' --output-on-failure`
+      passed 1/1 in 0.85 seconds.
+    - The broader focused suite covering JIT smoke and recovery, unresolved
+      dependencies, and all four host-symbol transaction tests passed 7/7 in
+      8.11 seconds.
 
 - 2026-07-23: Completed executable, shared-runtime, and plugin visibility checks.
   - The Debug `pure` artifact is a thin PIE linked to the build-tree

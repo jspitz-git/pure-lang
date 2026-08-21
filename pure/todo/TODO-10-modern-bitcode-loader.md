@@ -1,6 +1,6 @@
 # TODO-10 - Modern Bitcode Loader
 
-Status: Completed
+Status: Closed on 2026-07-23; extended by TODO-15 on 2026-07-25; transactionally hardened through 2026-08-20; audited on 2026-08-21
 Branch: todo/10-modern-bitcode-loader
 
 ## Purpose
@@ -32,18 +32,80 @@ linked, compiled, and unloaded predictably.
 - Keep source files, not historical binary bitcode, as canonical test inputs.
 - Reject unsupported bitcode with a useful message instead of crashing LLVM.
 
+## Current Loader Contract
+
+- File buffers and decoded modules use RAII ownership. Parse, verifier, linker,
+  and ORC failures are consumed and returned as diagnostics rather than escaping
+  through LLVM assertions or unchecked error objects.
+- Empty target metadata is treated as unspecified and canonicalized to the
+  configured LLJIT target. Explicit triples must match architecture,
+  subarchitecture, operating system, environment, and object format; vendor-only
+  differences are accepted. Explicit data layouts must be semantically equal.
+- Scalar-only external definitions may derive their Pure C ABI from concrete LLVM
+  scalar types. Pointer-bearing exports require valid version-1 `pure.abi`
+  metadata implemented by TODO-15; opaque pointer pointee roles are never guessed.
+- Interactive imports submit a separately tracked ORC provider and publish cached
+  declarations only after every export materializes. Later namespace imports use
+  the immutable cached ABI metadata rather than reopening the source file.
+- Batch imports prepare and verify a private candidate, materialize its providers,
+  stage wrappers and host symbols under rollback ownership, and replay the proven
+  link before the non-recoverable commit. Namespace and load-record publication
+  remain last.
+- Failed declaration, materialization, verification, host-symbol replacement, or
+  cleanup paths preserve the previous interpreter state. Failed tracker removals
+  remain owned for bounded retry or clean shutdown.
+
 ## Validation Plan
 
-- Build fixtures with `clang-22 -emit-llvm -c`.
-- Inspect fixtures with `llvm-dis-22` and validate linked IR with `opt-22`.
-- Run generic bitcode loader tests through CTest.
+- Build the configured tree, including `pure`, `pure-main-object`,
+  `pure-bitcode-transaction-custom-main-object`, and `pure-bitcode-fixtures`.
+  The fixture target invokes the configured Clang, assembler, disassembler, and
+  verifier rather than assuming suffixed executable names.
+- Run `ctest --test-dir <build> -R '^pure-bitcode-' --output-on-failure`
+  in both Release and ASan builds.
+- Keep coverage for parsing, target ABI, duplicate and unresolved symbols,
+  provider unload, pointer metadata, varargs mismatches, declaration rollback,
+  batch preparation and commit, host-symbol restoration, retry, and shutdown.
 
-## Open Questions
+## Decisions
 
-- Which level of cross-target bitcode compatibility should be promised?
-- Should linked modules share a compilation unit or retain individual resource trackers?
+- Cross-target execution is not promised. Only unspecified metadata or an explicit
+  target matching the LLJIT ABI under the component and semantic-layout rules above
+  is accepted.
+- Interactive modules retain individual provider trackers. Batch compilation links
+  a privately prepared provider into the output module so emitted programs remain
+  self-contained.
 
 ## Progress Log
+
+Entries dated 2026-07-23 describe the original migration and its five focused
+integration tests. TODO-15 and later transaction work expanded the loader contract;
+the audit entry below records the current tree rather than rewriting that history.
+
+- 2026-08-21: Audited the modern bitcode loader and reconciled this document with
+  pointer ABI metadata and post-closure transactional hardening.
+  - Replaced the resolved compatibility and tracker questions with explicit
+    decisions and documented the separate interactive and batch ownership models.
+  - Added the current `pure.abi`, staged publication, rollback, cleanup retry, and
+    non-recoverable commit boundaries.
+  - Updated validation from hard-coded LLVM 22 executable names and five original
+    tests to the configured toolchain and all 22 current `pure-bitcode-*` cases.
+  - Validation:
+    - Release passed 22/22 in 51.63 seconds.
+    - ASan passed 22/22 in 498.60 seconds without a sanitizer finding.
+    - An initial Release run omitted the custom-main object from a manually narrowed
+      build target list. Building its declared CMake target made the isolated test
+      pass 1/1; the subsequent complete run passed 22/22. This was a prerequisite
+      error in the audit command, not a loader or test-order failure.
+
+- 2026-08-20: Completed post-closure transactional hardening.
+  - Staged batch imports in private candidate modules, verified provider
+    materialization before publication, and retained rollback ownership for
+    declarations, wrappers, host symbols, and failed tracker removal.
+  - Preserved LLVM globals with a custom batch `main`, restored exact import and
+    host backing ownership, and corrected wrapper rollback cleanup.
+  - Added transaction recovery, custom-main, preparation-failure, host replacement,
+    re-registration, fatal restoration, and shutdown coverage.
 
 - 2026-07-23: Completed automated bitcode loader failure and lifecycle coverage.
   - Added CTest integration cases for isolated duplicate exports, malformed bitcode,
