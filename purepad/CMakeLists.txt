@@ -58,3 +58,17 @@ set_property(TARGET purepad PROPERTY
 target_link_options(purepad PRIVATE
   "/MANIFESTINPUT:${CMAKE_CURRENT_SOURCE_DIR}/purepad.manifest"
 )
+
+include(CTest)
+if(BUILD_TESTING)
+  add_executable(purepad-process-child tests/process_child.cpp)
+  add_executable(purepad-process-session-tests
+    tests/process_session_tests.cpp ProcessSession.cpp)
+  target_compile_features(purepad-process-child PRIVATE cxx_std_17)
+  target_compile_features(purepad-process-session-tests PRIVATE cxx_std_17)
+  target_include_directories(purepad-process-session-tests PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}")
+  add_test(NAME purepad-process-session
+    COMMAND purepad-process-session-tests
+      "$<TARGET_FILE:purepad-process-child>")
+endif()
