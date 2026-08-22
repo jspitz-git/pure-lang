@@ -112,6 +112,20 @@ if(WIN32)
     message(FATAL_ERROR
       "PURE_SQLITE_RUNTIME_LICENSE does not exist: ${PURE_SQLITE_RUNTIME_LICENSE}")
   endif()
+  get_filename_component(sqlite_runtime_real "${PURE_SQLITE_RUNTIME_DLL}" REALPATH)
+  get_filename_component(controlled_sqlite_real
+    "${SQLITE3_PREFIX}/bin/libsqlite3-0.dll" REALPATH)
+  if(NOT sqlite_runtime_real STREQUAL controlled_sqlite_real)
+    message(FATAL_ERROR
+      "PURE_SQLITE_RUNTIME_DLL must be the controlled SQLite runtime from ${SQLITE3_PREFIX}")
+  endif()
+  file(SHA256 "${PURE_SQLITE_RUNTIME_DLL}" sqlite_runtime_sha256)
+  set(controlled_sqlite_sha256
+    "91240f2e86a7648a408d2b3ea4f851c1db0fb9a778f775a823ff81978abb14f7")
+  if(NOT sqlite_runtime_sha256 STREQUAL controlled_sqlite_sha256)
+    message(FATAL_ERROR
+      "The controlled SQLite runtime has unexpected SHA-256: ${sqlite_runtime_sha256}")
+  endif()
   get_filename_component(sqlite_runtime_name "${PURE_SQLITE_RUNTIME_DLL}" NAME)
   if(NOT sqlite_runtime_name STREQUAL "libsqlite3-0.dll")
     message(FATAL_ERROR

@@ -13,6 +13,26 @@ with
   handler exception = throw exception;
 end;
 
+expect_stmt_error stmt = catch handler (sql3::exec stmt ())
+with
+  handler (sql3::db_error _ _) = 1;
+  handler exception = throw exception;
+end;
+
+check_statement_cleanup = ()
+when
+  db = sql3::open ":memory:";
+  stmt = sql3::prep db "i:" "select 1";
+  check (sql3::close db == 1)
+    "database with an outstanding statement did not close";
+  check (sql3::finalize stmt == 0)
+    "statement finalized by database close was not safe to release";
+  check (sql3::finalize stmt == 0)
+    "second statement finalize was not deterministic";
+  check (expect_stmt_error stmt == 1)
+    "statement remained usable after database close";
+end;
+
 check_round_trip [[1, name, note, payload]] expected_name = ()
 when
   check (name == expected_name) "Unicode text did not round-trip";
@@ -68,6 +88,7 @@ when
   check_reopen (sql3::exec verify_stmt ());
   check (sql3::finalize verify_stmt == 0) "reopen statement did not finalize";
   check (sql3::close reopened == 1) "reopened database did not close";
+  check_statement_cleanup;
   puts "PURE_SQL3_SMOKE_OK";
 end;
 

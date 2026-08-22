@@ -74,3 +74,21 @@ distribution.
 - 2026-07-27: The final source/build-path leak scan was clean, all direct
   nonsystem DLL imports were present in the portable tree, and installed
   binary hashes matched the audited build and controlled SQLite input.
+- 2026-08-22: SuperPowers audit hardened the retained Windows validation.
+  - Windows tests now require an explicit installed portable Pure interpreter
+    and `llvm-readobj`; the runner removes `PURELIB`, constructs a restricted
+    `PATH`, rejects stderr, and requires an exact success marker.
+  - The bundled `libsqlite3-0.dll` must come from the SQLite pkg-config prefix
+    and match the audited SHA-256; a differently named or same-name substituted
+    DLL is rejected during configuration.
+  - The database smoke test now closes a database with an outstanding prepared
+    statement, verifies safe repeated finalization, and rejects use after
+    close. A mutation of the sentry guard reproduced an access violation.
+  - The install contract verifies the exact 13-file manifest and content,
+    source/build/MSYS2 path hygiene, both AMD64 PE images, the 11 native module
+    exports, exact import sets, and the controlled SQLite hash. It then runs
+    the complete smoke test against a copied installed runtime with poisoned
+    inherited `PATH` and `PURELIB`.
+  - The non-Linux release workflow watches `pure-sql3` and TODO-26 and runs the
+    complete configure, build, lifecycle, install, staged-runtime, and PE
+    contract on Windows.
