@@ -7,6 +7,7 @@
 #include "Pipe.h"
 #include "MainFrm.h"
 
+#include <memory>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -36,22 +37,6 @@ std::vector<std::wstring> SplitArguments(LPCTSTR value)
 		token = arguments.Tokenize(_T(" \t"), position)) {
 		result.emplace_back(static_cast<LPCTSTR>(token), token.GetLength());
 	}
-	return result;
-}
-
-CString Utf8Text(std::string_view bytes)
-{
-	if (bytes.empty())
-		return CString();
-	const int length = MultiByteToWideChar(CP_UTF8, 0, bytes.data(),
-		static_cast<int>(bytes.size()), nullptr, 0);
-	if (length <= 0)
-		return CString();
-	CString result;
-	LPTSTR buffer = result.GetBuffer(length);
-	const int converted = MultiByteToWideChar(CP_UTF8, 0, bytes.data(),
-		static_cast<int>(bytes.size()), buffer, length);
-	result.ReleaseBuffer(converted > 0 ? converted : 0);
 	return result;
 }
 
@@ -166,13 +151,17 @@ BOOL CPipe::Run2(LPCTSTR application, LPCTSTR arguments,
 	auto launch = purepad::detail::BuildPipeLaunch(
 		WideString(application), SplitArguments(arguments), WideString(name),
 		WideString(CMainFrame::m_strQPS));
+	auto decoder = std::make_shared<purepad::detail::Utf8Decoder>();
 	purepad::ProcessCallbacks callbacks;
-	callbacks.output = [this, window](std::string_view bytes) {
-		const CString text = Utf8Text(bytes);
-		if (!text.IsEmpty() && m_bufInput.Write(text) && window)
+	callbacks.output = [this, window, decoder](std::string_view bytes) {
+		if (purepad::detail::AppendDecodedOutput(
+				m_bufInput, *decoder, bytes) && window)
 			::PostMessage(window, WM_USER_INPUT, 0, 0);
 	};
-	callbacks.exited = [this] {
+	callbacks.exited = [this, window, decoder] {
+		if (purepad::detail::FlushDecodedOutput(
+				m_bufInput, *decoder) && window)
+			::PostMessage(window, WM_USER_INPUT, 0, 0);
 		m_session.Stop();
 	};
 

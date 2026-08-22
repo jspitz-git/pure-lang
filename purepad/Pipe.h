@@ -7,6 +7,9 @@
 
 #include "Buffer.h"	// Added by ClassView
 #include "ProcessSession.h"
+#include <climits>
+#include <filesystem>
+#include <string_view>
 #include <utility>
 #if _MSC_VER > 1000
 #pragma once
@@ -28,6 +31,118 @@
 namespace purepad {
 namespace detail {
 
+class Utf8Decoder {
+public:
+	CString Push(std::string_view bytes)
+	{
+		if (!bytes.empty())
+			pending_.append(bytes.data(), bytes.size());
+		return Decode(CompletePrefixSize(pending_));
+	}
+
+	CString Finish()
+	{
+		return Decode(pending_.size());
+	}
+
+private:
+	static bool IsContinuation(unsigned char byte)
+	{
+		return (byte & 0xc0) == 0x80;
+	}
+
+	static size_t CompletePrefixSize(std::string_view bytes)
+	{
+		size_t index = 0;
+		while (index < bytes.size()) {
+			const unsigned char first =
+				static_cast<unsigned char>(bytes[index]);
+			if (first < 0x80) {
+				++index;
+				continue;
+			}
+
+			size_t sequence_length = 0;
+			if (first >= 0xc2 && first <= 0xdf)
+				sequence_length = 2;
+			else if (first >= 0xe0 && first <= 0xef)
+				sequence_length = 3;
+			else if (first >= 0xf0 && first <= 0xf4)
+				sequence_length = 4;
+			else {
+				++index;
+				continue;
+			}
+
+			bool invalid = false;
+			const size_t available = bytes.size() - index;
+			for (size_t offset = 1;
+				offset < sequence_length && offset < available; ++offset) {
+				if (!IsContinuation(
+						static_cast<unsigned char>(bytes[index + offset]))) {
+					invalid = true;
+					break;
+				}
+			}
+			if (invalid) {
+				++index;
+				continue;
+			}
+			if (available < sequence_length)
+				return index;
+
+			const unsigned char second =
+				static_cast<unsigned char>(bytes[index + 1]);
+			if ((first == 0xe0 && second < 0xa0) ||
+				(first == 0xed && second >= 0xa0) ||
+				(first == 0xf0 && second < 0x90) ||
+				(first == 0xf4 && second >= 0x90)) {
+				++index;
+				continue;
+			}
+			index += sequence_length;
+		}
+		return index;
+	}
+
+	CString Decode(size_t byte_count)
+	{
+		if (byte_count == 0 || byte_count > static_cast<size_t>(INT_MAX))
+			return CString();
+		const int source_length = static_cast<int>(byte_count);
+		const int length = MultiByteToWideChar(CP_UTF8, 0, pending_.data(),
+			source_length, nullptr, 0);
+		if (length <= 0)
+			return CString();
+		CString result;
+		LPTSTR output = result.GetBuffer(length);
+		const int converted = MultiByteToWideChar(CP_UTF8, 0, pending_.data(),
+			source_length, output, length);
+		if (converted <= 0) {
+			result.ReleaseBufferSetLength(0);
+			return result;
+		}
+		result.ReleaseBufferSetLength(converted);
+		pending_.erase(0, byte_count);
+		return result;
+	}
+
+	std::string pending_;
+};
+
+inline BOOL AppendDecodedOutput(CBuffer& buffer, Utf8Decoder& decoder,
+	std::string_view bytes)
+{
+	const CString text = decoder.Push(bytes);
+	return buffer.Write(text.GetString(), text.GetLength());
+}
+
+inline BOOL FlushDecodedOutput(CBuffer& buffer, Utf8Decoder& decoder)
+{
+	const CString text = decoder.Finish();
+	return buffer.Write(text.GetString(), text.GetLength());
+}
+
 inline ProcessLaunch BuildPipeLaunch(std::wstring application,
 	std::vector<std::wstring> arguments, const std::wstring& script,
 	std::wstring prompt)
@@ -37,17 +152,16 @@ inline ProcessLaunch BuildPipeLaunch(std::wstring application,
 	launch.arguments = std::move(arguments);
 	launch.prompt = std::move(prompt);
 
-	const size_t slash = script.find_last_of(L"/\\");
-	if (slash == std::wstring::npos) {
-		if (!script.empty())
-			launch.arguments.push_back(script);
-		return launch;
+	const std::filesystem::path script_path(script);
+	launch.working_directory = script_path.parent_path().native();
+	if (!launch.working_directory.empty() &&
+		launch.working_directory.back() == L':' &&
+		script.size() > launch.working_directory.size()) {
+		const wchar_t separator = script[launch.working_directory.size()];
+		if (separator == L'\\' || separator == L'/')
+			launch.working_directory.push_back(separator);
 	}
-
-	const size_t directory_length =
-		slash == 2 && script.size() > 2 && script[1] == L':' ? 3 : slash;
-	launch.working_directory = script.substr(0, directory_length);
-	const std::wstring basename = script.substr(slash + 1);
+	const std::wstring basename = script_path.filename().native();
 	if (!basename.empty())
 		launch.arguments.push_back(basename);
 	return launch;

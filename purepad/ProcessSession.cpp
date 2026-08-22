@@ -153,11 +153,11 @@ BOOL ProcessApi::SignalEvent(HANDLE event) {
 }
 
 LPWCH ProcessApi::GetEnvironmentStrings() {
-  return GetEnvironmentStringsW();
+  return ::GetEnvironmentStringsW();
 }
 
 BOOL ProcessApi::FreeEnvironmentStrings(LPWCH environment) {
-  return FreeEnvironmentStringsW(environment);
+  return ::FreeEnvironmentStringsW(environment);
 }
 
 DWORD ProcessApi::ResumeProcessThread(HANDLE thread) {

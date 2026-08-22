@@ -22,6 +22,8 @@ public:
 	BOOL Write(LPCTSTR lpszStr);
 	// append a string to the buffer (return TRUE if buffer is
 	// currently empty)
+	BOOL Write(LPCTSTR lpszStr, int length);
+	// append an explicitly sized string, including embedded nulls
 	CString Read();
 	// get the current buffer contents and empty the buffer
 	CString Peek();

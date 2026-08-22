@@ -64,9 +64,16 @@ include(CTest)
 if(BUILD_TESTING)
   add_executable(purepad-process-child tests/process_child.cpp)
   add_executable(purepad-process-session-tests
-    tests/process_session_tests.cpp ProcessSession.cpp)
+    tests/process_session_tests.cpp Buffer.cpp ProcessSession.cpp)
   target_compile_features(purepad-process-child PRIVATE cxx_std_17)
   target_compile_features(purepad-process-session-tests PRIVATE cxx_std_17)
+  target_compile_definitions(purepad-process-session-tests PRIVATE
+    _AFXDLL
+    UNICODE
+    _UNICODE
+    WINVER=0x0A00
+    _WIN32_WINNT=0x0A00
+  )
   target_include_directories(purepad-process-session-tests PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}")
   add_test(NAME purepad-process-session

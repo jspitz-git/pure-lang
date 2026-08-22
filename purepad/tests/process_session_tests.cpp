@@ -340,6 +340,22 @@ void invalid_working_directory_fails_synchronously(const wchar_t* child) {
 
 void sibling_launch_uses_absolute_application_and_script_parent(
     const wchar_t*) {
+  const auto rooted_backslash = purepad::detail::BuildPipeLaunch(
+    L"C:\\pure.exe", {}, L"\\script.pure", L"");
+  CHECK(rooted_backslash.working_directory == L"\\");
+  CHECK(rooted_backslash.arguments ==
+        std::vector<std::wstring>{L"script.pure"});
+  const auto rooted_slash = purepad::detail::BuildPipeLaunch(
+    L"C:\\pure.exe", {}, L"/script.pure", L"");
+  CHECK(rooted_slash.working_directory == L"/");
+  CHECK(rooted_slash.arguments ==
+        std::vector<std::wstring>{L"script.pure"});
+  const auto extended_drive_root = purepad::detail::BuildPipeLaunch(
+    L"C:\\pure.exe", {}, L"\\\\?\\C:\\script.pure", L"");
+  CHECK(extended_drive_root.working_directory == L"\\\\?\\C:\\");
+  CHECK(extended_drive_root.arguments ==
+        std::vector<std::wstring>{L"script.pure"});
+
   wchar_t temporary_root[MAX_PATH]{};
   CHECK(GetTempPathW(MAX_PATH, temporary_root) != 0);
   const std::wstring working_directory =
@@ -372,6 +388,55 @@ void sibling_launch_uses_absolute_application_and_script_parent(
   CHECK(session.WaitForExit(5s));
   session.Stop();
   CHECK(output.Get() == Utf8(script) + "\r\n");
+}
+
+void adapter_output_preserves_split_utf8_and_notification_coalescing() {
+  purepad::detail::Utf8Decoder decoder;
+  CBuffer buffer;
+  std::string first(4095, 'x');
+  first.push_back(static_cast<char>(0xe2));
+  CHECK(purepad::detail::AppendDecodedOutput(buffer, decoder, first));
+  CHECK(buffer.GetLength() == 4095);
+  CHECK(!purepad::detail::AppendDecodedOutput(
+    buffer, decoder, std::string_view("\x82\xac", 2)));
+  const CString actual = buffer.Read();
+  CHECK(actual.GetLength() == 4096);
+  if (actual.GetLength() == 4096)
+    CHECK(actual[4095] == static_cast<TCHAR>(0x20ac));
+}
+
+void adapter_output_preserves_embedded_nul() {
+  purepad::detail::Utf8Decoder decoder;
+  CBuffer buffer;
+  CHECK(purepad::detail::AppendDecodedOutput(
+    buffer, decoder, std::string_view("A\0B", 3)));
+  const CString actual = buffer.Read();
+  CHECK(actual.GetLength() == 3);
+  if (actual.GetLength() == 3) {
+    CHECK(actual[0] == _T('A'));
+    CHECK(actual[1] == _T('\0'));
+    CHECK(actual[2] == _T('B'));
+  }
+}
+
+void adapter_decoder_state_is_generation_local_and_flushable() {
+  purepad::detail::Utf8Decoder stopped_generation;
+  CBuffer stopped_output;
+  CHECK(!purepad::detail::AppendDecodedOutput(
+    stopped_output, stopped_generation, std::string_view("\xe2", 1)));
+  CHECK(purepad::detail::FlushDecodedOutput(
+    stopped_output, stopped_generation));
+  CHECK(stopped_output.GetLength() == 1);
+  CBuffer reused_output;
+  CHECK(purepad::detail::AppendDecodedOutput(
+    reused_output, stopped_generation, "after"));
+  CHECK(reused_output.Read() == _T("after"));
+
+  purepad::detail::Utf8Decoder new_generation;
+  CBuffer new_output;
+  CHECK(purepad::detail::AppendDecodedOutput(
+    new_output, new_generation, "next"));
+  CHECK(new_output.Read() == _T("next"));
 }
 
 void each_worker_creation_failure_cleans_everything(const wchar_t* child) {
@@ -643,6 +708,9 @@ int wmain(int argc, wchar_t** argv) {
   CHECK(argc == 2);
   if (argc != 2) return 1;
   const wchar_t* child = argv[1];
+  adapter_output_preserves_split_utf8_and_notification_coalescing();
+  adapter_output_preserves_embedded_nul();
+  adapter_decoder_state_is_generation_local_and_flushable();
   echo_round_trip(child);
   output_callback_can_stop_session(child);
   exited_callback_can_restart_session(child);
