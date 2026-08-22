@@ -145,3 +145,25 @@ with the portable Pure runtime.
     supported Visual Studio 2022 x64 build: GitHub migrated `windows-2025` to
     Visual Studio 2026 in June 2026, so it no longer supplies the required
     toolchain identity.
+- 2026-08-22: Bounded the inherited-stdout reader shutdown identified by the
+  lifecycle-hardening final review.
+  - The regression now pauses the output callback until cleanup reaches reader
+    shutdown, then uses named-event handshakes to keep an inherited descendant
+    producing another stdout chunk after every callback.  Against the old
+    implementation it failed deterministically after the generous ten-second
+    hang-detection bound, released the descendant safely, and left zero child
+    residue.
+  - The reader now peeks before every read and requests only bytes already
+    available.  A generation-local manual-reset event, signaled only after the
+    main process exits or is terminated, wakes idle polling and starts a final
+    drain bounded independently to 250 ms and 1 MiB.  Reader cleanup no longer
+    relies on a one-shot `CancelSynchronousIo`.
+  - From the PurePad directory under MSYS2 CLANG64 with
+    `PATH=/usr/bin:/clang64/bin`, the four-worker clean Release build completed
+    in 34 seconds and the full Release suite passed 4/4 tests in 38.55 seconds.
+    The four-worker clean Debug build completed in 30 seconds and the full
+    Debug suite passed 3/3 tests in 6.82 seconds.
+  - The Release process-session lifecycle test passed 100/100 consecutive
+    invocations in 607.88 seconds.  The immediate process-residue gate found
+    zero surviving `purepad-process-child` processes; the independent forbidden
+    source scan found zero matches, and no root build directory was created.

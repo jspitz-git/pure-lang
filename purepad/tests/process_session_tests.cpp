@@ -226,17 +226,30 @@ public:
   HANDLE release;
 };
 
-class ReaderCancellationApi final : public purepad::ProcessApi {
+class ReaderShutdownApi final : public purepad::ProcessApi {
 public:
-  ReaderCancellationApi()
-      : reader_cancel_requested(CreateEventW(nullptr, TRUE, FALSE, nullptr)) {}
-  ~ReaderCancellationApi() override { CloseHandle(reader_cancel_requested); }
-  BOOL CancelWorkerIo(HANDLE thread) override {
-    if (++cancel_calls == 2) SetEvent(reader_cancel_requested);
-    return ProcessApi::CancelWorkerIo(thread);
+  ReaderShutdownApi()
+      : reader_shutdown_requested(
+          CreateEventW(nullptr, TRUE, FALSE, nullptr)) {}
+  ~ReaderShutdownApi() override { CloseHandle(reader_shutdown_requested); }
+  BOOL SignalEvent(HANDLE event) override {
+    const int call = ++signal_calls;
+    const BOOL result = ProcessApi::SignalEvent(event);
+    // Cleanup signals writer stop, parent terminate, then reader stop.
+    if (call == 3) SetEvent(reader_shutdown_requested);
+    return result;
   }
+  BOOL CancelWorkerIo(HANDLE thread) override {
+    const int call = ++cancel_calls;
+    const BOOL result = ProcessApi::CancelWorkerIo(thread);
+    // The pre-fix reader cancellation was the second worker cancellation.
+    // Observing it positions the RED run without adding a production hook.
+    if (call == 2) SetEvent(reader_shutdown_requested);
+    return result;
+  }
+  std::atomic<int> signal_calls = 0;
   std::atomic<int> cancel_calls = 0;
-  HANDLE reader_cancel_requested;
+  HANDLE reader_shutdown_requested;
 };
 
 void echo_round_trip(const wchar_t* child) {
@@ -259,20 +272,35 @@ void inherited_stdout_descendant_does_not_block_stop(const wchar_t* child) {
     std::to_wstring(GetCurrentProcessId()) + L"-" +
     std::to_wstring(GetTickCount64());
   const std::wstring write_name = release_name + L"-write";
+  const std::wstring start_name = release_name + L"-start";
+  const std::wstring ready_name = release_name + L"-ready";
+  const std::wstring next_name = release_name + L"-next";
   HANDLE release = CreateEventW(nullptr, TRUE, FALSE, release_name.c_str());
   HANDLE write_final = CreateEventW(nullptr, TRUE, FALSE, write_name.c_str());
+  HANDLE start_writing =
+    CreateEventW(nullptr, TRUE, FALSE, start_name.c_str());
+  HANDLE chunk_ready =
+    CreateEventW(nullptr, FALSE, FALSE, ready_name.c_str());
+  HANDLE next_chunk =
+    CreateEventW(nullptr, FALSE, FALSE, next_name.c_str());
   HANDLE reader_blocked = CreateEventW(nullptr, TRUE, FALSE, nullptr);
   HANDLE release_reader = CreateEventW(nullptr, TRUE, FALSE, nullptr);
   HANDLE stop_completed = CreateEventW(nullptr, TRUE, FALSE, nullptr);
   CHECK(release != nullptr);
   CHECK(write_final != nullptr);
+  CHECK(start_writing != nullptr);
+  CHECK(chunk_ready != nullptr);
+  CHECK(next_chunk != nullptr);
   CHECK(reader_blocked != nullptr);
   CHECK(release_reader != nullptr);
   CHECK(stop_completed != nullptr);
-  if (!release || !write_final || !reader_blocked || !release_reader ||
-      !stop_completed) {
+  if (!release || !write_final || !start_writing || !chunk_ready ||
+      !next_chunk || !reader_blocked || !release_reader || !stop_completed) {
     if (release) CloseHandle(release);
     if (write_final) CloseHandle(write_final);
+    if (start_writing) CloseHandle(start_writing);
+    if (chunk_ready) CloseHandle(chunk_ready);
+    if (next_chunk) CloseHandle(next_chunk);
     if (reader_blocked) CloseHandle(reader_blocked);
     if (release_reader) CloseHandle(release_reader);
     if (stop_completed) CloseHandle(stop_completed);
@@ -282,26 +310,43 @@ void inherited_stdout_descendant_does_not_block_stop(const wchar_t* child) {
   std::mutex output_mutex;
   std::string output;
   std::atomic<bool> blocked = false;
+  std::atomic<bool> refill_after_callback = false;
   purepad::ProcessCallbacks callbacks;
   callbacks.output = [&](std::string_view bytes) {
+    bool have_descendant_record = false;
     {
       std::lock_guard<std::mutex> lock(output_mutex);
       output.append(bytes);
+      have_descendant_record = output.find("\r\n") != std::string::npos;
     }
-    if (!blocked.exchange(true)) {
+    if (have_descendant_record && !blocked.exchange(true)) {
       SetEvent(reader_blocked);
       WaitForSingleObject(release_reader, INFINITE);
+      return;
+    }
+    if (refill_after_callback.load(std::memory_order_acquire)) {
+      // Do not return until the descendant has queued the next chunk.  Thus
+      // the pre-fix unbounded drain cannot escape through a transient empty
+      // pipe; only the explicit release below ends that stream.
+      SetEvent(next_chunk);
+      HANDLE refill_events[] = {release, chunk_ready};
+      WaitForMultipleObjects(2, refill_events, FALSE, INFINITE);
     }
   };
-  ReaderCancellationApi api;
+  ReaderShutdownApi api;
   purepad::ProcessSession session(&api);
   const auto started = session.Start(
-    Launch(child, {L"--spawn-inherited-stdout", release_name, write_name}),
+    Launch(child, {L"--spawn-inherited-stdout", release_name, write_name,
+                   start_name, ready_name, next_name}),
     std::move(callbacks));
   CHECK(started.ok());
   if (!started.ok()) {
+    SetEvent(release);
     CloseHandle(release_reader);
     CloseHandle(reader_blocked);
+    CloseHandle(next_chunk);
+    CloseHandle(chunk_ready);
+    CloseHandle(start_writing);
     CloseHandle(write_final);
     CloseHandle(stop_completed);
     CloseHandle(release);
@@ -327,25 +372,34 @@ void inherited_stdout_descendant_does_not_block_stop(const wchar_t* child) {
   }
   CHECK(descendant_pid != 0);
   HANDLE descendant = descendant_pid == 0 ? nullptr :
-    OpenProcess(SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION, FALSE,
-                descendant_pid);
+    OpenProcess(SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION |
+                  PROCESS_TERMINATE,
+                FALSE, descendant_pid);
   CHECK(descendant != nullptr);
 
   std::thread stopper([&] {
     session.Stop();
     SetEvent(stop_completed);
   });
-  const bool reader_cancellation_observed =
-    WaitForSingleObject(api.reader_cancel_requested, 2'000) == WAIT_OBJECT_0;
+  const bool reader_shutdown_observed =
+    WaitForSingleObject(api.reader_shutdown_requested, 5'000) == WAIT_OBJECT_0;
+  CHECK(reader_shutdown_observed);
+  SetEvent(start_writing);
+  const bool first_chunk_ready =
+    WaitForSingleObject(chunk_ready, 5'000) == WAIT_OBJECT_0;
+  CHECK(first_chunk_ready);
+  refill_after_callback.store(true, std::memory_order_release);
   SetEvent(release_reader);
+  // This generous outer bound detects a hang; event handshakes position the
+  // race and make no correctness assertion about scheduler timing.
   const bool stopped_while_descendant_held_stdout =
-    WaitForSingleObject(stop_completed, 2'000) == WAIT_OBJECT_0;
+    WaitForSingleObject(stop_completed, 10'000) == WAIT_OBJECT_0;
   SetEvent(release);
   CHECK(WaitForSingleObject(stop_completed, 5'000) == WAIT_OBJECT_0);
   stopper.join();
 
-  CHECK(reader_cancellation_observed);
   CHECK(stopped_while_descendant_held_stdout);
+  CHECK(api.cancel_calls.load() == 1);
   {
     std::lock_guard<std::mutex> lock(output_mutex);
     CHECK(output.find("PARENT-FINAL\r\n") != std::string::npos);
@@ -356,11 +410,18 @@ void inherited_stdout_descendant_does_not_block_stop(const wchar_t* child) {
     DWORD exit_code = STILL_ACTIVE;
     CHECK(GetExitCodeProcess(descendant, &exit_code));
     CHECK(exit_code != STILL_ACTIVE);
+    if (exit_code == STILL_ACTIVE) {
+      TerminateProcess(descendant, 11);
+      WaitForSingleObject(descendant, 5'000);
+    }
     CloseHandle(descendant);
   }
   CloseHandle(stop_completed);
   CloseHandle(release_reader);
   CloseHandle(reader_blocked);
+  CloseHandle(next_chunk);
+  CloseHandle(chunk_ready);
+  CloseHandle(start_writing);
   CloseHandle(write_final);
   CloseHandle(release);
 }

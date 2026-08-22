@@ -8,6 +8,21 @@
 
 namespace {
 
+class ScopedHandle {
+public:
+  explicit ScopedHandle(HANDLE handle) : handle_(handle) {}
+  ~ScopedHandle() {
+    if (handle_) CloseHandle(handle_);
+  }
+  ScopedHandle(const ScopedHandle&) = delete;
+  ScopedHandle& operator=(const ScopedHandle&) = delete;
+  HANDLE get() const { return handle_; }
+  explicit operator bool() const { return handle_ != nullptr; }
+
+private:
+  HANDLE handle_;
+};
+
 std::string Utf8(std::wstring_view value) {
   if (value.empty()) return {};
   const int size = WideCharToMultiByte(CP_UTF8, 0, value.data(),
@@ -58,7 +73,10 @@ std::wstring ExecutablePath() {
 }
 
 bool SpawnInheritedStdoutDescendant(std::wstring_view release_event_name,
-                                    std::wstring_view write_event_name) {
+                                    std::wstring_view write_event_name,
+                                    std::wstring_view start_event_name,
+                                    std::wstring_view ready_event_name,
+                                    std::wstring_view next_event_name) {
   const std::wstring executable = ExecutablePath();
   if (executable.empty()) return false;
 
@@ -72,8 +90,11 @@ bool SpawnInheritedStdoutDescendant(std::wstring_view release_event_name,
   }
 
   std::wstring command_line = L"\"" + executable +
-    L"\" --hold-inherited-stdout \"" +
-    std::wstring(release_event_name) + L"\"";
+    L"\" --write-inherited-stdout \"" +
+    std::wstring(release_event_name) + L"\" \"" +
+    std::wstring(start_event_name) + L"\" \"" +
+    std::wstring(ready_event_name) + L"\" \"" +
+    std::wstring(next_event_name) + L"\"";
   STARTUPINFOW startup{};
   startup.cb = sizeof(startup);
   startup.dwFlags = STARTF_USESTDHANDLES;
@@ -100,6 +121,45 @@ bool SpawnInheritedStdoutDescendant(std::wstring_view release_event_name,
   if (write_wait != WAIT_OBJECT_0) return false;
   std::cout << "PARENT-FINAL\r\n" << std::flush;
   return true;
+}
+
+bool WriteInheritedStdout(std::wstring_view release_event_name,
+                          std::wstring_view start_event_name,
+                          std::wstring_view ready_event_name,
+                          std::wstring_view next_event_name) {
+  ScopedHandle release(OpenEventW(
+    SYNCHRONIZE, FALSE, std::wstring(release_event_name).c_str()));
+  ScopedHandle start(OpenEventW(
+    SYNCHRONIZE, FALSE, std::wstring(start_event_name).c_str()));
+  ScopedHandle ready(OpenEventW(
+    EVENT_MODIFY_STATE, FALSE, std::wstring(ready_event_name).c_str()));
+  ScopedHandle next(OpenEventW(
+    SYNCHRONIZE, FALSE, std::wstring(next_event_name).c_str()));
+  if (!release || !start || !ready || !next) return false;
+
+  HANDLE startup_events[] = {release.get(), start.get()};
+  const DWORD startup_wait =
+    WaitForMultipleObjects(2, startup_events, FALSE, INFINITE);
+  if (startup_wait == WAIT_OBJECT_0) return true;
+  if (startup_wait != WAIT_OBJECT_0 + 1) return false;
+
+  const std::string chunk(1024, 'D');
+  for (;;) {
+    DWORD written = 0;
+    if (!WriteFile(GetStdHandle(STD_OUTPUT_HANDLE), chunk.data(),
+                   static_cast<DWORD>(chunk.size()), &written, nullptr)) {
+      const DWORD error = GetLastError();
+      return error == ERROR_BROKEN_PIPE || error == ERROR_NO_DATA;
+    }
+    if (written != chunk.size()) return false;
+    if (!SetEvent(ready.get())) return false;
+
+    HANDLE writer_events[] = {release.get(), next.get()};
+    const DWORD writer_wait =
+      WaitForMultipleObjects(2, writer_events, FALSE, INFINITE);
+    if (writer_wait == WAIT_OBJECT_0) return true;
+    if (writer_wait != WAIT_OBJECT_0 + 1) return false;
+  }
 }
 
 } // namespace
@@ -134,15 +194,11 @@ int wmain(int argc, wchar_t** argv) {
     std::cout << std::flush;
     return 0;
   }
-  if (mode == L"--spawn-inherited-stdout" && argc == 4)
-    return SpawnInheritedStdoutDescendant(argv[2], argv[3]) ? 0 : 8;
-  if (mode == L"--hold-inherited-stdout" && argc == 3) {
-    HANDLE release = OpenEventW(SYNCHRONIZE, FALSE, argv[2]);
-    if (!release) return 9;
-    const DWORD wait = WaitForSingleObject(release, INFINITE);
-    CloseHandle(release);
-    return wait == WAIT_OBJECT_0 ? 0 : 10;
-  }
+  if (mode == L"--spawn-inherited-stdout" && argc == 7)
+    return SpawnInheritedStdoutDescendant(
+      argv[2], argv[3], argv[4], argv[5], argv[6]) ? 0 : 8;
+  if (mode == L"--write-inherited-stdout" && argc == 6)
+    return WriteInheritedStdout(argv[2], argv[3], argv[4], argv[5]) ? 0 : 9;
   if (argc != 2) return 2;
 
   std::cout << "READY\r\n" << std::flush;

@@ -3,12 +3,22 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <condition_variable>
 #include <cwchar>
 #include <mutex>
 #include <utility>
 
 namespace {
+
+// Anonymous pipes cannot be waited on for readability.  A short event wait
+// avoids idle spinning while still noticing EOF promptly during normal runs.
+constexpr DWORD kReaderPollIntervalMilliseconds = 20;
+
+// Preserve a generous amount of final parent diagnostics without allowing an
+// inherited, continuously written stdout handle to prolong Stop indefinitely.
+constexpr auto kReaderShutdownDrainDeadline = std::chrono::milliseconds(250);
+constexpr size_t kReaderShutdownDrainByteBudget = 1024 * 1024;
 
 class UniqueHandle {
 public:
@@ -236,7 +246,11 @@ public:
 
     void DrainAvailableOutput() {
       char bytes[4096];
-      for (;;) {
+      size_t drained = 0;
+      const auto deadline =
+        std::chrono::steady_clock::now() + kReaderShutdownDrainDeadline;
+      while (drained < kReaderShutdownDrainByteBudget &&
+             std::chrono::steady_clock::now() < deadline) {
         DWORD available = 0;
         if (!stdout_read ||
             !PeekNamedPipe(stdout_read.get(), nullptr, 0, nullptr, &available,
@@ -244,31 +258,51 @@ public:
             available == 0) {
           return;
         }
-        const DWORD requested = std::min<DWORD>(available, sizeof(bytes));
+        const size_t remaining = kReaderShutdownDrainByteBudget - drained;
+        const DWORD requested = std::min<DWORD>(
+          available,
+          static_cast<DWORD>(std::min<size_t>(sizeof(bytes), remaining)));
         DWORD read = 0;
         if (!ReadFile(stdout_read.get(), bytes, requested, &read, nullptr) ||
             read == 0) {
           return;
         }
         DeliverOutput(bytes, read);
+        drained += read;
       }
     }
 
     DWORD Reader() {
       char bytes[4096];
       for (;;) {
-        if (reader_stop_requested.load(std::memory_order_acquire)) {
+        if (WaitForSingleObject(reader_stop_event.get(), 0) == WAIT_OBJECT_0) {
           DrainAvailableOutput();
           break;
         }
-        DWORD read = 0;
-        const BOOL read_succeeded =
-          ReadFile(stdout_read.get(), bytes, sizeof(bytes), &read, nullptr);
-        if (!read_succeeded || read == 0) {
-          if (!read_succeeded && GetLastError() == ERROR_OPERATION_ABORTED)
-            DrainAvailableOutput();
+
+        DWORD available = 0;
+        if (!PeekNamedPipe(stdout_read.get(), nullptr, 0, nullptr, &available,
+                           nullptr)) {
           break;
         }
+        if (available == 0) {
+          const DWORD wait = WaitForSingleObject(
+            reader_stop_event.get(), kReaderPollIntervalMilliseconds);
+          if (wait == WAIT_OBJECT_0) {
+            DrainAvailableOutput();
+            break;
+          }
+          if (wait != WAIT_TIMEOUT) break;
+          continue;
+        }
+
+        // This generation has exactly one reader.  No other consumer can
+        // remove the bytes reported by PeekNamedPipe, so requesting no more
+        // than that snapshot never waits for future output.
+        const DWORD requested = std::min<DWORD>(available, sizeof(bytes));
+        DWORD read = 0;
+        if (!ReadFile(stdout_read.get(), bytes, requested, &read, nullptr) ||
+            read == 0) break;
         DeliverOutput(bytes, read);
       }
       if (WaitForStartup()) {
@@ -323,7 +357,8 @@ public:
 
     ProcessCallbacks callbacks;
     UniqueHandle stdin_read, stdin_write, stdout_read, stdout_write;
-    UniqueHandle stop_event, input_event, break_event, terminate_event;
+    UniqueHandle stop_event, input_event, reader_stop_event;
+    UniqueHandle break_event, terminate_event;
     UniqueHandle process_handle, process_thread, reader_thread, writer_thread;
     DWORD process_id = 0;
     DWORD reader_id = 0;
@@ -332,7 +367,6 @@ public:
     CRITICAL_SECTION input_lock;
     std::string pending_input;
     std::atomic<bool> accepting_requests = true;
-    std::atomic<bool> reader_stop_requested = false;
     std::mutex access_mutex;
     std::mutex completion_mutex;
     std::condition_variable completion_changed;
@@ -371,8 +405,6 @@ public:
     const bool on_reader =
       generation->reader_id != 0 &&
       generation->reader_id == GetCurrentThreadId();
-    if (on_reader)
-      generation->reader_stop_requested.store(true, std::memory_order_release);
     std::unique_lock<std::mutex> access_lock(generation->access_mutex);
     if (generation->stop_event) api->SignalEvent(generation->stop_event.get());
     if (generation->terminate_event)
@@ -397,16 +429,15 @@ public:
       }
     }
 
-    if (generation->reader_thread) {
-      generation->reader_stop_requested.store(true,
-                                               std::memory_order_release);
-      if (!on_reader)
-        api->CancelWorkerIo(generation->reader_thread.get());
+    if (generation->reader_thread && generation->reader_stop_event)
+      api->SignalEvent(generation->reader_stop_event.get());
+    if (!on_reader) {
+      if (generation->reader_thread)
+        WaitForSingleObject(generation->reader_thread.get(), INFINITE);
+      generation->reader_thread.reset();
+      generation->stdout_read.reset();
+      generation->reader_stop_event.reset();
     }
-    if (generation->reader_thread && !on_reader)
-      WaitForSingleObject(generation->reader_thread.get(), INFINITE);
-    generation->reader_thread.reset();
-    generation->stdout_read.reset();
 
     generation->stdin_read.reset();
     generation->stdout_write.reset();
@@ -499,6 +530,11 @@ public:
     }
     generation->input_event.reset(CreateEventW(nullptr, FALSE, FALSE, nullptr));
     if (!generation->input_event) {
+      return AbortStart(generation, ProcessError::EventCreation, GetLastError());
+    }
+    generation->reader_stop_event.reset(
+      CreateEventW(nullptr, TRUE, FALSE, nullptr));
+    if (!generation->reader_stop_event) {
       return AbortStart(generation, ProcessError::EventCreation, GetLastError());
     }
 
