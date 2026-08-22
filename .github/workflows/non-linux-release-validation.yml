@@ -14,6 +14,7 @@ on:
       - "pure-bonjour/**"
       - "pure-csv/**"
       - "pure-ffi/**"
+      - "pure-mpfr/**"
       - "pure-rational/**"
       - "purepad/**"
       - "pure/todo/TODO-45-windows-pure-bonjour.md"
@@ -21,6 +22,7 @@ on:
       - "pure/todo/TODO-21-windows-pure-rational.md"
       - "pure/todo/TODO-22-windows-pure-csv.md"
       - "pure/todo/TODO-23-windows-pure-ffi.md"
+      - "pure/todo/TODO-24-windows-pure-mpfr.md"
       - "docs/superpowers/specs/2026-08-18-windows-pure-bonjour-design.md"
       - "docs/superpowers/specs/2026-08-22-purepad-lifecycle-hardening-design.md"
       - "docs/superpowers/plans/2026-08-18-windows-pure-bonjour.md"
@@ -37,6 +39,7 @@ on:
       - "pure-bonjour/**"
       - "pure-csv/**"
       - "pure-ffi/**"
+      - "pure-mpfr/**"
       - "pure-rational/**"
       - "purepad/**"
       - "pure/todo/TODO-45-windows-pure-bonjour.md"
@@ -44,6 +47,7 @@ on:
       - "pure/todo/TODO-21-windows-pure-rational.md"
       - "pure/todo/TODO-22-windows-pure-csv.md"
       - "pure/todo/TODO-23-windows-pure-ffi.md"
+      - "pure/todo/TODO-24-windows-pure-mpfr.md"
       - "docs/superpowers/specs/2026-08-18-windows-pure-bonjour-design.md"
       - "docs/superpowers/specs/2026-08-22-purepad-lifecycle-hardening-design.md"
       - "docs/superpowers/plans/2026-08-18-windows-pure-bonjour.md"
@@ -290,6 +294,30 @@ jobs:
             --output-on-failure --no-tests=error `
             2>&1 | Tee-Object -FilePath "$env:LOG_DIR/ctest-pure-ffi.log"
           if ($LASTEXITCODE -ne 0) { throw 'pure-ffi contract failed' }
+
+      - name: Validate the pure-mpfr numerical, ABI, install, and PE contracts
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $prefix = [IO.Path]::GetFullPath($env:INSTALL_PREFIX)
+          $mpfrBuild = 'build/windows-pure-mpfr-contract'
+          $env:Path = "C:/msys64/clang64/bin;C:/msys64/usr/bin;$env:Path"
+          $env:PKG_CONFIG_PATH = "$prefix/lib/pkgconfig"
+          & $env:CMAKE_EXE -S ../pure-mpfr -B $mpfrBuild -G Ninja `
+            -DCMAKE_BUILD_TYPE=Release `
+            -DCMAKE_C_COMPILER=C:/msys64/clang64/bin/clang.exe `
+            -DPKG_CONFIG_EXECUTABLE=C:/msys64/clang64/bin/pkgconf.exe `
+            -DBUILD_TESTING=ON `
+            "-DPURE_EXECUTABLE=$prefix/bin/pure.exe" `
+            -DLLVM_READOBJ_EXECUTABLE=C:/msys64/clang64/bin/llvm-readobj.exe `
+            2>&1 | Tee-Object -FilePath "$env:LOG_DIR/configure-pure-mpfr.log"
+          if ($LASTEXITCODE -ne 0) { throw 'pure-mpfr configure failed' }
+          & $env:CMAKE_EXE --build $mpfrBuild --parallel 4 `
+            2>&1 | Tee-Object -FilePath "$env:LOG_DIR/build-pure-mpfr.log"
+          if ($LASTEXITCODE -ne 0) { throw 'pure-mpfr build failed' }
+          & $env:CTEST_EXE --test-dir $mpfrBuild -L pure-mpfr `
+            --output-on-failure --no-tests=error `
+            2>&1 | Tee-Object -FilePath "$env:LOG_DIR/ctest-pure-mpfr.log"
+          if ($LASTEXITCODE -ne 0) { throw 'pure-mpfr contract failed' }
 
       - name: Configure, build, and test Debug preset
         run: |

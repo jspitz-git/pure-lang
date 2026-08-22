@@ -134,3 +134,31 @@ used by the Windows runtime.
       marker-checked smoke test passed.
     - `llvm-readobj` confirmed that the installed `mpfr.dll` has only the three
       expected nonsystem direct imports, all provided by the portable runtime.
+- 2026-08-22: Audited and hardened the closed Windows package work.
+  - `BUILD_TESTING=ON` now requires an installed Pure interpreter and, on
+    Windows, `llvm-readobj`; missing prerequisites cannot silently yield zero
+    tests.
+  - Added configure, exact seven-file install-manifest, content-hash,
+    source/build-path leakage, duplicate MPFR/GMP DLL, AMD64 PE, exact
+    38-export/import, staged-runtime, and sanitized-environment contracts.
+  - The runner removes `PURELIB`, replaces `PATH` with the installed runtime and
+    Windows system directories, and rejects stderr diagnostics even when Pure
+    returns zero and prints the success marker.
+  - Added a compiled ABI probe which compares MPFR/GMP header and runtime
+    versions, verifies 8-byte/64-bit GMP limbs with zero nail bits, checks the
+    MPFR precision/exponent scalar layout, and performs a 128-bit MPFR operation.
+  - Added the missing negative `MPFR_RNDN` case, so both signs now exercise all
+    five documented rounding modes.
+  - Added `pure-mpfr` path filters and a Release configure/build/contract step
+    to the Windows CI workflow.
+  - Validation:
+    - A clean CLANG64 Release configure and two-target build in
+      `build/final TODO-24 contract` passed without warnings.
+    - `ctest --test-dir "build/final TODO-24 contract" -L pure-mpfr
+      --output-on-failure --no-tests=error` passed 4/4 tests in 26.93 seconds.
+    - Inserting the invalid Pure operator `!=` still produced the success marker
+      and exit code zero, but the hardened runner rejected its stderr diagnostic.
+    - Removing `trunc_mpfr` from the expected export set made the PE contract
+      fail with the exact unexpected-export difference.
+    - Changing the expected GMP limb size from eight to seven bytes made the ABI
+      test fail with `FAIL: unexpected GMP limb ABI`.

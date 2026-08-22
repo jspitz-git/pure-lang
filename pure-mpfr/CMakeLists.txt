@@ -70,11 +70,32 @@ set(
   PURE_EXECUTABLE ""
   CACHE FILEPATH "Pure interpreter used for package smoke tests"
 )
+set(LLVM_READOBJ_EXECUTABLE "" CACHE FILEPATH
+  "llvm-readobj used for the Windows package contract")
 if(BUILD_TESTING)
-  if(PURE_EXECUTABLE)
-    if(NOT EXISTS "${PURE_EXECUTABLE}")
-      message(FATAL_ERROR "PURE_EXECUTABLE does not exist: ${PURE_EXECUTABLE}")
-    endif()
+  if(NOT PURE_EXECUTABLE OR NOT EXISTS "${PURE_EXECUTABLE}")
+    message(FATAL_ERROR
+      "BUILD_TESTING requires an existing PURE_EXECUTABLE: ${PURE_EXECUTABLE}")
+  endif()
+  if(WIN32 AND NOT EXISTS "${LLVM_READOBJ_EXECUTABLE}")
+    message(FATAL_ERROR
+      "Windows BUILD_TESTING requires an existing LLVM_READOBJ_EXECUTABLE: "
+      "${LLVM_READOBJ_EXECUTABLE}")
+  endif()
+    add_executable(mpfr-abi-probe tests/abi-probe.c)
+    target_link_libraries(mpfr-abi-probe PRIVATE PkgConfig::MPFR PkgConfig::GMP)
+    add_test(NAME pure-mpfr-configure-contract COMMAND "${CMAKE_COMMAND}"
+      "-DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
+      "-DBINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}"
+      "-DTEST_ROOT=${CMAKE_CURRENT_BINARY_DIR}/pure-mpfr contract/configure"
+      "-DGENERATOR=${CMAKE_GENERATOR}"
+      "-DMAKE_PROGRAM=${CMAKE_MAKE_PROGRAM}"
+      "-DC_COMPILER=${CMAKE_C_COMPILER}"
+      "-DPKG_CONFIG_EXECUTABLE=${PKG_CONFIG_EXECUTABLE}"
+      "-DPKG_CONFIG_PATH=$ENV{PKG_CONFIG_PATH}"
+      "-DPURE_EXECUTABLE=${PURE_EXECUTABLE}"
+      "-DWINDOWS_BUILD=${WIN32}"
+      -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/configure_contract.cmake")
     add_test(
       NAME pure-mpfr-smoke
       COMMAND "${CMAKE_COMMAND}"
@@ -84,14 +105,27 @@ if(BUILD_TESTING)
         "-DTEST_SCRIPT=${CMAKE_CURRENT_SOURCE_DIR}/tests/smoke.pure"
         -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunSmokeTest.cmake"
     )
+    add_test(NAME pure-mpfr-abi COMMAND "${CMAKE_COMMAND}"
+      "-DABI_PROBE=$<TARGET_FILE:mpfr-abi-probe>"
+      "-DPURE_EXECUTABLE=${PURE_EXECUTABLE}"
+      -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/run_abi_probe.cmake")
+    set(mpfr_tests pure-mpfr-configure-contract pure-mpfr-smoke pure-mpfr-abi)
+    if(WIN32)
+      add_test(NAME pure-mpfr-install-contract COMMAND "${CMAKE_COMMAND}"
+        "-DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
+        "-DBINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}"
+        "-DMPFR_TARGET_FILE=$<TARGET_FILE:mpfr>"
+        "-DABI_PROBE=$<TARGET_FILE:mpfr-abi-probe>"
+        "-DPURE_EXECUTABLE=${PURE_EXECUTABLE}"
+        "-DLLVM_READOBJ_EXECUTABLE=${LLVM_READOBJ_EXECUTABLE}"
+        "-DTEST_ROOT=${CMAKE_CURRENT_BINARY_DIR}/pure-mpfr contract/install"
+        "-DSMOKE_SCRIPT=${CMAKE_CURRENT_SOURCE_DIR}/tests/smoke.pure"
+        -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/install_contract.cmake")
+      list(APPEND mpfr_tests pure-mpfr-install-contract)
+    endif()
     set_tests_properties(
-      pure-mpfr-smoke
+      ${mpfr_tests}
       PROPERTIES
-        LABELS "mpfr;smoke"
-        REQUIRED_FILES
-          "$<TARGET_FILE:mpfr>;${CMAKE_CURRENT_SOURCE_DIR}/tests/smoke.pure"
+        LABELS "pure-mpfr"
     )
-  else()
-    message(STATUS "PURE_EXECUTABLE is not set; pure-mpfr smoke test is disabled")
-  endif()
 endif()

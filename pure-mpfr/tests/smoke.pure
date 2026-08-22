@@ -25,12 +25,14 @@ smoke_check "positive rounding modes"
    double smoke_positive_down == 1.0 &&
    double smoke_positive_away == 1.5);
 
+let smoke_negative_nearest = mpfr ("-1.1",2,MPFR_RNDN);
 let smoke_negative_zero = mpfr ("-1.1",2,MPFR_RNDZ);
 let smoke_negative_up = mpfr ("-1.1",2,MPFR_RNDU);
 let smoke_negative_down = mpfr ("-1.1",2,MPFR_RNDD);
 let smoke_negative_away = mpfr ("-1.1",2,MPFR_RNDA);
 smoke_check "negative rounding modes"
-  (double smoke_negative_zero == -1.0 &&
+  (double smoke_negative_nearest == -1.0 &&
+   double smoke_negative_zero == -1.0 &&
    double smoke_negative_up == -1.0 &&
    double smoke_negative_down == -1.5 &&
    double smoke_negative_away == -1.5);
