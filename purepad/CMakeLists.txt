@@ -21,6 +21,7 @@ add_executable(purepad WIN32
   HistsizeDlg.cpp
   MainFrm.cpp
   Pipe.cpp
+  ProcessSession.cpp
   PromptDlg.cpp
   qpad.cpp
   qpadDoc.cpp

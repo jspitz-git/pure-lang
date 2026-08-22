@@ -1,10 +1,12 @@
 #include "ProcessSession.h"
+#include "Pipe.h"
 
 #include <atomic>
 #include <chrono>
 #include <iostream>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -59,6 +61,20 @@ purepad::ProcessLaunch Launch(const wchar_t* child,
   return launch;
 }
 
+std::string Utf8(std::wstring_view value) {
+  if (value.empty()) return {};
+  const int size = WideCharToMultiByte(
+    CP_UTF8, 0, value.data(), static_cast<int>(value.size()), nullptr, 0,
+    nullptr, nullptr);
+  CHECK(size > 0);
+  if (size <= 0) return {};
+  std::string result(static_cast<size_t>(size), '\0');
+  CHECK(WideCharToMultiByte(
+          CP_UTF8, 0, value.data(), static_cast<int>(value.size()),
+          result.data(), size, nullptr, nullptr) == size);
+  return result;
+}
+
 size_t Count(std::string_view text, std::string_view needle) {
   size_t result = 0;
   for (size_t at = 0; (at = text.find(needle, at)) != std::string_view::npos;
@@ -67,6 +83,50 @@ size_t Count(std::string_view text, std::string_view needle) {
   }
   return result;
 }
+
+class ScopedEnvironmentVariable {
+public:
+  ScopedEnvironmentVariable(const wchar_t* name, const wchar_t* value)
+      : name_(name) {
+    const DWORD required = GetEnvironmentVariableW(name, nullptr, 0);
+    if (required != 0) {
+      std::wstring original(required, L'\0');
+      const DWORD copied =
+        GetEnvironmentVariableW(name, original.data(), required);
+      if (copied != 0 && copied < required) {
+        original.resize(copied);
+        original_ = std::move(original);
+      }
+    }
+    changed_ = SetEnvironmentVariableW(name, value) != FALSE;
+  }
+
+  ~ScopedEnvironmentVariable() {
+    if (!changed_) return;
+    SetEnvironmentVariableW(name_.c_str(),
+                            original_ ? original_->c_str() : nullptr);
+  }
+
+  bool changed() const { return changed_; }
+
+private:
+  std::wstring name_;
+  std::optional<std::wstring> original_;
+  bool changed_ = false;
+};
+
+class ScopedDirectory {
+public:
+  explicit ScopedDirectory(std::wstring path) : path_(std::move(path)) {}
+  ~ScopedDirectory() {
+    DeleteFileW((path_ + L"\\script-name.pure").c_str());
+    DeleteFileW((path_ + L"\\sibling helper.exe").c_str());
+    RemoveDirectoryW(path_.c_str());
+  }
+
+private:
+  std::wstring path_;
+};
 
 struct FailingProcessApi final : purepad::ProcessApi {
   int fail_at = 0;
@@ -276,6 +336,42 @@ void invalid_working_directory_fails_synchronously(const wchar_t* child) {
   const auto result = session.Start(launch, {});
   CHECK(result.error == purepad::ProcessError::ProcessCreation);
   CHECK(!session.IsRunning());
+}
+
+void sibling_launch_uses_absolute_application_and_script_parent(
+    const wchar_t*) {
+  wchar_t temporary_root[MAX_PATH]{};
+  CHECK(GetTempPathW(MAX_PATH, temporary_root) != 0);
+  const std::wstring working_directory =
+    std::wstring(temporary_root) + L"PurePad sibling launch " +
+    std::to_wstring(GetCurrentProcessId());
+  CHECK(CreateDirectoryW(working_directory.c_str(), nullptr) ||
+        GetLastError() == ERROR_ALREADY_EXISTS);
+  ScopedDirectory cleanup(working_directory);
+
+  const std::wstring helper = working_directory + L"\\sibling helper.exe";
+  CHECK(CopyFileW(L"C:\\Windows\\System32\\where.exe", helper.c_str(),
+                  FALSE));
+  const std::wstring script = working_directory + L"\\script-name.pure";
+  HANDLE script_file = CreateFileW(script.c_str(), GENERIC_WRITE, 0, nullptr,
+                                   CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL,
+                                   nullptr);
+  CHECK(script_file != INVALID_HANDLE_VALUE);
+  if (script_file != INVALID_HANDLE_VALUE) CloseHandle(script_file);
+
+  ScopedEnvironmentVariable path(
+    L"PATH", L"C:\\Windows\\System32;C:\\Windows");
+  CHECK(path.changed());
+  Output output;
+  purepad::ProcessSession session;
+  auto launch = purepad::detail::BuildPipeLaunch(
+    helper, {L"/r", L"."}, script, L"test prompt");
+  const auto result = session.Start(launch, output.Callbacks());
+  CHECK(result.ok());
+  if (!result.ok()) return;
+  CHECK(session.WaitForExit(5s));
+  session.Stop();
+  CHECK(output.Get() == Utf8(script) + "\r\n");
 }
 
 void each_worker_creation_failure_cleans_everything(const wchar_t* child) {
@@ -553,6 +649,7 @@ int wmain(int argc, wchar_t** argv) {
   output_callback_can_destroy_session(child);
   nonexistent_executable_fails_synchronously();
   invalid_working_directory_fails_synchronously(child);
+  sibling_launch_uses_absolute_application_and_script_parent(child);
   each_worker_creation_failure_cleans_everything(child);
   environment_acquisition_failure_is_synchronous(child);
   exit_notification_only_follows_successful_start(child);
