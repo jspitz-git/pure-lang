@@ -544,7 +544,7 @@ void adapter_output_preserves_split_utf8_and_notification_coalescing() {
     CHECK(actual[4095] == static_cast<TCHAR>(0x20ac));
 }
 
-void adapter_output_preserves_embedded_nul() {
+void adapter_output_replaces_nul_for_ui_consumers() {
   purepad::detail::Utf8Decoder decoder;
   CBuffer buffer;
   CHECK(purepad::detail::AppendDecodedOutput(
@@ -553,9 +553,12 @@ void adapter_output_preserves_embedded_nul() {
   CHECK(actual.GetLength() == 3);
   if (actual.GetLength() == 3) {
     CHECK(actual[0] == _T('A'));
-    CHECK(actual[1] == _T('\0'));
+    CHECK(actual[1] == static_cast<TCHAR>(0xfffd));
     CHECK(actual[2] == _T('B'));
   }
+  const CString nul_terminated_consumer(actual.GetString());
+  CHECK(nul_terminated_consumer.GetLength() == 3);
+  CHECK(nul_terminated_consumer == actual);
 }
 
 void adapter_decoder_state_is_generation_local_and_flushable() {
@@ -848,7 +851,7 @@ int wmain(int argc, wchar_t** argv) {
   if (argc != 2) return 1;
   const wchar_t* child = argv[1];
   adapter_output_preserves_split_utf8_and_notification_coalescing();
-  adapter_output_preserves_embedded_nul();
+  adapter_output_replaces_nul_for_ui_consumers();
   adapter_decoder_state_is_generation_local_and_flushable();
   echo_round_trip(child);
   inherited_stdout_descendant_does_not_block_stop(child);

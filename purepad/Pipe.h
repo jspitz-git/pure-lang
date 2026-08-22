@@ -122,6 +122,10 @@ private:
 			result.ReleaseBufferSetLength(0);
 			return result;
 		}
+		for (int index = 0; index < converted; ++index) {
+			if (output[index] == _T('\0'))
+				output[index] = static_cast<TCHAR>(0xfffd);
+		}
 		result.ReleaseBufferSetLength(converted);
 		pending_.erase(0, byte_count);
 		return result;
