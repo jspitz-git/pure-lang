@@ -84,6 +84,13 @@ size_t Count(std::string_view text, std::string_view needle) {
   return result;
 }
 
+std::string LaunchReportRecord(std::string_view name,
+                               std::wstring_view value) {
+  const std::string utf8 = Utf8(value);
+  return std::string(name) + ':' + std::to_string(utf8.size()) + ':' + utf8 +
+         "\r\n";
+}
+
 class ScopedEnvironmentVariable {
 public:
   ScopedEnvironmentVariable(const wchar_t* name, const wchar_t* value)
@@ -339,7 +346,7 @@ void invalid_working_directory_fails_synchronously(const wchar_t* child) {
 }
 
 void sibling_launch_uses_absolute_application_and_script_parent(
-    const wchar_t*) {
+    const wchar_t* child) {
   const auto rooted_backslash = purepad::detail::BuildPipeLaunch(
     L"C:\\pure.exe", {}, L"\\script.pure", L"");
   CHECK(rooted_backslash.working_directory == L"\\");
@@ -366,8 +373,7 @@ void sibling_launch_uses_absolute_application_and_script_parent(
   ScopedDirectory cleanup(working_directory);
 
   const std::wstring helper = working_directory + L"\\sibling helper.exe";
-  CHECK(CopyFileW(L"C:\\Windows\\System32\\where.exe", helper.c_str(),
-                  FALSE));
+  CHECK(CopyFileW(child, helper.c_str(), FALSE));
   const std::wstring script = working_directory + L"\\script-name.pure";
   HANDLE script_file = CreateFileW(script.c_str(), GENERIC_WRITE, 0, nullptr,
                                    CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL,
@@ -381,13 +387,21 @@ void sibling_launch_uses_absolute_application_and_script_parent(
   Output output;
   purepad::ProcessSession session;
   auto launch = purepad::detail::BuildPipeLaunch(
-    helper, {L"/r", L"."}, script, L"test prompt");
+    helper, {L"--launch-report", L"fixed sibling argument"}, script,
+    L"test prompt");
+  CHECK(launch.application == helper);
+  CHECK(launch.working_directory == working_directory);
+  CHECK((launch.arguments == std::vector<std::wstring>{
+    L"--launch-report", L"fixed sibling argument", L"script-name.pure"}));
   const auto result = session.Start(launch, output.Callbacks());
   CHECK(result.ok());
   if (!result.ok()) return;
   CHECK(session.WaitForExit(5s));
   session.Stop();
-  CHECK(output.Get() == Utf8(script) + "\r\n");
+  CHECK(output.Get() ==
+        LaunchReportRecord("cwd", working_directory) +
+          LaunchReportRecord("arg", L"fixed sibling argument") +
+          LaunchReportRecord("script", L"script-name.pure"));
 }
 
 void adapter_output_preserves_split_utf8_and_notification_coalescing() {

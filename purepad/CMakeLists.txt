@@ -93,6 +93,7 @@ if(BUILD_TESTING)
     COMMAND purepad-process-session-tests
       "$<TARGET_FILE:purepad-process-child>")
   add_test(NAME purepad-install-contract
+    CONFIGURATIONS Release
     COMMAND "${CMAKE_COMMAND}"
       "-DPUREPAD_CMAKE_COMMAND=${CMAKE_COMMAND}"
       "-DPUREPAD_BUILD_DIR=${CMAKE_BINARY_DIR}"

@@ -26,6 +26,26 @@ void PrintValue(std::wstring_view value) {
   std::cout << utf8.size() << ':' << utf8 << "\r\n";
 }
 
+void PrintLaunchReportValue(std::string_view name, std::wstring_view value) {
+  const std::string utf8 = Utf8(value);
+  std::cout << name << ':' << utf8.size() << ':' << utf8 << "\r\n";
+}
+
+bool PrintLaunchReport(int argc, wchar_t** argv) {
+  const DWORD required = GetCurrentDirectoryW(0, nullptr);
+  if (required == 0) return false;
+  std::vector<wchar_t> directory(required);
+  const DWORD copied = GetCurrentDirectoryW(required, directory.data());
+  if (copied == 0 || copied >= required) return false;
+
+  PrintLaunchReportValue("cwd", std::wstring_view(directory.data(), copied));
+  for (int index = 2; index + 1 < argc; ++index)
+    PrintLaunchReportValue("arg", argv[index]);
+  PrintLaunchReportValue("script", argv[argc - 1]);
+  std::cout << std::flush;
+  return true;
+}
+
 } // namespace
 
 int wmain(int argc, wchar_t** argv) {
@@ -42,6 +62,8 @@ int wmain(int argc, wchar_t** argv) {
     std::cout << "GEN:" << Utf8(argv[2]) << "\r\n" << std::flush;
     return 0;
   }
+  if (mode == L"--launch-report" && argc >= 3)
+    return PrintLaunchReport(argc, argv) ? 0 : 7;
   if (mode == L"--print-pure-ps" && argc == 2) {
     const DWORD required = GetEnvironmentVariableW(L"PURE_PS", nullptr, 0);
     if (required == 0) {
