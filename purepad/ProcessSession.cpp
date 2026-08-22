@@ -1,4 +1,5 @@
 #include "ProcessSession.h"
+#include "ProcessSessionInternal.h"
 
 #include <algorithm>
 #include <atomic>
@@ -119,25 +120,58 @@ bool BuildChildEnvironment(purepad::ProcessApi& api,
     error = GetLastError();
     return false;
   }
+  std::vector<std::wstring> inherited;
   for (const wchar_t* entry = source; *entry != L'\0';) {
     const size_t length = std::wcslen(entry);
-    const wchar_t* equals = std::wcschr(entry, L'=');
-    const bool is_pure_ps = equals && (equals - entry) == 7 &&
-                            _wcsnicmp(entry, L"PURE_PS", 7) == 0;
-    if (!is_pure_ps) result.insert(result.end(), entry, entry + length + 1);
+    inherited.emplace_back(entry, length);
     entry += length + 1;
   }
   api.FreeEnvironmentStrings(source);
-  const std::wstring replacement = L"PURE_PS=" + prompt;
-  result.insert(result.end(), replacement.begin(), replacement.end());
-  result.push_back(L'\0');
-  result.push_back(L'\0');
+  result = purepad::detail::BuildChildEnvironmentBlock(inherited, prompt);
   return true;
 }
 
 } // namespace
 
 namespace purepad {
+
+namespace detail {
+
+std::vector<wchar_t> BuildChildEnvironmentBlock(
+    const std::vector<std::wstring>& inherited,
+    const std::wstring& prompt) {
+  constexpr wchar_t prompt_name[] = L"PURE_PS";
+  std::vector<std::wstring> entries;
+  entries.reserve(inherited.size() + 1);
+  for (const auto& entry : inherited) {
+    const bool is_prompt = entry.size() >= 8 && entry[7] == L'=' &&
+      CompareStringOrdinal(entry.data(), 7, prompt_name, 7, TRUE) ==
+        CSTR_EQUAL;
+    if (!is_prompt) entries.push_back(entry);
+  }
+  entries.push_back(std::wstring(prompt_name) + L'=' + prompt);
+  std::sort(entries.begin(), entries.end(),
+            [](const std::wstring& left, const std::wstring& right) {
+    const int comparison = CompareStringOrdinal(
+      left.data(), static_cast<int>(left.size()), right.data(),
+      static_cast<int>(right.size()), TRUE);
+    if (comparison == CSTR_EQUAL) return left < right;
+    return comparison == CSTR_LESS_THAN;
+  });
+
+  size_t character_count = 1;
+  for (const auto& entry : entries) character_count += entry.size() + 1;
+  std::vector<wchar_t> block;
+  block.reserve(character_count);
+  for (const auto& entry : entries) {
+    block.insert(block.end(), entry.begin(), entry.end());
+    block.push_back(L'\0');
+  }
+  block.push_back(L'\0');
+  return block;
+}
+
+} // namespace detail
 
 HANDLE ProcessApi::CreateWorkerThread(LPTHREAD_START_ROUTINE entry,
                                       void* context, DWORD* id) {

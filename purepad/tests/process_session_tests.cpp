@@ -1,4 +1,5 @@
 #include "ProcessSession.h"
+#include "ProcessSessionInternal.h"
 #include "Pipe.h"
 
 #include <atomic>
@@ -741,6 +742,31 @@ void prompt_environment_is_child_local(const wchar_t* child) {
   CHECK(SetEnvironmentVariableW(L"PURE_PS", nullptr));
 }
 
+void child_environment_is_sorted_replaced_and_double_terminated() {
+  const std::vector<std::wstring> inherited = {
+    L"zulu=9",
+    L"=D:=D:\\work",
+    L"Path=C:\\bin",
+    L"pUrE_pS=stale",
+    L"alpha=1",
+    L"=C:=C:\\root",
+    L"Beta=2",
+    L"PURE_ps=duplicate",
+  };
+  const std::vector<wchar_t> actual =
+    purepad::detail::BuildChildEnvironmentBlock(inherited, L"new prompt");
+  const wchar_t expected[] =
+    L"=C:=C:\\root\0"
+    L"=D:=D:\\work\0"
+    L"alpha=1\0"
+    L"Beta=2\0"
+    L"Path=C:\\bin\0"
+    L"PURE_PS=new prompt\0"
+    L"zulu=9\0";
+  CHECK(actual == std::vector<wchar_t>(
+    expected, expected + sizeof(expected) / sizeof(expected[0])));
+}
+
 void negative_wait_timeout_is_nonblocking(const wchar_t* child) {
   RecordingWaitApi api;
   purepad::ProcessSession session(&api);
@@ -869,6 +895,7 @@ int wmain(int argc, wchar_t** argv) {
   immediate_restart_has_isolated_generations(child);
   windows_arguments_round_trip(child);
   prompt_environment_is_child_local(child);
+  child_environment_is_sorted_replaced_and_double_terminated();
   negative_wait_timeout_is_nonblocking(child);
   finite_wait_timeout_never_uses_infinite(child);
   concurrent_stop_cancels_start(child);
