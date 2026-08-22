@@ -24,6 +24,11 @@ ctest --test-dir build/vs2022-x64 -C Release --output-on-failure
 cmake --install build/vs2022-x64 --config Release --component PurePad --prefix C:\PurePad-stage
 ```
 
+The GitHub Actions validation job intentionally uses `windows-2022`, which
+retains the supported Visual Studio 2022 toolchain.  GitHub migrated the
+`windows-2025` image to Visual Studio 2026 in June 2026, so that runner does not
+provide binding evidence for PurePad's Visual Studio 2022 x64 support target.
+
 The `PurePad` component installs `bin\purepad.exe` and this document.  It is
 the handoff artifact consumed by TODO-49's installer work.
 

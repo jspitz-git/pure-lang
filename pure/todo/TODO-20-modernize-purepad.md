@@ -106,3 +106,35 @@ with the portable Pure runtime.
     shutdown with no remaining child process.
   - Break reduced the allocating interpreter loop from about 1,000 ms CPU per
     second to 0 ms; Release and Debug x64 builds pass without warnings.
+- 2026-08-22: The lifecycle-hardening audit remediation passed; the historical
+  `Status: Closed on 2026-07-26` above remains the original completion record.
+  - A fresh Visual Studio 2022 x64 configure was run from MSYS2 CLANG64 with
+    `PATH=/usr/bin:/clang64/bin`.  The clean four-worker Release build completed
+    in 32 seconds and `ctest --test-dir build/vs2022-x64 -C Release
+    --output-on-failure` passed 2/2 tests in 35.99 seconds: the process-session
+    lifecycle test and the intentionally Release-only install-contract test.
+  - The clean four-worker Debug build completed in 31 seconds and
+    `ctest --test-dir build/vs2022-x64 -C Debug --output-on-failure` passed its
+    required lifecycle test, 1/1, in 5.90 seconds.  Debug omits the
+    install-contract test by design; lifecycle validation remains required in
+    both configurations.
+  - The Release process-session lifecycle test then passed 100 consecutive
+    repetitions with `--repeat until-fail:100` in 606.08 seconds.  The immediate
+    `Get-Process purepad-process-child` residue gate found zero surviving child
+    processes.
+  - The static gate found no `TerminateThread` or `RegisterShellFileTypes` use
+    in PurePad C++ sources or headers, and `git diff --check` passed.  Process
+    ownership is now represented by the tested `ProcessSession` lifecycle;
+    PurePad no longer terminates worker threads asynchronously.
+  - `.pure` file-association creation and removal is owned by TODO-49's
+    installer, not by PurePad startup.  The same installer owns the deployment
+    handoff for the matching Microsoft Visual C++ Redistributable and shared
+    MFC runtime; runtime DLLs are not copied from Visual Studio.
+  - GitHub Actions workflow run `32560603242` validated commit `2bd8b481` in
+    PurePad job `97001477480` on `windows-2022` with Visual Studio 2022.  Release
+    and Debug validation and the CTest-log artifact upload succeeded; the job
+    completed successfully at `2026-08-22T07:50:37Z`.
+  - The `windows-2022` runner selection is intentional and binding for the
+    supported Visual Studio 2022 x64 build: GitHub migrated `windows-2025` to
+    Visual Studio 2026 in June 2026, so it no longer supplies the required
+    toolchain identity.
