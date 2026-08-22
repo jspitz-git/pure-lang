@@ -15,8 +15,8 @@ struct ProcessLaunch {
   std::wstring prompt;
 };
 enum class ProcessError {
-  None, InvalidLaunch, PipeCreation, EventCreation, ProcessCreation,
-  ThreadCreation, ResumeProcess
+  None, InvalidLaunch, PipeCreation, EnvironmentCreation, EventCreation,
+  ProcessCreation, ThreadCreation, ResumeProcess
 };
 struct ProcessResult {
   ProcessError error = ProcessError::None;
@@ -33,6 +33,10 @@ public:
   virtual HANDLE CreateWorkerThread(LPTHREAD_START_ROUTINE entry,
                                     void* context, DWORD* id);
   virtual BOOL CancelWorkerIo(HANDLE thread);
+  virtual LPWCH GetEnvironmentStrings();
+  virtual BOOL FreeEnvironmentStrings(LPWCH environment);
+  virtual DWORD ResumeProcessThread(HANDLE thread);
+  virtual DWORD WaitForProcess(HANDLE process, DWORD timeout);
 };
 class ProcessSession {
 public:
