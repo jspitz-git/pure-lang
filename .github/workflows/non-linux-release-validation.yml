@@ -12,11 +12,13 @@ on:
       - "pure-reduce/**"
       - "pure-fastcgi/**"
       - "pure-bonjour/**"
+      - "pure-csv/**"
       - "pure-rational/**"
       - "purepad/**"
       - "pure/todo/TODO-45-windows-pure-bonjour.md"
       - "pure/todo/TODO-20-modernize-purepad.md"
       - "pure/todo/TODO-21-windows-pure-rational.md"
+      - "pure/todo/TODO-22-windows-pure-csv.md"
       - "docs/superpowers/specs/2026-08-18-windows-pure-bonjour-design.md"
       - "docs/superpowers/specs/2026-08-22-purepad-lifecycle-hardening-design.md"
       - "docs/superpowers/plans/2026-08-18-windows-pure-bonjour.md"
@@ -31,11 +33,13 @@ on:
       - "pure-reduce/**"
       - "pure-fastcgi/**"
       - "pure-bonjour/**"
+      - "pure-csv/**"
       - "pure-rational/**"
       - "purepad/**"
       - "pure/todo/TODO-45-windows-pure-bonjour.md"
       - "pure/todo/TODO-20-modernize-purepad.md"
       - "pure/todo/TODO-21-windows-pure-rational.md"
+      - "pure/todo/TODO-22-windows-pure-csv.md"
       - "docs/superpowers/specs/2026-08-18-windows-pure-bonjour-design.md"
       - "docs/superpowers/specs/2026-08-22-purepad-lifecycle-hardening-design.md"
       - "docs/superpowers/plans/2026-08-18-windows-pure-bonjour.md"
@@ -234,6 +238,30 @@ jobs:
             --output-on-failure --no-tests=error `
             2>&1 | Tee-Object -FilePath "$env:LOG_DIR/ctest-pure-rational.log"
           if ($LASTEXITCODE -ne 0) { throw 'pure-rational contract failed' }
+
+      - name: Validate the pure-csv install and PE contracts
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $prefix = [IO.Path]::GetFullPath($env:INSTALL_PREFIX)
+          $csvBuild = 'build/windows-pure-csv-contract'
+          $env:Path = "C:/msys64/clang64/bin;C:/msys64/usr/bin;$env:Path"
+          $env:PKG_CONFIG_PATH = "$prefix/lib/pkgconfig"
+          & $env:CMAKE_EXE -S ../pure-csv -B $csvBuild -G Ninja `
+            -DCMAKE_BUILD_TYPE=Release `
+            -DCMAKE_C_COMPILER=C:/msys64/clang64/bin/clang.exe `
+            -DPKG_CONFIG_EXECUTABLE=C:/msys64/clang64/bin/pkgconf.exe `
+            -DBUILD_TESTING=ON `
+            "-DPURE_EXECUTABLE=$prefix/bin/pure.exe" `
+            -DLLVM_READOBJ_EXECUTABLE=C:/msys64/clang64/bin/llvm-readobj.exe `
+            2>&1 | Tee-Object -FilePath "$env:LOG_DIR/configure-pure-csv.log"
+          if ($LASTEXITCODE -ne 0) { throw 'pure-csv configure failed' }
+          & $env:CMAKE_EXE --build $csvBuild --parallel 4 `
+            2>&1 | Tee-Object -FilePath "$env:LOG_DIR/build-pure-csv.log"
+          if ($LASTEXITCODE -ne 0) { throw 'pure-csv build failed' }
+          & $env:CTEST_EXE --test-dir $csvBuild -L pure-csv `
+            --output-on-failure --no-tests=error `
+            2>&1 | Tee-Object -FilePath "$env:LOG_DIR/ctest-pure-csv.log"
+          if ($LASTEXITCODE -ne 0) { throw 'pure-csv contract failed' }
 
       - name: Configure, build, and test Debug preset
         run: |

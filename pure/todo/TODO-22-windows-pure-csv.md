@@ -130,3 +130,34 @@ listed below; `pure-csv` does not duplicate them in its package manifest.
       expected prefix-containment diagnostic.
     - From `C:\Windows`, with `PURELIB` unset and `PATH` restricted to the staged
       `bin` and Windows system directories, `C:\msys64\clang64\bin\cmake.exe -DPURE_EXECUTABLE="C:\tmp\Pure CSV portable package step4 20260726\bin\pure.exe" -DPURE_SOURCE_DIR="C:\tmp\Pure CSV portable package step4 20260726\lib\pure" -DPURE_MODULE_DIR="C:\tmp\Pure CSV portable package step4 20260726\lib\pure" -DTEST_SCRIPT=C:\pure-lang\pure-csv\tests\smoke.pure -DTEST_DIRECTORY="C:\tmp\Pure CSV cwd-independent smoke data step4 20260726" -DNATIVE_NEWLINE=CRLF -P C:\pure-lang\pure-csv\cmake\RunSmokeTest.cmake` passed.
+- 2026-08-22: Audited and hardened the package validation contract.
+  - The audit reproduced a successful CTest run with zero tests when
+    `PURE_EXECUTABLE` was omitted. It also confirmed that the original automatic
+    smoke test used `csv.pure` from the source tree and `csv.dll` from the build
+    tree, so it could not detect broken install rules or a stale staged package.
+  - `BUILD_TESTING=ON` now requires an installed Pure interpreter. On Windows it
+    also requires `llvm-readobj` for the native package contract;
+    `BUILD_TESTING=OFF` remains available for package-only builds.
+  - The build-tree smoke test remains as a focused behavioral test. Its runner
+    now removes `PURELIB`, derives the portable runtime from `pure.exe`, and
+    limits `PATH` to that runtime and Windows system directories before Pure is
+    launched.
+  - The Windows install contract creates a package-only stage, verifies the
+    exact four-file manifest and content hashes, rejects source, build, MSYS2
+    and unexpanded-placeholder references, and validates `csv.dll` as AMD64 PE
+    with exactly the five documented exports and eight allowed direct imports.
+  - The contract then copies a clean portable Pure runtime, installs the current
+    package into it, and runs the marker-checked smoke test using only the
+    installed `csv.pure` and `csv.dll`. It deliberately supplies poisoned
+    `PURELIB` and MSYS2 `PATH` values before the runner sanitizes them.
+  - Mutation checks confirmed that removing `PURELIB` sanitization, removing
+    `PATH` sanitization, or changing the expected export set makes the focused
+    install contract fail.
+  - The Windows core job in `non-linux-release-validation.yml` now configures,
+    builds and runs the complete `pure-csv` CTest label against the freshly
+    installed portable Pure runtime. Workflow path filters include
+    `pure-csv/**` and this TODO file.
+  - A fresh local Release build from a worktree and build path containing spaces
+    and Czech Unicode passed all three contracts (3/3 in 10.75 seconds) with
+    Pure 0.68, LLVM/Clang 22.1.8 and a sanitized staged runtime. A separate
+    `BUILD_TESTING=OFF` build installed exactly the documented four files.

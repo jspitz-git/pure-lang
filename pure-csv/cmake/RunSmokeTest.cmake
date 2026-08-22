@@ -14,6 +14,25 @@ file(MAKE_DIRECTORY "${TEST_DIRECTORY}")
 set(ENV{PURE_CSV_TEST_DIRECTORY} "${TEST_DIRECTORY}")
 set(ENV{PURE_CSV_NATIVE_NEWLINE} "${NATIVE_NEWLINE}")
 unset(ENV{PURELIB})
+if(WIN32)
+  get_filename_component(pure_bin_dir "${PURE_EXECUTABLE}" DIRECTORY)
+  get_filename_component(runtime_prefix "${pure_bin_dir}" DIRECTORY)
+  get_filename_component(pure_bin_name "${pure_bin_dir}" NAME)
+  if(NOT pure_bin_name STREQUAL "bin" OR
+      NOT EXISTS "${runtime_prefix}/lib/pure/math.pure")
+    message(FATAL_ERROR
+      "PURE_EXECUTABLE must belong to an installed Pure runtime prefix")
+  endif()
+  set(ENV{PATH}
+    "${pure_bin_dir};$ENV{SystemRoot}/System32;$ENV{SystemRoot}")
+  string(TOLOWER "$ENV{PATH}" normalized_path)
+  if(normalized_path MATCHES "(^|;).*[/\\\\]msys64[/\\\\]")
+    message(FATAL_ERROR "MSYS2 survived Pure CSV PATH sanitization")
+  endif()
+endif()
+if(DEFINED ENV{PURELIB})
+  message(FATAL_ERROR "PURELIB survived Pure CSV environment sanitization")
+endif()
 
 execute_process(
   COMMAND "${PURE_EXECUTABLE}" --norc -q
