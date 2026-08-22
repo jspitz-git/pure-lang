@@ -103,3 +103,28 @@ Validate and package `pure-rational` for the portable Windows distribution.
       `math.pure`, `dict.pure`, `rat_interval.pure`, and `rational.pure` under
       `lib/pure`.
     - `$env:PURELIB=$null; $env:PATH="C:\tmp\pure-rational runtime step4 20260726\bin;$env:SystemRoot\System32;$env:SystemRoot"; & "C:\tmp\pure-rational runtime step4 20260726\bin\pure.exe" --norc -x "C:\pure-lang\pure-rational\tests\smoke.pure"` exited with status 0 outside MSYS2.
+- 2026-08-22: Audited and hardened the package validation contract.
+  - The audit reproduced two false-success paths in the original CTest setup:
+    configuring without `PURE_EXECUTABLE` registered no tests while CTest still
+    exited successfully, and an inherited `PURELIB` could supply modules which
+    were not installed beside the selected interpreter.
+  - `BUILD_TESTING=ON` now requires an existing `PURE_EXECUTABLE`; packaging
+    without runtime tests remains available with `BUILD_TESTING=OFF`.
+  - The install contract creates a package-only stage, verifies the exact
+    four-file manifest and source/configured-file hashes, rejects source, build,
+    MSYS2 and unexpanded-version references, copies a clean portable runtime,
+    installs the current package into that copy, and executes the smoke test
+    with `PURELIB` removed and `PATH` limited to the staged runtime and Windows
+    system directories.
+  - A configure contract verifies that the missing-interpreter case fails with
+    the intended diagnostic. The install-contract test itself starts with a
+    deliberately inherited `PURELIB`; a wrapper verifies that sanitization
+    occurred before launching Pure. Removing the sanitization was confirmed to
+    make the focused test fail.
+  - The Windows core job in `non-linux-release-validation.yml` now configures
+    and runs both pure-rational contracts against the freshly installed
+    portable Pure runtime. Changes below `pure-rational/` and this TODO file are
+    included in the workflow path filters.
+  - Local validation from a worktree and build path containing spaces passed
+    both contracts (2/2 in 1.22 seconds) using Pure 0.68 with LLVM 22.1.8. The
+    staged smoke-test environment contained no MSYS2 path and no `PURELIB`.

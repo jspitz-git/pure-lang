@@ -12,9 +12,11 @@ on:
       - "pure-reduce/**"
       - "pure-fastcgi/**"
       - "pure-bonjour/**"
+      - "pure-rational/**"
       - "purepad/**"
       - "pure/todo/TODO-45-windows-pure-bonjour.md"
       - "pure/todo/TODO-20-modernize-purepad.md"
+      - "pure/todo/TODO-21-windows-pure-rational.md"
       - "docs/superpowers/specs/2026-08-18-windows-pure-bonjour-design.md"
       - "docs/superpowers/specs/2026-08-22-purepad-lifecycle-hardening-design.md"
       - "docs/superpowers/plans/2026-08-18-windows-pure-bonjour.md"
@@ -29,9 +31,11 @@ on:
       - "pure-reduce/**"
       - "pure-fastcgi/**"
       - "pure-bonjour/**"
+      - "pure-rational/**"
       - "purepad/**"
       - "pure/todo/TODO-45-windows-pure-bonjour.md"
       - "pure/todo/TODO-20-modernize-purepad.md"
+      - "pure/todo/TODO-21-windows-pure-rational.md"
       - "docs/superpowers/specs/2026-08-18-windows-pure-bonjour-design.md"
       - "docs/superpowers/specs/2026-08-22-purepad-lifecycle-hardening-design.md"
       - "docs/superpowers/plans/2026-08-18-windows-pure-bonjour.md"
@@ -215,6 +219,21 @@ jobs:
             -P cmake/AuditWindowsPortableInstall.cmake `
             2>&1 | Tee-Object -FilePath "$env:LOG_DIR/portable-audit.log"
           if ($LASTEXITCODE -ne 0) { throw 'Portable prefix audit failed' }
+
+      - name: Validate the pure-rational install contract
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $prefix = [IO.Path]::GetFullPath($env:INSTALL_PREFIX)
+          $rationalBuild = 'build/windows-pure-rational-contract'
+          & $env:CMAKE_EXE -S ../pure-rational -B $rationalBuild -G Ninja `
+            -DBUILD_TESTING=ON `
+            "-DPURE_EXECUTABLE=$prefix/bin/pure.exe" `
+            2>&1 | Tee-Object -FilePath "$env:LOG_DIR/configure-pure-rational.log"
+          if ($LASTEXITCODE -ne 0) { throw 'pure-rational configure failed' }
+          & $env:CTEST_EXE --test-dir $rationalBuild `
+            --output-on-failure --no-tests=error `
+            2>&1 | Tee-Object -FilePath "$env:LOG_DIR/ctest-pure-rational.log"
+          if ($LASTEXITCODE -ne 0) { throw 'pure-rational contract failed' }
 
       - name: Configure, build, and test Debug preset
         run: |

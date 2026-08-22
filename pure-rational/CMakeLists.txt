@@ -32,19 +32,35 @@ set(
   CACHE FILEPATH "Pure interpreter used for package smoke tests"
 )
 if(BUILD_TESTING)
-  if(PURE_EXECUTABLE)
-    if(NOT EXISTS "${PURE_EXECUTABLE}")
-      message(FATAL_ERROR "PURE_EXECUTABLE does not exist: ${PURE_EXECUTABLE}")
-    endif()
-    add_test(
-      NAME pure-rational-smoke
-      COMMAND "${PURE_EXECUTABLE}" --norc -x
-        "${CMAKE_CURRENT_SOURCE_DIR}/tests/smoke.pure"
-    )
-  else()
-    message(STATUS
-      "PURE_EXECUTABLE is not set; pure-rational smoke test is disabled")
+  if(NOT PURE_EXECUTABLE OR NOT EXISTS "${PURE_EXECUTABLE}")
+    message(FATAL_ERROR
+      "BUILD_TESTING requires an existing PURE_EXECUTABLE: ${PURE_EXECUTABLE}")
   endif()
+
+  set(contract_root "${CMAKE_CURRENT_BINARY_DIR}/pure-rational contract")
+  add_test(
+    NAME pure-rational-configure-contract
+    COMMAND "${CMAKE_COMMAND}"
+      "-DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
+      "-DBINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}"
+      "-DTEST_ROOT=${contract_root}/configure"
+      -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/configure_contract.cmake"
+  )
+  add_test(
+    NAME pure-rational-install-contract
+    COMMAND "${CMAKE_COMMAND}"
+      "-DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
+      "-DBINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}"
+      "-DPURE_EXECUTABLE=${PURE_EXECUTABLE}"
+      "-DTEST_ROOT=${contract_root}/install"
+      "-DSMOKE_SCRIPT=${CMAKE_CURRENT_SOURCE_DIR}/tests/smoke.pure"
+      -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/install_contract.cmake"
+  )
+  set_tests_properties(
+    pure-rational-install-contract
+    PROPERTIES
+      ENVIRONMENT "PURELIB=${contract_root}/install/poison PURELIB"
+  )
 endif()
 
 install(
