@@ -137,10 +137,11 @@ with the portable Pure runtime.
     installer, not by PurePad startup.  The same installer owns the deployment
     handoff for the matching Microsoft Visual C++ Redistributable and shared
     MFC runtime; runtime DLLs are not copied from Visual Studio.
-  - GitHub Actions workflow run `32560603242` validated commit `2bd8b481` in
-    PurePad job `97001477480` on `windows-2022` with Visual Studio 2022.  Release
-    and Debug validation and the CTest-log artifact upload succeeded; the job
-    completed successfully at `2026-08-22T07:50:37Z`.
+  - The final authoritative GitHub Actions GREEN, workflow run `32571242498`,
+    validated head `7749fabe` in PurePad job `97026890714` on `windows-2022`
+    with Visual Studio 2022.  Validation, configure, build, and test all
+    succeeded, as did the CTest artifact upload; the job completed successfully
+    at `2026-08-22T11:49:19Z`.
   - The `windows-2022` runner selection is intentional and binding for the
     supported Visual Studio 2022 x64 build: GitHub migrated `windows-2025` to
     Visual Studio 2026 in June 2026, so it no longer supplies the required
