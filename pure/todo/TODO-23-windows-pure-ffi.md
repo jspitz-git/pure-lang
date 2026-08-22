@@ -139,3 +139,36 @@ the portable runtime.
       tests and emitted `PURE_FFI_SMOKE_OK`.
     - Configuring with `PURE_LIBRARY_INSTALL_DIR=../escape` failed with the
       expected prefix-containment diagnostic.
+- 2026-08-22: Audited and hardened the closed Windows package work.
+  - `BUILD_TESTING=ON` now rejects a missing `PURE_EXECUTABLE`; Windows test
+    configurations also require `llvm-readobj`, so a nominal test build cannot
+    silently register zero tests.
+  - Added automated configure, exact ten-file install-manifest, content-hash,
+    source/build-path leakage, AMD64 PE, exact export/import, and staged-runtime
+    contracts. The staged smoke removes `PURELIB` and replaces `PATH` with the
+    installed runtime plus Windows system directories.
+  - The build-tree smoke receives a private copied `libffi-8.dll`; it no longer
+    succeeds by inheriting the CLANG64 runtime directory.
+  - Extended the native helper and Pure smoke to compare the published ABI
+    values with libffi's headers, call a GNU Windows `long double` function,
+    and execute a Microsoft Windows ABI function through `FFI_WIN64`.
+  - The runner now rejects diagnostics on stderr. This caught that Pure can
+    report parser failures, continue, print the success marker, and return zero;
+    marker-only validation was therefore insufficient.
+  - Added `pure-ffi` path filters and a Release configure/build/contract step to
+    the Windows CI workflow.
+  - Validation:
+    - A clean CLANG64 Release configuration and four-target build in
+      `build/final TODO-23 contract` passed without warnings.
+    - `ctest --test-dir "build/final TODO-23 contract" -L pure-ffi
+      --output-on-failure --no-tests=error` passed 3/3 tests in 22.31 seconds.
+    - Removing `unset(ENV{PURELIB})` made the staged install contract fail with
+      `PURELIB survived Pure FFI environment sanitization`.
+    - Removing `ffi_typevect` from the expected exports made the PE contract
+      fail with the exact unexpected-export difference.
+    - Publishing `FFI_GNUW64` as `FFI_WIN64` made the ABI smoke fail with
+      `FAIL: Windows GNU ABI is the default`.
+  - Caveat: a diagnostic run below a path containing `Č` exposed a broader Pure
+    0.68 Windows Unicode-path problem. The strict runner rejects the resulting
+    parser diagnostics. The package contract supports ordinary Windows paths,
+    including spaces, but does not claim non-ASCII path support.

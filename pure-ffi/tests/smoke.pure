@@ -34,4 +34,24 @@ let smoke_invoke_callback =
 smoke_check "callback into Pure"
   (smoke_invoke_callback (smoke_callback,4,2) == 42);
 
+let smoke_default_abi =
+  fcall "ffi_smoke_default_abi" FFI_DEFAULT_ABI sint32_t ();
+let smoke_gnuw64_abi =
+  fcall "ffi_smoke_gnuw64_abi" FFI_DEFAULT_ABI sint32_t ();
+let smoke_win64_abi =
+  fcall "ffi_smoke_win64_abi" FFI_DEFAULT_ABI sint32_t ();
+smoke_check "Windows GNU ABI is the default"
+  (FFI_DEFAULT_ABI == smoke_default_abi () &&
+   FFI_GNUW64 == smoke_gnuw64_abi () &&
+   FFI_WIN64 == smoke_win64_abi () &&
+   (FFI_GNUW64 < FFI_WIN64 || FFI_GNUW64 > FFI_WIN64));
+let smoke_longdouble =
+  fcall "ffi_smoke_scale_longdouble" FFI_GNUW64
+    longdouble_t longdouble_t;
+smoke_check "GNU Windows long double ABI"
+  (smoke_longdouble 1.25 == 2.5);
+let smoke_win64 =
+  fcall "ffi_smoke_win64_add" FFI_WIN64 double_t (double_t,double_t);
+smoke_check "Microsoft Windows ABI" (smoke_win64 (19.5,22.5) == 42.0);
+
 puts "PURE_FFI_SMOKE_OK";

@@ -1,4 +1,5 @@
 #include <stdint.h>
+#include <ffi.h>
 
 #ifdef _WIN32
 #define FFI_SMOKE_EXPORT __declspec(dllexport)
@@ -14,6 +15,23 @@ typedef struct {
 typedef int32_t (*ffi_smoke_callback)(int32_t, int32_t);
 
 static int32_t pointer_value = 37;
+
+FFI_SMOKE_EXPORT int32_t ffi_smoke_default_abi(void)
+{
+  return FFI_DEFAULT_ABI;
+}
+
+#ifdef X86_WIN64
+FFI_SMOKE_EXPORT int32_t ffi_smoke_gnuw64_abi(void)
+{
+  return FFI_GNUW64;
+}
+
+FFI_SMOKE_EXPORT int32_t ffi_smoke_win64_abi(void)
+{
+  return FFI_WIN64;
+}
+#endif
 
 FFI_SMOKE_EXPORT int32_t ffi_smoke_add(int32_t x, int32_t y)
 {
@@ -43,3 +61,16 @@ ffi_smoke_invoke_callback(ffi_smoke_callback callback, int32_t x, int32_t y)
 {
   return callback ? callback(x, y) : -1;
 }
+
+FFI_SMOKE_EXPORT long double ffi_smoke_scale_longdouble(long double value)
+{
+  return value * 2.0L;
+}
+
+#if defined(_WIN32) && defined(__x86_64__)
+FFI_SMOKE_EXPORT __attribute__((ms_abi)) double
+ffi_smoke_win64_add(double x, double y)
+{
+  return x + y;
+}
+#endif

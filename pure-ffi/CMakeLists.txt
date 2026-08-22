@@ -159,12 +159,25 @@ set(
   PURE_EXECUTABLE ""
   CACHE FILEPATH "Pure interpreter used for package smoke tests"
 )
+set(
+  LLVM_READOBJ_EXECUTABLE ""
+  CACHE FILEPATH "llvm-readobj used for the Windows package contract"
+)
 if(BUILD_TESTING)
-  if(PURE_EXECUTABLE)
-    if(NOT EXISTS "${PURE_EXECUTABLE}")
-      message(FATAL_ERROR "PURE_EXECUTABLE does not exist: ${PURE_EXECUTABLE}")
-    endif()
+  if(NOT PURE_EXECUTABLE OR NOT EXISTS "${PURE_EXECUTABLE}")
+    message(FATAL_ERROR
+      "BUILD_TESTING requires an existing PURE_EXECUTABLE: ${PURE_EXECUTABLE}")
+  endif()
+  if(WIN32 AND NOT EXISTS "${LLVM_READOBJ_EXECUTABLE}")
+    message(FATAL_ERROR
+      "Windows BUILD_TESTING requires an existing LLVM_READOBJ_EXECUTABLE: "
+      "${LLVM_READOBJ_EXECUTABLE}")
+  endif()
     add_library(ffi-smoke-native SHARED tests/smoke-native.c)
+    target_link_libraries(ffi-smoke-native PRIVATE PkgConfig::LIBFFI)
+    add_custom_command(TARGET ffi POST_BUILD
+      COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+        "${PURE_FFI_RUNTIME_DLL}" "$<TARGET_FILE_DIR:ffi>/libffi-8.dll")
     set_target_properties(
       ffi-smoke-native
       PROPERTIES
@@ -173,23 +186,52 @@ if(BUILD_TESTING)
         C_STANDARD_REQUIRED ON
     )
     add_test(
+      NAME pure-ffi-configure-contract
+      COMMAND "${CMAKE_COMMAND}"
+        "-DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
+        "-DBINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}"
+        "-DTEST_ROOT=${CMAKE_CURRENT_BINARY_DIR}/pure-ffi contract/configure"
+        "-DGENERATOR=${CMAKE_GENERATOR}"
+        "-DMAKE_PROGRAM=${CMAKE_MAKE_PROGRAM}"
+        "-DC_COMPILER=${CMAKE_C_COMPILER}"
+        "-DPKG_CONFIG_EXECUTABLE=${PKG_CONFIG_EXECUTABLE}"
+        "-DPKG_CONFIG_PATH=$ENV{PKG_CONFIG_PATH}"
+        "-DPURE_EXECUTABLE=${PURE_EXECUTABLE}"
+        -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/configure_contract.cmake"
+    )
+    add_test(
       NAME pure-ffi-smoke
       COMMAND "${CMAKE_COMMAND}"
         "-DPURE_EXECUTABLE=${PURE_EXECUTABLE}"
         "-DPURE_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
         "-DPURE_MODULE_DIR=$<TARGET_FILE_DIR:ffi>"
         "-DNATIVE_MODULE_DIR=$<TARGET_FILE_DIR:ffi-smoke-native>"
+        "-DRUNTIME_DLL_DIRECTORY=$<TARGET_FILE_DIR:ffi>"
         "-DTEST_SCRIPT=${CMAKE_CURRENT_SOURCE_DIR}/tests/smoke.pure"
         -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunSmokeTest.cmake"
     )
+    set(ffi_tests pure-ffi-configure-contract pure-ffi-smoke)
+    if(WIN32)
+      add_test(
+        NAME pure-ffi-install-contract
+        COMMAND "${CMAKE_COMMAND}"
+          "-DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
+          "-DBINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}"
+          "-DFFI_TARGET_FILE=$<TARGET_FILE:ffi>"
+          "-DFFI_SMOKE_NATIVE_FILE=$<TARGET_FILE:ffi-smoke-native>"
+          "-DPURE_EXECUTABLE=${PURE_EXECUTABLE}"
+          "-DLLVM_READOBJ_EXECUTABLE=${LLVM_READOBJ_EXECUTABLE}"
+          "-DTEST_ROOT=${CMAKE_CURRENT_BINARY_DIR}/pure-ffi contract/install"
+          "-DSMOKE_SCRIPT=${CMAKE_CURRENT_SOURCE_DIR}/tests/smoke.pure"
+          "-DRUNTIME_DLL=${PURE_FFI_RUNTIME_DLL}"
+          "-DRUNTIME_LICENSE=${PURE_FFI_RUNTIME_LICENSE}"
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/install_contract.cmake"
+      )
+      list(APPEND ffi_tests pure-ffi-install-contract)
+    endif()
     set_tests_properties(
-      pure-ffi-smoke
+      ${ffi_tests}
       PROPERTIES
-        LABELS "ffi;smoke"
-        REQUIRED_FILES
-          "$<TARGET_FILE:ffi>;$<TARGET_FILE:ffi-smoke-native>;${CMAKE_CURRENT_SOURCE_DIR}/tests/smoke.pure"
+        LABELS "pure-ffi"
     )
-  else()
-    message(STATUS "PURE_EXECUTABLE is not set; pure-ffi smoke test is disabled")
-  endif()
 endif()
