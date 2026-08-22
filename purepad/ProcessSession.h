@@ -33,6 +33,7 @@ public:
   virtual HANDLE CreateWorkerThread(LPTHREAD_START_ROUTINE entry,
                                     void* context, DWORD* id);
   virtual BOOL CancelWorkerIo(HANDLE thread);
+  virtual BOOL SignalEvent(HANDLE event);
   virtual LPWCH GetEnvironmentStrings();
   virtual BOOL FreeEnvironmentStrings(LPWCH environment);
   virtual DWORD ResumeProcessThread(HANDLE thread);

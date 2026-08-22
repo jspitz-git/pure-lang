@@ -148,6 +148,10 @@ BOOL ProcessApi::CancelWorkerIo(HANDLE thread) {
   return CancelSynchronousIo(thread);
 }
 
+BOOL ProcessApi::SignalEvent(HANDLE event) {
+  return SetEvent(event);
+}
+
 LPWCH ProcessApi::GetEnvironmentStrings() {
   return GetEnvironmentStringsW();
 }
@@ -169,6 +173,8 @@ public:
   enum class State { Idle, Starting, Running, Stopping };
 
   struct Generation {
+    using WorkerContext = std::shared_ptr<Generation>;
+
     explicit Generation(ProcessCallbacks new_callbacks)
         : callbacks(std::move(new_callbacks)) {
       InitializeCriticalSection(&input_lock);
@@ -179,23 +185,32 @@ public:
     Generation& operator=(const Generation&) = delete;
 
     static DWORD WINAPI ReaderEntry(void* context) {
-      return static_cast<Generation*>(context)->Reader();
+      std::unique_ptr<WorkerContext> owner(
+        static_cast<WorkerContext*>(context));
+      return (*owner)->Reader();
     }
     static DWORD WINAPI WriterEntry(void* context) {
-      return static_cast<Generation*>(context)->Writer();
+      std::unique_ptr<WorkerContext> owner(
+        static_cast<WorkerContext*>(context));
+      return (*owner)->Writer();
     }
 
     DWORD Reader() {
       char bytes[4096];
       for (;;) {
+        if (reader_stop_requested.load(std::memory_order_acquire)) break;
         DWORD read = 0;
         if (!ReadFile(stdout_read.get(), bytes, sizeof(bytes), &read, nullptr) ||
             read == 0) {
           break;
         }
-        if (callbacks.output) callbacks.output(std::string_view(bytes, read));
+        auto output = callbacks.output;
+        if (output) output(std::string_view(bytes, read));
       }
-      if (WaitForStartup() && callbacks.exited) callbacks.exited();
+      if (WaitForStartup()) {
+        auto exited = callbacks.exited;
+        if (exited) exited();
+      }
       return 0;
     }
 
@@ -247,10 +262,13 @@ public:
     UniqueHandle stop_event, input_event, break_event, terminate_event;
     UniqueHandle process_handle, process_thread, reader_thread, writer_thread;
     DWORD process_id = 0;
+    DWORD reader_id = 0;
+    DWORD writer_id = 0;
     bool resumed = false;
     CRITICAL_SECTION input_lock;
     std::string pending_input;
     std::atomic<bool> accepting_requests = true;
+    std::atomic<bool> reader_stop_requested = false;
     std::mutex access_mutex;
     std::mutex completion_mutex;
     std::condition_variable completion_changed;
@@ -286,9 +304,15 @@ public:
   }
 
   void Cleanup(const std::shared_ptr<Generation>& generation) {
+    const bool on_reader =
+      generation->reader_id != 0 &&
+      generation->reader_id == GetCurrentThreadId();
+    if (on_reader)
+      generation->reader_stop_requested.store(true, std::memory_order_release);
     std::unique_lock<std::mutex> access_lock(generation->access_mutex);
-    if (generation->stop_event) SetEvent(generation->stop_event.get());
-    if (generation->terminate_event) SetEvent(generation->terminate_event.get());
+    if (generation->stop_event) api->SignalEvent(generation->stop_event.get());
+    if (generation->terminate_event)
+      api->SignalEvent(generation->terminate_event.get());
 
     if (generation->writer_thread)
       api->CancelWorkerIo(generation->writer_thread.get());
@@ -309,9 +333,7 @@ public:
       }
     }
 
-    if (generation->reader_thread)
-      api->CancelWorkerIo(generation->reader_thread.get());
-    if (generation->reader_thread)
+    if (generation->reader_thread && !on_reader)
       WaitForSingleObject(generation->reader_thread.get(), INFINITE);
     generation->reader_thread.reset();
     generation->stdout_read.reset();
@@ -460,19 +482,24 @@ public:
     if (!IsCurrentAndStarting(generation))
       return CancelledStart(generation, ProcessError::EventCreation);
 
-    DWORD worker_id = 0;
+    auto reader_context =
+      std::make_unique<Generation::WorkerContext>(generation);
     generation->reader_thread.reset(api->CreateWorkerThread(
-      Generation::ReaderEntry, generation.get(), &worker_id));
+      Generation::ReaderEntry, reader_context.get(), &generation->reader_id));
     if (!generation->reader_thread) {
       return AbortStart(generation, ProcessError::ThreadCreation, GetLastError());
     }
+    reader_context.release();
     if (!IsCurrentAndStarting(generation))
       return CancelledStart(generation, ProcessError::ThreadCreation);
+    auto writer_context =
+      std::make_unique<Generation::WorkerContext>(generation);
     generation->writer_thread.reset(api->CreateWorkerThread(
-      Generation::WriterEntry, generation.get(), &worker_id));
+      Generation::WriterEntry, writer_context.get(), &generation->writer_id));
     if (!generation->writer_thread) {
       return AbortStart(generation, ProcessError::ThreadCreation, GetLastError());
     }
+    writer_context.release();
     if (!IsCurrentAndStarting(generation))
       return CancelledStart(generation, ProcessError::ThreadCreation);
 
@@ -514,7 +541,8 @@ public:
     }
     EnterCriticalSection(&generation->input_lock);
     generation->pending_input.append(bytes.data(), bytes.size());
-    const bool signaled = SetEvent(generation->input_event.get()) != FALSE;
+    const bool signaled =
+      api->SignalEvent(generation->input_event.get()) != FALSE;
     LeaveCriticalSection(&generation->input_lock);
     return signaled;
   }
@@ -529,7 +557,7 @@ public:
     std::lock_guard<std::mutex> access_lock(generation->access_mutex);
     if (generation->accepting_requests.load(std::memory_order_acquire) &&
         generation->break_event) {
-      SetEvent(generation->break_event.get());
+      api->SignalEvent(generation->break_event.get());
     }
   }
 
@@ -557,6 +585,10 @@ public:
       }
     }
     if (wait_for_cleanup) {
+      if (generation->reader_id != 0 &&
+          generation->reader_id == GetCurrentThreadId()) {
+        return;
+      }
       generation->WaitForCleanup();
       return;
     }

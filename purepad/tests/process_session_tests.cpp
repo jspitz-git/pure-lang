@@ -3,6 +3,7 @@
 #include <atomic>
 #include <chrono>
 #include <iostream>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <string_view>
@@ -99,6 +100,45 @@ struct RecordingWaitApi final : purepad::ProcessApi {
   }
 };
 
+class BlockingWaitApi final : public purepad::ProcessApi {
+public:
+  BlockingWaitApi()
+      : entered(CreateEventW(nullptr, TRUE, FALSE, nullptr)),
+        release(CreateEventW(nullptr, TRUE, FALSE, nullptr)) {}
+  ~BlockingWaitApi() override {
+    CloseHandle(entered);
+    CloseHandle(release);
+  }
+  DWORD WaitForProcess(HANDLE process, DWORD timeout) override {
+    SetEvent(entered);
+    WaitForSingleObject(release, INFINITE);
+    return ProcessApi::WaitForProcess(process, timeout);
+  }
+  HANDLE entered;
+  HANDLE release;
+};
+
+class BlockingSignalApi final : public purepad::ProcessApi {
+public:
+  BlockingSignalApi()
+      : entered(CreateEventW(nullptr, TRUE, FALSE, nullptr)),
+        release(CreateEventW(nullptr, TRUE, FALSE, nullptr)) {}
+  ~BlockingSignalApi() override {
+    CloseHandle(entered);
+    CloseHandle(release);
+  }
+  BOOL SignalEvent(HANDLE event) override {
+    if (!blocked.exchange(true)) {
+      SetEvent(entered);
+      WaitForSingleObject(release, INFINITE);
+    }
+    return ProcessApi::SignalEvent(event);
+  }
+  std::atomic<bool> blocked = false;
+  HANDLE entered;
+  HANDLE release;
+};
+
 class ResumeGateApi final : public purepad::ProcessApi {
 public:
   ResumeGateApi()
@@ -130,6 +170,93 @@ void echo_round_trip(const wchar_t* child) {
   session.Stop();
   CHECK(!session.IsRunning());
   CHECK(output.Get() == "READY\r\nhello\r\nDONE\r\n");
+}
+
+void output_callback_can_stop_session(const wchar_t* child) {
+  purepad::ProcessSession session;
+  std::atomic<bool> armed = false;
+  std::atomic<bool> triggered = false;
+  HANDLE completed = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+  std::string output;
+  purepad::ProcessCallbacks callbacks;
+  callbacks.output = [&](std::string_view bytes) {
+    output.append(bytes);
+    if (output.find("DONE\r\n") != std::string::npos &&
+        !triggered.exchange(true)) {
+      while (!armed.load(std::memory_order_acquire)) SwitchToThread();
+      session.Stop();
+      SetEvent(completed);
+    }
+  };
+  const auto started = session.Start(
+    Launch(child, {L"--echo"}), std::move(callbacks));
+  CHECK(started.ok());
+  if (started.ok()) {
+    CHECK(session.Write("callback-stop\n"));
+    armed.store(true, std::memory_order_release);
+    CHECK(WaitForSingleObject(completed, 5'000) == WAIT_OBJECT_0);
+    CHECK(!session.IsRunning());
+  }
+  CloseHandle(completed);
+}
+
+void exited_callback_can_restart_session(const wchar_t* child) {
+  purepad::ProcessSession session;
+  Output restarted_output;
+  std::atomic<bool> armed = false;
+  HANDLE completed = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+  purepad::ProcessResult restarted;
+  purepad::ProcessCallbacks callbacks;
+  callbacks.exited = [&] {
+    while (!armed.load(std::memory_order_acquire)) SwitchToThread();
+    restarted = session.Start(
+      Launch(child, {L"--generation", L"callback-restart"}),
+      restarted_output.Callbacks());
+    SetEvent(completed);
+  };
+  const auto started = session.Start(
+    Launch(child, {L"--echo"}), std::move(callbacks));
+  CHECK(started.ok());
+  if (started.ok()) {
+    CHECK(session.Write("callback-restart\n"));
+    armed.store(true, std::memory_order_release);
+    CHECK(WaitForSingleObject(completed, 5'000) == WAIT_OBJECT_0);
+    CHECK(restarted.ok());
+    if (restarted.ok()) {
+      CHECK(session.WaitForExit(5s));
+      session.Stop();
+      CHECK(restarted_output.Get() == "GEN:callback-restart\r\n");
+    }
+  }
+  CloseHandle(completed);
+}
+
+void output_callback_can_destroy_session(const wchar_t* child) {
+  auto session = std::make_unique<purepad::ProcessSession>();
+  std::atomic<bool> armed = false;
+  std::atomic<bool> triggered = false;
+  HANDLE completed = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+  std::string output;
+  purepad::ProcessCallbacks callbacks;
+  callbacks.output = [&](std::string_view bytes) {
+    output.append(bytes);
+    if (output.find("DONE\r\n") != std::string::npos &&
+        !triggered.exchange(true)) {
+      while (!armed.load(std::memory_order_acquire)) SwitchToThread();
+      session.reset();
+      SetEvent(completed);
+    }
+  };
+  const auto started = session->Start(
+    Launch(child, {L"--echo"}), std::move(callbacks));
+  CHECK(started.ok());
+  if (started.ok()) {
+    CHECK(session->Write("callback-destroy\n"));
+    armed.store(true, std::memory_order_release);
+    CHECK(WaitForSingleObject(completed, 5'000) == WAIT_OBJECT_0);
+    CHECK(!session);
+  }
+  CloseHandle(completed);
 }
 
 void nonexistent_executable_fails_synchronously() {
@@ -312,20 +439,15 @@ void prompt_environment_is_child_local(const wchar_t* child) {
 }
 
 void negative_wait_timeout_is_nonblocking(const wchar_t* child) {
-  purepad::ProcessSession session;
+  RecordingWaitApi api;
+  purepad::ProcessSession session(&api);
   const auto result = session.Start(Launch(child, {L"--wait-for-stop"}), {});
   CHECK(result.ok());
   if (!result.ok()) return;
-  std::thread stopper([&] {
-    Sleep(100);
-    session.Stop();
-  });
-  const auto before = std::chrono::steady_clock::now();
-  const bool waited = session.WaitForExit(-1ms);
-  const auto elapsed = std::chrono::steady_clock::now() - before;
-  stopper.join();
-  CHECK(!waited);
-  CHECK(elapsed < 50ms);
+  CHECK(!session.WaitForExit(-1ms));
+  CHECK(api.timeouts.size() == 1);
+  if (api.timeouts.size() == 1) CHECK(api.timeouts.front() == 0);
+  session.Stop();
 }
 
 void finite_wait_timeout_never_uses_infinite(const wchar_t* child) {
@@ -371,25 +493,52 @@ void concurrent_stop_cancels_start(const wchar_t* child) {
   CHECK(exits.load() == 0);
 }
 
-void concurrent_write_and_stop_are_safe(const wchar_t* child) {
-  for (int iteration = 0; iteration != 20; ++iteration) {
-    purepad::ProcessSession session;
-    const auto result = session.Start(
-      Launch(child, {L"--wait-for-stop"}), {});
-    CHECK(result.ok());
-    if (!result.ok()) return;
-    std::atomic<bool> stop_writes = false;
-    std::thread writer([&] {
-      while (!stop_writes.load(std::memory_order_relaxed)) {
-        session.Write("input\n");
-      }
-    });
+void concurrent_write_and_stop_are_serialized(const wchar_t* child) {
+  BlockingSignalApi api;
+  purepad::ProcessSession session(&api);
+  const auto result = session.Start(
+    Launch(child, {L"--wait-for-stop"}), {});
+  CHECK(result.ok());
+  if (!result.ok()) return;
+
+  bool wrote = false;
+  std::thread writer([&] { wrote = session.Write("input\n"); });
+  CHECK(WaitForSingleObject(api.entered, 5'000) == WAIT_OBJECT_0);
+  std::atomic<bool> stop_returned = false;
+  std::thread stopper([&] {
     session.Stop();
-    stop_writes.store(true, std::memory_order_relaxed);
-    writer.join();
-    CHECK(!session.Write("after stop\n"));
-    CHECK(!session.IsRunning());
-  }
+    stop_returned.store(true, std::memory_order_release);
+  });
+  const auto deadline = std::chrono::steady_clock::now() + 5s;
+  while (session.IsRunning() && std::chrono::steady_clock::now() < deadline)
+    SwitchToThread();
+  CHECK(!session.IsRunning());
+  CHECK(!stop_returned.load(std::memory_order_acquire));
+  SetEvent(api.release);
+  writer.join();
+  stopper.join();
+  CHECK(wrote);
+  CHECK(!session.Write("after stop\n"));
+  CHECK(!session.IsRunning());
+}
+
+void concurrent_wait_for_exit_and_stop_keep_duplicate_alive(
+    const wchar_t* child) {
+  BlockingWaitApi api;
+  purepad::ProcessSession session(&api);
+  const auto result = session.Start(
+    Launch(child, {L"--wait-for-stop"}), {});
+  CHECK(result.ok());
+  if (!result.ok()) return;
+
+  bool exited = false;
+  std::thread waiter([&] { exited = session.WaitForExit(5s); });
+  CHECK(WaitForSingleObject(api.entered, 5'000) == WAIT_OBJECT_0);
+  session.Stop();
+  CHECK(!session.IsRunning());
+  SetEvent(api.release);
+  waiter.join();
+  CHECK(exited);
 }
 
 } // namespace
@@ -399,6 +548,9 @@ int wmain(int argc, wchar_t** argv) {
   if (argc != 2) return 1;
   const wchar_t* child = argv[1];
   echo_round_trip(child);
+  output_callback_can_stop_session(child);
+  exited_callback_can_restart_session(child);
+  output_callback_can_destroy_session(child);
   nonexistent_executable_fails_synchronously();
   invalid_working_directory_fails_synchronously(child);
   each_worker_creation_failure_cleans_everything(child);
@@ -412,6 +564,7 @@ int wmain(int argc, wchar_t** argv) {
   negative_wait_timeout_is_nonblocking(child);
   finite_wait_timeout_never_uses_infinite(child);
   concurrent_stop_cancels_start(child);
-  concurrent_write_and_stop_are_safe(child);
+  concurrent_write_and_stop_are_serialized(child);
+  concurrent_wait_for_exit_and_stop_keep_duplicate_alive(child);
   return failures == 0 ? 0 : 1;
 }
