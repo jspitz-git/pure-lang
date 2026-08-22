@@ -195,17 +195,47 @@ public:
       return (*owner)->Writer();
     }
 
+    void DeliverOutput(const char* bytes, DWORD length) {
+      auto output = callbacks.output;
+      if (output) output(std::string_view(bytes, length));
+    }
+
+    void DrainAvailableOutput() {
+      char bytes[4096];
+      for (;;) {
+        DWORD available = 0;
+        if (!stdout_read ||
+            !PeekNamedPipe(stdout_read.get(), nullptr, 0, nullptr, &available,
+                           nullptr) ||
+            available == 0) {
+          return;
+        }
+        const DWORD requested = std::min<DWORD>(available, sizeof(bytes));
+        DWORD read = 0;
+        if (!ReadFile(stdout_read.get(), bytes, requested, &read, nullptr) ||
+            read == 0) {
+          return;
+        }
+        DeliverOutput(bytes, read);
+      }
+    }
+
     DWORD Reader() {
       char bytes[4096];
       for (;;) {
-        if (reader_stop_requested.load(std::memory_order_acquire)) break;
-        DWORD read = 0;
-        if (!ReadFile(stdout_read.get(), bytes, sizeof(bytes), &read, nullptr) ||
-            read == 0) {
+        if (reader_stop_requested.load(std::memory_order_acquire)) {
+          DrainAvailableOutput();
           break;
         }
-        auto output = callbacks.output;
-        if (output) output(std::string_view(bytes, read));
+        DWORD read = 0;
+        const BOOL read_succeeded =
+          ReadFile(stdout_read.get(), bytes, sizeof(bytes), &read, nullptr);
+        if (!read_succeeded || read == 0) {
+          if (!read_succeeded && GetLastError() == ERROR_OPERATION_ABORTED)
+            DrainAvailableOutput();
+          break;
+        }
+        DeliverOutput(bytes, read);
       }
       if (WaitForStartup()) {
         auto exited = callbacks.exited;
@@ -333,6 +363,12 @@ public:
       }
     }
 
+    if (generation->reader_thread) {
+      generation->reader_stop_requested.store(true,
+                                               std::memory_order_release);
+      if (!on_reader)
+        api->CancelWorkerIo(generation->reader_thread.get());
+    }
     if (generation->reader_thread && !on_reader)
       WaitForSingleObject(generation->reader_thread.get(), INFINITE);
     generation->reader_thread.reset();

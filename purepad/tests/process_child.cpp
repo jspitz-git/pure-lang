@@ -46,6 +46,62 @@ bool PrintLaunchReport(int argc, wchar_t** argv) {
   return true;
 }
 
+std::wstring ExecutablePath() {
+  std::vector<wchar_t> path(260);
+  for (;;) {
+    const DWORD copied = GetModuleFileNameW(
+      nullptr, path.data(), static_cast<DWORD>(path.size()));
+    if (copied == 0) return {};
+    if (copied < path.size()) return std::wstring(path.data(), copied);
+    path.resize(path.size() * 2);
+  }
+}
+
+bool SpawnInheritedStdoutDescendant(std::wstring_view release_event_name,
+                                    std::wstring_view write_event_name) {
+  const std::wstring executable = ExecutablePath();
+  if (executable.empty()) return false;
+
+  HANDLE stdout_handle = GetStdHandle(STD_OUTPUT_HANDLE);
+  HANDLE stderr_handle = GetStdHandle(STD_ERROR_HANDLE);
+  if (!SetHandleInformation(stdout_handle, HANDLE_FLAG_INHERIT,
+                            HANDLE_FLAG_INHERIT) ||
+      !SetHandleInformation(stderr_handle, HANDLE_FLAG_INHERIT,
+                            HANDLE_FLAG_INHERIT)) {
+    return false;
+  }
+
+  std::wstring command_line = L"\"" + executable +
+    L"\" --hold-inherited-stdout \"" +
+    std::wstring(release_event_name) + L"\"";
+  STARTUPINFOW startup{};
+  startup.cb = sizeof(startup);
+  startup.dwFlags = STARTF_USESTDHANDLES;
+  startup.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
+  startup.hStdOutput = stdout_handle;
+  startup.hStdError = stderr_handle;
+  PROCESS_INFORMATION descendant{};
+  if (!CreateProcessW(executable.c_str(), command_line.data(), nullptr,
+                      nullptr, TRUE, CREATE_NO_WINDOW, nullptr, nullptr,
+                      &startup, &descendant)) {
+    return false;
+  }
+
+  std::cout << "DESCENDANT:" << descendant.dwProcessId << "\r\n"
+            << std::flush;
+  CloseHandle(descendant.hThread);
+  CloseHandle(descendant.hProcess);
+
+  HANDLE write_event = OpenEventW(SYNCHRONIZE, FALSE,
+                                  std::wstring(write_event_name).c_str());
+  if (!write_event) return false;
+  const DWORD write_wait = WaitForSingleObject(write_event, INFINITE);
+  CloseHandle(write_event);
+  if (write_wait != WAIT_OBJECT_0) return false;
+  std::cout << "PARENT-FINAL\r\n" << std::flush;
+  return true;
+}
+
 } // namespace
 
 int wmain(int argc, wchar_t** argv) {
@@ -77,6 +133,15 @@ int wmain(int argc, wchar_t** argv) {
     }
     std::cout << std::flush;
     return 0;
+  }
+  if (mode == L"--spawn-inherited-stdout" && argc == 4)
+    return SpawnInheritedStdoutDescendant(argv[2], argv[3]) ? 0 : 8;
+  if (mode == L"--hold-inherited-stdout" && argc == 3) {
+    HANDLE release = OpenEventW(SYNCHRONIZE, FALSE, argv[2]);
+    if (!release) return 9;
+    const DWORD wait = WaitForSingleObject(release, INFINITE);
+    CloseHandle(release);
+    return wait == WAIT_OBJECT_0 ? 0 : 10;
   }
   if (argc != 2) return 2;
 
