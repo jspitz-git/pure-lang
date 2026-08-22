@@ -83,3 +83,21 @@ portable Windows distribution.
   Windows system directories. The full marker-checked lifetime test passed.
 - 2026-07-28: The final source/build-path leak scan was clean and every direct
   nonsystem import was satisfied by the staged `libpure.dll` and `libc++.dll`.
+- 2026-08-23: SuperPowers audit hardened the retained Windows validation.
+  - Windows tests require an explicit installed portable Pure interpreter and
+    `llvm-readobj`; the runner removes `PURELIB`, constructs a restricted
+    `PATH`, rejects stderr, and requires an exact success marker.
+  - Generated module-definition files derive the public export set from the
+    consuming Pure modules. `hashdict.dll` now exports exactly 82 C symbols and
+    `orddict.dll` exactly 68, with no leaked mangled libc++ implementation ABI.
+  - Windows compilation disables C++ exceptions. The PE contract rejects
+    throwing, allocation-exception, personality, unwind, and terminate ABI
+    imports while allowing only thread-safe static-initialization guards.
+  - The install contract verifies the exact 13-file manifest and content,
+    path hygiene, both AMD64 PE images, exact exports/imports, and the existing
+    portable `libc++.dll` SHA-256 without duplicating it. It then runs the full
+    lifetime smoke test against a copied runtime with poisoned inherited
+    `PATH` and `PURELIB`.
+  - The non-Linux release workflow watches `pure-stldict` and TODO-27 and runs
+    the complete configure, build, lifetime, C++ ABI, install, staged-runtime,
+    and PE contract on Windows.
