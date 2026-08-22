@@ -9,6 +9,15 @@ foreach(required_var IN ITEMS
 endforeach()
 
 unset(ENV{PURELIB})
+if(WIN32)
+  get_filename_component(pure_bin_dir "${PURE_EXECUTABLE}" DIRECTORY)
+  get_filename_component(runtime_prefix "${pure_bin_dir}" DIRECTORY)
+  if(NOT EXISTS "${runtime_prefix}/lib/pure/math.pure")
+    message(FATAL_ERROR
+      "PURE_EXECUTABLE must belong to an installed Pure runtime prefix")
+  endif()
+  set(ENV{PATH} "${pure_bin_dir};$ENV{SystemRoot}/System32;$ENV{SystemRoot}")
+endif()
 
 execute_process(
   COMMAND "${PURE_EXECUTABLE}" --norc -q
@@ -24,6 +33,10 @@ execute_process(
 if(NOT "${result}" STREQUAL "0")
   message(FATAL_ERROR
     "Pure sockets loopback test exited with ${result}\n${output}${error}")
+endif()
+if(NOT "${error}" STREQUAL "")
+  message(FATAL_ERROR
+    "Pure sockets loopback test emitted stderr\n${output}${error}")
 endif()
 if(NOT output MATCHES "(^|\r?\n)PURE_SOCKETS_LOOPBACK_OK(\r?\n|$)")
   message(FATAL_ERROR

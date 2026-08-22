@@ -11,6 +11,12 @@ typedef int (*cleanup_fn)(void);
 typedef int64_t (*socket_fn)(int, int, int);
 typedef int (*close_fn)(int64_t);
 typedef int (*shutdown_fn)(int64_t, int);
+typedef int64_t (*send_fn)(int64_t, const void *, size_t, int);
+typedef int64_t (*recv_fn)(int64_t, void *, size_t, int);
+typedef int64_t (*sendto_fn)(int64_t, const void *, size_t, int,
+                             struct sockaddr *, int);
+typedef int64_t (*recvfrom_fn)(int64_t, void *, size_t, int,
+                               struct sockaddr *, int *);
 typedef int (*error_fn)(void);
 typedef const char *(*strerror_fn)(int);
 
@@ -30,6 +36,10 @@ int main(int argc, char **argv)
   socket_fn open_socket;
   close_fn close_socket;
   shutdown_fn shutdown_socket;
+  send_fn send_socket;
+  recv_fn recv_socket;
+  sendto_fn sendto_socket;
+  recvfrom_fn recvfrom_socket;
   error_fn socket_error;
   strerror_fn socket_strerror;
   int64_t fd;
@@ -50,11 +60,16 @@ int main(int argc, char **argv)
   open_socket = (socket_fn)required_symbol(module, "pure_socket");
   close_socket = (close_fn)required_symbol(module, "pure_closesocket");
   shutdown_socket = (shutdown_fn)required_symbol(module, "pure_shutdown");
+  send_socket = (send_fn)required_symbol(module, "pure_send");
+  recv_socket = (recv_fn)required_symbol(module, "pure_recv");
+  sendto_socket = (sendto_fn)required_symbol(module, "pure_sendto");
+  recvfrom_socket = (recvfrom_fn)required_symbol(module, "pure_recvfrom");
   socket_error = (error_fn)required_symbol(module, "pure_socket_errno");
   socket_strerror =
     (strerror_fn)required_symbol(module, "pure_socket_strerror");
   if (!startup || !cleanup || !open_socket || !close_socket ||
-      !shutdown_socket || !socket_error || !socket_strerror) {
+      !shutdown_socket || !send_socket || !recv_socket || !sendto_socket ||
+      !recvfrom_socket || !socket_error || !socket_strerror) {
     FreeLibrary(module);
     return 1;
   }
@@ -93,6 +108,22 @@ int main(int argc, char **argv)
   if (fd < 0 || shutdown_socket(fd, SD_BOTH) != SOCKET_ERROR ||
       socket_error() != WSAENOTCONN || close_socket(fd) || cleanup()) {
     fprintf(stderr, "socket open/close after restart failed\n");
+    FreeLibrary(module);
+    return 1;
+  }
+
+  fd = open_socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+  if (fd < 0 ||
+      send_socket(fd, "x", (size_t)INT_MAX + 1, 0) != SOCKET_ERROR ||
+      socket_error() != WSAEMSGSIZE ||
+      recv_socket(fd, 0, (size_t)INT_MAX + 1, 0) != SOCKET_ERROR ||
+      socket_error() != WSAEMSGSIZE ||
+      sendto_socket(fd, "x", (size_t)INT_MAX + 1, 0, 0, 0) != SOCKET_ERROR ||
+      socket_error() != WSAEMSGSIZE ||
+      recvfrom_socket(fd, 0, (size_t)INT_MAX + 1, 0, 0, 0) != SOCKET_ERROR ||
+      socket_error() != WSAEMSGSIZE || close_socket(fd) || cleanup() ||
+      startup() || cleanup()) {
+    fprintf(stderr, "oversized-buffer or failure cleanup contract failed\n");
     FreeLibrary(module);
     return 1;
   }

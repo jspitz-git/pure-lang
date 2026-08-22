@@ -166,3 +166,20 @@ distribution.
       `WS2_32.dll`, `libpure.dll`, Windows system libraries, and UCRT imports.
       The staged `bin/libpure.dll` satisfies the only nonsystem runtime
       dependency.
+- 2026-08-22: SuperPowers audit hardened the retained Windows validation.
+  - `BUILD_TESTING=ON` now requires an installed portable Pure interpreter and
+    `llvm-readobj`; it can no longer report a partial green suite with the
+    TCP/UDP loopback test omitted.
+  - Both the native audit and Pure runner construct `PATH` from the selected
+    portable runtime plus Windows system directories, unset `PURELIB`, require
+    an exact success marker, and reject unexpected stderr.
+  - The native audit covers all four oversized buffer wrappers and requires
+    `WSAEMSGSIZE`, then closes the socket and verifies cleanup/restart.
+  - The install contract checks the exact seven-file manifest and file content,
+    rejects build, source, MSYS2, and unexpanded-template paths, verifies the
+    AMD64 PE image, all 35 exports, and the exact allowed import set, then runs
+    both tests against a copied installed runtime with poisoned inherited
+    `PATH` and `PURELIB`.
+  - The non-Linux release workflow now watches `pure-sockets` and TODO-25 and
+    runs the complete configure, build, Winsock, loopback, install, and PE
+    contract on Windows.
