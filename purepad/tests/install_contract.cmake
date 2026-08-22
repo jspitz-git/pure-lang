@@ -30,6 +30,7 @@ endif()
 
 set(purepad_executable "${purepad_install_prefix}/bin/purepad.exe")
 set(purepad_documentation "${purepad_install_prefix}/share/doc/purepad/WINDOWS.md")
+set(purepad_manifest "${purepad_install_prefix}/purepad.manifest")
 if(NOT EXISTS "${purepad_executable}")
   message(FATAL_ERROR "PurePad component did not install ${purepad_executable}")
 endif()
@@ -43,6 +44,7 @@ execute_process(
     "-DPUREPAD_SOURCE_DIR=${PUREPAD_SOURCE_DIR}"
     "-DPUREPAD_BUILD_DIR=${PUREPAD_BUILD_DIR}"
     "-DPUREPAD_CMAKE_MT=${PUREPAD_CMAKE_MT}"
+    "-DPUREPAD_MANIFEST=${purepad_manifest}"
     -P "${PUREPAD_SOURCE_DIR}/cmake/VerifyInstalledPurePad.cmake"
   RESULT_VARIABLE purepad_verify_result
   OUTPUT_VARIABLE purepad_verify_stdout
@@ -51,4 +53,45 @@ if(NOT purepad_verify_result EQUAL 0)
   message(FATAL_ERROR
     "PurePad installed executable verification failed:\n"
     "${purepad_verify_stdout}${purepad_verify_stderr}")
+endif()
+
+message(STATUS "PurePad verifier output:\n${purepad_verify_stdout}")
+set(purepad_expected_runtime_report
+  "PurePad Microsoft runtime dependencies for TODO-49: mfc140u.dll;msvcp140.dll;vcruntime140.dll;vcruntime140_1.dll")
+string(FIND "${purepad_verify_stdout}" "${purepad_expected_runtime_report}"
+  purepad_runtime_report_index)
+if(purepad_runtime_report_index EQUAL -1)
+  message(FATAL_ERROR
+    "PurePad verifier did not report the normalized Microsoft runtime "
+    "contract: ${purepad_expected_runtime_report}")
+endif()
+
+set(purepad_unresolved_source_leak
+  "${PUREPAD_SOURCE_DIR}/fixtures/../unresolved-leak.dll")
+execute_process(
+  COMMAND "${PUREPAD_CMAKE_COMMAND}"
+    "-DPUREPAD_EXECUTABLE=${purepad_executable}"
+    "-DPUREPAD_SOURCE_DIR=${PUREPAD_SOURCE_DIR}"
+    "-DPUREPAD_BUILD_DIR=${PUREPAD_BUILD_DIR}"
+    "-DPUREPAD_CMAKE_MT=${PUREPAD_CMAKE_MT}"
+    "-DPUREPAD_MANIFEST=${purepad_manifest}"
+    "-DPUREPAD_TEST_UNRESOLVED_DEPENDENCIES=${purepad_unresolved_source_leak}"
+    -P "${PUREPAD_SOURCE_DIR}/cmake/VerifyInstalledPurePad.cmake"
+  RESULT_VARIABLE purepad_leak_result
+  OUTPUT_VARIABLE purepad_leak_stdout
+  ERROR_VARIABLE purepad_leak_stderr)
+if(purepad_leak_result EQUAL 0)
+  message(FATAL_ERROR
+    "PurePad verifier accepted an unresolved dependency under the source tree")
+endif()
+set(purepad_leak_output "${purepad_leak_stdout}${purepad_leak_stderr}")
+if(NOT purepad_leak_output MATCHES "embedded under")
+  message(FATAL_ERROR
+    "PurePad verifier failed for the wrong reason:\n${purepad_leak_output}")
+endif()
+
+file(REMOVE_RECURSE "${purepad_install_prefix}")
+if(EXISTS "${purepad_install_prefix}")
+  message(FATAL_ERROR
+    "PurePad install-contract cleanup left ${purepad_install_prefix}")
 endif()
