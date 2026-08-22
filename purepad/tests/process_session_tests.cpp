@@ -252,6 +252,39 @@ public:
   HANDLE reader_shutdown_requested;
 };
 
+class ReaderStopWindowApi final : public purepad::ProcessApi {
+public:
+  ReaderStopWindowApi()
+      : reader_checked_stop(CreateEventW(nullptr, TRUE, FALSE, nullptr)),
+        release_reader(CreateEventW(nullptr, TRUE, FALSE, nullptr)),
+        reader_stop_signaled(CreateEventW(nullptr, TRUE, FALSE, nullptr)) {}
+  ~ReaderStopWindowApi() override {
+    CloseHandle(reader_checked_stop);
+    CloseHandle(release_reader);
+    CloseHandle(reader_stop_signaled);
+  }
+  void Arm() { armed.store(true, std::memory_order_release); }
+  void ReaderStopCheckCompleted() override {
+    if (armed.load(std::memory_order_acquire) && !paused.exchange(true)) {
+      SetEvent(reader_checked_stop);
+      WaitForSingleObject(release_reader, INFINITE);
+    }
+  }
+  BOOL SignalEvent(HANDLE event) override {
+    const int call = ++signal_calls;
+    const BOOL result = ProcessApi::SignalEvent(event);
+    // Cleanup signals writer stop, parent terminate, then reader stop.
+    if (call == 3) SetEvent(reader_stop_signaled);
+    return result;
+  }
+  std::atomic<bool> armed = false;
+  std::atomic<bool> paused = false;
+  std::atomic<int> signal_calls = 0;
+  HANDLE reader_checked_stop;
+  HANDLE release_reader;
+  HANDLE reader_stop_signaled;
+};
+
 void echo_round_trip(const wchar_t* child) {
   Output output;
   purepad::ProcessSession session;
@@ -264,6 +297,179 @@ void echo_round_trip(const wchar_t* child) {
   session.Stop();
   CHECK(!session.IsRunning());
   CHECK(output.Get() == "READY\r\nhello\r\nDONE\r\n");
+}
+
+void reader_stop_is_latched_after_normal_loop_check(const wchar_t* child) {
+  const std::wstring release_name =
+    L"Local\\PurePadReaderStopWindow-" +
+    std::to_wstring(GetCurrentProcessId()) + L"-" +
+    std::to_wstring(GetTickCount64());
+  const std::wstring write_name = release_name + L"-write";
+  const std::wstring start_name = release_name + L"-start";
+  const std::wstring ready_name = release_name + L"-ready";
+  const std::wstring next_name = release_name + L"-next";
+  HANDLE release = CreateEventW(nullptr, TRUE, FALSE, release_name.c_str());
+  HANDLE write_final = CreateEventW(nullptr, TRUE, FALSE, write_name.c_str());
+  HANDLE start_writing =
+    CreateEventW(nullptr, TRUE, FALSE, start_name.c_str());
+  HANDLE chunk_ready =
+    CreateEventW(nullptr, FALSE, FALSE, ready_name.c_str());
+  HANDLE next_chunk =
+    CreateEventW(nullptr, FALSE, FALSE, next_name.c_str());
+  HANDLE stop_completed = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+  HANDLE descendant_reported = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+  HANDLE parent_final_blocked = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+  HANDLE release_parent_final = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+  ReaderStopWindowApi api;
+  CHECK(release != nullptr);
+  CHECK(write_final != nullptr);
+  CHECK(start_writing != nullptr);
+  CHECK(chunk_ready != nullptr);
+  CHECK(next_chunk != nullptr);
+  CHECK(stop_completed != nullptr);
+  CHECK(descendant_reported != nullptr);
+  CHECK(parent_final_blocked != nullptr);
+  CHECK(release_parent_final != nullptr);
+  CHECK(api.reader_checked_stop != nullptr);
+  CHECK(api.release_reader != nullptr);
+  CHECK(api.reader_stop_signaled != nullptr);
+  if (!release || !write_final || !start_writing || !chunk_ready ||
+      !next_chunk || !stop_completed || !descendant_reported ||
+      !parent_final_blocked || !release_parent_final ||
+      !api.reader_checked_stop || !api.release_reader ||
+      !api.reader_stop_signaled) {
+    if (release) CloseHandle(release);
+    if (write_final) CloseHandle(write_final);
+    if (start_writing) CloseHandle(start_writing);
+    if (chunk_ready) CloseHandle(chunk_ready);
+    if (next_chunk) CloseHandle(next_chunk);
+    if (stop_completed) CloseHandle(stop_completed);
+    if (descendant_reported) CloseHandle(descendant_reported);
+    if (parent_final_blocked) CloseHandle(parent_final_blocked);
+    if (release_parent_final) CloseHandle(release_parent_final);
+    return;
+  }
+
+  std::mutex output_mutex;
+  std::string output;
+  std::atomic<bool> blocked_on_parent_final = false;
+  purepad::ProcessCallbacks callbacks;
+  callbacks.output = [&](std::string_view bytes) {
+    bool have_descendant_record = false;
+    bool have_parent_final = false;
+    {
+      std::lock_guard<std::mutex> lock(output_mutex);
+      output.append(bytes);
+      const size_t descendant_at = output.find("DESCENDANT:");
+      have_descendant_record = descendant_at != std::string::npos &&
+        output.find("\r\n", descendant_at) != std::string::npos;
+      have_parent_final =
+        output.find("PARENT-FINAL\r\n") != std::string::npos;
+    }
+    if (have_descendant_record) SetEvent(descendant_reported);
+    if (have_parent_final && !blocked_on_parent_final.exchange(true)) {
+      SetEvent(parent_final_blocked);
+      WaitForSingleObject(release_parent_final, INFINITE);
+    }
+  };
+  purepad::ProcessSession session(&api);
+  const auto started = session.Start(
+    Launch(child, {L"--spawn-inherited-stdout", release_name, write_name,
+                   start_name, ready_name, next_name}),
+    std::move(callbacks));
+  CHECK(started.ok());
+  if (!started.ok()) {
+    SetEvent(release);
+    SetEvent(release_parent_final);
+    CloseHandle(release_parent_final);
+    CloseHandle(parent_final_blocked);
+    CloseHandle(descendant_reported);
+    CloseHandle(stop_completed);
+    CloseHandle(next_chunk);
+    CloseHandle(chunk_ready);
+    CloseHandle(start_writing);
+    CloseHandle(write_final);
+    CloseHandle(release);
+    return;
+  }
+
+  CHECK(WaitForSingleObject(descendant_reported, 5'000) == WAIT_OBJECT_0);
+  std::string before_parent_exit;
+  {
+    std::lock_guard<std::mutex> lock(output_mutex);
+    before_parent_exit = output;
+  }
+  const size_t pid_begin = before_parent_exit.find("DESCENDANT:");
+  const size_t pid_end = pid_begin == std::string::npos
+    ? std::string::npos : before_parent_exit.find("\r\n", pid_begin);
+  DWORD descendant_pid = 0;
+  if (pid_begin != std::string::npos && pid_end != std::string::npos) {
+    descendant_pid = static_cast<DWORD>(std::stoul(before_parent_exit.substr(
+      pid_begin + std::string_view("DESCENDANT:").size(),
+      pid_end - pid_begin - std::string_view("DESCENDANT:").size())));
+  }
+  CHECK(descendant_pid != 0);
+  HANDLE descendant = descendant_pid == 0 ? nullptr :
+    OpenProcess(SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION |
+                  PROCESS_TERMINATE,
+                FALSE, descendant_pid);
+  CHECK(descendant != nullptr);
+
+  SetEvent(write_final);
+  CHECK(session.WaitForExit(5s));
+  CHECK(WaitForSingleObject(parent_final_blocked, 5'000) == WAIT_OBJECT_0);
+  if (descendant)
+    CHECK(WaitForSingleObject(descendant, 0) == WAIT_TIMEOUT);
+
+  api.Arm();
+  SetEvent(release_parent_final);
+  const bool reader_paused_after_clear_stop =
+    WaitForSingleObject(api.reader_checked_stop, 5'000) == WAIT_OBJECT_0;
+  CHECK(reader_paused_after_clear_stop);
+  std::thread stopper([&] {
+    session.Stop();
+    SetEvent(stop_completed);
+  });
+  const bool reader_stop_was_signaled =
+    WaitForSingleObject(api.reader_stop_signaled, 5'000) == WAIT_OBJECT_0;
+  CHECK(reader_stop_was_signaled);
+  SetEvent(api.release_reader);
+  // Event handshakes position the race.  This generous outer wait only turns
+  // a future-byte ReadFile mutant into a bounded test failure.
+  const bool stopped_with_empty_inherited_pipe =
+    WaitForSingleObject(stop_completed, 10'000) == WAIT_OBJECT_0;
+  SetEvent(release);
+  SetEvent(api.release_reader);
+  SetEvent(release_parent_final);
+  CHECK(WaitForSingleObject(stop_completed, 5'000) == WAIT_OBJECT_0);
+  stopper.join();
+
+  CHECK(stopped_with_empty_inherited_pipe);
+  CHECK(!session.IsRunning());
+  {
+    std::lock_guard<std::mutex> lock(output_mutex);
+    CHECK(output.find("PARENT-FINAL\r\n") != std::string::npos);
+  }
+  if (descendant) {
+    CHECK(WaitForSingleObject(descendant, 5'000) == WAIT_OBJECT_0);
+    DWORD exit_code = STILL_ACTIVE;
+    CHECK(GetExitCodeProcess(descendant, &exit_code));
+    CHECK(exit_code != STILL_ACTIVE);
+    if (exit_code == STILL_ACTIVE) {
+      TerminateProcess(descendant, 11);
+      WaitForSingleObject(descendant, 5'000);
+    }
+    CloseHandle(descendant);
+  }
+  CloseHandle(release_parent_final);
+  CloseHandle(parent_final_blocked);
+  CloseHandle(descendant_reported);
+  CloseHandle(stop_completed);
+  CloseHandle(next_chunk);
+  CloseHandle(chunk_ready);
+  CloseHandle(start_writing);
+  CloseHandle(write_final);
+  CloseHandle(release);
 }
 
 void inherited_stdout_descendant_does_not_block_stop(const wchar_t* child) {
@@ -941,6 +1147,7 @@ int wmain(int argc, wchar_t** argv) {
   adapter_output_replaces_nul_for_ui_consumers();
   adapter_decoder_state_is_generation_local_and_flushable();
   echo_round_trip(child);
+  reader_stop_is_latched_after_normal_loop_check(child);
   inherited_stdout_descendant_does_not_block_stop(child);
   output_callback_can_stop_session(child);
   exited_callback_can_restart_session(child);

@@ -196,6 +196,8 @@ BOOL ProcessApi::SignalEvent(HANDLE event) {
   return SetEvent(event);
 }
 
+void ProcessApi::ReaderStopCheckCompleted() {}
+
 LPWCH ProcessApi::GetEnvironmentStrings() {
   return ::GetEnvironmentStringsW();
 }
@@ -219,8 +221,8 @@ public:
   struct Generation {
     using WorkerContext = std::shared_ptr<Generation>;
 
-    explicit Generation(ProcessCallbacks new_callbacks)
-        : callbacks(std::move(new_callbacks)) {
+    explicit Generation(ProcessApi& new_api, ProcessCallbacks new_callbacks)
+        : process_api(new_api), callbacks(std::move(new_callbacks)) {
       InitializeCriticalSection(&input_lock);
     }
     ~Generation() { DeleteCriticalSection(&input_lock); }
@@ -279,6 +281,7 @@ public:
           DrainAvailableOutput();
           break;
         }
+        process_api.ReaderStopCheckCompleted();
 
         DWORD available = 0;
         if (!PeekNamedPipe(stdout_read.get(), nullptr, 0, nullptr, &available,
@@ -355,6 +358,7 @@ public:
       completion_changed.wait(lock, [&] { return cleanup_done; });
     }
 
+    ProcessApi& process_api;
     ProcessCallbacks callbacks;
     UniqueHandle stdin_read, stdin_write, stdout_read, stdout_write;
     UniqueHandle stop_event, input_event, reader_stop_event;
@@ -486,7 +490,7 @@ public:
       return {ProcessError::InvalidLaunch, ERROR_INVALID_PARAMETER};
 
     auto generation =
-      std::make_shared<Generation>(std::move(new_callbacks));
+      std::make_shared<Generation>(*api, std::move(new_callbacks));
     {
       ExclusiveStateLock lock(state_lock);
       if (state != State::Idle) {

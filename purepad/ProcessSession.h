@@ -34,6 +34,8 @@ public:
                                     void* context, DWORD* id);
   virtual BOOL CancelWorkerIo(HANDLE thread);
   virtual BOOL SignalEvent(HANDLE event);
+  // Test seam immediately after an unsignaled reader-stop check.
+  virtual void ReaderStopCheckCompleted();
   virtual LPWCH GetEnvironmentStrings();
   virtual BOOL FreeEnvironmentStrings(LPWCH environment);
   virtual DWORD ResumeProcessThread(HANDLE thread);

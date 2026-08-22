@@ -167,3 +167,15 @@ with the portable Pure runtime.
     invocations in 607.88 seconds.  The immediate process-residue gate found
     zero surviving `purepad-process-child` processes; the independent forbidden
     source scan found zero matches, and no root build directory was created.
+  - A review follow-up split the two shutdown guarantees into separate tests.
+    The continuous-writer case covers the deadline/byte-bounded drain and final
+    parent output.  The new empty-pipe case pauses immediately after an
+    unsignaled reader-stop check, lets `Stop()` latch the dedicated event, and
+    then releases the reader; a deliberate future-byte `ReadFile` mutant failed
+    the generous outer hang detector while the peek-based reader passed.
+  - With the narrow no-op test seam in production, the focused Debug lifecycle
+    case passed 10/10 consecutive invocations in 49.99 seconds.  Four-worker
+    clean Release and Debug builds completed in 26 and 25 seconds; their full
+    suites passed 4/4 in 32.13 seconds and 3/3 in 5.89 seconds, respectively.
+    The earlier 100/100 Release run remains the production-behavior stress
+    evidence; this review round added the targeted 10/10 seam-positioned repeat.
