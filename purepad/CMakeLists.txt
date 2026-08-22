@@ -76,9 +76,11 @@ install(FILES WINDOWS.md DESTINATION share/doc/purepad COMPONENT PurePad)
 include(CTest)
 if(BUILD_TESTING)
   add_executable(purepad-process-child tests/process_child.cpp)
+  add_executable(purepad-pe-fixture-mutator tests/pe_fixture_mutator.cpp)
   add_executable(purepad-process-session-tests
     tests/process_session_tests.cpp Buffer.cpp ProcessSession.cpp)
   target_compile_features(purepad-process-child PRIVATE cxx_std_17)
+  target_compile_features(purepad-pe-fixture-mutator PRIVATE cxx_std_17)
   target_compile_features(purepad-process-session-tests PRIVATE cxx_std_17)
   target_compile_definitions(purepad-process-session-tests PRIVATE
     _AFXDLL
@@ -92,6 +94,16 @@ if(BUILD_TESTING)
   add_test(NAME purepad-process-session
     COMMAND purepad-process-session-tests
       "$<TARGET_FILE:purepad-process-child>")
+  add_test(NAME purepad-source-policy
+    COMMAND "${CMAKE_COMMAND}"
+      "-DPUREPAD_SOURCE_DIR=${CMAKE_SOURCE_DIR}"
+      "-DPUREPAD_BUILD_DIR=${CMAKE_BINARY_DIR}"
+      -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/VerifySourcePolicy.cmake")
+  add_test(NAME purepad-source-policy-contract
+    COMMAND "${CMAKE_COMMAND}"
+      "-DPUREPAD_CMAKE_COMMAND=${CMAKE_COMMAND}"
+      "-DPUREPAD_SOURCE_POLICY_VERIFIER=${CMAKE_CURRENT_SOURCE_DIR}/cmake/VerifySourcePolicy.cmake"
+      -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/source_policy_contract.cmake")
   add_test(NAME purepad-install-contract
     CONFIGURATIONS Release
     COMMAND "${CMAKE_COMMAND}"
@@ -100,5 +112,6 @@ if(BUILD_TESTING)
       "-DPUREPAD_SOURCE_DIR=${CMAKE_SOURCE_DIR}"
       "-DPUREPAD_CONFIGURATION=$<CONFIG>"
       "-DPUREPAD_CMAKE_MT=${CMAKE_MT}"
+      "-DPUREPAD_PE_FIXTURE_MUTATOR=$<TARGET_FILE:purepad-pe-fixture-mutator>"
       -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/install_contract.cmake")
 endif()

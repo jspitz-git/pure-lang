@@ -14,6 +14,62 @@ endforeach()
 if(NOT EXISTS "${PUREPAD_EXECUTABLE}")
   message(FATAL_ERROR "PurePad executable does not exist: ${PUREPAD_EXECUTABLE}")
 endif()
+
+function(purepad_read_hex offset byte_count output)
+  file(READ "${PUREPAD_EXECUTABLE}" value
+    OFFSET "${offset}" LIMIT "${byte_count}" HEX)
+  string(TOLOWER "${value}" value)
+  math(EXPR expected_length "${byte_count} * 2")
+  string(LENGTH "${value}" actual_length)
+  if(NOT actual_length EQUAL expected_length)
+    message(FATAL_ERROR
+      "PurePad executable is truncated at byte offset ${offset}")
+  endif()
+  set(${output} "${value}" PARENT_SCOPE)
+endfunction()
+
+function(purepad_little_endian_u32 bytes output)
+  string(SUBSTRING "${bytes}" 0 2 byte_0)
+  string(SUBSTRING "${bytes}" 2 2 byte_1)
+  string(SUBSTRING "${bytes}" 4 2 byte_2)
+  string(SUBSTRING "${bytes}" 6 2 byte_3)
+  math(EXPR value "0x${byte_3}${byte_2}${byte_1}${byte_0}")
+  set(${output} "${value}" PARENT_SCOPE)
+endfunction()
+
+purepad_read_hex(0 2 purepad_dos_signature)
+if(NOT purepad_dos_signature STREQUAL "4d5a")
+  message(FATAL_ERROR "PurePad executable must begin with an MZ header")
+endif()
+purepad_read_hex(60 4 purepad_pe_offset_bytes)
+purepad_little_endian_u32("${purepad_pe_offset_bytes}" purepad_pe_offset)
+purepad_read_hex("${purepad_pe_offset}" 4 purepad_pe_signature)
+if(NOT purepad_pe_signature STREQUAL "50450000")
+  message(FATAL_ERROR "PurePad executable has an invalid PE signature")
+endif()
+
+math(EXPR purepad_machine_offset "${purepad_pe_offset} + 4")
+purepad_read_hex("${purepad_machine_offset}" 2 purepad_machine_bytes)
+if(NOT purepad_machine_bytes STREQUAL "6486")
+  message(FATAL_ERROR
+    "PurePad PE machine AMD64 (0x8664) is required; found little-endian bytes "
+    "${purepad_machine_bytes}")
+endif()
+
+math(EXPR purepad_optional_header_offset "${purepad_pe_offset} + 24")
+purepad_read_hex("${purepad_optional_header_offset}" 2
+  purepad_optional_header_magic)
+if(NOT purepad_optional_header_magic STREQUAL "0b02")
+  message(FATAL_ERROR "PurePad executable must use the PE32+ optional header")
+endif()
+math(EXPR purepad_subsystem_offset "${purepad_optional_header_offset} + 68")
+purepad_read_hex("${purepad_subsystem_offset}" 2 purepad_subsystem_bytes)
+if(NOT purepad_subsystem_bytes STREQUAL "0200")
+  message(FATAL_ERROR
+    "PurePad executable must use Windows GUI subsystem (2); found "
+    "little-endian bytes ${purepad_subsystem_bytes}")
+endif()
+
 if(NOT EXISTS "${PUREPAD_CMAKE_MT}")
   message(FATAL_ERROR "CMAKE_MT does not exist: ${PUREPAD_CMAKE_MT}")
 endif()
@@ -107,6 +163,8 @@ if(NOT purepad_manifest_contents MATCHES
   message(FATAL_ERROR "PurePad manifest must declare longPathAware=true")
 endif()
 
+message(STATUS
+  "PurePad PE header: AMD64 (0x8664), Windows GUI subsystem (2)")
 message(STATUS
   "PurePad Microsoft runtime dependencies for TODO-49: "
   "${purepad_declared_runtime_names}")

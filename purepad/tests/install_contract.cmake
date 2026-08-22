@@ -5,7 +5,8 @@ foreach(required_variable IN ITEMS
     PUREPAD_BUILD_DIR
     PUREPAD_SOURCE_DIR
     PUREPAD_CONFIGURATION
-    PUREPAD_CMAKE_MT)
+    PUREPAD_CMAKE_MT
+    PUREPAD_PE_FIXTURE_MUTATOR)
   if(NOT DEFINED ${required_variable} OR "${${required_variable}}" STREQUAL "")
     message(FATAL_ERROR "${required_variable} is required")
   endif()
@@ -65,6 +66,60 @@ if(purepad_runtime_report_index EQUAL -1)
     "PurePad verifier did not report the normalized Microsoft runtime "
     "contract: ${purepad_expected_runtime_report}")
 endif()
+
+set(purepad_fixture_runtime_dependencies
+  "C:/Windows/System32/mfc140u.dll"
+  "C:/Windows/System32/msvcp140.dll"
+  "C:/Windows/System32/vcruntime140.dll"
+  "C:/Windows/System32/vcruntime140_1.dll")
+
+function(purepad_expect_pe_rejection executable expected_message label)
+  execute_process(
+    COMMAND "${PUREPAD_CMAKE_COMMAND}"
+      "-DPUREPAD_EXECUTABLE=${executable}"
+      "-DPUREPAD_SOURCE_DIR=${PUREPAD_SOURCE_DIR}"
+      "-DPUREPAD_BUILD_DIR=${PUREPAD_BUILD_DIR}"
+      "-DPUREPAD_CMAKE_MT=${PUREPAD_CMAKE_MT}"
+      "-DPUREPAD_MANIFEST=${purepad_manifest}"
+      "-DPUREPAD_TEST_RESOLVED_DEPENDENCIES=${purepad_fixture_runtime_dependencies}"
+      "-DPUREPAD_TEST_UNRESOLVED_DEPENDENCIES="
+      -P "${PUREPAD_SOURCE_DIR}/cmake/VerifyInstalledPurePad.cmake"
+    RESULT_VARIABLE verify_result
+    OUTPUT_VARIABLE verify_stdout
+    ERROR_VARIABLE verify_stderr)
+  set(verify_output "${verify_stdout}${verify_stderr}")
+  if(verify_result EQUAL 0)
+    message(FATAL_ERROR
+      "PurePad verifier accepted ${label}")
+  endif()
+  if(NOT verify_output MATCHES "${expected_message}")
+    message(FATAL_ERROR
+      "PurePad verifier rejected ${label} for the wrong reason:\n"
+      "${verify_output}")
+  endif()
+endfunction()
+
+set(purepad_wrong_machine "${purepad_install_prefix}/wrong-machine.exe")
+execute_process(
+  COMMAND "${PUREPAD_PE_FIXTURE_MUTATOR}" "${purepad_executable}"
+    "${purepad_wrong_machine}" --machine-i386
+  RESULT_VARIABLE purepad_machine_mutation_result)
+if(NOT purepad_machine_mutation_result EQUAL 0)
+  message(FATAL_ERROR "Could not create wrong-machine PurePad fixture")
+endif()
+purepad_expect_pe_rejection("${purepad_wrong_machine}" "machine AMD64"
+  "an I386 executable")
+
+set(purepad_wrong_subsystem "${purepad_install_prefix}/wrong-subsystem.exe")
+execute_process(
+  COMMAND "${PUREPAD_PE_FIXTURE_MUTATOR}" "${purepad_executable}"
+    "${purepad_wrong_subsystem}" --subsystem-console
+  RESULT_VARIABLE purepad_subsystem_mutation_result)
+if(NOT purepad_subsystem_mutation_result EQUAL 0)
+  message(FATAL_ERROR "Could not create wrong-subsystem PurePad fixture")
+endif()
+purepad_expect_pe_rejection("${purepad_wrong_subsystem}"
+  "Windows GUI subsystem" "a Console-subsystem executable")
 
 set(purepad_unresolved_source_leak
   "${PUREPAD_SOURCE_DIR}/fixtures/../unresolved-leak.dll")
