@@ -271,50 +271,100 @@ jobs:
       - name: Check out source
         uses: actions/checkout@v4
 
-      - name: Validate the Visual Studio MFC component
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
-          & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.ATLMFC
-          if ($LASTEXITCODE -ne 0) { throw 'Visual Studio MFC component is unavailable' }
-
-      - name: Copy PurePad source to a path containing spaces and configure it
+      - name: Validate, configure, build, and test PurePad
         run: |
           $ErrorActionPreference = 'Stop'
           $source = Join-Path $env:RUNNER_TEMP 'PurePad source with spaces'
-          Copy-Item "$env:GITHUB_WORKSPACE\purepad" $source -Recurse
-          New-Item -ItemType Directory -Path "$source\logs" -Force | Out-Null
-          cmake -S $source -B "$source\build" -G 'Visual Studio 17 2022' -A x64
-          if ($LASTEXITCODE -ne 0) { throw 'PurePad configure failed' }
+          $logs = Join-Path $env:RUNNER_TEMP 'PurePad lifecycle logs'
+          $script:failed = $false
+          $script:mfcReady = $false
+          $script:configured = $false
+          $buildSucceeded = @{ Release = $false; Debug = $false }
 
-      - name: Build and test PurePad Release
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $source = Join-Path $env:RUNNER_TEMP 'PurePad source with spaces'
-          cmake --build "$source\build" --config Release --parallel 4
-          if ($LASTEXITCODE -ne 0) { throw 'PurePad Release build failed' }
-          ctest --test-dir "$source\build" -C Release --output-on-failure 2>&1 |
-            Tee-Object -FilePath "$source\logs\ctest-release.log"
-          $ctestExit = $LASTEXITCODE
-          if ($ctestExit -ne 0) { exit $ctestExit }
+          New-Item -ItemType Directory -Path $logs -Force | Out-Null
+          foreach ($configuration in @('Release', 'Debug')) {
+            Set-Content -LiteralPath (Join-Path $logs "ctest-$($configuration.ToLowerInvariant()).log") `
+              -Value "CTest $configuration has not run yet."
+          }
 
-      - name: Build and test PurePad Debug
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $source = Join-Path $env:RUNNER_TEMP 'PurePad source with spaces'
-          cmake --build "$source\build" --config Debug --parallel 4
-          if ($LASTEXITCODE -ne 0) { throw 'PurePad Debug build failed' }
-          ctest --test-dir "$source\build" -C Debug --output-on-failure 2>&1 |
-            Tee-Object -FilePath "$source\logs\ctest-debug.log"
-          $ctestExit = $LASTEXITCODE
-          if ($ctestExit -ne 0) { exit $ctestExit }
+          function Invoke-PurePadPhase {
+            param([string] $Name, [scriptblock] $Action)
+            try {
+              & $Action
+            } catch {
+              $script:failed = $true
+              Write-Host "::error title=PurePad $Name failed::$($_.Exception.Message)"
+            }
+          }
+
+          Invoke-PurePadPhase 'MFC validation' {
+            $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+            if (-not (Test-Path -LiteralPath $vswhere -PathType Leaf)) {
+              throw "vswhere is unavailable at $vswhere"
+            }
+            $installationPath = & $vswhere -latest -products * `
+              -requires Microsoft.VisualStudio.Component.VC.ATLMFC `
+              -property installationPath
+            $vswhereExit = $LASTEXITCODE
+            if ($vswhereExit -ne 0) {
+              throw "vswhere MFC query failed with exit code $vswhereExit"
+            }
+            $installationPath = @($installationPath | Where-Object {
+              -not [string]::IsNullOrWhiteSpace([string] $_)
+            } | Select-Object -First 1)
+            if ($installationPath.Count -eq 0) {
+              throw 'Visual Studio MFC component is unavailable'
+            }
+            Write-Host "Visual Studio MFC installation: $installationPath"
+            $script:mfcReady = $true
+          }
+
+          if ($script:mfcReady) {
+            Invoke-PurePadPhase 'copy and configure' {
+              Copy-Item "$env:GITHUB_WORKSPACE\purepad" $source -Recurse
+              cmake -S $source -B "$source\build" -G 'Visual Studio 17 2022' -A x64
+              if ($LASTEXITCODE -ne 0) { throw 'PurePad configure failed' }
+              $script:configured = $true
+            }
+          }
+
+          foreach ($configuration in @('Release', 'Debug')) {
+            $ctestLog = Join-Path $logs "ctest-$($configuration.ToLowerInvariant()).log"
+            if ($script:configured) {
+              Invoke-PurePadPhase "${configuration} build" {
+                cmake --build "$source\build" --config $configuration --parallel 4
+                if ($LASTEXITCODE -ne 0) { throw "PurePad $configuration build failed" }
+                $buildSucceeded[$configuration] = $true
+              }
+            }
+            if ($buildSucceeded[$configuration]) {
+              Invoke-PurePadPhase "${configuration} CTest" {
+                ctest --test-dir "$source\build" -C $configuration --output-on-failure 2>&1 |
+                  Tee-Object -FilePath $ctestLog
+                $ctestExit = $LASTEXITCODE
+                if ($ctestExit -ne 0) {
+                  throw "PurePad $configuration CTest failed with exit code $ctestExit"
+                }
+              }
+            } elseif (-not $script:configured) {
+              Add-Content -LiteralPath $ctestLog `
+                -Value "CTest $configuration was not run because configuration did not succeed."
+            } else {
+              Add-Content -LiteralPath $ctestLog `
+                -Value "CTest $configuration was not run because its build did not succeed."
+            }
+          }
+
+          if ($script:failed) {
+            throw 'One or more Windows PurePad lifecycle phases failed; see the CTest logs artifact.'
+          }
 
       - name: Upload PurePad CTest logs
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: windows-purepad-lifecycle-ctest-logs
-          path: ${{ runner.temp }}/PurePad source with spaces/logs
+          path: ${{ runner.temp }}/PurePad lifecycle logs
           if-no-files-found: warn
 
   windows-pure-fastcgi:
