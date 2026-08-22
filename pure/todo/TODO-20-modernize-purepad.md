@@ -108,24 +108,31 @@ with the portable Pure runtime.
     second to 0 ms; Release and Debug x64 builds pass without warnings.
 - 2026-08-22: The lifecycle-hardening audit remediation passed; the historical
   `Status: Closed on 2026-07-26` above remains the original completion record.
-  - A fresh Visual Studio 2022 x64 configure was run from MSYS2 CLANG64 with
-    `PATH=/usr/bin:/clang64/bin`.  The clean four-worker Release build completed
-    in 32 seconds and `ctest --test-dir build/vs2022-x64 -C Release
-    --output-on-failure` passed 2/2 tests in 35.99 seconds: the process-session
-    lifecycle test and the intentionally Release-only install-contract test.
-  - The clean four-worker Debug build completed in 31 seconds and
+  - The Visual Studio 2022 x64 build tree was configured/reconfigured from
+    MSYS2 CLANG64 with `PATH=/usr/bin:/clang64/bin`, followed by fresh
+    four-worker `--clean-first` builds.  Release completed in 31.27 seconds and
+    `ctest --test-dir build/vs2022-x64 -C Release --output-on-failure` passed
+    4/4 tests in 37.39 seconds: the process-session lifecycle test, the live
+    source-policy gate, its forbidden-source fixture contract, and the
+    intentionally Release-only install-contract test.
+  - The fresh four-worker Debug `--clean-first` build completed in 30.00
+    seconds and
     `ctest --test-dir build/vs2022-x64 -C Debug --output-on-failure` passed its
-    required lifecycle test, 1/1, in 5.90 seconds.  Debug omits the
-    install-contract test by design; lifecycle validation remains required in
-    both configurations.
+    lifecycle and source-policy tests, 3/3, in 6.33 seconds.  Debug omits the
+    install-contract test by design; lifecycle and source-policy validation
+    remain required in both configurations.
   - The Release process-session lifecycle test then passed 100 consecutive
-    repetitions with `--repeat until-fail:100` in 606.08 seconds.  The immediate
+    repetitions with `--repeat until-fail:100` in 603.87 seconds.  The immediate
     `Get-Process purepad-process-child` residue gate found zero surviving child
     processes.
-  - The static gate found no `TerminateThread` or `RegisterShellFileTypes` use
-    in PurePad C++ sources or headers, and `git diff --check` passed.  Process
-    ownership is now represented by the tested `ProcessSession` lifecycle;
-    PurePad no longer terminates worker threads asynchronously.
+  - CTest now enforces the source-policy gate and its behavioral negative
+    fixtures; the independent static scan found no forbidden thread-termination
+    or startup-association API use in PurePad C++ sources or headers, and
+    `git diff --check` passed.  The installed-executable verifier also parses
+    the PE header and rejects non-AMD64 machines and non-GUI subsystems through
+    mutated negative fixtures.  Process ownership is represented by the tested
+    `ProcessSession` lifecycle; PurePad does not terminate worker threads
+    asynchronously.
   - `.pure` file-association creation and removal is owned by TODO-49's
     installer, not by PurePad startup.  The same installer owns the deployment
     handoff for the matching Microsoft Visual C++ Redistributable and shared
