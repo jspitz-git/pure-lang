@@ -60,6 +60,19 @@ target_link_options(purepad PRIVATE
   "/MANIFESTINPUT:${CMAKE_CURRENT_SOURCE_DIR}/purepad.manifest"
 )
 
+if(CMAKE_MT MATCHES "-NOTFOUND$")
+  find_program(CMAKE_MT NAMES mt mt.exe
+    HINTS
+      "[HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows Kits\\Installed Roots;KitsRoot10]/bin/${CMAKE_VS_WINDOWS_TARGET_PLATFORM_VERSION}/x64"
+      "$ENV{WindowsSdkDir}/bin/${CMAKE_VS_WINDOWS_TARGET_PLATFORM_VERSION}/x64")
+endif()
+if(NOT CMAKE_MT OR CMAKE_MT MATCHES "-NOTFOUND$")
+  message(FATAL_ERROR "The Windows SDK manifest tool (mt.exe) is required.")
+endif()
+
+install(TARGETS purepad RUNTIME DESTINATION bin COMPONENT PurePad)
+install(FILES WINDOWS.md DESTINATION share/doc/purepad COMPONENT PurePad)
+
 include(CTest)
 if(BUILD_TESTING)
   add_executable(purepad-process-child tests/process_child.cpp)
@@ -79,4 +92,12 @@ if(BUILD_TESTING)
   add_test(NAME purepad-process-session
     COMMAND purepad-process-session-tests
       "$<TARGET_FILE:purepad-process-child>")
+  add_test(NAME purepad-install-contract
+    COMMAND "${CMAKE_COMMAND}"
+      "-DPUREPAD_CMAKE_COMMAND=${CMAKE_COMMAND}"
+      "-DPUREPAD_BUILD_DIR=${CMAKE_BINARY_DIR}"
+      "-DPUREPAD_SOURCE_DIR=${CMAKE_SOURCE_DIR}"
+      "-DPUREPAD_CONFIGURATION=$<CONFIG>"
+      "-DPUREPAD_CMAKE_MT=${CMAKE_MT}"
+      -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/install_contract.cmake")
 endif()

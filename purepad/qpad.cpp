@@ -223,7 +223,6 @@ BOOL CQpadApp::InitInstance()
 
 	// Enable DDE Execute open
 	EnableShellOpen();
-	RegisterShellFileTypes(TRUE);
 
 	// Parse command line for standard shell commands, DDE, file open
 	CCommandLineInfo cmdInfo;
