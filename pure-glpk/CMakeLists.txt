@@ -20,6 +20,7 @@ find_library(
   NO_DEFAULT_PATH
   REQUIRED
 )
+get_filename_component(GLPK_RUNTIME_DIR "${GLPK_LIBRARY}" DIRECTORY)
 
 add_library(glpk MODULE glpk.c)
 target_compile_features(glpk PRIVATE c_std_11)
@@ -64,11 +65,18 @@ if(WIN32)
       REQUIRED
     )
   endforeach()
-  find_program(LLVM_READOBJ NAMES llvm-readobj REQUIRED)
+  get_filename_component(GLPK_RUNTIME_DIR "${GLPK_RUNTIME_DLL}" DIRECTORY)
+  set(LLVM_READOBJ_EXECUTABLE "" CACHE FILEPATH
+    "llvm-readobj used for Windows PE validation")
+  if(NOT LLVM_READOBJ_EXECUTABLE OR
+      NOT EXISTS "${LLVM_READOBJ_EXECUTABLE}")
+    message(FATAL_ERROR
+      "Windows validation requires an existing LLVM_READOBJ_EXECUTABLE")
+  endif()
   add_custom_target(
     verify-windows-dependencies
     COMMAND "${CMAKE_COMMAND}"
-      "-DLLVM_READOBJ=${LLVM_READOBJ}"
+      "-DLLVM_READOBJ=${LLVM_READOBJ_EXECUTABLE}"
       "-DGLPK_MODULE=$<TARGET_FILE:glpk>"
       "-DGLPK_DLL=${GLPK_RUNTIME_DLL}"
       "-DCOLAMD_DLL=${COLAMD_RUNTIME_DLL}"
@@ -87,20 +95,29 @@ endif()
 include(CTest)
 if(BUILD_TESTING)
   pkg_get_variable(PURE_PREFIX pure prefix)
-  find_program(
-    PURE_EXECUTABLE
-    NAMES pure
-    HINTS "${PURE_PREFIX}/bin"
-    NO_DEFAULT_PATH
-    REQUIRED
-  )
+  if(WIN32)
+    set(PURE_EXECUTABLE "" CACHE FILEPATH "Installed Pure interpreter for tests")
+    if(NOT PURE_EXECUTABLE OR NOT EXISTS "${PURE_EXECUTABLE}")
+      message(FATAL_ERROR "BUILD_TESTING requires an existing PURE_EXECUTABLE")
+    endif()
+  else()
+    find_program(
+      PURE_EXECUTABLE
+      NAMES pure
+      HINTS "${PURE_PREFIX}/bin"
+      NO_DEFAULT_PATH
+      REQUIRED
+    )
+  endif()
   add_test(
     NAME pure-glpk-load
     COMMAND "${CMAKE_COMMAND}"
       "-DPURE_EXECUTABLE=${PURE_EXECUTABLE}"
-      "-DPURE_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
+      "-DPACKAGE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
       "-DMODULE_DIR=$<TARGET_FILE_DIR:glpk>"
-      -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunLoadTest.cmake"
+      "-DRUNTIME_BIN_DIR=${GLPK_RUNTIME_DIR}"
+      "-DTEST_SCRIPT=${CMAKE_CURRENT_SOURCE_DIR}/tests/load.pure"
+      -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunPureTest.cmake"
   )
   set_tests_properties(
     pure-glpk-load
@@ -113,10 +130,11 @@ if(BUILD_TESTING)
     NAME pure-glpk-smoke
     COMMAND "${CMAKE_COMMAND}"
       "-DPURE_EXECUTABLE=${PURE_EXECUTABLE}"
-      "-DPURE_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
+      "-DPACKAGE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
       "-DMODULE_DIR=$<TARGET_FILE_DIR:glpk>"
+      "-DRUNTIME_BIN_DIR=${GLPK_RUNTIME_DIR}"
       "-DTEST_SCRIPT=${CMAKE_CURRENT_SOURCE_DIR}/tests/smoke.pure"
-      -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunSmokeTest.cmake"
+      -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunPureTest.cmake"
   )
   set_tests_properties(
     pure-glpk-smoke
@@ -125,5 +143,33 @@ if(BUILD_TESTING)
       REQUIRED_FILES "$<TARGET_FILE:glpk>;${CMAKE_CURRENT_SOURCE_DIR}/tests/smoke.pure"
       TIMEOUT 60
   )
+  if(WIN32)
+    set(contract_root "${CMAKE_CURRENT_BINARY_DIR}/pure-glpk contract")
+    add_test(
+      NAME pure-glpk-runner-contract
+      COMMAND "${CMAKE_COMMAND}"
+        "-DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
+        "-DTEST_ROOT=${contract_root}/runner"
+        -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/runner_contract.cmake"
+    )
+    add_test(
+      NAME pure-glpk-configure-contract
+      COMMAND "${CMAKE_COMMAND}"
+        "-DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
+        "-DTEST_ROOT=${contract_root}/configure"
+        "-DGENERATOR=${CMAKE_GENERATOR}"
+        "-DMAKE_PROGRAM=${CMAKE_MAKE_PROGRAM}"
+        "-DC_COMPILER=${CMAKE_C_COMPILER}"
+        "-DPKG_CONFIG_EXECUTABLE=${PKG_CONFIG_EXECUTABLE}"
+        "-DPKG_CONFIG_PATH=$ENV{PKG_CONFIG_PATH}"
+        "-DPURE_EXECUTABLE=${PURE_EXECUTABLE}"
+        "-DLLVM_READOBJ_EXECUTABLE=${LLVM_READOBJ_EXECUTABLE}"
+        -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/configure_contract.cmake"
+    )
+    set_tests_properties(
+      pure-glpk-runner-contract pure-glpk-configure-contract
+      PROPERTIES LABELS "glpk;contract" TIMEOUT 60
+    )
+  endif()
 endif()
 include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/Install.cmake")
