@@ -1723,11 +1723,12 @@ static void mip_callback(glp_tree *tree, void *info)
   }
   treeobj->magic = TREE_MAGIC;
   treeobj->tree = tree;
-  treeptr = pure_pointer(treeobj);
+  treeptr = pure_new(pure_pointer(treeobj));
   res = pure_app(pure_app(pure_symbol(pure_sym("glp::mip_cb")), treeptr),
                  pure_pointer(info));
   pure_freenew(res);
   treeptr->data.p = NULL;
+  pure_free(treeptr);
   free(treeobj);
   return;
 }

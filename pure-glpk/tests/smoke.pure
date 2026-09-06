@@ -11,8 +11,8 @@ errorp value = index (str value) "glp::error" >= 0;
 
 using glpk;
 
-let callback_invocations, callback_info_seen, retained_tree =
-  ref 0, ref false, ref NULL;
+let callback_invocations, callback_info_seen, retained_tree,
+    retain_callback_tree = ref 0, ref false, ref NULL, ref true;
 let callback_info = ref ();
 
 namespace glp;
@@ -20,7 +20,9 @@ mip_cb tree info = () when
   put smoke::callback_invocations (get smoke::callback_invocations+1);
   put smoke::callback_info_seen (info === smoke::callback_info);
   glp::ios_reason tree;
-  put smoke::retained_tree tree;
+  if get smoke::retain_callback_tree
+    then put smoke::retained_tree tree
+    else ();
 end;
 namespace smoke;
 
@@ -96,3 +98,17 @@ smoke::check "MIP integer y"
   (smoke::close (glp::mip_col_val mip 2)
                 (round (glp::mip_col_val mip 2)) 1.0e-9);
 smoke::check "MIP cleanup" (glp::delete_prob mip === ());
+
+let no_retain_callbacks = get callback_invocations;
+put retain_callback_tree false;
+let no_retain_mip = smoke::make_mip;
+smoke::check "MIP without retained callback tree relaxation"
+  (glp::simplex no_retain_mip [(glp::msg_lev,glp::msg_off)] === glp::ok);
+smoke::check "MIP without retained callback tree solver return"
+  (glp::intopt no_retain_mip [(glp::msg_lev,glp::msg_off),
+                              (glp::cb_func,glp::on),
+                              (glp::cb_info,callback_info)] === glp::ok);
+smoke::check "MIP callback ran without retaining tree"
+  (get callback_invocations > no_retain_callbacks);
+smoke::check "MIP without retained callback tree cleanup"
+  (glp::delete_prob no_retain_mip === ());
