@@ -42,3 +42,13 @@ Build, validate, and package the complete `pure-stllib` collection for Windows.
 - 2026-07-28: Installed the complete 42-file manifest and ran both installed
   suites from `C:\Windows` with an isolated path and no MSYS2 dependency.
 - 2026-07-28: Completed.
+- 2026-09-06: Audited the package. The original runner accepted parser
+  diagnostics, omitted the numeric suite, and did not preserve the install and
+  clean-runtime checks in CI.
+- 2026-09-06: Added negative runner/configuration contracts, enabled the
+  numeric suite, required explicit Windows tools, and enabled
+  `-Wall -Wextra -Wpedantic -Werror`.
+- 2026-09-06: Added exact AMD64 PE import validation and an exact 42-file
+  staged-install contract which runs both installed suites with poisoned
+  `PURELIB` and a sanitized runtime path.
+- 2026-09-06: Added the complete pure-stllib contract suite to Windows CI.

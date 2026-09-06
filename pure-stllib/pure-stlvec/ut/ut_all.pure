@@ -25,6 +25,7 @@ using ut_sort;
 using ut_merge;
 using ut_heap;
 using ut_minmax;
+using ut_numeric;
 
 test_all = ok when
   puts "--- START STLVEC UNIT TESTS ---";
@@ -37,6 +38,7 @@ test_all = ok when
   ok = test_merge && ok;
   ok = test_heap && ok;
   ok = test_minmax && ok;
+  ok = test_numeric && ok;
   if ~ok then puts "--- FAILED STLVEC UNIT TESTS ---" $$ exit 1 
   else puts "\n--- PASSED STLVEC UNIT TESTS ---" $$ exit 0;
 end;

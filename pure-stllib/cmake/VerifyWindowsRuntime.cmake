@@ -20,9 +20,9 @@ set(modules
   "${STLHMAP_DLL}"
 )
 
-function(read_imports module output_var)
+function(read_pe module output_var)
   execute_process(
-    COMMAND "${LLVM_READOBJ}" --coff-imports "${module}"
+    COMMAND "${LLVM_READOBJ}" --file-headers --coff-imports "${module}"
     RESULT_VARIABLE result
     OUTPUT_VARIABLE output
     ERROR_VARIABLE error
@@ -35,10 +35,28 @@ function(read_imports module output_var)
   set(${output_var} "${output}" PARENT_SCOPE)
 endfunction()
 
-function(require_import module import_name)
-  read_imports("${module}" imports)
-  if(NOT imports MATCHES "Name: ${import_name}([\r\n]|$)")
-    message(FATAL_ERROR "${module} does not import ${import_name}")
+function(require_exact_imports module)
+  read_pe("${module}" pe)
+  if(NOT pe MATCHES "Format: COFF-x86-64" OR
+      NOT pe MATCHES "Machine: IMAGE_FILE_MACHINE_AMD64")
+    message(FATAL_ERROR "${module} is not an AMD64 PE image")
+  endif()
+  string(REGEX MATCHALL "Name: [^\r\n]+" name_lines "${pe}")
+  set(imports)
+  foreach(line IN LISTS name_lines)
+    string(REPLACE "Name: " "" name "${line}")
+    if(name MATCHES "\\.dll$")
+      string(TOLOWER "${name}" name)
+      list(APPEND imports "${name}")
+    endif()
+  endforeach()
+  set(expected ${ARGN})
+  list(REMOVE_DUPLICATES imports)
+  list(SORT imports)
+  list(SORT expected)
+  if(NOT imports STREQUAL expected)
+    message(FATAL_ERROR
+      "${module} imports differ. Expected '${expected}', got '${imports}'")
   endif()
 endfunction()
 
@@ -46,24 +64,29 @@ foreach(module IN LISTS modules)
   if(NOT EXISTS "${module}")
     message(FATAL_ERROR "Module does not exist: ${module}")
   endif()
-  read_imports("${module}" imports)
-  if(NOT imports MATCHES "Name: libc\\+\\+\\.dll([\r\n]|$)")
-    message(FATAL_ERROR "${module} does not use the shared libc++.dll runtime")
-  endif()
-  if(imports MATCHES "Name: (libstdc\\+\\+|libgcc[^.]*)\\.dll")
-    message(FATAL_ERROR "${module} mixes a GNU C++ runtime into the CLANG64 package")
-  endif()
-  if(NOT imports MATCHES "Name: libpure\\.dll([\r\n]|$)")
-    message(FATAL_ERROR "${module} does not import libpure.dll")
-  endif()
 endforeach()
 
-require_import("${STLVEC_DLL}" "stlbase\\.dll")
-require_import("${STLALGORITHM_DLL}" "stlbase\\.dll")
-require_import("${STLALGORITHM_DLL}" "stlvec\\.dll")
-require_import("${STLMAP_DLL}" "stlbase\\.dll")
-require_import("${STLMMAP_DLL}" "stlbase\\.dll")
-require_import("${STLHMAP_DLL}" "stlbase\\.dll")
+set(common_imports
+  api-ms-win-crt-private-l1-1-0.dll
+  api-ms-win-crt-runtime-l1-1-0.dll
+  api-ms-win-crt-stdio-l1-1-0.dll
+  api-ms-win-crt-string-l1-1-0.dll
+  kernel32.dll
+  libc++.dll
+  libpure.dll
+)
+require_exact_imports("${STLBASE_DLL}" ${common_imports}
+  api-ms-win-crt-heap-l1-1-0.dll)
+require_exact_imports("${STLVEC_DLL}" ${common_imports}
+  api-ms-win-crt-heap-l1-1-0.dll stlbase.dll)
+require_exact_imports("${STLALGORITHM_DLL}" ${common_imports}
+  api-ms-win-crt-utility-l1-1-0.dll stlbase.dll stlvec.dll)
+require_exact_imports("${STLMAP_DLL}" ${common_imports}
+  api-ms-win-crt-heap-l1-1-0.dll stlbase.dll)
+require_exact_imports("${STLMMAP_DLL}" ${common_imports}
+  api-ms-win-crt-heap-l1-1-0.dll stlbase.dll)
+require_exact_imports("${STLHMAP_DLL}" ${common_imports}
+  api-ms-win-crt-heap-l1-1-0.dll api-ms-win-crt-math-l1-1-0.dll stlbase.dll)
 
 message(STATUS
-  "Verified pure-stllib PE dependencies: one libc++ runtime and expected module links")
+  "Verified exact pure-stllib AMD64 PE import contracts")

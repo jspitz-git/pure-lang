@@ -19,6 +19,7 @@ on:
       - "pure-sockets/**"
       - "pure-sql3/**"
       - "pure-stldict/**"
+      - "pure-stllib/**"
       - "purepad/**"
       - "pure/todo/TODO-45-windows-pure-bonjour.md"
       - "pure/todo/TODO-20-modernize-purepad.md"
@@ -29,6 +30,7 @@ on:
       - "pure/todo/TODO-25-windows-pure-sockets.md"
       - "pure/todo/TODO-26-windows-pure-sql3.md"
       - "pure/todo/TODO-27-windows-pure-stldict.md"
+      - "pure/todo/TODO-28-windows-pure-stllib.md"
       - "docs/superpowers/specs/2026-08-18-windows-pure-bonjour-design.md"
       - "docs/superpowers/specs/2026-08-22-purepad-lifecycle-hardening-design.md"
       - "docs/superpowers/plans/2026-08-18-windows-pure-bonjour.md"
@@ -50,6 +52,7 @@ on:
       - "pure-sockets/**"
       - "pure-sql3/**"
       - "pure-stldict/**"
+      - "pure-stllib/**"
       - "purepad/**"
       - "pure/todo/TODO-45-windows-pure-bonjour.md"
       - "pure/todo/TODO-20-modernize-purepad.md"
@@ -60,6 +63,7 @@ on:
       - "pure/todo/TODO-25-windows-pure-sockets.md"
       - "pure/todo/TODO-26-windows-pure-sql3.md"
       - "pure/todo/TODO-27-windows-pure-stldict.md"
+      - "pure/todo/TODO-28-windows-pure-stllib.md"
       - "docs/superpowers/specs/2026-08-18-windows-pure-bonjour-design.md"
       - "docs/superpowers/specs/2026-08-22-purepad-lifecycle-hardening-design.md"
       - "docs/superpowers/plans/2026-08-18-windows-pure-bonjour.md"
@@ -402,6 +406,34 @@ jobs:
             --output-on-failure --no-tests=error `
             2>&1 | Tee-Object -FilePath "$env:LOG_DIR/ctest-pure-stldict.log"
           if ($LASTEXITCODE -ne 0) { throw 'pure-stldict contract failed' }
+
+      - name: Validate the pure-stllib tests, install, and PE contracts
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $prefix = [IO.Path]::GetFullPath($env:INSTALL_PREFIX)
+          $stllibBuild = 'build/windows-pure-stllib-contract'
+          $env:Path = "C:/msys64/clang64/bin;C:/msys64/usr/bin;$env:Path"
+          $env:PKG_CONFIG_PATH = "$prefix/lib/pkgconfig;C:/msys64/clang64/lib/pkgconfig"
+          & $env:CMAKE_EXE -S ../pure-stllib -B $stllibBuild -G Ninja `
+            -DCMAKE_BUILD_TYPE=Release `
+            -DCMAKE_CXX_COMPILER=C:/msys64/clang64/bin/clang++.exe `
+            -DPKG_CONFIG_EXECUTABLE=C:/msys64/clang64/bin/pkgconf.exe `
+            -DBUILD_TESTING=ON `
+            "-DPURE_EXECUTABLE=$prefix/bin/pure.exe" `
+            -DLLVM_READOBJ_EXECUTABLE=C:/msys64/clang64/bin/llvm-readobj.exe `
+            2>&1 | Tee-Object -FilePath "$env:LOG_DIR/configure-pure-stllib.log"
+          if ($LASTEXITCODE -ne 0) { throw 'pure-stllib configure failed' }
+          & $env:CMAKE_EXE --build $stllibBuild --parallel 4 `
+            2>&1 | Tee-Object -FilePath "$env:LOG_DIR/build-pure-stllib.log"
+          if ($LASTEXITCODE -ne 0) { throw 'pure-stllib build failed' }
+          & $env:CMAKE_EXE --build $stllibBuild --target verify-windows-runtime `
+            --parallel 4 `
+            2>&1 | Tee-Object -FilePath "$env:LOG_DIR/pe-pure-stllib.log"
+          if ($LASTEXITCODE -ne 0) { throw 'pure-stllib PE contract failed' }
+          & $env:CTEST_EXE --test-dir $stllibBuild -L stllib `
+            --verbose --no-tests=error `
+            2>&1 | Tee-Object -FilePath "$env:LOG_DIR/ctest-pure-stllib.log"
+          if ($LASTEXITCODE -ne 0) { throw 'pure-stllib contract failed' }
 
       - name: Configure, build, and test Debug preset
         run: |
