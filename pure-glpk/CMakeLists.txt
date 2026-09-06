@@ -181,6 +181,9 @@ if(BUILD_TESTING AND WIN32)
     NAME pure-glpk-runtime-verifier-contract
     COMMAND "${CMAKE_COMMAND}"
       "-DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
+      "-DBINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}"
+      "-DCONTRACT_ROOT=${contract_root}"
+      "-DPORTABLE_PURE_PREFIX=${PURE_PREFIX}"
       "-DTEST_ROOT=${contract_root}/runtime verifier"
       -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/runtime_verifier_contract.cmake"
   )
@@ -189,6 +192,7 @@ if(BUILD_TESTING AND WIN32)
     COMMAND "${CMAKE_COMMAND}"
       "-DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
       "-DBINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}"
+      "-DCONTRACT_ROOT=${contract_root}"
       "-DTEST_ROOT=${contract_root}/install"
       "-DPORTABLE_PURE_PREFIX=${PURE_PREFIX}"
       "-DSOURCE_RUNTIME_DIR=${GLPK_RUNTIME_DIR}"
