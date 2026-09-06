@@ -44,3 +44,14 @@ Build, validate, and package `pure-xml` with libxml2 and libxslt on Windows.
 - 2026-07-28: Installed the complete 17-file manifest and passed the installed
   smoke test from `C:\Windows` with a sanitized environment and no MSYS2 path.
 - 2026-07-28: Completed.
+- 2026-09-06: Audit fixed false-positive smoke results by rejecting Pure
+  diagnostics on stderr and matching the success marker as a complete line.
+- 2026-09-06: Removed ambient discovery from Windows validation: the installed
+  Pure interpreter, LLVM inspector, and dependency runtime directory are now
+  explicit inputs, and the smoke PATH is built without inheriting MSYS2.
+- 2026-09-06: Strengthened PE validation to require AMD64 and exact import sets
+  through libxml2, libxslt, iconv, and zlib.
+- 2026-09-06: Added CTest contracts for configuration failures, runner
+  diagnostics, the exact 17-file install, a copied standalone Pure runtime,
+  and disabled libxml2 HTTP/FTP loaders.
+- 2026-09-06: Added `pure-xml` to Windows CI path selection and validation.
