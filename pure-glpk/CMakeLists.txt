@@ -146,7 +146,8 @@ if(BUILD_TESTING)
       TIMEOUT 60
   )
   if(WIN32)
-    set(contract_root "${CMAKE_CURRENT_BINARY_DIR}/pure-glpk contract")
+    set(contract_root "${CMAKE_CURRENT_BINARY_DIR}/pure-glpk-contract")
+    find_program(PURE_GLPK_MAKE_EXECUTABLE NAMES make REQUIRED)
     add_test(
       NAME pure-glpk-runner-contract
       COMMAND "${CMAKE_COMMAND}"
@@ -168,9 +169,30 @@ if(BUILD_TESTING)
         "-DLLVM_READOBJ_EXECUTABLE=${LLVM_READOBJ_EXECUTABLE}"
         -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/configure_contract.cmake"
     )
+    add_test(
+      NAME pure-glpk-source-dist-contract
+      COMMAND "${CMAKE_COMMAND}"
+        "-DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
+        "-DBINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}"
+        "-DCONTRACT_ROOT=${contract_root}"
+        "-DTEST_ROOT=${contract_root}/source-dist"
+        "-DMAKE_EXECUTABLE=${PURE_GLPK_MAKE_EXECUTABLE}"
+        "-DGENERATOR=${CMAKE_GENERATOR}"
+        "-DMAKE_PROGRAM=${CMAKE_MAKE_PROGRAM}"
+        "-DC_COMPILER=${CMAKE_C_COMPILER}"
+        "-DPKG_CONFIG_EXECUTABLE=${PKG_CONFIG_EXECUTABLE}"
+        "-DPKG_CONFIG_PATH=$ENV{PKG_CONFIG_PATH}"
+        "-DMSYSTEM_PREFIX=$ENV{MSYSTEM_PREFIX}"
+        "-DLLVM_READOBJ_EXECUTABLE=${LLVM_READOBJ_EXECUTABLE}"
+        -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/source_dist_contract.cmake"
+    )
     set_tests_properties(
       pure-glpk-runner-contract pure-glpk-configure-contract
       PROPERTIES LABELS "glpk;contract" TIMEOUT 60
+    )
+    set_tests_properties(
+      pure-glpk-source-dist-contract
+      PROPERTIES LABELS "glpk;contract;dist" TIMEOUT 180
     )
   endif()
 endif()

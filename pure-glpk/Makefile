@@ -37,7 +37,8 @@ LIBS = $(ODBCLIB) -lglpk -lgmp -lltdl -lz
 MOD_CFLAGS  = $(PIC) $(shell pkg-config pure --cflags) $(CFLAGS) $(CPPFLAGS)
 MOD_LDFLAGS = $(shell pkg-config pure --libs) $(LDFLAGS) $(LIBS)
 
-DISTFILES = COPYING Makefile README debian/* examples/*.pure glpk.c glpk.pure
+DISTFILES = COPYING Makefile README CMakeLists.txt WINDOWS.md debian/* \
+	examples/*.pure cmake/*.cmake tests/*.pure tests/*.cmake glpk.c glpk.pure
 SEDFILES = README
 
 all: glpk$(DLL)
@@ -80,7 +81,8 @@ datesubst = sed -e "s?@version@?$(version)?g" -e "s?|today|?$(date)?g" < $(1) > 
 
 dist:
 	rm -rf $(dist)
-	mkdir $(dist) && mkdir $(dist)/debian && mkdir $(dist)/examples
+	mkdir $(dist) && mkdir $(dist)/debian && mkdir $(dist)/examples \
+		&& mkdir $(dist)/cmake && mkdir $(dist)/tests
 	for x in $(DISTFILES); do ln -sf $$PWD/$$x $(dist)/$$x; done
 	for x in $(SEDFILES); do rm -f $(dist)/$$x; $(call datesubst,$$PWD/$$x,$(dist)/$$x); done
 	rm -f $(dist).tar.gz
