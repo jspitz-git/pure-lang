@@ -175,3 +175,46 @@ if(BUILD_TESTING)
   endif()
 endif()
 include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/Install.cmake")
+
+if(BUILD_TESTING AND WIN32)
+  add_test(
+    NAME pure-glpk-runtime-verifier-contract
+    COMMAND "${CMAKE_COMMAND}"
+      "-DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
+      "-DTEST_ROOT=${contract_root}/runtime verifier"
+      -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/runtime_verifier_contract.cmake"
+  )
+  add_test(
+    NAME pure-glpk-install-contract
+    COMMAND "${CMAKE_COMMAND}"
+      "-DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
+      "-DBINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}"
+      "-DTEST_ROOT=${contract_root}/install"
+      "-DPORTABLE_PURE_PREFIX=${PURE_PREFIX}"
+      "-DSOURCE_RUNTIME_DIR=${GLPK_RUNTIME_DIR}"
+      "-DLLVM_READOBJ=${LLVM_READOBJ_EXECUTABLE}"
+      "-DGLPK_MODULE_SOURCE=$<TARGET_FILE:glpk>"
+      "-DGLPK_INTERFACE_SOURCE=${CMAKE_CURRENT_SOURCE_DIR}/glpk.pure"
+      "-DREADME_SOURCE=${CMAKE_CURRENT_BINARY_DIR}/README"
+      "-DCOPYING_SOURCE=${CMAKE_CURRENT_SOURCE_DIR}/COPYING"
+      "-DWINDOWS_SOURCE=${CMAKE_CURRENT_SOURCE_DIR}/WINDOWS.md"
+      "-DEXAMPLE_SOURCE=${CMAKE_CURRENT_SOURCE_DIR}/examples/lp.pure"
+      "-DTEST_SOURCE=${CMAKE_CURRENT_SOURCE_DIR}/tests/smoke.pure"
+      "-DGLPK_DLL_SOURCE=${GLPK_RUNTIME_DLL}"
+      "-DCOLAMD_DLL_SOURCE=${COLAMD_RUNTIME_DLL}"
+      "-DAMD_DLL_SOURCE=${AMD_RUNTIME_DLL}"
+      "-DSUITESPARSECONFIG_DLL_SOURCE=${SUITESPARSECONFIG_RUNTIME_DLL}"
+      "-DOMP_DLL_SOURCE=${OMP_RUNTIME_DLL}"
+      "-DGLPK_LICENSE_SOURCE=${GLPK_RUNTIME_LICENSE}"
+      "-DSUITESPARSE_LICENSE_SOURCE=${SUITESPARSE_RUNTIME_LICENSE}"
+      "-DLLVM_LICENSE_SOURCE=${LLVM_RUNTIME_LICENSE}"
+      -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/install_contract.cmake"
+  )
+  set_tests_properties(
+    pure-glpk-runtime-verifier-contract pure-glpk-install-contract
+    PROPERTIES
+      LABELS "glpk;contract"
+      REQUIRED_FILES "$<TARGET_FILE:glpk>"
+      TIMEOUT 300
+  )
+endif()
