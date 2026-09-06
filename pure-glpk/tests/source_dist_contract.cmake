@@ -97,7 +97,7 @@ expect_unsafe_root_rejected("MSYSTEM prefix" "${MSYSTEM_PREFIX}")
 file(REMOVE_RECURSE "${TEST_ROOT}")
 file(MAKE_DIRECTORY "${TEST_ROOT}")
 
-set(distribution_driver "${TEST_ROOT}/distribution-driver")
+set(distribution_driver "${TEST_ROOT}/distribution driver")
 set(extract_root "${TEST_ROOT}/extracted")
 file(COPY "${SOURCE_DIR}/" DESTINATION "${distribution_driver}")
 

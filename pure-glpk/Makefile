@@ -77,17 +77,17 @@ uninstall:
 	rm -f "$(DESTDIR)$(libdir)/pure/glpk.pure" "$(DESTDIR)$(libdir)/pure/glpk$(DLL)"
 
 date = $(shell date "+%B %-d, %Y")
-datesubst = sed -e "s?@version@?$(version)?g" -e "s?|today|?$(date)?g" < $(1) > $(2)
+datesubst = sed -e "s?@version@?$(version)?g" -e "s?|today|?$(date)?g" < "$(1)" > "$(2)"
 
 dist:
-	rm -rf $(dist)
-	mkdir $(dist) && mkdir $(dist)/debian && mkdir $(dist)/examples \
-		&& mkdir $(dist)/cmake && mkdir $(dist)/tests
-	for x in $(DISTFILES); do ln -sf $$PWD/$$x $(dist)/$$x; done
-	for x in $(SEDFILES); do rm -f $(dist)/$$x; $(call datesubst,$$PWD/$$x,$(dist)/$$x); done
-	rm -f $(dist).tar.gz
-	tar cfzh $(dist).tar.gz $(dist)
-	rm -rf $(dist)
+	rm -rf "$(dist)"
+	mkdir "$(dist)" && mkdir "$(dist)/debian" && mkdir "$(dist)/examples" \
+		&& mkdir "$(dist)/cmake" && mkdir "$(dist)/tests"
+	for x in $(DISTFILES); do ln -sf "$$PWD/$$x" "$(dist)/$$x"; done
+	for x in $(SEDFILES); do rm -f "$(dist)/$$x"; $(call datesubst,$$PWD/$$x,$(dist)/$$x); done
+	rm -f "$(dist).tar.gz"
+	tar cfzh "$(dist).tar.gz" "$(dist)"
+	rm -rf "$(dist)"
 
 distcheck: dist
 	tar xfz $(dist).tar.gz
