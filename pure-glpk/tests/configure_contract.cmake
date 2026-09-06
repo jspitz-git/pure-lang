@@ -37,8 +37,15 @@ expect_configure_failure("missing Pure" "PURE_EXECUTABLE"
 expect_configure_failure("nonexistent Pure" "PURE_EXECUTABLE"
   "-DPURE_EXECUTABLE=${TEST_ROOT}/missing/pure.exe"
   "-DLLVM_READOBJ_EXECUTABLE=${LLVM_READOBJ_EXECUTABLE}")
+file(MAKE_DIRECTORY "${TEST_ROOT}/directory-as-executable")
+expect_configure_failure("directory Pure" "PURE_EXECUTABLE"
+  "-DPURE_EXECUTABLE=${TEST_ROOT}/directory-as-executable"
+  "-DLLVM_READOBJ_EXECUTABLE=${LLVM_READOBJ_EXECUTABLE}")
 expect_configure_failure("missing readobj" "LLVM_READOBJ_EXECUTABLE"
   "-DPURE_EXECUTABLE=${PURE_EXECUTABLE}" -DLLVM_READOBJ_EXECUTABLE=)
 expect_configure_failure("nonexistent readobj" "LLVM_READOBJ_EXECUTABLE"
   "-DPURE_EXECUTABLE=${PURE_EXECUTABLE}"
   "-DLLVM_READOBJ_EXECUTABLE=${TEST_ROOT}/missing/llvm-readobj.exe")
+expect_configure_failure("directory readobj" "LLVM_READOBJ_EXECUTABLE"
+  "-DPURE_EXECUTABLE=${PURE_EXECUTABLE}"
+  "-DLLVM_READOBJ_EXECUTABLE=${TEST_ROOT}/directory-as-executable")

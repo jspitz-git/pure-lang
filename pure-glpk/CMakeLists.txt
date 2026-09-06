@@ -69,7 +69,8 @@ if(WIN32)
   set(LLVM_READOBJ_EXECUTABLE "" CACHE FILEPATH
     "llvm-readobj used for Windows PE validation")
   if(NOT LLVM_READOBJ_EXECUTABLE OR
-      NOT EXISTS "${LLVM_READOBJ_EXECUTABLE}")
+      NOT EXISTS "${LLVM_READOBJ_EXECUTABLE}" OR
+      IS_DIRECTORY "${LLVM_READOBJ_EXECUTABLE}")
     message(FATAL_ERROR
       "Windows validation requires an existing LLVM_READOBJ_EXECUTABLE")
   endif()
@@ -97,7 +98,8 @@ if(BUILD_TESTING)
   pkg_get_variable(PURE_PREFIX pure prefix)
   if(WIN32)
     set(PURE_EXECUTABLE "" CACHE FILEPATH "Installed Pure interpreter for tests")
-    if(NOT PURE_EXECUTABLE OR NOT EXISTS "${PURE_EXECUTABLE}")
+    if(NOT PURE_EXECUTABLE OR NOT EXISTS "${PURE_EXECUTABLE}" OR
+        IS_DIRECTORY "${PURE_EXECUTABLE}")
       message(FATAL_ERROR "BUILD_TESTING requires an existing PURE_EXECUTABLE")
     endif()
   else()
