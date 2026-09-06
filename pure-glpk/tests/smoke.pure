@@ -11,6 +11,19 @@ errorp value = index (str value) "glp::error" >= 0;
 
 using glpk;
 
+let callback_invocations, callback_info_seen, retained_tree =
+  ref 0, ref false, ref NULL;
+let callback_info = ref ();
+
+namespace glp;
+mip_cb tree info = () when
+  put smoke::callback_invocations (get smoke::callback_invocations+1);
+  put smoke::callback_info_seen (info === smoke::callback_info);
+  glp::ios_reason tree;
+  put smoke::retained_tree tree;
+end;
+namespace smoke;
+
 smoke::make_lp =
   lp when
     lp = glp::create_prob;
@@ -66,7 +79,13 @@ let mip = smoke::make_mip;
 smoke::check "MIP relaxation"
   (glp::simplex mip [(glp::msg_lev,glp::msg_off)] === glp::ok);
 smoke::check "MIP solver return"
-  (glp::intopt mip [(glp::msg_lev,glp::msg_off)] === glp::ok);
+  (glp::intopt mip [(glp::msg_lev,glp::msg_off),
+                    (glp::cb_func,glp::on),
+                    (glp::cb_info,callback_info)] === glp::ok);
+smoke::check "MIP callback invoked" (get callback_invocations > 0);
+smoke::check "MIP callback info" (get callback_info_seen);
+smoke::check "MIP callback stale handle rejected"
+  (~intp (glp::ios_reason (get retained_tree)));
 smoke::check "MIP optimal status" (glp::mip_status mip === glp::opt);
 smoke::check "MIP objective"
   (smoke::close (glp::mip_obj_val mip) 2.0 1.0e-9);

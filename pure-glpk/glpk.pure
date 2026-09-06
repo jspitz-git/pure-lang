@@ -517,7 +517,8 @@ opts2vals opts_struct opts =
     with
       replace (sym, val::int)		|
       replace (sym, val::double)	|
-      replace (sym, val::bigint)	= (sym, val);
+      replace (sym, val::bigint)	|
+      replace (sym, val::pointer)	= (sym, val);
       replace (sym, sym2)		= (sym, val)
         when
           _ typ	= opts_struct!sym;

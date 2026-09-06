@@ -1716,17 +1716,18 @@ pure_expr *glpk_get_num_bin(pure_expr *ptr)
 static void mip_callback(glp_tree *tree, void *info)
 {
   // Callback routine for the branch-and-cut algorithm
-  pure_expr *res;
+  pure_expr *res, *treeptr;
   tree_obj *treeobj;
   if (!(treeobj = (tree_obj *)malloc(sizeof(tree_obj)))) {
     return;
   }
   treeobj->magic = TREE_MAGIC;
   treeobj->tree = tree;
-  res = pure_app(pure_app(pure_symbol(pure_sym("glp::mip_cb")),
-                                      pure_pointer(treeobj)),
-                                      pure_pointer(info));
+  treeptr = pure_pointer(treeobj);
+  res = pure_app(pure_app(pure_symbol(pure_sym("glp::mip_cb")), treeptr),
+                 pure_pointer(info));
   pure_freenew(res);
+  treeptr->data.p = NULL;
   free(treeobj);
   return;
 }
