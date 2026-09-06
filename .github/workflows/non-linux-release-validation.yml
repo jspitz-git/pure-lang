@@ -22,6 +22,7 @@ on:
       - "pure-stllib/**"
       - "pure-xml/**"
       - "pure-gsl/**"
+      - "pure-glpk/**"
       - "purepad/**"
       - "pure/todo/TODO-45-windows-pure-bonjour.md"
       - "pure/todo/TODO-20-modernize-purepad.md"
@@ -35,6 +36,7 @@ on:
       - "pure/todo/TODO-28-windows-pure-stllib.md"
       - "pure/todo/TODO-29-windows-pure-xml.md"
       - "pure/todo/TODO-30-windows-pure-gsl.md"
+      - "pure/todo/TODO-31-windows-pure-glpk.md"
       - "docs/superpowers/specs/2026-08-18-windows-pure-bonjour-design.md"
       - "docs/superpowers/specs/2026-08-22-purepad-lifecycle-hardening-design.md"
       - "docs/superpowers/plans/2026-08-18-windows-pure-bonjour.md"
@@ -59,6 +61,7 @@ on:
       - "pure-stllib/**"
       - "pure-xml/**"
       - "pure-gsl/**"
+      - "pure-glpk/**"
       - "purepad/**"
       - "pure/todo/TODO-45-windows-pure-bonjour.md"
       - "pure/todo/TODO-20-modernize-purepad.md"
@@ -72,6 +75,7 @@ on:
       - "pure/todo/TODO-28-windows-pure-stllib.md"
       - "pure/todo/TODO-29-windows-pure-xml.md"
       - "pure/todo/TODO-30-windows-pure-gsl.md"
+      - "pure/todo/TODO-31-windows-pure-glpk.md"
       - "docs/superpowers/specs/2026-08-18-windows-pure-bonjour-design.md"
       - "docs/superpowers/specs/2026-08-22-purepad-lifecycle-hardening-design.md"
       - "docs/superpowers/plans/2026-08-18-windows-pure-bonjour.md"
@@ -123,6 +127,7 @@ jobs:
             mingw-w64-clang-x86_64-cmake
             mingw-w64-clang-x86_64-flang
             mingw-w64-clang-x86_64-gmp
+            mingw-w64-clang-x86_64-glpk
             mingw-w64-clang-x86_64-gsl
             mingw-w64-clang-x86_64-libiconv
             mingw-w64-clang-x86_64-libxml2
@@ -502,6 +507,92 @@ jobs:
             --output-on-failure --no-tests=error `
             2>&1 | Tee-Object -FilePath "$env:LOG_DIR/ctest-pure-gsl.log"
           if ($LASTEXITCODE -ne 0) { throw 'pure-gsl contract failed' }
+
+      - name: Build and validate the pure-glpk contracts
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $prefix = [IO.Path]::GetFullPath($env:INSTALL_PREFIX)
+          $glpkBuild = [IO.Path]::GetFullPath('build/windows-pure-glpk-contract')
+          $env:MSYSTEM_PREFIX = 'C:/msys64/clang64'
+          $env:PKG_CONFIG_PATH = "$prefix/lib/pkgconfig;C:/msys64/clang64/lib/pkgconfig"
+          $env:Path = "C:/msys64/clang64/bin;C:/msys64/usr/bin;$env:Path"
+          & $env:CMAKE_EXE -S ../pure-glpk -B $glpkBuild -G Ninja `
+            -DCMAKE_BUILD_TYPE=Release `
+            -DCMAKE_C_COMPILER=C:/msys64/clang64/bin/clang.exe `
+            "-DCMAKE_C_FLAGS=-Wall -Wextra -Werror" `
+            -DPKG_CONFIG_EXECUTABLE=C:/msys64/clang64/bin/pkgconf.exe `
+            -DBUILD_TESTING=ON `
+            "-DPURE_EXECUTABLE=$prefix/bin/pure.exe" `
+            -DLLVM_READOBJ_EXECUTABLE=C:/msys64/clang64/bin/llvm-readobj.exe `
+            2>&1 | Tee-Object -FilePath "$env:LOG_DIR/configure-pure-glpk.log"
+          if ($LASTEXITCODE -ne 0) { throw 'pure-glpk configure failed' }
+          & $env:CMAKE_EXE --build $glpkBuild --parallel 4 `
+            2>&1 | Tee-Object -FilePath "$env:LOG_DIR/build-pure-glpk.log"
+          if ($LASTEXITCODE -ne 0) { throw 'pure-glpk build failed' }
+          & $env:CMAKE_EXE --build $glpkBuild `
+            --target verify-windows-dependencies --parallel 4 `
+            2>&1 | Tee-Object -FilePath "$env:LOG_DIR/pe-pure-glpk.log"
+          if ($LASTEXITCODE -ne 0) { throw 'pure-glpk PE contract failed' }
+          Remove-Item Env:PURELIB -ErrorAction SilentlyContinue
+          $env:Path = "$prefix/bin;$env:SystemRoot/System32/WindowsPowerShell/v1.0;$env:SystemRoot/System32;$env:SystemRoot"
+          if ($env:Path -match '(?i)(^|;).*[/\\]msys64[/\\]') {
+            throw "MSYS2 path survived sanitization: $env:Path"
+          }
+          & $env:CTEST_EXE --test-dir $glpkBuild -L glpk `
+            --output-on-failure --no-tests=error `
+            2>&1 | Tee-Object -FilePath "$env:LOG_DIR/ctest-pure-glpk.log"
+          if ($LASTEXITCODE -ne 0) { throw 'pure-glpk contract failed' }
+          "PURE_GLPK_BUILD=$($glpkBuild.Replace('\', '/'))" |
+            Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Verify the final pure-glpk package stage
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $repo = (Get-Location).Path
+          $source = [IO.Path]::GetFullPath((Join-Path $repo '../pure-glpk'))
+          $purePrefix = [IO.Path]::GetFullPath($env:INSTALL_PREFIX)
+          $build = [IO.Path]::GetFullPath($env:PURE_GLPK_BUILD)
+          $stage = [IO.Path]::GetFullPath('build/staged pure-glpk package')
+          if (Test-Path -LiteralPath $stage) {
+            Remove-Item -LiteralPath $stage -Recurse -Force
+          }
+          New-Item -ItemType Directory -Path $stage | Out-Null
+          Copy-Item -Path "$purePrefix/*" -Destination $stage -Recurse
+          & $env:CMAKE_EXE --install $build --prefix $stage --component runtime
+          if ($LASTEXITCODE -ne 0) { throw 'pure-glpk runtime install failed' }
+          & $env:CMAKE_EXE --install $build --prefix $stage --component documentation
+          if ($LASTEXITCODE -ne 0) { throw 'pure-glpk documentation install failed' }
+          Remove-Item Env:PURELIB -ErrorAction SilentlyContinue
+          $env:Path = "$stage/bin;$env:SystemRoot/System32/WindowsPowerShell/v1.0;$env:SystemRoot/System32;$env:SystemRoot"
+          if ($env:Path -match '(?i)(^|;).*[/\\]msys64[/\\]') {
+            throw "MSYS2 path survived sanitization: $env:Path"
+          }
+          & $env:CMAKE_EXE `
+            "-DSTAGE_PREFIX=$stage" `
+            -DSOURCE_RUNTIME_DIR=C:/msys64/clang64/bin `
+            -DLLVM_READOBJ=C:/msys64/clang64/bin/llvm-readobj.exe `
+            "-DGLPK_MODULE_SOURCE=$build/glpk.dll" `
+            "-DGLPK_INTERFACE_SOURCE=$source/glpk.pure" `
+            "-DREADME_SOURCE=$build/README" `
+            "-DCOPYING_SOURCE=$source/COPYING" `
+            "-DWINDOWS_SOURCE=$source/WINDOWS.md" `
+            "-DEXAMPLE_SOURCE=$source/examples/lp.pure" `
+            "-DTEST_SOURCE=$source/tests/smoke.pure" `
+            -DGLPK_DLL_SOURCE=C:/msys64/clang64/bin/libglpk-40.dll `
+            -DCOLAMD_DLL_SOURCE=C:/msys64/clang64/bin/libcolamd.dll `
+            -DAMD_DLL_SOURCE=C:/msys64/clang64/bin/libamd.dll `
+            -DSUITESPARSECONFIG_DLL_SOURCE=C:/msys64/clang64/bin/libsuitesparseconfig.dll `
+            -DOMP_DLL_SOURCE=C:/msys64/clang64/bin/libomp.dll `
+            -DGLPK_LICENSE_SOURCE=C:/msys64/clang64/share/licenses/glpk/LICENSE `
+            -DSUITESPARSE_LICENSE_SOURCE=C:/msys64/clang64/share/licenses/suitesparse/LICENSE `
+            -DLLVM_LICENSE_SOURCE=C:/msys64/clang64/share/licenses/llvm/LICENSE `
+            "-DRUN_PURE_TEST_SCRIPT=$source/cmake/RunPureTest.cmake" `
+            "-DWINDOWS_DEPENDENCY_VERIFIER=$source/cmake/VerifyWindowsDependencies.cmake" `
+            -P "$source/cmake/VerifyInstalledPackage.cmake" `
+            2>&1 | Tee-Object -FilePath "$env:LOG_DIR/installed-pure-glpk.log"
+          if ($LASTEXITCODE -ne 0) {
+            throw 'installed pure-glpk verification failed'
+          }
 
       - name: Configure, build, and test Debug preset
         run: |

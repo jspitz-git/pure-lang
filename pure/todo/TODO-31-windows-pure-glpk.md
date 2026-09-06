@@ -62,3 +62,57 @@ Build, validate, and package `pure-glpk` with a controlled Windows GLPK runtime.
   passed. The complete portable-prefix audit reported 17 DLLs, 16 resolved
   non-system dependency paths, and 55 files without forbidden build/MSYS2
   path leakage.
+- 2026-09-07: The follow-up audit found that a callback could retain its
+  `tree` expression after the native `tree_obj` wrapper was freed, so a later
+  `glp::ios_*` validation read freed memory. The callback wrapper now retains
+  the Pure expression through cleanup, clears its pointer payload before
+  freeing the native wrapper, and the smoke regression covers both retained
+  and non-retained callbacks.
+- 2026-09-07: The callback regression also exposed that `cb_info` declared a
+  pointer contract but option conversion rejected pointer values before they
+  reached GLPK. Pointer-valued `cb_info` now passes through unchanged, and the
+  callback checks that it receives the configured pointer.
+- 2026-09-07: Build-tree tests inherited the developer's ambient `PATH`, so
+  their passing result did not prove that the module was independent of
+  MSYS2. One strict runner now requires explicit Pure, package, module,
+  runtime, and test paths; clears `PURELIB`; and constructs its Windows
+  `PATH` solely from those runtime inputs and Windows system directories.
+  Runner and configure contracts reject missing inputs and implicit tool
+  lookup.
+- 2026-09-07: The installed-package verifier existed outside the normal test
+  graph, leaving its result dependent on a manual invocation. The registered
+  install contract now copies a clean portable Pure prefix, installs only the
+  runtime and documentation components, verifies the exact 15-file ownership
+  and source hashes, confirms reused GMP/zlib hashes, runs the solver/callback
+  regression, and repeats the staged PE audit. Its negative paths reject a
+  contaminated input prefix, an extra owned file, and altered installed
+  bytes.
+- 2026-09-07: PE validation previously checked only selected forbidden or
+  required imports and could accept an unreviewed dependency. It now compares
+  the complete normalized import sets of all eight AMD64 binaries and reports
+  missing and unexpected names. The fixture contract demonstrates rejection
+  of an injected import and preserves case/order canonicalization coverage;
+  the literal expectations remain intentionally package-version-sensitive.
+- 2026-09-07: The legacy source archive omitted its CMake build and validation
+  inputs. `make dist` now includes `CMakeLists.txt`, `WINDOWS.md`, every CMake
+  helper, both Pure tests, and all contract scripts. The source-dist contract
+  executes the real archive recipe from a path containing spaces, deletes its
+  source copy, and configures the extracted tree without checkout-only files.
+- 2026-09-07: Windows CI now installs the CLANG64 GLPK prerequisite, supplies
+  explicit tool and pkg-config inputs, builds pure-glpk with four workers,
+  executes exact PE and all `glpk`-label contracts with no MSYS2 directory in
+  the runtime `PATH`, and verifies a separate fresh final package stage with
+  every declared source, runtime, and license input.
+- 2026-09-07: Fresh audit verification used Clang 22.1.8, strict Release
+  warnings, and exactly four build workers. Exact imports passed for eight
+  AMD64 binaries, and all seven `glpk` CTests passed in 52.00 seconds with the
+  parent `PATH` limited to Windows system directories and `PURELIB` absent.
+  The seven comprise load, solver/callback smoke, runner, configure,
+  source-dist, PE-verifier, and installed-package contracts.
+- 2026-09-07: A separate final stage was installed at the physical path
+  `task 5 závěrečná instalace`. Pure 0.68 produced parser errors when launched
+  directly below the non-ASCII prefix; using that same directory's Windows
+  8.3 alias isolated the limitation to Pure's executable-prefix handling. The
+  complete verifier then passed for the physical Unicode-and-space stage: 15
+  exact package-owned files and hashes, deduplicated GMP/zlib, solver and
+  callback smoke coverage, and exact staged PE imports.
