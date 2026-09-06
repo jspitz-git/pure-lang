@@ -11,9 +11,13 @@ Set `PATH` so that `/clang64/bin` precedes `/usr/bin`, and point
 
 ```sh
 cmake -S . -B build -G Ninja \
-  -DCMAKE_C_COMPILER=clang \
+  -DCMAKE_C_COMPILER=/clang64/bin/clang.exe \
   -DCMAKE_BUILD_TYPE=Release \
-  -DCMAKE_C_FLAGS="-Wall -Wextra -Werror"
+  -DCMAKE_C_FLAGS="-Wall -Wextra -Werror" \
+  -DPKG_CONFIG_EXECUTABLE=/clang64/bin/pkgconf.exe \
+  -DBUILD_TESTING=ON \
+  -DPURE_EXECUTABLE=/c/pure-lang/pure/build/windows-clang64-prefix/bin/pure.exe \
+  -DLLVM_READOBJ_EXECUTABLE=/clang64/bin/llvm-readobj.exe
 cmake --build build
 cmake --build build --target verify-windows-dependencies
 ctest --test-dir build --output-on-failure
@@ -21,10 +25,9 @@ ctest --test-dir build --output-on-failure
 
 The Windows runtime ABI validated by this package is GSL 2.8:
 
-- `gsl.dll` imports `libpure.dll` and `libgsl-28.dll`;
-- `libgsl-28.dll` imports `libgslcblas-0.dll`;
-- neither GSL DLL nor the Pure module may import `msys-2.0.dll`, `libgcc`, or
-  `libstdc++`.
+- all three binaries must be AMD64 PE images;
+- `gsl.dll`, `libgsl-28.dll`, and `libgslcblas-0.dll` must have the exact
+  reviewed direct-import sets encoded by the verifier.
 
 The bundle must therefore place `libgsl-28.dll` and `libgslcblas-0.dll` next to
 `pure.exe`. Both come from the same MSYS2 CLANG64 GSL package.
@@ -47,4 +50,12 @@ nonlinear root solver. Tests cover all implemented and advertised numerical
 families; “roots” means the polynomial-root API provided by `gsl::poly`.
 
 Numerical smoke tests use explicit absolute tolerances. They are behavioral
-checks, not bit-for-bit floating-point comparisons.
+checks, not bit-for-bit floating-point comparisons. The experimental complex
+module is import-tested; its machine-complex values are opaque to the standard
+symbolic `re`, `im`, and `abs` functions, so the smoke test does not pretend
+that those functions provide a numerical assertion.
+
+The `gsl` CTest label also verifies the exact 21-file package manifest and DLL
+hashes, overlays the package on a copied portable Pure prefix, and runs from
+`C:\Windows`. Test execution constructs a PATH containing only the module,
+configured GSL runtime, Pure runtime, and Windows system directories.

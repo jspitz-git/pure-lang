@@ -37,6 +37,29 @@ foreach(expected IN LISTS expected_files)
   endif()
 endforeach()
 
+file(GLOB installed_top_level LIST_DIRECTORIES FALSE RELATIVE "${stage}"
+  "${module_dir}/gsl*")
+file(GLOB_RECURSE installed_namespace LIST_DIRECTORIES FALSE RELATIVE "${stage}"
+  "${module_dir}/gsl/*")
+file(GLOB installed_runtime LIST_DIRECTORIES FALSE RELATIVE "${stage}"
+  "${stage}/bin/libgsl-*.dll" "${stage}/bin/libgslcblas-*.dll")
+file(GLOB_RECURSE installed_docs LIST_DIRECTORIES FALSE RELATIVE "${stage}"
+  "${doc_dir}/*")
+set(installed_package_files ${installed_top_level} ${installed_namespace}
+  ${installed_runtime} ${installed_docs})
+set(expected_relative)
+foreach(expected IN LISTS expected_files)
+  file(RELATIVE_PATH relative "${stage}" "${expected}")
+  list(APPEND expected_relative "${relative}")
+endforeach()
+list(SORT installed_package_files)
+list(SORT expected_relative)
+if(NOT installed_package_files STREQUAL expected_relative)
+  message(FATAL_ERROR
+    "Installed pure-gsl files differ. Expected '${expected_relative}', "
+    "got '${installed_package_files}'")
+endif()
+
 file(GLOB installed_modules LIST_DIRECTORIES FALSE "${module_dir}/gsl/*.pure")
 list(LENGTH installed_modules installed_module_count)
 if(NOT installed_module_count EQUAL 10)
@@ -62,6 +85,11 @@ if(NOT result EQUAL 0)
     "Installed pure-gsl smoke test failed (${result})\n"
     "stdout:\n${output}\nstderr:\n${error}")
 endif()
+if(NOT error STREQUAL "")
+  message(FATAL_ERROR
+    "Installed pure-gsl smoke emitted diagnostics\n"
+    "stdout:\n${output}\nstderr:\n${error}")
+endif()
 
 execute_process(
   COMMAND "${CMAKE_COMMAND}"
@@ -83,5 +111,5 @@ endif()
 
 list(LENGTH expected_files expected_count)
 message(STATUS
-  "Verified installed pure-gsl: ${expected_count} files, 10 modules, "
+  "Verified installed pure-gsl: ${expected_count} package files, 10 modules, "
   "sanitized native smoke test, and staged PE closure")

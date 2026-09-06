@@ -49,8 +49,9 @@ Build, validate, and package `pure-gsl` with the CLANG64 GSL implementation.
 - 2026-07-28: Added behavioral tests with explicit tolerances for matrix
   multiplication, an SVD solve, vector sorting, Gaussian PDF/CDF, statistics,
   polynomial evaluation and roots, linear fitting, Bessel values and error
-  estimates, domain guarding, and complex square roots. Both the import test
-  and numerical CTest pass.
+  estimates, and domain guarding; the experimental complex namespace is
+  import-tested separately. The 2026-09-06 audit corrected API names which
+  had previously produced diagnostics hidden by the original runners.
 - 2026-07-28: Added complete install rules. The package delta contains 21
   verified files: the native module, umbrella module, all ten namespace
   modules, GSL and CBLAS DLLs, package and dependency licenses, Windows
@@ -62,3 +63,13 @@ Build, validate, and package `pure-gsl` with the CLANG64 GSL implementation.
   audit resolved every non-system dependency within the stage and reported
   14 DLLs, 13 dependency paths, and 61 files with no forbidden build/MSYS2
   path leakage.
+- 2026-09-06: Audit found that the original load test accepted Pure loader
+  diagnostics and that both source tests depended on an ambient MSYS2 PATH.
+- 2026-09-06: Replaced the runners with strict stderr handling and an explicit,
+  sanitized Pure/GSL runtime path; corrected the SVD and distribution API names
+  in the numerical smoke test.
+- 2026-09-06: Added explicit Pure and LLVM tool inputs, exact AMD64 PE import
+  contracts, an exact 21-file install/hash contract, and a copied portable
+  runtime test executed from `C:\Windows`.
+- 2026-09-06: Added `pure-gsl` to Windows CI and aligned the Windows build
+  documentation with the automated guarantees.

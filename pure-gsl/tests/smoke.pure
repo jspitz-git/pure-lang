@@ -1,3 +1,6 @@
+using gsl;
+using gsl::complex;
+
 namespace smoke;
 
 check name condition
@@ -7,26 +10,23 @@ check name condition
 close actual expected tolerance =
   abs (actual-expected) <= tolerance;
 
-using gsl;
-using gsl::complex;
+namespace;
 
 smoke::check "matrix multiplication"
   ({1.0,2.0;3.0,4.0} * {2.0;1.0} == {4.0;10.0});
 
 smoke::check "SVD solver"
-  (all (\x->smoke::close x!0 x!1 1.0e-10)
-       (zip (list (gsl::svd_solve (gsl::svd {3.0,0.0;0.0,2.0})
-                                  {6.0;8.0}))
-            [2.0,4.0]));
+  (gsl::matrix::svd_solve (gsl::matrix::svd {3.0,0.0;0.0,2.0})
+                           {6.0;8.0} == {2.0;4.0});
 
 smoke::check "vector sort"
   (gsl::sort_vector {3.0,-1.0,2.0} == {-1.0,2.0,3.0});
 
 smoke::check "Gaussian density"
-  (smoke::close (gsl::randist::ugaussian_pdf 0.0)
+  (smoke::close (gsl::ran::ugaussian_pdf 0.0)
                 0.3989422804014327 1.0e-14);
 smoke::check "Gaussian CDF"
-  (smoke::close (gsl::randist::ugaussian_P 0.0) 0.5 1.0e-15);
+  (smoke::close (gsl::cdf::ugaussian_P 0.0) 0.5 1.0e-15);
 
 smoke::check "statistics mean"
   (smoke::close (gsl::stats::mean {1.0,2.0,3.0,4.0}) 2.5 1.0e-15);
@@ -54,6 +54,3 @@ smoke::check "Bessel error estimate"
    end);
 smoke::check "special-function domain guard"
   (~doublep (gsl::sf::bessel_Y0 (-1.0)));
-
-smoke::check "complex square root"
-  (smoke::close (im (gsl::complex::sqrt ((-4.0)+:0.0))) 2.0 1.0e-14);

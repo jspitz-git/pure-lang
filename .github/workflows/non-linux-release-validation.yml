@@ -21,6 +21,7 @@ on:
       - "pure-stldict/**"
       - "pure-stllib/**"
       - "pure-xml/**"
+      - "pure-gsl/**"
       - "purepad/**"
       - "pure/todo/TODO-45-windows-pure-bonjour.md"
       - "pure/todo/TODO-20-modernize-purepad.md"
@@ -33,6 +34,7 @@ on:
       - "pure/todo/TODO-27-windows-pure-stldict.md"
       - "pure/todo/TODO-28-windows-pure-stllib.md"
       - "pure/todo/TODO-29-windows-pure-xml.md"
+      - "pure/todo/TODO-30-windows-pure-gsl.md"
       - "docs/superpowers/specs/2026-08-18-windows-pure-bonjour-design.md"
       - "docs/superpowers/specs/2026-08-22-purepad-lifecycle-hardening-design.md"
       - "docs/superpowers/plans/2026-08-18-windows-pure-bonjour.md"
@@ -56,6 +58,7 @@ on:
       - "pure-stldict/**"
       - "pure-stllib/**"
       - "pure-xml/**"
+      - "pure-gsl/**"
       - "purepad/**"
       - "pure/todo/TODO-45-windows-pure-bonjour.md"
       - "pure/todo/TODO-20-modernize-purepad.md"
@@ -68,6 +71,7 @@ on:
       - "pure/todo/TODO-27-windows-pure-stldict.md"
       - "pure/todo/TODO-28-windows-pure-stllib.md"
       - "pure/todo/TODO-29-windows-pure-xml.md"
+      - "pure/todo/TODO-30-windows-pure-gsl.md"
       - "docs/superpowers/specs/2026-08-18-windows-pure-bonjour-design.md"
       - "docs/superpowers/specs/2026-08-22-purepad-lifecycle-hardening-design.md"
       - "docs/superpowers/plans/2026-08-18-windows-pure-bonjour.md"
@@ -119,6 +123,7 @@ jobs:
             mingw-w64-clang-x86_64-cmake
             mingw-w64-clang-x86_64-flang
             mingw-w64-clang-x86_64-gmp
+            mingw-w64-clang-x86_64-gsl
             mingw-w64-clang-x86_64-libiconv
             mingw-w64-clang-x86_64-libxml2
             mingw-w64-clang-x86_64-libxslt
@@ -468,6 +473,35 @@ jobs:
             --output-on-failure --no-tests=error `
             2>&1 | Tee-Object -FilePath "$env:LOG_DIR/ctest-pure-xml.log"
           if ($LASTEXITCODE -ne 0) { throw 'pure-xml contract failed' }
+
+      - name: Validate the pure-gsl numerical, install, and PE contracts
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $prefix = [IO.Path]::GetFullPath($env:INSTALL_PREFIX)
+          $gslBuild = 'build/windows-pure-gsl-contract'
+          $env:Path = "C:/msys64/clang64/bin;C:/msys64/usr/bin;$env:Path"
+          $env:PKG_CONFIG_PATH = "$prefix/lib/pkgconfig;C:/msys64/clang64/lib/pkgconfig"
+          & $env:CMAKE_EXE -S ../pure-gsl -B $gslBuild -G Ninja `
+            -DCMAKE_BUILD_TYPE=Release `
+            -DCMAKE_C_COMPILER=C:/msys64/clang64/bin/clang.exe `
+            "-DCMAKE_C_FLAGS=-Wall -Wextra -Werror" `
+            -DPKG_CONFIG_EXECUTABLE=C:/msys64/clang64/bin/pkgconf.exe `
+            -DBUILD_TESTING=ON `
+            "-DPURE_EXECUTABLE=$prefix/bin/pure.exe" `
+            -DLLVM_READOBJ_EXECUTABLE=C:/msys64/clang64/bin/llvm-readobj.exe `
+            2>&1 | Tee-Object -FilePath "$env:LOG_DIR/configure-pure-gsl.log"
+          if ($LASTEXITCODE -ne 0) { throw 'pure-gsl configure failed' }
+          & $env:CMAKE_EXE --build $gslBuild --parallel 4 `
+            2>&1 | Tee-Object -FilePath "$env:LOG_DIR/build-pure-gsl.log"
+          if ($LASTEXITCODE -ne 0) { throw 'pure-gsl build failed' }
+          & $env:CMAKE_EXE --build $gslBuild `
+            --target verify-windows-dependencies --parallel 4 `
+            2>&1 | Tee-Object -FilePath "$env:LOG_DIR/pe-pure-gsl.log"
+          if ($LASTEXITCODE -ne 0) { throw 'pure-gsl PE contract failed' }
+          & $env:CTEST_EXE --test-dir $gslBuild -L gsl `
+            --output-on-failure --no-tests=error `
+            2>&1 | Tee-Object -FilePath "$env:LOG_DIR/ctest-pure-gsl.log"
+          if ($LASTEXITCODE -ne 0) { throw 'pure-gsl contract failed' }
 
       - name: Configure, build, and test Debug preset
         run: |
