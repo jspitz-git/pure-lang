@@ -56,10 +56,9 @@ install(
   COMPONENT documentation
 )
 install(
-  DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/examples/"
+  FILES "${CMAKE_CURRENT_SOURCE_DIR}/examples/menagerie.pure"
   DESTINATION "${PURE_EXAMPLES_INSTALL_DIR}"
   COMPONENT documentation
-  FILES_MATCHING PATTERN "*.pure"
 )
 install(
   FILES "${CMAKE_CURRENT_SOURCE_DIR}/tests/smoke.pure"
@@ -67,7 +66,9 @@ install(
   COMPONENT documentation
 )
 install(
-  DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/tests/data/"
+  FILES
+    "${CMAKE_CURRENT_SOURCE_DIR}/tests/data/people.csv"
+    "${CMAKE_CURRENT_SOURCE_DIR}/tests/data/Schema.ini"
   DESTINATION "${PURE_DOCUMENTATION_INSTALL_DIR}/tests/data"
   COMPONENT documentation
 )
