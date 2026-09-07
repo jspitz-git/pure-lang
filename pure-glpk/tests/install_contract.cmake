@@ -122,8 +122,107 @@ function(require_clean_portable_prefix)
   endif()
 endfunction()
 
+set(expected_package_delta
+  bin/libamd.dll
+  bin/libcolamd.dll
+  bin/libglpk-40.dll
+  bin/libomp.dll
+  bin/libsuitesparseconfig.dll
+  lib/pure/glpk.dll
+  lib/pure/glpk.pure
+  share/doc/pure-glpk/COPYING
+  share/doc/pure-glpk/README
+  share/doc/pure-glpk/WINDOWS.md
+  share/doc/pure-glpk/examples/lp.pure
+  share/doc/pure-glpk/glpk-LICENSE
+  share/doc/pure-glpk/openmp-LICENSE
+  share/doc/pure-glpk/suitesparse-LICENSE
+  share/doc/pure-glpk/tests/smoke.pure
+)
+list(SORT expected_package_delta)
+
+function(snapshot_prefix root paths_var hashes_var)
+  if(NOT IS_DIRECTORY "${root}")
+    message(FATAL_ERROR "Snapshot root is not a directory: ${root}")
+  endif()
+  file(GLOB_RECURSE entries LIST_DIRECTORIES FALSE RELATIVE "${root}"
+    "${root}/*")
+  list(SORT entries)
+  set(paths)
+  set(hashes)
+  foreach(relative IN LISTS entries)
+    cmake_path(CONVERT "${relative}" TO_CMAKE_PATH_LIST relative NORMALIZE)
+    if(IS_SYMLINK "${root}/${relative}")
+      message(FATAL_ERROR "Prefix snapshot rejects symlink: ${relative}")
+    endif()
+    file(SHA256 "${root}/${relative}" hash)
+    list(APPEND paths "${relative}")
+    list(APPEND hashes "${hash}")
+  endforeach()
+  set(${paths_var} "${paths}" PARENT_SCOPE)
+  set(${hashes_var} "${hashes}" PARENT_SCOPE)
+endfunction()
+
+function(require_snapshot_preserved label expected_paths_var
+    expected_hashes_var actual_root)
+  set(expected_paths "${${expected_paths_var}}")
+  set(expected_hashes "${${expected_hashes_var}}")
+  snapshot_prefix("${actual_root}" actual_paths actual_hashes)
+  foreach(relative IN LISTS expected_paths)
+    list(FIND actual_paths "${relative}" actual_index)
+    if(actual_index EQUAL -1)
+      message(FATAL_ERROR "${label} removed pre-existing file: ${relative}")
+    endif()
+    list(FIND expected_paths "${relative}" expected_index)
+    list(GET expected_hashes ${expected_index} expected_hash)
+    list(GET actual_hashes ${actual_index} actual_hash)
+    if(NOT actual_hash STREQUAL expected_hash)
+      message(FATAL_ERROR "${label} changed pre-existing file: ${relative}")
+    endif()
+  endforeach()
+endfunction()
+
+function(require_exact_install_delta baseline_paths_var baseline_hashes_var
+    installed_root)
+  set(baseline_paths "${${baseline_paths_var}}")
+  require_snapshot_preserved("pure-glpk install" "${baseline_paths_var}"
+    "${baseline_hashes_var}" "${installed_root}")
+  snapshot_prefix("${installed_root}" installed_paths installed_hashes)
+  set(actual_delta "${installed_paths}")
+  foreach(relative IN LISTS baseline_paths)
+    list(REMOVE_ITEM actual_delta "${relative}")
+  endforeach()
+  list(SORT actual_delta)
+  set(missing "${expected_package_delta}")
+  foreach(relative IN LISTS actual_delta)
+    list(REMOVE_ITEM missing "${relative}")
+  endforeach()
+  set(unexpected "${actual_delta}")
+  foreach(relative IN LISTS expected_package_delta)
+    list(REMOVE_ITEM unexpected "${relative}")
+  endforeach()
+  if(missing OR unexpected)
+    message(FATAL_ERROR
+      "Installed prefix delta mismatch\nmissing: ${missing}\nunexpected: ${unexpected}")
+  endif()
+endfunction()
+
 require_clean_portable_prefix()
 if(PREFIX_OWNERSHIP_PROBE)
+  return()
+endif()
+if(DELTA_OWNERSHIP_PROBE)
+  if(NOT DEFINED DELTA_STAGE OR "${DELTA_STAGE}" STREQUAL "")
+    message(FATAL_ERROR "DELTA_STAGE is required")
+  endif()
+  cmake_path(ABSOLUTE_PATH DELTA_STAGE NORMALIZE OUTPUT_VARIABLE DELTA_STAGE)
+  cmake_path(GET DELTA_STAGE PARENT_PATH delta_parent)
+  if(NOT "${delta_parent}" STREQUAL "${TEST_ROOT}")
+    message(FATAL_ERROR
+      "Unsafe DELTA_STAGE; expected a direct child of TEST_ROOT: ${DELTA_STAGE}")
+  endif()
+  snapshot_prefix("${PORTABLE_PURE_PREFIX}" baseline_paths baseline_hashes)
+  require_exact_install_delta(baseline_paths baseline_hashes "${DELTA_STAGE}")
   return()
 endif()
 expect_probe_rejected("source TEST_ROOT" "Unsafe TEST_ROOT"
@@ -150,7 +249,10 @@ expect_probe_rejected("GLPK-contaminated portable prefix"
 
 set(stage "${TEST_ROOT}/stage")
 file(MAKE_DIRECTORY "${stage}")
+snapshot_prefix("${PORTABLE_PURE_PREFIX}" baseline_paths baseline_hashes)
 file(COPY "${PORTABLE_PURE_PREFIX}/" DESTINATION "${stage}")
+require_snapshot_preserved("portable-prefix staging" baseline_paths
+  baseline_hashes "${stage}")
 
 foreach(component IN ITEMS runtime documentation)
   execute_process(
@@ -167,6 +269,8 @@ foreach(component IN ITEMS runtime documentation)
       "stdout:\n${install_output}\nstderr:\n${install_error}")
   endif()
 endforeach()
+
+require_exact_install_delta(baseline_paths baseline_hashes "${stage}")
 
 set(portable_pure "${PORTABLE_PURE_PREFIX}/bin/pure.exe")
 set(staged_pure "${stage}/bin/pure.exe")
@@ -221,6 +325,18 @@ if(NOT pristine_result EQUAL 0)
     "Untouched installed package was rejected (${pristine_result})\n"
     "${pristine_diagnostics}")
 endif()
+
+set(out_of_namespace_file
+  "${stage}/share/unexpected-outside-owned-globs.txt")
+file(WRITE "${out_of_namespace_file}" "not package-owned\n")
+expect_probe_rejected("out-of-namespace installed file"
+  "unexpected-outside-owned-globs\\.txt"
+  "-DPORTABLE_PURE_PREFIX=${PORTABLE_PURE_PREFIX}"
+  "-DTEST_ROOT=${TEST_ROOT}"
+  "-DDELTA_STAGE=${stage}"
+  -DDELTA_OWNERSHIP_PROBE=ON)
+file(REMOVE "${out_of_namespace_file}")
+require_exact_install_delta(baseline_paths baseline_hashes "${stage}")
 
 run_verifier("${stage}" wrong_openmp_license_result wrong_openmp_license_diagnostics
   "-DOPENMP_LICENSE_SOURCE=${GLPK_LICENSE_SOURCE}")

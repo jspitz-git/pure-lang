@@ -11,15 +11,24 @@ errorp value = index (str value) "glp::error" >= 0;
 
 using glpk;
 
+callback_reasonp reason =
+  reason === glp::irowgen || reason === glp::ibingo ||
+  reason === glp::iheur || reason === glp::icutgen ||
+  reason === glp::ibranch || reason === glp::iselect ||
+  reason === glp::iprepro;
+
 let callback_invocations, callback_info_seen, retained_tree,
-    retain_callback_tree = ref 0, ref false, ref NULL, ref true;
+    retain_callback_tree, callback_reason, callback_reason_valid =
+      ref 0, ref false, ref NULL, ref true, ref NULL, ref false;
 let callback_info = ref ();
 
 namespace glp;
 mip_cb tree info = () when
   put smoke::callback_invocations (get smoke::callback_invocations+1);
   put smoke::callback_info_seen (info === smoke::callback_info);
-  glp::ios_reason tree;
+  put smoke::callback_reason (glp::ios_reason tree);
+  put smoke::callback_reason_valid
+    (smoke::callback_reasonp (get smoke::callback_reason));
   if get smoke::retain_callback_tree
     then put smoke::retained_tree tree
     else ();
@@ -86,8 +95,11 @@ smoke::check "MIP solver return"
                     (glp::cb_info,callback_info)] === glp::ok);
 smoke::check "MIP callback invoked" (get callback_invocations > 0);
 smoke::check "MIP callback info" (get callback_info_seen);
-smoke::check "MIP callback stale handle rejected"
-  (~intp (glp::ios_reason (get retained_tree)));
+smoke::check "callback ios_reason was not one of seven GLPK reason symbols"
+  (get callback_reason_valid);
+let stale_callback_reason = glp::ios_reason (get retained_tree);
+smoke::check "retained callback tree returned a valid reason after intopt"
+  (~smoke::callback_reasonp stale_callback_reason);
 smoke::check "MIP optimal status" (glp::mip_status mip === glp::opt);
 smoke::check "MIP objective"
   (smoke::close (glp::mip_obj_val mip) 2.0 1.0e-9);

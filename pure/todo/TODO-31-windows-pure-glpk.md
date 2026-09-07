@@ -136,3 +136,27 @@ Build, validate, and package `pure-glpk` with a controlled Windows GLPK runtime.
   `fdad1758a9e1f9d5a81e18879b3406772115edc92c24bfa36b70c654f325e8e4`,
   equal to the owner package source, and the obsolete conflated notice was
   absent.
+- 2026-09-07: Final review hardened the remaining destructive contract
+  fixtures. Runner and nested-configure tests now normalize explicit binary,
+  contract, and test roots; accept only the intended direct-child layout;
+  reject protected roots through non-destructive self-probes; and only then
+  remove their isolated test directories. The runner contract also proves
+  `C:/Windows` as the effective working directory and rejects a zero-exit
+  child that emits stderr.
+- 2026-09-07: The callback smoke test now records `glp::ios_reason` while the
+  callback handle is live and requires one of all seven documented reason
+  symbols. After `glp::intopt` returns, the retained cleared handle must not
+  yield any of those symbols. The install contract snapshots every relative
+  file and SHA-256 in the portable prefix, proves all pre-existing files stay
+  unchanged, and requires the complete post-install delta to be exactly the
+  15 owned files; its negative probe adds a file outside the old glob
+  namespaces and confirms rejection.
+- 2026-09-07: The final PE fixture contract now covers both an unexpected
+  import and omission of known `libpure.dll`, requires the module filename and
+  all four expected/actual/missing/unexpected diagnostic labels, restores each
+  mutation, and reruns the pristine verifier. The source archive driver is
+  deleted before asset inspection; required archive inputs must be regular,
+  non-symlink files whose SHA-256 values match the checkout. A fresh strict
+  Release build used Clang 22.1.8 and exactly four workers, exact imports
+  passed for eight AMD64 binaries, and all seven sanitized `glpk` tests passed
+  in 56.73 seconds.

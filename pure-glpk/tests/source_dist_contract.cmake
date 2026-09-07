@@ -143,6 +143,10 @@ if(NOT IS_DIRECTORY "${staged_source}")
   message(FATAL_ERROR "Extracted source directory is missing: ${staged_source}")
 endif()
 
+# Remove the tree that drove the legacy make target before inspecting or using
+# the extracted archive.  Every subsequent source input must be self-contained.
+file(REMOVE_RECURSE "${distribution_driver}")
+
 set(required_assets CMakeLists.txt WINDOWS.md tests/load.pure tests/smoke.pure)
 file(GLOB source_cmake_scripts RELATIVE "${SOURCE_DIR}"
   "${SOURCE_DIR}/cmake/*.cmake")
@@ -156,11 +160,23 @@ foreach(asset IN LISTS required_assets)
       IS_DIRECTORY "${staged_source}/${asset}")
     message(FATAL_ERROR "Source archive misses required asset: ${asset}")
   endif()
+  if(IS_SYMLINK "${staged_source}/${asset}")
+    message(FATAL_ERROR "Source archive contains symlink asset: ${asset}")
+  endif()
+  if(NOT EXISTS "${SOURCE_DIR}/${asset}" OR
+      IS_DIRECTORY "${SOURCE_DIR}/${asset}" OR
+      IS_SYMLINK "${SOURCE_DIR}/${asset}")
+    message(FATAL_ERROR "Source asset is not a regular file: ${asset}")
+  endif()
+  file(SHA256 "${SOURCE_DIR}/${asset}" source_hash)
+  file(SHA256 "${staged_source}/${asset}" staged_hash)
+  if(NOT staged_hash STREQUAL source_hash)
+    message(FATAL_ERROR "Source archive asset hash mismatch: ${asset}")
+  endif()
 endforeach()
 
 # Prove the configure step consumes only the extracted source tree, rather
 # than falling back to the copied tree that drove the legacy make target.
-file(REMOVE_RECURSE "${distribution_driver}")
 set(configure_build "${TEST_ROOT}/configure")
 execute_process(
   COMMAND "${CMAKE_COMMAND}" -E env

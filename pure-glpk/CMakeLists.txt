@@ -152,6 +152,8 @@ if(BUILD_TESTING)
       NAME pure-glpk-runner-contract
       COMMAND "${CMAKE_COMMAND}"
         "-DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
+        "-DBINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}"
+        "-DCONTRACT_ROOT=${contract_root}"
         "-DTEST_ROOT=${contract_root}/runner"
         -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/runner_contract.cmake"
     )
@@ -159,6 +161,8 @@ if(BUILD_TESTING)
       NAME pure-glpk-configure-contract
       COMMAND "${CMAKE_COMMAND}"
         "-DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
+        "-DBINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}"
+        "-DCONTRACT_ROOT=${contract_root}"
         "-DTEST_ROOT=${contract_root}/configure"
         "-DGENERATOR=${CMAKE_GENERATOR}"
         "-DMAKE_PROGRAM=${CMAKE_MAKE_PROGRAM}"

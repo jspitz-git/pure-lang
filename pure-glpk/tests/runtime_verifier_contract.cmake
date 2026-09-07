@@ -243,14 +243,85 @@ execute_process(
   ENCODING UTF-8
 )
 set(unexpected_diagnostics "${unexpected_output}\n${unexpected_error}")
+file(REMOVE "${test_root}/inject-unexpected")
 if(unexpected_result EQUAL 0)
   message(FATAL_ERROR
     "PE verifier accepted unexpected import libunexpected.dll")
 endif()
-if(NOT unexpected_diagnostics MATCHES "libunexpected\\.dll")
+if(NOT unexpected_diagnostics MATCHES "glpk\\.dll import mismatch" OR
+    NOT unexpected_diagnostics MATCHES "libunexpected\\.dll")
   message(FATAL_ERROR
-    "PE verifier rejected the mutation without naming libunexpected.dll\n"
+    "PE verifier rejected the mutation without naming glpk.dll and "
+    "libunexpected.dll\n"
     "${unexpected_diagnostics}")
 endif()
+foreach(label IN ITEMS "expected:" "actual:" "missing:" "unexpected:")
+  if(NOT unexpected_diagnostics MATCHES "${label}")
+    message(FATAL_ERROR
+      "Unexpected-import diagnostic omitted ${label}\n"
+      "${unexpected_diagnostics}")
+  endif()
+endforeach()
 
-message(STATUS "Exact PE import contract rejected libunexpected.dll")
+execute_process(
+  COMMAND "${CMAKE_COMMAND}" ${verifier_arguments}
+  RESULT_VARIABLE restored_result
+  OUTPUT_VARIABLE restored_output
+  ERROR_VARIABLE restored_error
+  ENCODING UTF-8
+)
+if(NOT restored_result EQUAL 0)
+  message(FATAL_ERROR
+    "PE verifier fixture was not pristine after sentinel cleanup\n"
+    "${restored_output}\n${restored_error}")
+endif()
+
+set(glpk_fixture "${test_root}/glpk.dll.imports")
+file(READ "${glpk_fixture}" original_glpk_imports)
+string(REPLACE "LiBpUrE.DlL\n" "" omitted_glpk_imports
+  "${original_glpk_imports}")
+if(omitted_glpk_imports STREQUAL original_glpk_imports)
+  message(FATAL_ERROR "Unable to construct missing-import fixture")
+endif()
+file(WRITE "${glpk_fixture}" "${omitted_glpk_imports}")
+execute_process(
+  COMMAND "${CMAKE_COMMAND}" ${verifier_arguments}
+  RESULT_VARIABLE omitted_result
+  OUTPUT_VARIABLE omitted_output
+  ERROR_VARIABLE omitted_error
+  ENCODING UTF-8
+)
+file(WRITE "${glpk_fixture}" "${original_glpk_imports}")
+set(omitted_diagnostics "${omitted_output}\n${omitted_error}")
+if(omitted_result EQUAL 0)
+  message(FATAL_ERROR "PE verifier accepted omitted known import libpure.dll")
+endif()
+if(NOT omitted_diagnostics MATCHES "glpk\\.dll import mismatch" OR
+    NOT omitted_diagnostics MATCHES "missing:.*libpure\\.dll")
+  message(FATAL_ERROR
+    "Missing-import diagnostic omitted glpk.dll or libpure.dll\n"
+    "${omitted_diagnostics}")
+endif()
+foreach(label IN ITEMS "expected:" "actual:" "missing:" "unexpected:")
+  if(NOT omitted_diagnostics MATCHES "${label}")
+    message(FATAL_ERROR
+      "Missing-import diagnostic omitted ${label}\n"
+      "${omitted_diagnostics}")
+  endif()
+endforeach()
+
+execute_process(
+  COMMAND "${CMAKE_COMMAND}" ${verifier_arguments}
+  RESULT_VARIABLE final_result
+  OUTPUT_VARIABLE final_output
+  ERROR_VARIABLE final_error
+  ENCODING UTF-8
+)
+if(NOT final_result EQUAL 0)
+  message(FATAL_ERROR
+    "PE verifier fixture was not pristine after import restoration\n"
+    "${final_output}\n${final_error}")
+endif()
+
+message(STATUS
+  "Exact PE import contract rejected unexpected and missing imports")

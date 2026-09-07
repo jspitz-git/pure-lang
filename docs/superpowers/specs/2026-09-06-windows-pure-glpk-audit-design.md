@@ -122,4 +122,3 @@ build directory:
 5. callback lifetime regression, including a retained stale handle;
 6. source-distribution contract test;
 7. `git diff --check` and workflow syntax validation.
-
