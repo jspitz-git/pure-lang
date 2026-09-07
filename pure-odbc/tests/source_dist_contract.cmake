@@ -245,6 +245,61 @@ endif()
 _pure_odbc_require_no_reparse(
   "${checkout_source}" "restored copied distribution checkout" TRUE)
 
+set(checkout_junction "${dist_root}/checkout-root-junction")
+execute_process(
+  COMMAND "${CMAKE_COMMAND}" -E env
+    "PURE_ODBC_LINK_PATH=${checkout_junction}"
+    "PURE_ODBC_LINK_TARGET=${checkout_source}"
+    "SystemRoot=${WINDOWS_DIRECTORY}" "windir=${WINDOWS_DIRECTORY}"
+    "${powershell}" -NoProfile -NonInteractive -ExecutionPolicy Bypass
+    -Command "$ErrorActionPreference='Stop'; New-Item -ItemType Junction -Path $env:PURE_ODBC_LINK_PATH -Target $env:PURE_ODBC_LINK_TARGET | Out-Null"
+  RESULT_VARIABLE root_junction_create_result
+  OUTPUT_VARIABLE root_junction_create_output
+  ERROR_VARIABLE root_junction_create_error
+  ENCODING UTF-8)
+if(NOT root_junction_create_result EQUAL 0)
+  message(FATAL_ERROR
+    "Unable to create the checkout-root reparse fixture "
+    "(${root_junction_create_result})\n"
+    "${root_junction_create_output}${root_junction_create_error}")
+endif()
+execute_process(
+  COMMAND "${CMAKE_COMMAND}" -E env
+    "PATH=${msys_usr_bin};${CLANG64_PREFIX}/bin;${WINDOWS_DIRECTORY}/System32"
+    "PKG_CONFIG_PATH=${PKG_CONFIG_PATH}"
+    "${MAKE_EXECUTABLE}" date=September\ 7,\ 2026 dist
+  WORKING_DIRECTORY "${checkout_junction}"
+  RESULT_VARIABLE root_junction_dist_result
+  OUTPUT_VARIABLE root_junction_dist_output
+  ERROR_VARIABLE root_junction_dist_error
+  ENCODING UTF-8)
+execute_process(
+  COMMAND "${CMAKE_COMMAND}" -E env
+    "PURE_ODBC_LINK_PATH=${checkout_junction}"
+    "SystemRoot=${WINDOWS_DIRECTORY}" "windir=${WINDOWS_DIRECTORY}"
+    "${powershell}" -NoProfile -NonInteractive -ExecutionPolicy Bypass
+    -Command "$ErrorActionPreference='Stop'; $item=Get-Item -LiteralPath $env:PURE_ODBC_LINK_PATH -Force; if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -eq 0) { throw 'fixture is not a reparse point' }; [IO.Directory]::Delete($env:PURE_ODBC_LINK_PATH, $false)"
+  RESULT_VARIABLE root_junction_remove_result
+  OUTPUT_VARIABLE root_junction_remove_output
+  ERROR_VARIABLE root_junction_remove_error
+  ENCODING UTF-8)
+if(NOT root_junction_remove_result EQUAL 0)
+  message(FATAL_ERROR
+    "Unable to remove the checkout-root reparse fixture "
+    "(${root_junction_remove_result})\n"
+    "${root_junction_remove_output}${root_junction_remove_error}")
+endif()
+file(REMOVE "${checkout_source}/pure-odbc-0.10.tar.gz")
+if(root_junction_dist_result EQUAL 0)
+  message(FATAL_ERROR "make dist accepted a junction in the checkout path")
+endif()
+if(NOT root_junction_dist_error MATCHES
+    "refusing reparse distribution input: CMakeLists\\.txt")
+  message(FATAL_ERROR
+    "make dist rejected the checkout junction with the wrong diagnostic\n"
+    "${root_junction_dist_output}${root_junction_dist_error}")
+endif()
+
 run_checked("make dist" dist_result dist_output dist_error
   WORKING_DIRECTORY "${checkout_source}"
   COMMAND "${CMAKE_COMMAND}" -E env
