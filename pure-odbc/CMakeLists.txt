@@ -2,6 +2,8 @@ cmake_minimum_required(VERSION 3.25)
 
 project(pure-odbc VERSION 0.10 LANGUAGES C)
 
+option(PURE_ODBC_BUILD_FAULT_TESTS "Build native ODBC fault-injection tests" OFF)
+
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(PURE REQUIRED IMPORTED_TARGET "pure>=0.68")
 pkg_check_modules(GMP REQUIRED IMPORTED_TARGET gmp)
@@ -81,5 +83,30 @@ if(BUILD_TESTING)
       REQUIRED_FILES "$<TARGET_FILE:odbc>;${CMAKE_CURRENT_SOURCE_DIR}/tests/smoke.pure"
       TIMEOUT 60
   )
+
+  if(PURE_ODBC_BUILD_FAULT_TESTS)
+    add_executable(pure-odbc-fault-tests tests/odbc_fault_harness.c)
+    target_compile_features(pure-odbc-fault-tests PRIVATE c_std_11)
+    target_compile_definitions(pure-odbc-fault-tests PRIVATE PURE_ODBC_TESTING)
+    target_link_libraries(
+      pure-odbc-fault-tests
+      PRIVATE PkgConfig::PURE PkgConfig::GMP
+    )
+    if(WIN32)
+      target_link_libraries(pure-odbc-fault-tests PRIVATE odbc32)
+    endif()
+    if(MINGW)
+      target_compile_options(
+        pure-odbc-fault-tests
+        PRIVATE -Wall -Wextra -Werror -fsanitize=address -fno-omit-frame-pointer
+      )
+      target_link_options(pure-odbc-fault-tests PRIVATE -fsanitize=address)
+    endif()
+    add_test(NAME pure-odbc-fault COMMAND pure-odbc-fault-tests)
+    set_tests_properties(
+      pure-odbc-fault
+      PROPERTIES LABELS "odbc;fault;asan" TIMEOUT 30
+    )
+  endif()
 endif()
 include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/Install.cmake")

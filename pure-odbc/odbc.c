@@ -33,6 +33,7 @@
 
 #include <sql.h>
 #include <sqlext.h>
+#include "odbc_api.h"
 
 #if (ODBCVER < 0x0300)
 #error "Sorry, this module requires ODBC 3.0 or later!"
@@ -40,6 +41,110 @@
 
 #include <gmp.h>
 #include <pure/runtime.h>
+
+static const struct pure_odbc_api pure_odbc_production_api = {
+  SQLAllocHandle,
+  SQLFreeHandle,
+  SQLSetEnvAttr,
+  SQLDriverConnect,
+  SQLDisconnect,
+  SQLGetDiagRec,
+  SQLDrivers,
+  SQLDataSources,
+  SQLGetInfo,
+  SQLGetTypeInfo,
+  SQLBindCol,
+  SQLFetch,
+  SQLFreeStmt,
+  SQLTables,
+  SQLColumns,
+  SQLPrimaryKeys,
+  SQLForeignKeys,
+  SQLPrepare,
+  SQLBindParameter,
+  SQLExecute,
+  SQLNumResultCols,
+  SQLRowCount,
+  SQLDescribeCol,
+  SQLGetData,
+  SQLMoreResults,
+  SQLCloseCursor
+};
+
+static const struct pure_odbc_api *api = &pure_odbc_production_api;
+
+#ifdef PURE_ODBC_TESTING
+static struct pure_odbc_api pure_odbc_test_api;
+
+void pure_odbc_set_api_for_test(const struct pure_odbc_api *test_api)
+{
+  if (!test_api) {
+    api = &pure_odbc_production_api;
+    return;
+  }
+  pure_odbc_test_api = pure_odbc_production_api;
+#define PURE_ODBC_OVERRIDE(member) \
+  if (test_api->member) pure_odbc_test_api.member = test_api->member
+  PURE_ODBC_OVERRIDE(alloc_handle);
+  PURE_ODBC_OVERRIDE(free_handle);
+  PURE_ODBC_OVERRIDE(set_env_attr);
+  PURE_ODBC_OVERRIDE(driver_connect);
+  PURE_ODBC_OVERRIDE(disconnect);
+  PURE_ODBC_OVERRIDE(get_diag_rec);
+  PURE_ODBC_OVERRIDE(drivers);
+  PURE_ODBC_OVERRIDE(data_sources);
+  PURE_ODBC_OVERRIDE(get_info);
+  PURE_ODBC_OVERRIDE(get_type_info);
+  PURE_ODBC_OVERRIDE(bind_col);
+  PURE_ODBC_OVERRIDE(fetch);
+  PURE_ODBC_OVERRIDE(free_stmt);
+  PURE_ODBC_OVERRIDE(tables);
+  PURE_ODBC_OVERRIDE(columns);
+  PURE_ODBC_OVERRIDE(primary_keys);
+  PURE_ODBC_OVERRIDE(foreign_keys);
+  PURE_ODBC_OVERRIDE(prepare);
+  PURE_ODBC_OVERRIDE(bind_parameter);
+  PURE_ODBC_OVERRIDE(execute);
+  PURE_ODBC_OVERRIDE(num_result_cols);
+  PURE_ODBC_OVERRIDE(row_count);
+  PURE_ODBC_OVERRIDE(describe_col);
+  PURE_ODBC_OVERRIDE(get_data);
+  PURE_ODBC_OVERRIDE(more_results);
+  PURE_ODBC_OVERRIDE(close_cursor);
+#undef PURE_ODBC_OVERRIDE
+  api = &pure_odbc_test_api;
+}
+#endif
+
+#ifdef SQLAllocHandle
+#undef SQLAllocHandle
+#endif
+#define SQLAllocHandle(...) api->alloc_handle(__VA_ARGS__)
+#define SQLFreeHandle(...) api->free_handle(__VA_ARGS__)
+#define SQLSetEnvAttr(...) api->set_env_attr(__VA_ARGS__)
+#define SQLDriverConnect(...) api->driver_connect(__VA_ARGS__)
+#define SQLDisconnect(...) api->disconnect(__VA_ARGS__)
+#define SQLGetDiagRec(...) api->get_diag_rec(__VA_ARGS__)
+#define SQLDrivers(...) api->drivers(__VA_ARGS__)
+#define SQLDataSources(...) api->data_sources(__VA_ARGS__)
+#define SQLGetInfo(...) api->get_info(__VA_ARGS__)
+#define SQLGetTypeInfo(...) api->get_type_info(__VA_ARGS__)
+#define SQLBindCol(...) api->bind_col(__VA_ARGS__)
+#define SQLFetch(...) api->fetch(__VA_ARGS__)
+#define SQLFreeStmt(...) api->free_stmt(__VA_ARGS__)
+#define SQLTables(...) api->tables(__VA_ARGS__)
+#define SQLColumns(...) api->columns(__VA_ARGS__)
+#define SQLPrimaryKeys(...) api->primary_keys(__VA_ARGS__)
+#define SQLForeignKeys(...) api->foreign_keys(__VA_ARGS__)
+#define SQLPrepare(...) api->prepare(__VA_ARGS__)
+#define SQLBindParameter(...) api->bind_parameter(__VA_ARGS__)
+#define SQLExecute(...) api->execute(__VA_ARGS__)
+#define SQLNumResultCols(...) api->num_result_cols(__VA_ARGS__)
+#define SQLRowCount(...) api->row_count(__VA_ARGS__)
+#define SQLDescribeCol(...) api->describe_col(__VA_ARGS__)
+#define SQLGetData(...) api->get_data(__VA_ARGS__)
+#define SQLMoreResults(...) api->more_results(__VA_ARGS__)
+#define SQLCloseCursor(...) api->close_cursor(__VA_ARGS__)
 
 /* SQL NULL representation. */
 
@@ -520,28 +625,118 @@ pure_expr *odbc_info(pure_expr *dbx)
     return 0;
 }
 
+enum odbc_info_value_kind {
+  ODBC_INFO_TEXT,
+  ODBC_INFO_USMALLINT,
+  ODBC_INFO_UINTEGER,
+  ODBC_INFO_HANDLE
+};
+
+static enum odbc_info_value_kind odbc_info_value_kind(SQLUSMALLINT info_type)
+{
+  switch (info_type) {
+  case 0: case 1: case 9: case 11: case 12: case 15: case 19: case 20:
+  case 21: case 22: case 23: case 24: case 27: case 28: case 30: case 31:
+  case 32: case 33: case 34: case 35: case 36: case 37: case 38: case 46:
+  case 74: case 75: case 84: case 85: case 87: case 88: case 90: case 93:
+  case 97: case 98: case 99: case 100: case 101: case 103: case 106:
+  case 107: case 111: case 113: case 114: case 116: case 152: case 10000:
+  case 10002: case 10003: case 10005: case 10021:
+    return ODBC_INFO_USMALLINT;
+  case 8: case 26: case 43: case 44: case 48:
+  case 49: case 50: case 51: case 52: case 53: case 54: case 55: case 56:
+  case 57: case 58: case 59: case 60: case 61: case 62: case 63: case 64:
+  case 65: case 66: case 67: case 68: case 69: case 70: case 71: case 72:
+  case 78: case 79: case 80: case 81: case 82: case 83: case 86:
+  case 91: case 92: case 95: case 96: case 102: case 104: case 105:
+  case 108: case 109: case 110: case 112: case 115: case 117: case 118:
+  case 119: case 120: case 121: case 122: case 123: case 124: case 125:
+  case 126: case 127: case 128: case 129: case 130: case 131: case 132:
+  case 133: case 134: case 136: case 137: case 138: case 139:
+  case 140: case 141: case 142: case 143: case 144: case 145: case 146:
+  case 147: case 148: case 149: case 150: case 151: case 153: case 154:
+  case 155: case 156: case 157: case 158: case 159: case 160: case 161:
+  case 162: case 163: case 164: case 165: case 166: case 167: case 168:
+  case 169: case 170: case 172: case 173: case 10001: case 10022:
+  case 10023: case 10024: case 10025: case 10026: case 10027: case 10028:
+    return ODBC_INFO_UINTEGER;
+  case 3: case 4: case 5: case 76: case 135:
+    return ODBC_INFO_HANDLE;
+  default:
+    return ODBC_INFO_TEXT;
+  }
+}
+
+static pure_expr *odbc_getinfo_numeric(ODBCHandle *db, SQLUSMALLINT info_type,
+                                       size_t value_size)
+{
+  SQLSMALLINT length = 0;
+  SQLRETURN ret;
+  unsigned char *buf = (unsigned char *)malloc(value_size);
+
+  if (!buf)
+    return pure_err_internal("insufficient memory");
+  ret = SQLGetInfo(db->hdbc, info_type, buf, (SQLSMALLINT)value_size, &length);
+  if (!SQL_SUCCEEDED(ret)) {
+    free(buf);
+    return pure_err(db->henv, db->hdbc, 0);
+  }
+  return pure_sentry(pure_symbol(pure_sym("free")), pure_pointer(buf));
+}
+
+static pure_expr *odbc_getinfo_text(ODBCHandle *db, SQLUSMALLINT info_type)
+{
+  char info[1024] = {0};
+  SQLSMALLINT length = 0;
+  SQLRETURN ret;
+  unsigned char *buf;
+  size_t buffer_size;
+
+  ret = SQLGetInfo(db->hdbc, info_type, info, sizeof(info), &length);
+  if (!SQL_SUCCEEDED(ret))
+    return pure_err(db->henv, db->hdbc, 0);
+  if (length < 0 || length == SQL_NO_TOTAL)
+    return pure_err(db->henv, db->hdbc, 0);
+  if ((size_t)length < sizeof(info)) {
+    buffer_size = (size_t)length + 1;
+    if (!(buf = (unsigned char *)malloc(buffer_size)))
+      return pure_err_internal("insufficient memory");
+    memcpy(buf, info, (size_t)length);
+  } else {
+    if ((size_t)length >= (size_t)SHRT_MAX)
+      return pure_err(db->henv, db->hdbc, 0);
+    buffer_size = (size_t)length + 1;
+    if (!(buf = (unsigned char *)malloc(buffer_size)))
+      return pure_err_internal("insufficient memory");
+    ret = SQLGetInfo(db->hdbc, info_type, buf, (SQLSMALLINT)buffer_size,
+                     &length);
+    if (!SQL_SUCCEEDED(ret) || length < 0 ||
+        (size_t)length >= buffer_size) {
+      free(buf);
+      return pure_err(db->henv, db->hdbc, 0);
+    }
+  }
+  buf[length] = 0;
+  return pure_sentry(pure_symbol(pure_sym("free")), pure_pointer(buf));
+}
+
 pure_expr *odbc_getinfo(pure_expr *dbx, unsigned int info_type)
 {
   ODBCHandle *db;
   if (is_db_pointer(dbx, &db)) {
-    long ret;
-    char info[1024];
-    short len;
-    unsigned char *buf;
-    /* A few queries (which are not supported by this interface right now)
-       take pointer arguments, therefore we initialize the beginning of the
-       buffer to prevent segfaults. */
-    memset(info, 0, 32);
-    if ((ret  = SQLGetInfo(db->hdbc, info_type,
-			   info, sizeof(info), &len)) == SQL_SUCCESS ||
-	ret == SQL_SUCCESS_WITH_INFO) {
-      if (!(buf = (unsigned char*) malloc(len + 1)))
-	return pure_err_internal("insufficient memory");
-      memcpy(buf, info, len);
-      buf[len] = 0;
-      return pure_sentry(pure_symbol(pure_sym("free")), pure_pointer(buf));
-    } else
-      return pure_err(db->henv, db->hdbc, 0);
+    switch (odbc_info_value_kind((SQLUSMALLINT)info_type)) {
+    case ODBC_INFO_USMALLINT:
+      return odbc_getinfo_numeric(db, (SQLUSMALLINT)info_type,
+                                  sizeof(SQLUSMALLINT));
+    case ODBC_INFO_UINTEGER:
+      return odbc_getinfo_numeric(db, (SQLUSMALLINT)info_type,
+                                  sizeof(SQLUINTEGER));
+    case ODBC_INFO_HANDLE:
+      return odbc_getinfo_numeric(db, (SQLUSMALLINT)info_type,
+                                  sizeof(SQLHANDLE));
+    default:
+      return odbc_getinfo_text(db, (SQLUSMALLINT)info_type);
+    }
   } else
     return 0;
 }
@@ -1084,7 +1279,7 @@ pure_expr *odbc_sql_fetch(pure_expr *dbx)
 {
   ODBCHandle *db;
   if (is_db_pointer(dbx, &db) && db->coltype) {
-    long ret;
+    SQLRETURN ret;
     pure_expr *res, **xs;
     short i, j, cols = db->cols, *coltype = db->coltype;
     long iv, sz = BUFSZ;
@@ -1107,9 +1302,8 @@ pure_expr *odbc_sql_fetch(pure_expr *dbx)
       case SQL_TINYINT:
       case SQL_SMALLINT:
       case SQL_INTEGER:
-	if ((ret = SQLGetData(db->hstmt, i+1, SQL_INTEGER, &iv,
-			      sizeof(iv), &len) != SQL_SUCCESS) &&
-	    ret != SQL_SUCCESS_WITH_INFO)
+	ret = SQLGetData(db->hstmt, i+1, SQL_INTEGER, &iv, sizeof(iv), &len);
+	if (!SQL_SUCCEEDED(ret))
 	  goto err2;
 	if (len == SQL_NULL_DATA)
 	  xs[i] = pure_sqlnull();
@@ -1120,9 +1314,8 @@ pure_expr *odbc_sql_fetch(pure_expr *dbx)
 	/* hack to get bigint values converted to mpz_t, without having to
 	   fiddle around with long long values
 	   FIXME: we should really avoid the string conversion here */
-	if ((ret = SQLGetData(db->hstmt, i+1, SQL_CHAR, buf,
-			      sz, &len) != SQL_SUCCESS) &&
-	    ret != SQL_SUCCESS_WITH_INFO)
+	ret = SQLGetData(db->hstmt, i+1, SQL_CHAR, buf, sz, &len);
+	if (!SQL_SUCCEEDED(ret))
 	  goto err2;
 	if (len == SQL_NULL_DATA)
 	  xs[i] = pure_sqlnull();
@@ -1139,9 +1332,8 @@ pure_expr *odbc_sql_fetch(pure_expr *dbx)
       case SQL_NUMERIC:
       case SQL_FLOAT:
       case SQL_REAL:
-	if ((ret = SQLGetData(db->hstmt, i+1, SQL_DOUBLE, &fv,
-			      sizeof(fv), &len) != SQL_SUCCESS) &&
-	    ret != SQL_SUCCESS_WITH_INFO)
+	ret = SQLGetData(db->hstmt, i+1, SQL_DOUBLE, &fv, sizeof(fv), &len);
+	if (!SQL_SUCCEEDED(ret))
 	  goto err2;
 	if (len == SQL_NULL_DATA)
 	  xs[i] = pure_sqlnull();
@@ -1153,23 +1345,34 @@ pure_expr *odbc_sql_fetch(pure_expr *dbx)
       case SQL_LONGVARBINARY: {
 	char *bufp = buf;
 	SQLLEN total = 0, actsz = sz;
+	bool is_null = false;
 	*buf = 0;
 	while (1) {
-	  if ((ret = SQLGetData(db->hstmt, i+1, SQL_BINARY, bufp,
-				actsz, &len)) == SQL_SUCCESS ||
-	      ret == SQL_NO_DATA) {
-	    if (len == SQL_NULL_DATA)
+	  ret = SQLGetData(db->hstmt, i+1, SQL_BINARY, bufp, actsz, &len);
+	  if (ret == SQL_NO_DATA) {
+	    if (total == 0)
+	      goto err2;
+	    break;
+	  }
+	  if (!SQL_SUCCEEDED(ret))
+	    goto err2;
+	  if (ret == SQL_SUCCESS) {
+	    if (len == SQL_NULL_DATA) {
+	      is_null = true;
 	      break;
+	    }
 	    if (total+len < total)
 	      goto fatal2;
 	    else
 	      total += len;
 	    break;
-	  } else if (ret == SQL_SUCCESS_WITH_INFO) {
+	  } else {
 	    /* we probably need to make room for additional data */
 	    char *buf1;
-	    if (len == SQL_NULL_DATA)
+	    if (len == SQL_NULL_DATA) {
+	      is_null = true;
 	      break;
+	    }
 #if 0
 	    if (total+BUFSZ < total)
 	      goto fatal2;
@@ -1182,12 +1385,9 @@ pure_expr *odbc_sql_fetch(pure_expr *dbx)
 	    bufp = buf+total;
 	    sz += BUFSZ;
 	    actsz = BUFSZ;
-	  } else {
-	    /* some other error, bail out */
-	    goto err2;
 	  }
 	}
-	if (len == SQL_NULL_DATA)
+	if (is_null)
 	  xs[i] = pure_sqlnull();
 	else if (total == 0) {
 	  xs[i] = pure_tuplel(2, pure_int64(0),
@@ -1209,23 +1409,34 @@ pure_expr *odbc_sql_fetch(pure_expr *dbx)
       default: {
 	char *bufp = buf;
 	long total = 0, actsz = sz;
+	bool is_null = false;
 	*buf = 0;
 	while (1) {
-	  if ((ret = SQLGetData(db->hstmt, i+1, SQL_CHAR, bufp,
-				actsz, &len)) == SQL_SUCCESS ||
-	      ret == SQL_NO_DATA) {
-	    if (len == SQL_NULL_DATA)
+	  ret = SQLGetData(db->hstmt, i+1, SQL_CHAR, bufp, actsz, &len);
+	  if (ret == SQL_NO_DATA) {
+	    if (total == 0)
+	      goto err2;
+	    break;
+	  }
+	  if (!SQL_SUCCEEDED(ret))
+	    goto err2;
+	  if (ret == SQL_SUCCESS) {
+	    if (len == SQL_NULL_DATA) {
+	      is_null = true;
 	      break;
+	    }
 	    if (total+len < total)
 	      goto fatal2;
 	    else
 	      total += len;
 	    break;
-	  } else if (ret == SQL_SUCCESS_WITH_INFO) {
+	  } else {
 	    /* we probably need to make room for additional data */
 	    char *buf1;
-	    if (len == SQL_NULL_DATA)
+	    if (len == SQL_NULL_DATA) {
+	      is_null = true;
 	      break;
+	    }
 #if 0
 	    if (total+BUFSZ < total)
 	      goto fatal2;
@@ -1238,12 +1449,9 @@ pure_expr *odbc_sql_fetch(pure_expr *dbx)
 	    bufp = buf+total;
 	    sz += BUFSZ;
 	    actsz = BUFSZ+1;
-	  } else {
-	    /* some other error, bail out */
-	    goto err2;
 	  }
 	}
-	if (len == SQL_NULL_DATA)
+	if (is_null)
 	  xs[i] = pure_sqlnull();
 	else {
 	  xs[i] = pure_cstring_dup(buf);
