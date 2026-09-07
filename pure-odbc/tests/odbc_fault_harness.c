@@ -21,6 +21,7 @@ enum fault_mode {
   INFO_UINTEGER,
   INFO_XOPEN_TEXT,
   INFO_YN_TEXT,
+  INFO_UNTERMINATED_TEXT,
   INFO_HSTMT,
   INFO_HDESC
 };
@@ -31,6 +32,14 @@ enum binary_mode {
   BINARY_MULTI_CHUNK,
   BINARY_NO_TOTAL,
   BINARY_INFO_THEN_NO_DATA
+};
+
+enum text_mode {
+  TEXT_DEFAULT,
+  TEXT_SHORT_INFO,
+  TEXT_NEGATIVE_INFO,
+  TEXT_INFO_THEN_NO_DATA,
+  TEXT_REPEATED_INFO
 };
 
 enum operation_fault {
@@ -67,6 +76,7 @@ static int getdata_calls;
 static int getdata_null_result;
 static int getdata_info_then_no_data;
 static enum binary_mode binary_read_mode;
+static enum text_mode text_read_mode;
 static int getinfo_calls;
 static SQLUSMALLINT expected_info_type;
 static SQLSMALLINT expected_info_buffer_length;
@@ -704,6 +714,32 @@ static SQLRETURN SQL_API fake_SQLGetData(SQLHSTMT statement,
   }
   if (target_type == SQL_BINARY && binary_read_mode != BINARY_DEFAULT)
     return fake_binary_getdata(target, buffer_length, length);
+  if (target_type == SQL_CHAR && text_read_mode != TEXT_DEFAULT) {
+    static const char short_value[] = "short warning";
+    if (text_read_mode == TEXT_SHORT_INFO) {
+      if (getdata_calls > 2) return SQL_ERROR;
+      memcpy(target, short_value, sizeof(short_value));
+      *length = (SQLLEN)(sizeof(short_value) - 1);
+      return SQL_SUCCESS_WITH_INFO;
+    }
+    if (text_read_mode == TEXT_NEGATIVE_INFO) {
+      if (getdata_calls > 2) return SQL_ERROR;
+      if (buffer_length > 0) ((char *)target)[0] = 0;
+      *length = -2;
+      return SQL_SUCCESS_WITH_INFO;
+    }
+    if (text_read_mode == TEXT_INFO_THEN_NO_DATA && getdata_calls == 2) {
+      *length = SQL_NULL_DATA;
+      return SQL_NO_DATA;
+    }
+    if (getdata_calls > 20) return SQL_ERROR;
+    if (buffer_length > 0) {
+      memset(target, 'R', (size_t)buffer_length - 1);
+      ((char *)target)[buffer_length - 1] = 0;
+    }
+    *length = SQL_NO_TOTAL;
+    return SQL_SUCCESS_WITH_INFO;
+  }
   if (target_type == SQL_INTEGER) {
     *(SQLINTEGER *)target = INT32_C(0x12345678);
     *length = sizeof(SQLINTEGER);
@@ -1048,6 +1084,12 @@ static SQLRETURN SQL_API fake_SQLGetInfo(SQLHDBC connection,
     *length = sizeof(yn_value) - 1;
     return SQL_SUCCESS;
   }
+  if (mode == INFO_UNTERMINATED_TEXT) {
+    static const char value_without_nul[] = {'A', 'B', 'C', 'D'};
+    memcpy(value, value_without_nul, sizeof(value_without_nul));
+    *length = sizeof(value_without_nul);
+    return SQL_SUCCESS;
+  }
   if (mode == INFO_HSTMT) {
     SQLHANDLE statement_value = expected_info_input;
     getinfo_request_ok = info_type == expected_info_type &&
@@ -1073,7 +1115,7 @@ static SQLRETURN SQL_API fake_SQLGetInfo(SQLHDBC connection,
     *length = SQL_NO_TOTAL;
     return SQL_SUCCESS_WITH_INFO;
   }
-  if (getinfo_calls == 1) {
+  if ((getinfo_calls & 1) != 0) {
     for (i = 0; value && i + 1 < (size_t)buffer_length; ++i)
       ((char *)value)[i] = (char)('A' + i % 26);
     if (value && buffer_length > 0)
@@ -2405,8 +2447,8 @@ static void run_getdata_cases(void)
      SQL_NO_DATA, false, false, false, false},
     {"string accepts SQL_SUCCESS_WITH_INFO only with a valid indicator",
      SQL_VARCHAR, SQL_SUCCESS_WITH_INFO, true, true, false, true},
-    {"string does not read a poisoned indicator after SQL_NO_DATA",
-     SQL_VARCHAR, SQL_SUCCESS_WITH_INFO, true, false, true, false},
+    {"short text warning does not make a speculative read",
+     SQL_VARCHAR, SQL_SUCCESS_WITH_INFO, true, false, false, false},
     {"binary rejects SQL_ERROR without reading output", SQL_VARBINARY,
      SQL_ERROR, false, false, false, false},
     {"binary rejects initial SQL_NO_DATA without reading output", SQL_VARBINARY,
@@ -2431,6 +2473,7 @@ static void run_getdata_cases(void)
     getdata_null_result = cases[i].null_result;
     getdata_info_then_no_data = cases[i].info_then_no_data;
     binary_read_mode = BINARY_DEFAULT;
+    text_read_mode = TEXT_DEFAULT;
     database.magic = ODBC_MAGIC;
     database.henv = (SQLHENV)(uintptr_t)1;
     database.hdbc = (SQLHDBC)(uintptr_t)2;
@@ -2445,8 +2488,7 @@ static void run_getdata_cases(void)
     check(!produced_value ||
           is_singleton_sqlnull_list(result) == cases[i].should_produce_sqlnull,
           "SQLGetData conversion has the expected SQL NULL state");
-    check(getdata_calls == (cases[i].info_then_no_data &&
-                            cases[i].sql_type != SQL_VARBINARY ? 2 : 1),
+    check(getdata_calls == 1,
           "SQLGetData uses the expected number of calls");
     if (result && cases[i].sql_type == SQL_VARBINARY)
       (void)release_binary_result(result);
@@ -2454,6 +2496,75 @@ static void run_getdata_cases(void)
     pure_freenew(database_value);
     check(allocation_count == 0, "getdata case has zero net allocations");
   }
+}
+
+static void run_text_getdata_case(enum text_mode requested_mode,
+                                  const char *name, const char *expected,
+                                  bool should_produce_value,
+                                  int maximum_calls)
+{
+  SQLSMALLINT column_type = SQL_VARCHAR;
+  ODBCHandle database = {0};
+  pure_expr *database_value;
+  pure_expr *result;
+  pure_expr **items = NULL;
+  size_t count = 0;
+  const char *actual = NULL;
+  bool produced_value;
+
+  mode = FAULT_GETDATA;
+  text_read_mode = requested_mode;
+  binary_read_mode = BINARY_DEFAULT;
+  getdata_calls = 0;
+  getdata_null_result = 0;
+  getdata_info_then_no_data = 0;
+  database.magic = ODBC_MAGIC;
+  database.henv = (SQLHENV)(uintptr_t)1;
+  database.hdbc = (SQLHDBC)(uintptr_t)2;
+  database.hstmt = (SQLHSTMT)(uintptr_t)3;
+  database.coltype = &column_type;
+  database.cols = 1;
+  database.exec = 1;
+  database_value = pure_pointer(&database);
+  result = odbc_sql_fetch(database_value);
+  produced_value = pure_is_listv(result, &count, &items) && count == 1 &&
+    pure_is_string(items[0], &actual);
+  check(produced_value == should_produce_value, name);
+  if (should_produce_value) {
+    bool exact = actual != NULL;
+    if (expected)
+      exact = exact && strcmp(actual, expected) == 0;
+    else {
+      size_t i;
+      exact = exact && strlen(actual) == BUFSZ - 1;
+      for (i = 0; exact && i < BUFSZ - 1; ++i)
+        exact = actual[i] == 'R';
+    }
+    check(exact, "text SQLGetData value is exact");
+  }
+  check(getdata_calls <= maximum_calls,
+        "text SQLGetData warning continuation is bounded");
+  free(items);
+  release_pure_result(result);
+  pure_freenew(database_value);
+  check(allocation_count == 0, "text SQLGetData case has zero net allocations");
+  text_read_mode = TEXT_DEFAULT;
+}
+
+static void run_text_getdata_cases(void)
+{
+  run_text_getdata_case(TEXT_SHORT_INFO,
+                        "short text warning returns a complete value",
+                        "short warning", true, 1);
+  run_text_getdata_case(TEXT_NEGATIVE_INFO,
+                        "negative text indicator is rejected",
+                        "", false, 1);
+  run_text_getdata_case(TEXT_INFO_THEN_NO_DATA,
+                        "text truncation then SQL_NO_DATA preserves initialized bytes",
+                        NULL, true, 2);
+  run_text_getdata_case(TEXT_REPEATED_INFO,
+                        "repeated text warnings fail closed",
+                        "", false, 17);
 }
 
 static bool binary_bytes_match(enum binary_mode requested_mode,
@@ -2703,6 +2814,89 @@ static void run_getinfo_cases(void)
   check(allocation_count == 0, "descriptor rejection has zero net allocations");
 }
 
+static bool public_info_text_matches(const char *text,
+                                     enum fault_mode requested_mode)
+{
+  size_t i;
+  if (!text) return false;
+  if (requested_mode == INFO_UNTERMINATED_TEXT)
+    return strcmp(text, "ABCD") == 0;
+  if (requested_mode != INFO_LONG_TEXT)
+    return text[0] == 0;
+  if (strlen(text) != 2048) return false;
+  for (i = 0; i < 2048; ++i)
+    if (text[i] != (char)('A' + i % 26)) return false;
+  return true;
+}
+
+static void run_public_info_case(enum fault_mode requested_mode,
+                                 const char *name, int expected_calls)
+{
+  ODBCHandle database = {0};
+  pure_expr *database_value;
+  pure_expr *result;
+  pure_expr **fields = NULL;
+  size_t count = 0, i;
+  bool exact;
+
+  mode = requested_mode;
+  getinfo_calls = 0;
+  database.magic = ODBC_MAGIC;
+  database.henv = (SQLHENV)(uintptr_t)1;
+  database.hdbc = (SQLHDBC)(uintptr_t)2;
+  database.hstmt = (SQLHSTMT)(uintptr_t)3;
+  database_value = pure_pointer(&database);
+  result = odbc_info(database_value);
+  exact = pure_is_tuplev(result, &count, &fields) && count == 8;
+  for (i = 0; exact && i < count; ++i) {
+    const char *text = NULL;
+    exact = pure_is_string(fields[i], &text) &&
+      public_info_text_matches(text, requested_mode);
+  }
+  check(exact, name);
+  check(getinfo_calls == expected_calls,
+        "public odbc_info uses the safe loader call protocol");
+  free(fields);
+  release_pure_result(result);
+  pure_freenew(database_value);
+  check(allocation_count == 0, "public odbc_info has zero net allocations");
+}
+
+static void run_public_info_cases(void)
+{
+  ODBCHandle database = {0};
+  pure_expr *database_value;
+  pure_expr *result;
+
+  run_public_info_case(INFO_LONG_TEXT,
+                       "public odbc_info returns all long values exactly", 16);
+  run_public_info_case(INFO_NEGATIVE_LENGTH,
+                       "public odbc_info rejects invalid lengths safely", 8);
+  run_public_info_case(INFO_NO_TOTAL,
+                       "public odbc_info rejects SQL_NO_TOTAL safely", 8);
+  run_public_info_case(INFO_RETRY_FAILURE,
+                       "public odbc_info handles retry failures safely", 16);
+  run_public_info_case(INFO_UNTERMINATED_TEXT,
+                       "public odbc_info terminates reported short values", 8);
+
+  mode = INFO_LONG_TEXT;
+  getinfo_calls = 0;
+  fail_allocation_countdown = 3;
+  database.magic = ODBC_MAGIC;
+  database.henv = (SQLHENV)(uintptr_t)1;
+  database.hdbc = (SQLHDBC)(uintptr_t)2;
+  database.hstmt = (SQLHSTMT)(uintptr_t)3;
+  database_value = pure_pointer(&database);
+  result = odbc_info(database_value);
+  check(is_odbc_error(result),
+        "public odbc_info reports loader allocation failure");
+  release_pure_result(result);
+  pure_freenew(database_value);
+  check(allocation_count == 0,
+        "public odbc_info allocation failure frees partial values");
+  fail_allocation_countdown = 0;
+}
+
 int main(void)
 {
   pure_interp *interpreter = pure_create_interp(0, NULL);
@@ -2756,8 +2950,10 @@ int main(void)
   run_diagnostic_collection_case();
   run_failed_bind_col_cases();
   run_getdata_cases();
+  run_text_getdata_cases();
   run_binary_cases();
   run_getinfo_cases();
+  run_public_info_cases();
   pure_odbc_set_api_for_test(NULL);
   pure_delete_interp(interpreter);
   printf("SUMMARY: %d failure(s), %zu net allocation(s)\n",

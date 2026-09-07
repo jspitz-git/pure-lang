@@ -969,65 +969,44 @@ pure_expr *odbc_disconnect(pure_expr *dbx)
     return 0;
 }
 
+enum odbc_info_text_result {
+  ODBC_INFO_TEXT_OK,
+  ODBC_INFO_TEXT_ODBC_ERROR,
+  ODBC_INFO_TEXT_MEMORY_ERROR
+};
+
+static enum odbc_info_text_result odbc_load_info_text(
+  ODBCHandle *db, SQLUSMALLINT info_type, unsigned char **value);
+
 pure_expr *odbc_info(pure_expr *dbx)
 {
   ODBCHandle *db;
   if (is_db_pointer(dbx, &db)) {
-    SQLRETURN ret;
-    size_t n = 0;
+    static const SQLUSMALLINT info_types[] = {
+      SQL_DATA_SOURCE_NAME, SQL_DATABASE_NAME, SQL_DBMS_NAME, SQL_DBMS_VER,
+      SQL_DRIVER_NAME, SQL_DRIVER_VER, SQL_DRIVER_ODBC_VER, SQL_ODBC_VER
+    };
+    size_t n;
     pure_expr *xv[8], *res;
-    char info[1024];
-    SQLSMALLINT len;
-    if ((ret  = SQLGetInfo(db->hdbc, SQL_DATA_SOURCE_NAME,
-			   info, sizeof(info), &len)) == SQL_SUCCESS ||
-	ret == SQL_SUCCESS_WITH_INFO)
-      xv[n++] = pure_cstring_dup(info);
-    else
-      xv[n++] = pure_string_dup("");
-    if ((ret  = SQLGetInfo(db->hdbc, SQL_DATABASE_NAME,
-			   info, sizeof(info), &len)) == SQL_SUCCESS ||
-	ret == SQL_SUCCESS_WITH_INFO)
-      xv[n++] = pure_cstring_dup(info);
-    else
-      xv[n++] = pure_string_dup("");
-    if ((ret  = SQLGetInfo(db->hdbc, SQL_DBMS_NAME,
-			   info, sizeof(info), &len)) == SQL_SUCCESS ||
-	ret == SQL_SUCCESS_WITH_INFO)
-      xv[n++] = pure_cstring_dup(info);
-    else
-      xv[n++] = pure_string_dup("");
-    if ((ret  = SQLGetInfo(db->hdbc, SQL_DBMS_VER,
-			   info, sizeof(info), &len)) == SQL_SUCCESS ||
-	ret == SQL_SUCCESS_WITH_INFO)
-      xv[n++] = pure_cstring_dup(info);
-    else
-      xv[n++] = pure_string_dup("");
-    if ((ret  = SQLGetInfo(db->hdbc, SQL_DRIVER_NAME,
-			   info, sizeof(info), &len)) == SQL_SUCCESS ||
-	ret == SQL_SUCCESS_WITH_INFO)
-      xv[n++] = pure_cstring_dup(info);
-    else
-      xv[n++] = pure_string_dup("");
-    if ((ret  = SQLGetInfo(db->hdbc, SQL_DRIVER_VER,
-			   info, sizeof(info), &len)) == SQL_SUCCESS ||
-	ret == SQL_SUCCESS_WITH_INFO)
-      xv[n++] = pure_cstring_dup(info);
-    else
-      xv[n++] = pure_string_dup("");
-    if ((ret  = SQLGetInfo(db->hdbc, SQL_DRIVER_ODBC_VER,
-			   info, sizeof(info), &len)) == SQL_SUCCESS ||
-	ret == SQL_SUCCESS_WITH_INFO)
-      xv[n++] = pure_cstring_dup(info);
-    else
-      xv[n++] = pure_string_dup("");
-    if ((ret  = SQLGetInfo(db->hdbc, SQL_ODBC_VER,
-			   info, sizeof(info), &len)) == SQL_SUCCESS ||
-	ret == SQL_SUCCESS_WITH_INFO)
-      xv[n++] = pure_cstring_dup(info);
-    else
-      xv[n++] = pure_string_dup("");
+    for (n = 0; n < sizeof(info_types) / sizeof(info_types[0]); ++n) {
+      unsigned char *info = NULL;
+      enum odbc_info_text_result load_result =
+        odbc_load_info_text(db, info_types[n], &info);
+      if (load_result == ODBC_INFO_TEXT_MEMORY_ERROR)
+        goto memory_error;
+      xv[n] = load_result == ODBC_INFO_TEXT_OK ?
+        pure_cstring_dup((const char *)info) : pure_string_dup("");
+      free(info);
+      if (!xv[n])
+        goto memory_error;
+    }
     res = pure_tuplev(n, xv);
+    if (!res)
+      goto memory_error;
     return res;
+  memory_error:
+    while (n > 0) pure_freenew(xv[--n]);
+    return pure_err_internal("insufficient memory");
   } else
     return 0;
 }
@@ -1282,39 +1261,55 @@ static pure_expr *odbc_getinfo_handle(ODBCHandle *db, SQLUSMALLINT info_type)
   return pure_sentry(pure_symbol(pure_sym("free")), pure_pointer(buf));
 }
 
-static pure_expr *odbc_getinfo_text(ODBCHandle *db, SQLUSMALLINT info_type)
+static enum odbc_info_text_result odbc_load_info_text(
+  ODBCHandle *db, SQLUSMALLINT info_type, unsigned char **value)
 {
   char info[1024] = {0};
   SQLSMALLINT length = 0;
   SQLRETURN ret;
-  unsigned char *buf;
+  unsigned char *buf = NULL;
   size_t buffer_size;
+
+  *value = NULL;
 
   ret = SQLGetInfo(db->hdbc, info_type, info, sizeof(info), &length);
   if (!SQL_SUCCEEDED(ret))
-    return pure_err(db->henv, db->hdbc, 0);
+    return ODBC_INFO_TEXT_ODBC_ERROR;
   if (length < 0 || length == SQL_NO_TOTAL)
-    return pure_err(db->henv, db->hdbc, 0);
+    return ODBC_INFO_TEXT_ODBC_ERROR;
   if ((size_t)length < sizeof(info)) {
     buffer_size = (size_t)length + 1;
     if (!(buf = (unsigned char *)malloc(buffer_size)))
-      return pure_err_internal("insufficient memory");
+      return ODBC_INFO_TEXT_MEMORY_ERROR;
     memcpy(buf, info, (size_t)length);
   } else {
     if ((size_t)length >= (size_t)SHRT_MAX)
-      return pure_err(db->henv, db->hdbc, 0);
+      return ODBC_INFO_TEXT_ODBC_ERROR;
     buffer_size = (size_t)length + 1;
     if (!(buf = (unsigned char *)malloc(buffer_size)))
-      return pure_err_internal("insufficient memory");
+      return ODBC_INFO_TEXT_MEMORY_ERROR;
     ret = SQLGetInfo(db->hdbc, info_type, buf, (SQLSMALLINT)buffer_size,
                      &length);
     if (!SQL_SUCCEEDED(ret) || length < 0 ||
         (size_t)length >= buffer_size) {
       free(buf);
-      return pure_err(db->henv, db->hdbc, 0);
+      return ODBC_INFO_TEXT_ODBC_ERROR;
     }
   }
   buf[length] = 0;
+  *value = buf;
+  return ODBC_INFO_TEXT_OK;
+}
+
+static pure_expr *odbc_getinfo_text(ODBCHandle *db, SQLUSMALLINT info_type)
+{
+  unsigned char *buf = NULL;
+  enum odbc_info_text_result result =
+    odbc_load_info_text(db, info_type, &buf);
+  if (result == ODBC_INFO_TEXT_MEMORY_ERROR)
+    return pure_err_internal("insufficient memory");
+  if (result == ODBC_INFO_TEXT_ODBC_ERROR)
+    return pure_err(db->henv, db->hdbc, 0);
   return pure_sentry(pure_symbol(pure_sym("free")), pure_pointer(buf));
 }
 
@@ -2076,6 +2071,7 @@ pure_expr *odbc_sql_fetch(pure_expr *dbx)
       default: {
 	char *bufp = buf;
 	size_t total = 0;
+	unsigned int warning_count = 0;
 	SQLLEN actsz = (SQLLEN)sz;
 	bool is_null = false;
 	*buf = 0;
@@ -2093,21 +2089,34 @@ pure_expr *odbc_sql_fetch(pure_expr *dbx)
 	      is_null = true;
 	      break;
 	    }
-	    if (len < 0 || total > SIZE_MAX - (size_t)len)
-	      goto fatal2;
-	    else
-	      total += (size_t)len;
+	    if (len < 0 || len >= actsz ||
+		total > SIZE_MAX - (size_t)len)
+	      goto err2;
+	    total += (size_t)len;
+	    buf[total] = 0;
 	    break;
 	  } else {
-	    /* we probably need to make room for additional data */
+	    SQLLEN received;
 	    char *buf1;
 	    if (len == SQL_NULL_DATA) {
 	      is_null = true;
 	      break;
 	    }
+	    if (len < 0 && len != SQL_NO_TOTAL)
+	      goto err2;
+	    if (len != SQL_NO_TOTAL && len < actsz) {
+	      if (total > SIZE_MAX - (size_t)len)
+		goto fatal2;
+	      total += (size_t)len;
+	      buf[total] = 0;
+	      break;
+	    }
+	    if (++warning_count > 16)
+	      goto err2;
 	    if (actsz <= 0 || total > SIZE_MAX - ((size_t)actsz - 1))
 	      goto fatal2;
-	    total += (size_t)actsz - 1;
+	    received = actsz - 1;
+	    total += (size_t)received;
 	    if (sz > SIZE_MAX - BUFSZ)
 	      goto fatal2;
 	    if (!(buf1 = realloc(buf, sz+BUFSZ)))

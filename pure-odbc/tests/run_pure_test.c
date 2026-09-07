@@ -88,6 +88,38 @@ static int mark_test_query(void) {
   CloseHandle(file);
   return 0;
 }
+
+static void mark_cleanup_event(const char *event) {
+  const wchar_t *marker = _wgetenv(L"PURE_ODBC_TEST_CLEANUP_MARKER");
+  HANDLE file;
+  DWORD written;
+  if (marker == NULL || *marker == L'\0') return;
+  file = CreateFileW(marker, FILE_APPEND_DATA, FILE_SHARE_READ, NULL,
+                     OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+  if (file == INVALID_HANDLE_VALUE) return;
+  WriteFile(file, event, (DWORD)strlen(event), &written, NULL);
+  WriteFile(file, " ", 1, &written, NULL);
+  CloseHandle(file);
+}
+
+static HANDLE create_capture_thread(LPTHREAD_START_ROUTINE start,
+                                    LPVOID argument) {
+  static int call_count;
+  const wchar_t *controlled =
+    _wgetenv(L"PURE_ODBC_TEST_CREATE_THREAD_FAILURE");
+  ++call_count;
+  if (controlled != NULL && _wtoi(controlled) == call_count) {
+    SetLastError(ERROR_NOT_ENOUGH_MEMORY);
+    return NULL;
+  }
+  return CreateThread(NULL, 0, start, argument, 0, NULL);
+}
+#else
+#define mark_cleanup_event(event) ((void)0)
+static HANDLE create_capture_thread(LPTHREAD_START_ROUTINE start,
+                                    LPVOID argument) {
+  return CreateThread(NULL, 0, start, argument, 0, NULL);
+}
 #endif
 
 static int path_has_reparse_component(const wchar_t *path) {
@@ -407,6 +439,10 @@ static int fake_child(int argc, wchar_t **argv, const wchar_t *name) {
     wprintf(L"SKIP_STDOUT_SENTINEL\n");
     return 77;
   }
+  if (_wcsicmp(name, L"fake-hang.exe") == 0) {
+    Sleep(INFINITE);
+    return 1;
+  }
   if (_wcsicmp(name, L"fake-success.exe") != 0) return -1;
   GetCurrentDirectoryW((DWORD)(sizeof(cwd) / sizeof(cwd[0])), cwd);
   path = _wgetenv(L"PATH");
@@ -443,6 +479,9 @@ int wmain(int argc, wchar_t **argv) {
   struct capture_reader stderr_capture = {0};
   DWORD exit_code = 1;
   int result = 1;
+  int process_waited = 0;
+  int stdout_thread_waited = 0;
+  int stderr_thread_waited = 0;
 
   if (GetModuleFileNameW(NULL, module_name,
                          (DWORD)(sizeof(module_name) / sizeof(module_name[0]))) == 0)
@@ -518,25 +557,26 @@ int wmain(int argc, wchar_t **argv) {
     fail(L"cannot start PURE_EXECUTABLE", pure);
     goto done;
   }
-  CloseHandle(stdout_write);
-  stdout_write = NULL;
-  CloseHandle(stderr_write);
-  stderr_write = NULL;
-
   stdout_capture.input = stdout_read;
   stdout_capture.output = GetStdHandle(STD_OUTPUT_HANDLE);
   stderr_capture.input = stderr_read;
   stderr_capture.output = GetStdHandle(STD_ERROR_HANDLE);
-  stdout_thread = CreateThread(NULL, 0, capture_thread, &stdout_capture, 0, NULL);
-  stderr_thread = CreateThread(NULL, 0, capture_thread, &stderr_capture, 0, NULL);
+  stdout_thread = create_capture_thread(capture_thread, &stdout_capture);
+  stderr_thread = create_capture_thread(capture_thread, &stderr_capture);
   if (stdout_thread == NULL || stderr_thread == NULL) {
-    TerminateProcess(process.hProcess, 1);
     fail(L"cannot create output capture threads", NULL);
     goto done;
   }
+  CloseHandle(stdout_write);
+  stdout_write = NULL;
+  CloseHandle(stderr_write);
+  stderr_write = NULL;
   WaitForSingleObject(process.hProcess, INFINITE);
+  process_waited = 1;
   WaitForSingleObject(stdout_thread, INFINITE);
+  stdout_thread_waited = 1;
   WaitForSingleObject(stderr_thread, INFINITE);
+  stderr_thread_waited = 1;
   if (!GetExitCodeProcess(process.hProcess, &exit_code) ||
       stdout_capture.error != 0 || stderr_capture.error != 0) {
     fail(L"cannot collect child result", NULL);
@@ -549,12 +589,50 @@ int wmain(int argc, wchar_t **argv) {
   result = (int)exit_code;
 
 done:
-  if (stdout_write != NULL) CloseHandle(stdout_write);
-  if (stderr_write != NULL) CloseHandle(stderr_write);
-  if (stdout_thread != NULL) CloseHandle(stdout_thread);
-  if (stderr_thread != NULL) CloseHandle(stderr_thread);
-  if (stdout_read != NULL) CloseHandle(stdout_read);
-  if (stderr_read != NULL) CloseHandle(stderr_read);
+  if (process.hProcess != NULL && !process_waited) {
+    mark_cleanup_event("terminate-process");
+    TerminateProcess(process.hProcess, 1);
+  }
+  if (stdout_write != NULL) {
+    CloseHandle(stdout_write);
+    stdout_write = NULL;
+  }
+  if (stderr_write != NULL) {
+    CloseHandle(stderr_write);
+    stderr_write = NULL;
+  }
+  mark_cleanup_event("close-write-ends");
+  if (process.hProcess != NULL && !process_waited) {
+    mark_cleanup_event("wait-process");
+    WaitForSingleObject(process.hProcess, INFINITE);
+    process_waited = 1;
+  }
+  if (stdout_thread != NULL && !stdout_thread_waited) {
+    mark_cleanup_event("wait-stdout-thread");
+    WaitForSingleObject(stdout_thread, INFINITE);
+    stdout_thread_waited = 1;
+  }
+  if (stderr_thread != NULL && !stderr_thread_waited) {
+    mark_cleanup_event("wait-stderr-thread");
+    WaitForSingleObject(stderr_thread, INFINITE);
+    stderr_thread_waited = 1;
+  }
+  if (stdout_thread != NULL) {
+    mark_cleanup_event("close-stdout-thread");
+    CloseHandle(stdout_thread);
+  }
+  if (stderr_thread != NULL) {
+    mark_cleanup_event("close-stderr-thread");
+    CloseHandle(stderr_thread);
+  }
+  if (stdout_read != NULL) {
+    mark_cleanup_event("close-stdout-read");
+    CloseHandle(stdout_read);
+  }
+  if (stderr_read != NULL) {
+    mark_cleanup_event("close-stderr-read");
+    CloseHandle(stderr_read);
+  }
   if (process.hThread != NULL) CloseHandle(process.hThread);
   if (process.hProcess != NULL) CloseHandle(process.hProcess);
   free(pure);

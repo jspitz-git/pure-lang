@@ -505,7 +505,8 @@ file(MAKE_DIRECTORY
   "${TEST_ROOT}/alternate-windows")
 file(COPY_FILE
   "${RUN_PURE_TEST_EXECUTABLE}" "${TEST_ROOT}/module/run_pure_test.exe")
-foreach(fake_name IN ITEMS fake-success fake-stderr fake-exit37 fake-exit77)
+foreach(fake_name IN ITEMS
+    fake-success fake-stderr fake-exit37 fake-exit77 fake-hang)
   file(COPY_FILE
     "${RUN_PURE_TEST_EXECUTABLE}"
     "${TEST_ROOT}/pure/bin/${fake_name}.exe")
@@ -616,6 +617,40 @@ if(NOT alternate_launch_result EQUAL 0 OR
   message(FATAL_ERROR
     "Alternate-authority native launcher failed\n"
     "${alternate_launch_output}${alternate_launch_error}")
+endif()
+
+set(partial_thread_marker "${TEST_ROOT}/partial-thread-cleanup.events")
+file(REMOVE "${partial_thread_marker}")
+execute_process(
+  COMMAND "${CMAKE_COMMAND}" -E env
+    "PURE_ODBC_TEST_WINDOWS_DIRECTORY=${TEST_ROOT}/alternate-windows"
+    "PURE_ODBC_TEST_CREATE_THREAD_FAILURE=2"
+    "PURE_ODBC_TEST_CLEANUP_MARKER=${partial_thread_marker}"
+    "${ALTERNATE_RUN_PURE_TEST_EXECUTABLE}"
+    "${TEST_ROOT}/pure/bin/fake-hang.exe"
+    "${SOURCE_DIR}"
+    "${TEST_ROOT}/module"
+    "${TEST_ROOT}/test.pure"
+    "${TEST_ROOT}/alternate-windows"
+  RESULT_VARIABLE partial_thread_result
+  OUTPUT_VARIABLE partial_thread_output
+  ERROR_VARIABLE partial_thread_error
+  TIMEOUT 10
+  ENCODING UTF-8
+)
+if(NOT partial_thread_result EQUAL 1)
+  message(FATAL_ERROR
+    "Partial capture-thread failure did not fail promptly and exactly\n"
+    "${partial_thread_output}${partial_thread_error}")
+endif()
+if(NOT EXISTS "${partial_thread_marker}")
+  message(FATAL_ERROR "Partial capture-thread failure emitted no cleanup trace")
+endif()
+file(READ "${partial_thread_marker}" partial_thread_events)
+if(NOT partial_thread_events MATCHES
+    "terminate-process.*close-write-ends.*wait-process.*wait-stdout-thread.*close-stdout-thread.*close-stdout-read")
+  message(FATAL_ERROR
+    "Partial capture-thread cleanup ordering is unsafe\n${partial_thread_events}")
 endif()
 string(REGEX MATCH "EFFECTIVE_CWD=([^\r\n]+)" unused
   "${alternate_launch_output}")
