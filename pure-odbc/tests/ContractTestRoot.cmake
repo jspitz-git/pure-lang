@@ -190,7 +190,12 @@ function(pure_odbc_validate_contract_test_root leaf output_test_root)
     message(FATAL_ERROR
       "BINARY_DIR cache identity mismatch: ${cache_binary}")
   endif()
-  if(NOT cache_project STREQUAL "pure-odbc")
+  set(expected_project "pure-odbc")
+  set(compared_project "${cache_project}")
+  if(WIN32)
+    string(TOLOWER "${compared_project}" compared_project)
+  endif()
+  if(NOT compared_project STREQUAL expected_project)
     message(FATAL_ERROR
       "BINARY_DIR cache belongs to project '${cache_project}', not pure-odbc")
   endif()
@@ -294,4 +299,61 @@ function(pure_odbc_prepare_contract_test_root leaf configure_source
     file(WRITE "${sentinel}" "${expected_sentinel}")
   endif()
   set(${output_test_root} "${test_root}" PARENT_SCOPE)
+endfunction()
+
+function(pure_odbc_require_owned_or_neutral_work_directory input output)
+  cmake_path(ABSOLUTE_PATH input NORMALIZE OUTPUT_VARIABLE work_directory)
+  if(NOT IS_DIRECTORY "${work_directory}")
+    message(FATAL_ERROR
+      "WORK_DIRECTORY must be an existing directory: ${work_directory}")
+  endif()
+  _pure_odbc_require_no_reparse(
+    "${work_directory}" "WORK_DIRECTORY" FALSE)
+  file(REAL_PATH "${work_directory}" canonical_work_directory)
+  _pure_odbc_fold_path("${canonical_work_directory}" folded_work_directory)
+
+  if(WIN32 AND IS_DIRECTORY "C:/Windows")
+    _pure_odbc_require_no_reparse("C:/Windows" "neutral WORK_DIRECTORY" FALSE)
+    file(REAL_PATH "C:/Windows" neutral_work_directory)
+    _pure_odbc_fold_path("${neutral_work_directory}" folded_neutral_directory)
+    if(folded_work_directory STREQUAL folded_neutral_directory)
+      set(${output} "${canonical_work_directory}" PARENT_SCOPE)
+      return()
+    endif()
+  endif()
+
+  cmake_path(GET canonical_work_directory FILENAME leaf)
+  cmake_path(GET canonical_work_directory PARENT_PATH contract_root)
+  cmake_path(GET contract_root FILENAME contract_name)
+  cmake_path(GET contract_root PARENT_PATH derived_binary)
+  if(NOT contract_name STREQUAL "pure-odbc-contract" OR
+      NOT leaf MATCHES "^(runner|cleanup|access)$")
+    message(FATAL_ERROR
+      "WORK_DIRECTORY must be C:/Windows or an owned pure-odbc contract leaf")
+  endif()
+
+  set(BINARY_DIR "${derived_binary}")
+  pure_odbc_validate_contract_test_root("${leaf}" validated_test_root)
+  _pure_odbc_fold_path("${validated_test_root}" folded_validated_test_root)
+  if(NOT folded_work_directory STREQUAL folded_validated_test_root)
+    message(FATAL_ERROR
+      "WORK_DIRECTORY does not match its validated pure-odbc contract leaf")
+  endif()
+
+  set(sentinel "${validated_test_root}/.pure-odbc-contract-owner")
+  _pure_odbc_sentinel_content(
+    "${leaf}" "${SOURCE_DIR}" "${BINARY_DIR}" expected_sentinel)
+  if(NOT EXISTS "${sentinel}" OR IS_DIRECTORY "${sentinel}" OR
+      IS_SYMLINK "${sentinel}")
+    message(FATAL_ERROR
+      "WORK_DIRECTORY has no regular ownership sentinel: ${sentinel}")
+  endif()
+  _pure_odbc_require_no_reparse(
+    "${sentinel}" "WORK_DIRECTORY ownership sentinel" FALSE)
+  file(READ "${sentinel}" actual_sentinel)
+  if(NOT actual_sentinel STREQUAL expected_sentinel)
+    message(FATAL_ERROR
+      "WORK_DIRECTORY has an invalid ownership sentinel: ${sentinel}")
+  endif()
+  set(${output} "${canonical_work_directory}" PARENT_SCOPE)
 endfunction()

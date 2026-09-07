@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.29)
+cmake_minimum_required(VERSION 3.25)
 
 set(contract_helper "${CMAKE_CURRENT_LIST_DIR}/ContractTestRoot.cmake")
 if(NOT EXISTS "${contract_helper}")
@@ -12,15 +12,19 @@ if(DEFINED ROOT_PROBE_MODE)
       message(FATAL_ERROR "${required} is required")
     endif()
   endforeach()
-  if(ROOT_PROBE_MODE STREQUAL "validate")
+  if(ROOT_PROBE_MODE STREQUAL "validate" OR
+      ROOT_PROBE_MODE STREQUAL "validate-positive")
     pure_odbc_validate_contract_test_root("${EXPECTED_LEAF}" unused_root)
   elseif(ROOT_PROBE_MODE STREQUAL "reset")
     pure_odbc_reset_contract_test_root("${EXPECTED_LEAF}")
   else()
     message(FATAL_ERROR "Unknown root probe mode: ${ROOT_PROBE_MODE}")
   endif()
-  message(FATAL_ERROR
-    "ROOT_SAFETY_PROBE accepted unsafe ${ROOT_PROBE_MODE} input")
+  if(ROOT_PROBE_MODE STREQUAL "validate-positive")
+    message(STATUS "ROOT_SAFETY_PROBE accepted expected safe input")
+    return()
+  endif()
+  message(FATAL_ERROR "ROOT_SAFETY_PROBE accepted unsafe input")
 endif()
 
 function(expect_root_rejected label mode leaf candidate expected)
@@ -50,6 +54,24 @@ function(expect_root_rejected label mode leaf candidate expected)
   endif()
 endfunction()
 
+function(expect_root_accepted label leaf candidate)
+  execute_process(
+    COMMAND "${CMAKE_COMMAND}"
+      "-DBINARY_DIR=${candidate}"
+      "-DEXPECTED_LEAF=${leaf}"
+      -DROOT_PROBE_MODE=validate-positive
+      -P "${CMAKE_CURRENT_LIST_FILE}"
+    RESULT_VARIABLE result
+    OUTPUT_VARIABLE output
+    ERROR_VARIABLE error
+    ENCODING UTF-8
+  )
+  if(NOT result EQUAL 0)
+    message(FATAL_ERROR
+      "Root-safety probe rejected safe ${label}: ${candidate}\n${output}${error}")
+  endif()
+endfunction()
+
 function(expect_runner_rejected label expected)
   execute_process(
     COMMAND "${CMAKE_COMMAND}" -E env
@@ -71,6 +93,91 @@ function(expect_runner_rejected label expected)
       "Runner rejected ${label} for the wrong reason\n${diagnostics}")
   endif()
 endfunction()
+
+function(expect_runner_link_rejected label link_kind link_path link_target
+    linked_input input_path link_is_directory)
+  execute_process(
+    COMMAND "${CMAKE_COMMAND}" -E env
+      "PURE_ODBC_LINK_KIND=${link_kind}"
+      "PURE_ODBC_LINK_PATH=${link_path}"
+      "PURE_ODBC_LINK_TARGET=${link_target}"
+      "${powershell}" -NoProfile -NonInteractive -ExecutionPolicy Bypass
+      -Command
+      "$ErrorActionPreference='Stop'; New-Item -ItemType $env:PURE_ODBC_LINK_KIND -Path $env:PURE_ODBC_LINK_PATH -Target $env:PURE_ODBC_LINK_TARGET | Out-Null"
+    RESULT_VARIABLE create_result
+    OUTPUT_VARIABLE create_output
+    ERROR_VARIABLE create_error
+    ENCODING UTF-8
+  )
+  if(NOT create_result EQUAL 0)
+    message(FATAL_ERROR
+      "Unable to create ${label} (${create_result})\n"
+      "${create_output}${create_error}")
+  endif()
+
+  set(args ${all_args})
+  list(FILTER args EXCLUDE REGEX "^-D${linked_input}=")
+  list(PREPEND args "-D${linked_input}=${input_path}")
+  execute_process(
+    COMMAND "${CMAKE_COMMAND}" -E env
+      "PATH=C:/ambient-msys2/bin;C:/ambient-tools"
+      "PURELIB=C:/ambient-purelib"
+      "${CMAKE_COMMAND}" ${args}
+      -P "${SOURCE_DIR}/cmake/RunPureTest.cmake"
+    RESULT_VARIABLE result
+    OUTPUT_VARIABLE output
+    ERROR_VARIABLE error
+    ENCODING UTF-8
+  )
+
+  execute_process(
+    COMMAND "${CMAKE_COMMAND}" -E env
+      "PURE_ODBC_LINK_PATH=${link_path}"
+      "PURE_ODBC_LINK_IS_DIRECTORY=${link_is_directory}"
+      "${powershell}" -NoProfile -NonInteractive -ExecutionPolicy Bypass
+      -Command
+      "$ErrorActionPreference='Stop'; $item=Get-Item -LiteralPath $env:PURE_ODBC_LINK_PATH -Force; if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -eq 0) { throw 'not a reparse point' }; if ($env:PURE_ODBC_LINK_IS_DIRECTORY -eq 'TRUE') { [IO.Directory]::Delete($env:PURE_ODBC_LINK_PATH, $false) } else { [IO.File]::Delete($env:PURE_ODBC_LINK_PATH) }"
+    RESULT_VARIABLE cleanup_result
+    OUTPUT_VARIABLE cleanup_output
+    ERROR_VARIABLE cleanup_error
+    ENCODING UTF-8
+  )
+  if(NOT cleanup_result EQUAL 0)
+    message(FATAL_ERROR
+      "Unable to remove ${label} (${cleanup_result})\n"
+      "${cleanup_output}${cleanup_error}")
+  endif()
+
+  set(diagnostics "${output}\n${error}")
+  if(result EQUAL 0)
+    message(FATAL_ERROR "Runner accepted ${label}")
+  endif()
+  if(NOT diagnostics MATCHES "${linked_input}.*[Rr]eparse")
+    message(FATAL_ERROR
+      "Runner rejected ${label} for the wrong reason\n${diagnostics}")
+  endif()
+endfunction()
+
+foreach(required IN ITEMS RUN_PURE_TEST_EXECUTABLE ACTUAL_PURE_EXECUTABLE
+    ACTUAL_MODULE_DIR ACCESS_SCRIPT ACCESS_WORK_DIRECTORY)
+  if(NOT DEFINED ${required} OR "${${required}}" STREQUAL "")
+    message(FATAL_ERROR "${required} is required")
+  endif()
+endforeach()
+foreach(file_input IN ITEMS RUN_PURE_TEST_EXECUTABLE ACTUAL_PURE_EXECUTABLE
+    ACCESS_SCRIPT)
+  if(NOT EXISTS "${${file_input}}" OR IS_DIRECTORY "${${file_input}}")
+    message(FATAL_ERROR
+      "${file_input} must be an existing file: ${${file_input}}")
+  endif()
+endforeach()
+foreach(directory_input IN ITEMS ACTUAL_MODULE_DIR ACCESS_WORK_DIRECTORY)
+  if(NOT IS_DIRECTORY "${${directory_input}}")
+    message(FATAL_ERROR
+      "${directory_input} must be an existing directory: "
+      "${${directory_input}}")
+  endif()
+endforeach()
 
 pure_odbc_validate_contract_test_root("runner" initial_test_root)
 pure_odbc_reset_contract_test_root("runner")
@@ -151,6 +258,27 @@ expect_root_rejected(
   "wrong build cache" validate runner "${wrong_cache}"
   "belongs to project 'not-pure-odbc'")
 
+set(case_cache "${TEST_ROOT}/case-project-cache")
+file(MAKE_DIRECTORY "${case_cache}")
+string(TOUPPER "${SOURCE_DIR}" case_cache_source)
+string(TOUPPER "${case_cache}" case_cache_binary)
+file(WRITE "${case_cache}/CMakeCache.txt"
+  "CMAKE_HOME_DIRECTORY:INTERNAL=${case_cache_source}\n"
+  "CMAKE_CACHEFILE_DIR:INTERNAL=${case_cache_binary}\n"
+  "CMAKE_PROJECT_NAME:STATIC=PURE-ODBC\n")
+expect_root_accepted(
+  "case-only project/cache identity" runner "${case_cache}")
+
+set(case_wrong_cache "${TEST_ROOT}/case-wrong-project-cache")
+file(MAKE_DIRECTORY "${case_wrong_cache}")
+file(WRITE "${case_wrong_cache}/CMakeCache.txt"
+  "CMAKE_HOME_DIRECTORY:INTERNAL=${case_cache_source}\n"
+  "CMAKE_CACHEFILE_DIR:INTERNAL=${case_wrong_cache}\n"
+  "CMAKE_PROJECT_NAME:STATIC=PURE-ODBC-WRONG\n")
+expect_root_rejected(
+  "case-folded wrong project identity" validate runner "${case_wrong_cache}"
+  "belongs to project 'PURE-ODBC-WRONG'")
+
 set(owner_sentinel "${TEST_ROOT}/.pure-odbc-contract-owner")
 pure_odbc_contract_sentinel_content("runner" expected_sentinel)
 file(WRITE "${TEST_ROOT}/unowned.guard" "must survive rejected reset\n")
@@ -179,32 +307,22 @@ file(MAKE_DIRECTORY
   "${TEST_ROOT}/pure/bin"
   "${TEST_ROOT}/module"
   "${TEST_ROOT}/work")
-file(WRITE "${TEST_ROOT}/pure/bin/pure.cmd"
-  "@echo off\r\n"
-  "echo RUNNER_STDOUT_SENTINEL\r\n"
-  "echo EFFECTIVE_CWD=%CD%\r\n"
-  "echo EFFECTIVE_PATH=%PATH%\r\n"
-  "if defined PURELIB echo EFFECTIVE_PURELIB=SET\r\n"
-  "if not defined PURELIB echo EFFECTIVE_PURELIB=UNSET\r\n"
-  "echo EFFECTIVE_ARGS=%*\r\n"
-  "exit /b 0\r\n")
-file(WRITE "${TEST_ROOT}/pure/bin/stderr-pure.cmd"
-  "@echo off\r\n"
-  "echo ZERO_EXIT_STDERR_SENTINEL 1>&2\r\n"
-  "exit /b 0\r\n")
-file(WRITE "${TEST_ROOT}/pure/bin/exit-pure.cmd"
-  "@echo off\r\n"
-  "echo EXIT_STDOUT_SENTINEL\r\n"
-  "exit /b 37\r\n")
+file(COPY_FILE
+  "${RUN_PURE_TEST_EXECUTABLE}" "${TEST_ROOT}/module/run_pure_test.exe")
+foreach(fake_name IN ITEMS fake-success fake-stderr fake-exit37 fake-exit77)
+  file(COPY_FILE
+    "${RUN_PURE_TEST_EXECUTABLE}"
+    "${TEST_ROOT}/pure/bin/${fake_name}.exe")
+endforeach()
 file(WRITE "${TEST_ROOT}/test.pure" "// runner contract fixture\n")
 file(WRITE "${TEST_ROOT}/not-a-directory" "fixture\n")
 
 set(all_args
-  "-DPURE_EXECUTABLE=${TEST_ROOT}/pure/bin/pure.cmd"
+  "-DPURE_EXECUTABLE=${TEST_ROOT}/pure/bin/fake-success.exe"
   "-DPURE_SOURCE_DIR=${SOURCE_DIR}"
   "-DMODULE_DIR=${TEST_ROOT}/module"
   "-DSCRIPT=${TEST_ROOT}/test.pure"
-  "-DWORK_DIRECTORY=${TEST_ROOT}/work")
+  "-DWORK_DIRECTORY=${TEST_ROOT}")
 
 foreach(missing IN ITEMS
     PURE_EXECUTABLE PURE_SOURCE_DIR MODULE_DIR SCRIPT WORK_DIRECTORY)
@@ -229,6 +347,16 @@ foreach(file_input IN ITEMS PURE_EXECUTABLE SCRIPT)
     "${file_input} must be an existing file" ${args})
 endforeach()
 
+expect_runner_link_rejected(
+  "a junction-component PURE_EXECUTABLE"
+  Junction "${TEST_ROOT}/pure-directory-link"
+  "${TEST_ROOT}/pure/bin" PURE_EXECUTABLE
+  "${TEST_ROOT}/pure-directory-link/fake-success.exe" TRUE)
+expect_runner_link_rejected(
+  "a junction-component SCRIPT"
+  Junction "${TEST_ROOT}/script-directory-link"
+  "${TEST_ROOT}" SCRIPT "${TEST_ROOT}/script-directory-link/test.pure" TRUE)
+
 foreach(directory_input IN ITEMS PURE_SOURCE_DIR MODULE_DIR WORK_DIRECTORY)
   set(args ${all_args})
   list(FILTER args EXCLUDE REGEX "^-D${directory_input}=")
@@ -243,6 +371,14 @@ foreach(directory_input IN ITEMS PURE_SOURCE_DIR MODULE_DIR WORK_DIRECTORY)
     "a file ${directory_input}"
     "${directory_input} must be an existing directory" ${args})
 endforeach()
+
+set(arbitrary_work_args ${all_args})
+list(FILTER arbitrary_work_args EXCLUDE REGEX "^-DWORK_DIRECTORY=")
+list(PREPEND arbitrary_work_args "-DWORK_DIRECTORY=${TEST_ROOT}/work")
+expect_runner_rejected(
+  "an arbitrary existing WORK_DIRECTORY"
+  "WORK_DIRECTORY must be C:/Windows or an owned pure-odbc contract leaf"
+  ${arbitrary_work_args})
 
 execute_process(
   COMMAND "${CMAKE_COMMAND}" -E env
@@ -264,6 +400,21 @@ endif()
 if(NOT output MATCHES "RUNNER_STDOUT_SENTINEL")
   message(FATAL_ERROR "Runner discarded child stdout\n${output}")
 endif()
+foreach(expected_arg IN ITEMS
+    "EFFECTIVE_ARG_1=--norc"
+    "EFFECTIVE_ARG_2=-I"
+    "EFFECTIVE_ARG_3=${SOURCE_DIR}"
+    "EFFECTIVE_ARG_4=-L"
+    "EFFECTIVE_ARG_5=${TEST_ROOT}/module"
+    "EFFECTIVE_ARG_6=-x"
+    "EFFECTIVE_ARG_7=${TEST_ROOT}/test.pure")
+  string(REPLACE "/" "[/\\\\]" expected_arg_pattern "${expected_arg}")
+  if(NOT output MATCHES "${expected_arg_pattern}")
+    message(FATAL_ERROR
+      "Runner did not use the exact Pure command; missing "
+      "'${expected_arg}'\n${output}")
+  endif()
+endforeach()
 if(NOT output MATCHES "EFFECTIVE_PURELIB=UNSET" OR
     output MATCHES "EFFECTIVE_PURELIB=SET")
   message(FATAL_ERROR "Runner did not unset PURELIB\n${output}")
@@ -284,7 +435,7 @@ endif()
 string(REGEX MATCH "EFFECTIVE_CWD=([^\r\n]+)" unused "${output}")
 set(actual_work_directory "${CMAKE_MATCH_1}")
 _pure_odbc_fold_path("${actual_work_directory}" actual_work_directory)
-_pure_odbc_fold_path("${TEST_ROOT}/work" expected_work_directory)
+_pure_odbc_fold_path("${TEST_ROOT}" expected_work_directory)
 if(NOT actual_work_directory STREQUAL expected_work_directory)
   message(FATAL_ERROR
     "Runner used '${actual_work_directory}', expected '${expected_work_directory}'")
@@ -293,7 +444,7 @@ endif()
 set(stderr_args ${all_args})
 list(FILTER stderr_args EXCLUDE REGEX "^-DPURE_EXECUTABLE=")
 list(PREPEND stderr_args
-  "-DPURE_EXECUTABLE=${TEST_ROOT}/pure/bin/stderr-pure.cmd")
+  "-DPURE_EXECUTABLE=${TEST_ROOT}/pure/bin/fake-stderr.exe")
 execute_process(
   COMMAND "${CMAKE_COMMAND}" -E env
     "PATH=C:/ambient-msys2/bin;C:/ambient-tools"
@@ -313,16 +464,16 @@ if(NOT stderr_result EQUAL 1 OR
     "Runner did not reject zero-exit stderr correctly\n${stderr_diagnostics}")
 endif()
 
-set(exit_args ${all_args})
-list(FILTER exit_args EXCLUDE REGEX "^-DPURE_EXECUTABLE=")
-list(PREPEND exit_args
-  "-DPURE_EXECUTABLE=${TEST_ROOT}/pure/bin/exit-pure.cmd")
 execute_process(
   COMMAND "${CMAKE_COMMAND}" -E env
     "PATH=C:/ambient-msys2/bin;C:/ambient-tools"
     "PURELIB=C:/ambient-purelib"
-    "${CMAKE_COMMAND}" ${exit_args}
-    -P "${SOURCE_DIR}/cmake/RunPureTest.cmake"
+    "${RUN_PURE_TEST_EXECUTABLE}"
+    "${TEST_ROOT}/pure/bin/fake-exit37.exe"
+    "${SOURCE_DIR}"
+    "${TEST_ROOT}/module"
+    "${TEST_ROOT}/test.pure"
+    "${TEST_ROOT}"
   RESULT_VARIABLE exit_result
   OUTPUT_VARIABLE exit_output
   ERROR_VARIABLE exit_error
@@ -333,9 +484,104 @@ if(NOT exit_result EQUAL 37)
     "Runner did not propagate child exit 37 (got ${exit_result})\n"
     "${exit_output}${exit_error}")
 endif()
+
+execute_process(
+  COMMAND "${RUN_PURE_TEST_EXECUTABLE}"
+    "${TEST_ROOT}/pure/bin/fake-exit77.exe"
+    "${SOURCE_DIR}"
+    "${TEST_ROOT}/module"
+    "${TEST_ROOT}/test.pure"
+    "${TEST_ROOT}"
+  RESULT_VARIABLE skip_result
+  OUTPUT_VARIABLE skip_output
+  ERROR_VARIABLE skip_error
+  ENCODING UTF-8
+)
+if(NOT skip_result EQUAL 77 OR NOT skip_error STREQUAL "" OR
+    NOT skip_output MATCHES "SKIP_STDOUT_SENTINEL")
+  message(FATAL_ERROR
+    "Native runner did not preserve child exit 77\n"
+    "${skip_output}${skip_error}")
+endif()
 if(NOT "${exit_output}\n${exit_error}" MATCHES "EXIT_STDOUT_SENTINEL")
   message(FATAL_ERROR
     "Runner discarded stdout from failed child\n${exit_output}${exit_error}")
+endif()
+
+file(READ "${ACCESS_SCRIPT}" access_source)
+function(run_access_variant label driver_expression expected_result
+    expected_diagnostic)
+  string(REPLACE
+    "drivers = odbc::drivers;"
+    "drivers = ${driver_expression};"
+    variant_source "${access_source}")
+  if(variant_source STREQUAL access_source)
+    message(FATAL_ERROR
+      "Access ${label} probe could not replace the driver enumeration")
+  endif()
+  set(variant "${TEST_ROOT}/access-${label}.pure")
+  file(WRITE "${variant}" "${variant_source}")
+  execute_process(
+    COMMAND "${RUN_PURE_TEST_EXECUTABLE}"
+      "${ACTUAL_PURE_EXECUTABLE}"
+      "${SOURCE_DIR}"
+      "${ACTUAL_MODULE_DIR}"
+      "${variant}"
+      "${ACCESS_WORK_DIRECTORY}"
+    RESULT_VARIABLE variant_result
+    OUTPUT_VARIABLE variant_output
+    ERROR_VARIABLE variant_error
+    ENCODING UTF-8
+  )
+  set(variant_diagnostics "${variant_output}\n${variant_error}")
+  if(NOT variant_result EQUAL expected_result OR
+      NOT variant_diagnostics MATCHES "${expected_diagnostic}")
+    message(FATAL_ERROR
+      "Access ${label} contract failed (expected ${expected_result}, "
+      "got ${variant_result})\n${variant_diagnostics}")
+  endif()
+endfunction()
+
+run_access_variant(
+  "driver-absent" "[]" 77 "PURE_ODBC_TEXT_DRIVER_SKIPPED")
+run_access_variant(
+  "malformed-before-exact"
+  "[(\"malformed\",42),(text_driver,[])]" 1 "driver record shape")
+run_access_variant(
+  "malformed-after-exact"
+  "[(text_driver,[]),(\"malformed\",42)]" 1 "driver record shape")
+
+set(skip_ctest_directory "${TEST_ROOT}/absence-skip-ctest")
+file(MAKE_DIRECTORY "${skip_ctest_directory}")
+file(WRITE "${skip_ctest_directory}/CTestTestfile.cmake"
+  "add_test(pure-odbc-access-absence-contract "
+  "\"${RUN_PURE_TEST_EXECUTABLE}\" "
+  "\"${ACTUAL_PURE_EXECUTABLE}\" "
+  "\"${SOURCE_DIR}\" "
+  "\"${ACTUAL_MODULE_DIR}\" "
+  "\"${TEST_ROOT}/access-driver-absent.pure\" "
+  "\"${ACCESS_WORK_DIRECTORY}\")\n"
+  "set_tests_properties(pure-odbc-access-absence-contract PROPERTIES "
+  "SKIP_RETURN_CODE 77)\n")
+cmake_path(GET CMAKE_COMMAND PARENT_PATH cmake_bin)
+set(ctest_executable "${cmake_bin}/ctest.exe")
+if(NOT EXISTS "${ctest_executable}" OR IS_DIRECTORY "${ctest_executable}")
+  message(FATAL_ERROR "CTest executable is missing: ${ctest_executable}")
+endif()
+execute_process(
+  COMMAND "${ctest_executable}"
+    --test-dir "${skip_ctest_directory}" --output-on-failure
+  RESULT_VARIABLE skip_ctest_result
+  OUTPUT_VARIABLE skip_ctest_output
+  ERROR_VARIABLE skip_ctest_error
+  ENCODING UTF-8
+)
+if(NOT skip_ctest_result EQUAL 0 OR
+    NOT skip_ctest_output MATCHES "[*][*][*]Skipped" OR
+    NOT skip_ctest_output MATCHES "100% tests passed")
+  message(FATAL_ERROR
+    "CTest did not classify exact-driver absence as an explicit skip\n"
+    "${skip_ctest_output}${skip_ctest_error}")
 endif()
 
 message(STATUS "pure-odbc runner and root-safety contracts passed")

@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.29)
+cmake_minimum_required(VERSION 3.25)
 
 project(pure-odbc VERSION 0.10 LANGUAGES C)
 
@@ -44,6 +44,18 @@ endif()
 
 include(CTest)
 if(BUILD_TESTING)
+  if(WIN32)
+    add_executable(pure-odbc-run-pure-test tests/run_pure_test.c)
+    target_compile_features(pure-odbc-run-pure-test PRIVATE c_std_11)
+    set_target_properties(
+      pure-odbc-run-pure-test PROPERTIES OUTPUT_NAME run_pure_test)
+    if(MINGW)
+      target_compile_options(
+        pure-odbc-run-pure-test PRIVATE -Wall -Wextra -Werror)
+      target_link_options(pure-odbc-run-pure-test PRIVATE -municode)
+    endif()
+  endif()
+
   pkg_get_variable(PURE_PREFIX pure prefix)
   find_program(
     PURE_EXECUTABLE
@@ -69,6 +81,11 @@ if(BUILD_TESTING)
     "${access_work_directory}/Schema.ini"
     COPYONLY
   )
+  if(WIN32)
+    set(manager_work_directory "C:/Windows")
+  else()
+    set(manager_work_directory "${CMAKE_CURRENT_BINARY_DIR}")
+  endif()
 
   add_test(
     NAME pure-odbc-manager-smoke
@@ -77,38 +94,45 @@ if(BUILD_TESTING)
       "-DPURE_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
       "-DMODULE_DIR=$<TARGET_FILE_DIR:odbc>"
       "-DSCRIPT=${CMAKE_CURRENT_SOURCE_DIR}/tests/smoke.pure"
-      "-DWORK_DIRECTORY=${CMAKE_CURRENT_BINARY_DIR}"
+      "-DWORK_DIRECTORY=${manager_work_directory}"
       -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunPureTest.cmake"
   )
+  set(manager_required_files
+    "$<TARGET_FILE:odbc>"
+    "${CMAKE_CURRENT_SOURCE_DIR}/odbc.pure"
+    "${CMAKE_CURRENT_SOURCE_DIR}/tests/smoke.pure")
+  if(WIN32)
+    list(APPEND manager_required_files
+      "$<TARGET_FILE:pure-odbc-run-pure-test>")
+  endif()
   set_tests_properties(
     pure-odbc-manager-smoke
     PROPERTIES
       LABELS "odbc;driver-manager;drivers;diagnostics"
-      REQUIRED_FILES
-        "$<TARGET_FILE:odbc>;${CMAKE_CURRENT_SOURCE_DIR}/odbc.pure;${CMAKE_CURRENT_SOURCE_DIR}/tests/smoke.pure"
+      REQUIRED_FILES "${manager_required_files}"
       TIMEOUT 30
-  )
-  add_test(
-    NAME pure-odbc-access-text-smoke
-    COMMAND "${CMAKE_COMMAND}"
-      "-DPURE_EXECUTABLE=${PURE_EXECUTABLE}"
-      "-DPURE_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
-      "-DMODULE_DIR=$<TARGET_FILE_DIR:odbc>"
-      "-DSCRIPT=${CMAKE_CURRENT_SOURCE_DIR}/tests/access_smoke.pure"
-      "-DWORK_DIRECTORY=${access_work_directory}"
-      -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunPureTest.cmake"
-  )
-  set_tests_properties(
-    pure-odbc-access-text-smoke
-    PROPERTIES
-      LABELS "odbc;access-text;parameters;results;cleanup"
-      REQUIRED_FILES
-        "$<TARGET_FILE:odbc>;${CMAKE_CURRENT_SOURCE_DIR}/odbc.pure;${CMAKE_CURRENT_SOURCE_DIR}/tests/access_smoke.pure;${access_work_directory}/people.csv;${access_work_directory}/Schema.ini"
-      SKIP_RETURN_CODE 77
-      TIMEOUT 60
   )
 
   if(WIN32)
+    add_test(
+      NAME pure-odbc-access-text-smoke
+      COMMAND "$<TARGET_FILE:pure-odbc-run-pure-test>"
+        "${PURE_EXECUTABLE}"
+        "${CMAKE_CURRENT_SOURCE_DIR}"
+        "$<TARGET_FILE_DIR:odbc>"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/access_smoke.pure"
+        "${access_work_directory}"
+    )
+    set_tests_properties(
+      pure-odbc-access-text-smoke
+      PROPERTIES
+        LABELS "odbc;access-text;parameters;results;cleanup"
+        REQUIRED_FILES
+          "$<TARGET_FILE:odbc>;$<TARGET_FILE:pure-odbc-run-pure-test>;${CMAKE_CURRENT_SOURCE_DIR}/odbc.pure;${CMAKE_CURRENT_SOURCE_DIR}/tests/access_smoke.pure;${access_work_directory}/people.csv;${access_work_directory}/Schema.ini"
+        SKIP_RETURN_CODE 77
+        TIMEOUT 60
+    )
+
     cmake_path(GET PKG_CONFIG_EXECUTABLE PARENT_PATH pkg_config_bin)
     cmake_path(GET pkg_config_bin PARENT_PATH msystem_prefix)
     cmake_path(GET msystem_prefix PARENT_PATH msys_root)
@@ -123,6 +147,11 @@ if(BUILD_TESTING)
       NAME pure-odbc-runner-contract
       COMMAND "${CMAKE_COMMAND}"
         "-DBINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}"
+        "-DRUN_PURE_TEST_EXECUTABLE=$<TARGET_FILE:pure-odbc-run-pure-test>"
+        "-DACTUAL_PURE_EXECUTABLE=${PURE_EXECUTABLE}"
+        "-DACTUAL_MODULE_DIR=$<TARGET_FILE_DIR:odbc>"
+        "-DACCESS_SCRIPT=${CMAKE_CURRENT_SOURCE_DIR}/tests/access_smoke.pure"
+        "-DACCESS_WORK_DIRECTORY=${access_work_directory}"
         -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/runner_contract.cmake"
     )
     add_test(

@@ -13,6 +13,17 @@ has_driver [] = 0;
 has_driver ((name,_):xs) = name == text_driver || has_driver xs;
 has_driver _ = 0;
 
+driver_recordp (name,attributes)
+  = stringp name && listp attributes && all stringp attributes;
+driver_recordp _ = 0;
+
+driver_recordsp drivers = listp drivers && all driver_recordp drivers;
+
+driver_status drivers
+  = -1 if ~driver_recordsp drivers;
+  = 1 if has_driver drivers;
+  = 0 otherwise;
+
 csv_test = ()
 when
   connection =
@@ -44,8 +55,9 @@ end;
 access_smoke = ()
 when
   drivers = odbc::drivers;
-  check "driver enumeration" (listp drivers);
-  if has_driver drivers then
+  status = driver_status drivers;
+  check "driver record shape" (status ~= -1);
+  if status then
     csv_test
   else
     puts "PURE_ODBC_TEXT_DRIVER_SKIPPED" $$ exit 77;
