@@ -584,7 +584,8 @@ typedef SQLRETURN (SQL_API *odbc_enumerator)(
 /* SQL_FETCH_NEXT always advances, even when the preceding value was
    truncated. Bound complete FIRST/NEXT replays so a changing catalog cannot
    turn repeated growth into an unbounded loop. */
-#define ODBC_ENUMERATION_RESTART_LIMIT 16U
+#define ODBC_ENUMERATION_TRUNCATION_RESTART_LIMIT 16U
+#define ODBC_ENUMERATION_CATALOG_RESTART_LIMIT 8U
 
 static bool grow_enumeration_buffer(SQLCHAR **buffer, size_t *capacity,
                                     size_t required)
@@ -733,7 +734,8 @@ static pure_expr *odbc_enumeration(bool drivers)
   size_t value_count = 0;
   size_t durable_value_high_water = 0;
   size_t replay_index = 0;
-  unsigned int restart_count = 0;
+  unsigned int truncation_restart_count = 0;
+  unsigned int catalog_restart_count = 0;
   SQLUSMALLINT direction = SQL_FETCH_FIRST;
   SQLRETURN ret;
   bool odbc_failure = false;
@@ -764,7 +766,7 @@ static pure_expr *odbc_enumeration(bool drivers)
                     &detail_length);
     if (ret == SQL_NO_DATA) {
       if (replaying && replay_index < value_count) {
-        if (++restart_count > ODBC_ENUMERATION_RESTART_LIMIT)
+        if (++catalog_restart_count > ODBC_ENUMERATION_CATALOG_RESTART_LIMIT)
           goto unstable_enumeration;
         clear_enumeration_values(values, &value_count);
         replay_index = 0;
@@ -787,7 +789,10 @@ static pure_expr *odbc_enumeration(bool drivers)
         !grow_enumeration_buffer(&detail, &detail_capacity, required_detail))
       goto allocation_failure;
     if (retry) {
-      if (++restart_count > ODBC_ENUMERATION_RESTART_LIMIT)
+      /* Exhausted catalog retries also bound truncation/rebuild churn. */
+      if (catalog_restart_count >= ODBC_ENUMERATION_CATALOG_RESTART_LIMIT ||
+          ++truncation_restart_count >
+          ODBC_ENUMERATION_TRUNCATION_RESTART_LIMIT)
         goto unstable_enumeration;
       replay_index = 0;
       replaying = true;
@@ -802,7 +807,7 @@ static pure_expr *odbc_enumeration(bool drivers)
       if (!enumeration_value_matches(values[replay_index], drivers, name,
                                      (size_t)name_length, detail,
                                      (size_t)detail_length)) {
-        if (++restart_count > ODBC_ENUMERATION_RESTART_LIMIT)
+        if (++catalog_restart_count > ODBC_ENUMERATION_CATALOG_RESTART_LIMIT)
           goto unstable_enumeration;
         clear_enumeration_values(values, &value_count);
         replay_index = 0;
@@ -831,9 +836,12 @@ static pure_expr *odbc_enumeration(bool drivers)
     if (!values[value_count])
       goto allocation_failure;
     ++value_count;
+    /* A rebuilt stable prefix can make independent buffer-growth progress. */
+    truncation_restart_count = 0;
     if (value_count > durable_value_high_water) {
       durable_value_high_water = value_count;
-      restart_count = 0;
+      /* Reconstructing discarded tuples must not replenish catalog retries. */
+      catalog_restart_count = 0;
     }
     replay_index = 0;
     replaying = false;

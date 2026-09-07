@@ -121,10 +121,12 @@ static int source_catalog_changes;
 static bool enumeration_retry_protocol_ok;
 static bool enumeration_never_stabilizes;
 static bool enumeration_many_truncations;
+static bool enumeration_rebuild_truncations;
 static bool enumeration_prefix_churn;
 static bool enumeration_churn_limit_hit;
 static bool enumeration_fail_on_growth;
 static int driver_truncations;
+static int driver_rebuild_truncations;
 static bool handle_protocol_ok;
 static SQLSMALLINT result_cols[4];
 static SQLLEN result_rows[4];
@@ -829,9 +831,12 @@ static SQLRETURN SQL_API fake_SQLDrivers(SQLHENV environment,
     }
   }
   record_count = enumeration_prefix_churn ? CHURN_ENUMERATION_RECORDS :
-    (enumeration_many_truncations ? MANY_TRUNCATION_RECORDS :
+    (enumeration_rebuild_truncations ?
+     (driver_catalog_final ? MANY_TRUNCATION_RECORDS :
+      MANY_TRUNCATION_RECORDS + 1) :
+     (enumeration_many_truncations ? MANY_TRUNCATION_RECORDS :
      (driver_catalog_final ? ENUMERATION_RECORDS :
-      INITIAL_ENUMERATION_RECORDS));
+      INITIAL_ENUMERATION_RECORDS)));
   step = enumeration_record(direction, &driver_record,
                             &driver_last_call_truncated, record_count);
   if (!SQL_SUCCEEDED(step))
@@ -856,7 +861,21 @@ static SQLRETURN SQL_API fake_SQLDrivers(SQLHENV environment,
       name_length = (size_t)name_result;
       attr_length = sizeof("Churn-Attr") - 1U;
     }
-  } else if (enumeration_many_truncations) {
+  } else if (enumeration_rebuild_truncations && !driver_catalog_final) {
+    /* Reach a 20-tuple high-water mark before the catalog changes once. */
+    if (driver_record == MANY_TRUNCATION_RECORDS) {
+      name_length = 128;
+      make_repeated_text(name, name_length, 'Z');
+    } else {
+      int name_result = snprintf(name, sizeof(name), "Before-%02d",
+                                 driver_record);
+      if (name_result < 0)
+        return SQL_ERROR;
+      name_length = (size_t)name_result;
+    }
+    memcpy(attr, "Before-Attr", sizeof("Before-Attr"));
+    attr_length = sizeof("Before-Attr") - 1U;
+  } else if (enumeration_many_truncations || enumeration_rebuild_truncations) {
     int attr_result;
 
     name_length = many_driver_name_lengths[driver_record];
@@ -908,6 +927,9 @@ static SQLRETURN SQL_API fake_SQLDrivers(SQLHENV environment,
   driver_last_call_truncated = name_truncated || attr_truncated;
   if (driver_last_call_truncated)
     ++driver_truncations;
+  if (driver_last_call_truncated && enumeration_rebuild_truncations &&
+      driver_catalog_final && driver_record > 0)
+    ++driver_rebuild_truncations;
   return driver_last_call_truncated ? SQL_SUCCESS_WITH_INFO : SQL_SUCCESS;
 }
 
@@ -1210,10 +1232,12 @@ static void reset_operation_state(void)
   enumeration_retry_protocol_ok = true;
   enumeration_never_stabilizes = false;
   enumeration_many_truncations = false;
+  enumeration_rebuild_truncations = false;
   enumeration_prefix_churn = false;
   enumeration_churn_limit_hit = false;
   enumeration_fail_on_growth = false;
   driver_truncations = 0;
+  driver_rebuild_truncations = 0;
   handle_protocol_ok = true;
   memset(result_cols, 0, sizeof(result_cols));
   memset(result_rows, 0, sizeof(result_rows));
@@ -2145,6 +2169,22 @@ static void run_enumeration_cases(void)
         "each stable driver truncation restarts with FIRST and preserves order");
   check(alloc_env_calls == 1 && free_env_calls == 1 && allocation_count == 0,
         "many-truncation enumeration balances handles and allocations");
+  release_pure_result(result);
+  if (allocation_count != 0)
+    drain_tracked_allocations();
+
+  reset_operation_state();
+  enumeration_rebuild_truncations = true;
+  result = odbc_drivers();
+  check(many_truncation_driver_list_is_exact(result),
+        "once-changed catalog returns every rebuilt tuple in exact order");
+  check(driver_calls == 253 && driver_catalog_changes == 1 &&
+        driver_truncations == 21 && driver_rebuild_truncations == 19 &&
+        enumeration_retry_protocol_ok,
+        "rebuilt prefix survives nineteen stable truncations below its old high-water mark");
+  check(alloc_env_calls == 1 && free_env_calls == 1 && handle_protocol_ok &&
+        allocation_count == 0,
+        "once-changed catalog rebuild balances handles and allocations");
   release_pure_result(result);
   if (allocation_count != 0)
     drain_tracked_allocations();
