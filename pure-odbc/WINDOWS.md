@@ -45,6 +45,7 @@ at `pure/build/windows-clang64-prefix`:
 ```powershell
 $cmake = 'C:/msys64/clang64/bin/cmake.exe'
 $ctest = 'C:/msys64/clang64/bin/ctest.exe'
+$python = 'C:/msys64/clang64/bin/python.exe'
 $prefix = (Resolve-Path 'pure/build/windows-clang64-prefix').Path.Replace('\', '/')
 $build = 'build/windows-pure-odbc-audit'
 
@@ -76,7 +77,9 @@ Remove-Item Env:PURELIB -ErrorAction SilentlyContinue
 & $ctest --test-dir $build -L odbc --output-on-failure --no-tests=error
 $env:Path = $savedPath
 
-python .github/scripts/validate_non_linux_release_workflow.py `
+& $python -c "import yaml; print(yaml.__version__)"
+& $python .github/scripts/test_validate_non_linux_release_workflow.py -v
+& $python .github/scripts/validate_non_linux_release_workflow.py `
   .github/workflows/non-linux-release-validation.yml
 ```
 
@@ -88,24 +91,82 @@ built, tested, installed, and verified without checkout-side source inputs.
 
 ## Installation and verification
 
-Install runtime and documentation separately into a fresh copy of the portable
-Pure prefix:
+The following complete continuation of the preceding PowerShell session creates
+a fresh stage, records the full pre-install prefix, installs runtime and
+documentation separately, preserves both component manifests, and invokes the
+installed verifier with every required argument. It does not depend on CI-only
+variables.
 
 ```powershell
-& $cmake --install $build --prefix $stage --component runtime
-Copy-Item "$build/install_manifest_runtime.txt" $runtimeManifest
-& $cmake --install $build --prefix $stage --component documentation
-Copy-Item "$build/install_manifest_documentation.txt" $documentationManifest
+$sourceNative = (Resolve-Path 'pure-odbc').Path
+$prefixNative = (Resolve-Path 'pure/build/windows-clang64-prefix').Path
+$buildNative = [IO.Path]::GetFullPath($build)
+$stageNative = [IO.Path]::GetFullPath('build/windows-pure-odbc-stage')
+$baseline = Join-Path $buildNative 'windows-pure-odbc-baseline.sha256'
+$runtimeManifest = Join-Path $buildNative 'install-manifest-runtime-ci.txt'
+$documentationManifest =
+  Join-Path $buildNative 'install-manifest-documentation-ci.txt'
+
+if (Test-Path -LiteralPath $stageNative) {
+  throw "Fresh pure-odbc stage already exists: $stageNative"
+}
+Get-ChildItem -LiteralPath $prefixNative -File -Recurse |
+  Sort-Object FullName | ForEach-Object {
+    $relative =
+      [IO.Path]::GetRelativePath($prefixNative, $_.FullName).Replace('\', '/')
+    $hash =
+      (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+    "$hash|$relative"
+  } | Set-Content -LiteralPath $baseline -Encoding utf8
+
+New-Item -ItemType Directory -Path $stageNative | Out-Null
+Get-ChildItem -LiteralPath $prefixNative -Force |
+  Copy-Item -Destination $stageNative -Recurse -Force
+
+& $cmake --install $buildNative --prefix $stageNative --component runtime
+if ($LASTEXITCODE -ne 0) { throw 'pure-odbc runtime install failed' }
+Copy-Item -LiteralPath "$buildNative/install_manifest_runtime.txt" `
+  -Destination $runtimeManifest
+
+& $cmake --install $buildNative --prefix $stageNative `
+  --component documentation
+if ($LASTEXITCODE -ne 0) { throw 'pure-odbc documentation install failed' }
+Copy-Item -LiteralPath "$buildNative/install_manifest_documentation.txt" `
+  -Destination $documentationManifest
+
+$source = $sourceNative.Replace('\', '/')
+$prefix = $prefixNative.Replace('\', '/')
+$buildPath = $buildNative.Replace('\', '/')
+$stage = $stageNative.Replace('\', '/')
+& $cmake `
+  "-DSTAGE_PREFIX=$stage" `
+  "-DBASELINE_MANIFEST=$($baseline.Replace('\', '/'))" `
+  "-DRUNTIME_COMPONENT_MANIFEST=$($runtimeManifest.Replace('\', '/'))" `
+  "-DDOCUMENTATION_COMPONENT_MANIFEST=$($documentationManifest.Replace('\', '/'))" `
+  -DLLVM_READOBJ=C:/msys64/clang64/bin/llvm-readobj.exe `
+  "-DODBC_MODULE_SOURCE=$buildPath/odbc.dll" `
+  "-DODBC_INTERFACE_SOURCE=$source/odbc.pure" `
+  "-DREADME_SOURCE=$buildPath/README" `
+  "-DCOPYING_SOURCE=$source/COPYING" `
+  "-DCOPYING_LESSER_SOURCE=$source/COPYING.LESSER" `
+  "-DWINDOWS_SOURCE=$source/WINDOWS.md" `
+  "-DEXAMPLE_SOURCE=$source/examples/menagerie.pure" `
+  "-DSMOKE_SOURCE=$source/tests/smoke.pure" `
+  "-DPEOPLE_SOURCE=$source/tests/data/people.csv" `
+  "-DSCHEMA_SOURCE=$source/tests/data/Schema.ini" `
+  -DGMP_DLL_SOURCE=C:/msys64/clang64/bin/libgmp-10.dll `
+  "-DPURE_RUNTIME_DLL_SOURCE=$prefix/bin/libpure.dll" `
+  "-DRUN_PURE_TEST_EXECUTABLE=$buildPath/run_pure_test.exe" `
+  "-DWINDOWS_DEPENDENCY_VERIFIER=$source/cmake/VerifyWindowsDependencies.cmake" `
+  -DWINDOWS_DIRECTORY=C:/Windows `
+  -DSYSTEM_ODBC_DLL=C:/Windows/System32/odbc32.dll `
+  -DPURE_ODBC_AUTHORITATIVE_WINDOWS_DIRECTORY=C:/Windows `
+  -P pure-odbc/cmake/VerifyInstalledPackage.cmake
+if ($LASTEXITCODE -ne 0) { throw 'Installed pure-odbc verification failed' }
 ```
 
-Before installation, snapshot every existing prefix file as
-`lowercase-sha256|relative/path`. Then invoke
-`pure-odbc/cmake/VerifyInstalledPackage.cmake` with the stage, baseline and both
-component manifests; `llvm-readobj`; every built/source artifact; the staged
-Pure and GMP DLLs; the native test runner and dependency verifier; and the
-Windows, System32 ODBC, and independently established authoritative Windows
-paths. The complete invocation is executable in
-`.github/workflows/non-linux-release-validation.yml`.
+The baseline format is `lowercase-sha256|relative/path`. The verifier fails
+closed unless the stage is an exact extension of that baseline.
 
 The verified install delta is exactly these ten files:
 

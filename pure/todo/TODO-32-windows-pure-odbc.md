@@ -1,6 +1,6 @@
 # TODO-32 - Windows pure-odbc Package
 
-Status: Closed on 2026-09-07
+Status: Open
 Branch: todo/32-windows-pure-odbc
 
 ## Purpose
@@ -119,3 +119,6 @@ Build and validate `pure-odbc` against an explicitly selected Windows ODBC layer
   host-dependent; System32 `odbc32.dll` internal imports may change through
   Windows servicing; and exact CLANG64/Pure import manifests require a new
   audit when the audited toolchain or SDK changes.
+- 2026-09-08: Task 7 CI and documentation review completed. The TODO remains
+  open deliberately; `Status: Closed on YYYY-MM-DD` may be set only after Task
+  8 whole-branch review and final clean verification have both passed.

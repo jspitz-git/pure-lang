@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
+import re
 from typing import Any
 
 import yaml
@@ -12,6 +13,7 @@ import yaml
 
 REQUIRED_PATHS = {
     ".github/scripts/validate_non_linux_release_workflow.py",
+    ".github/scripts/test_validate_non_linux_release_workflow.py",
     "pure-odbc/**",
     "pure/todo/TODO-32-windows-pure-odbc.md",
 }
@@ -97,6 +99,20 @@ def command(step: dict[str, Any], name: str) -> str:
     return value
 
 
+def cmake_build_invocations(script: str) -> list[list[str]]:
+    """Return tokenized CMake --build invocations after PS continuations."""
+    logical_script = re.sub(r"`[ \t]*\r?\n[ \t]*", " ", script)
+    invocations = []
+    prefix = "& $env:CMAKE_EXE --build "
+    for line in logical_script.splitlines():
+        line = line.strip()
+        if not line.startswith(prefix):
+            continue
+        command_only = line.split("2>&1", 1)[0].strip()
+        invocations.append(command_only.split())
+    return invocations
+
+
 def validate(path: Path) -> None:
     with path.open("r", encoding="utf-8") as stream:
         document = yaml.load(stream, Loader=yaml.BaseLoader)
@@ -143,12 +159,21 @@ def validate(path: Path) -> None:
                 f"strict configure is missing staged input: {staged_argument}")
 
     build = command(selected[STEP_ORDER[2]], STEP_ORDER[2])
-    require(build.count("--parallel 4") == 2,
-            "build and PE target must each use exactly --parallel 4")
-    require("--target verify-windows-dependencies --parallel 4" in build,
-            "exact PE dependency target is missing")
-    require("--parallel 1" not in build,
-            "pure-odbc audit must not reduce the approved worker count")
+    invocations = cmake_build_invocations(build)
+    normal = [
+        "&", "$env:CMAKE_EXE", "--build", "$odbcBuild",
+        "--parallel", "4",
+    ]
+    pe_target = [
+        "&", "$env:CMAKE_EXE", "--build", "$odbcBuild", "--target",
+        "verify-windows-dependencies", "--parallel", "4",
+    ]
+    require(len(invocations) == 2,
+            "build step must contain exactly two CMake --build invocations")
+    require(invocations.count(normal) == 1,
+            "build step must contain exactly one normal --parallel 4 build")
+    require(invocations.count(pe_target) == 1,
+            "build step must contain exactly one PE-target --parallel 4 build")
 
     tests = command(selected[STEP_ORDER[3]], STEP_ORDER[3])
     require("-L odbc" in tests and "--no-tests=error" in tests,
@@ -170,6 +195,8 @@ def validate(path: Path) -> None:
                 f"installed verifier is missing argument: {argument}")
 
     semantic = command(selected[STEP_ORDER[5]], STEP_ORDER[5])
+    require("test_validate_non_linux_release_workflow.py" in semantic,
+            "workflow semantic mutation-test command is missing")
     require("validate_non_linux_release_workflow.py" in semantic,
             "workflow semantic validation command is missing")
     require("C:/msys64/clang64/bin/python.exe" in semantic,

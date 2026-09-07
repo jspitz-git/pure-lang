@@ -44,6 +44,7 @@ on:
       - "docs/superpowers/plans/2026-08-18-windows-pure-bonjour.md"
       - "docs/superpowers/plans/2026-08-22-purepad-lifecycle-hardening.md"
       - ".github/scripts/validate_non_linux_release_workflow.py"
+      - ".github/scripts/test_validate_non_linux_release_workflow.py"
       - ".github/workflows/non-linux-release-validation.yml"
   pull_request:
     branches:
@@ -86,6 +87,7 @@ on:
       - "docs/superpowers/plans/2026-08-18-windows-pure-bonjour.md"
       - "docs/superpowers/plans/2026-08-22-purepad-lifecycle-hardening.md"
       - ".github/scripts/validate_non_linux_release_workflow.py"
+      - ".github/scripts/test_validate_non_linux_release_workflow.py"
       - ".github/workflows/non-linux-release-validation.yml"
 
 concurrency:
@@ -378,6 +380,10 @@ jobs:
       - name: Validate non-Linux workflow semantics
         run: |
           $ErrorActionPreference = 'Stop'
+          & C:/msys64/clang64/bin/python.exe `
+            ../.github/scripts/test_validate_non_linux_release_workflow.py -v `
+            2>&1 | Tee-Object -FilePath "$env:LOG_DIR/workflow-semantics-tests.log"
+          if ($LASTEXITCODE -ne 0) { throw 'Workflow semantic mutation tests failed' }
           & C:/msys64/clang64/bin/python.exe `
             ../.github/scripts/validate_non_linux_release_workflow.py `
             ../.github/workflows/non-linux-release-validation.yml `
