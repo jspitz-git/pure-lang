@@ -41,6 +41,10 @@ static wchar_t *full_path(const wchar_t *path) {
 }
 
 static wchar_t *os_windows_directory(void) {
+#ifdef PURE_ODBC_TEST_SEAM
+  const wchar_t *controlled = _wgetenv(L"PURE_ODBC_TEST_WINDOWS_DIRECTORY");
+  if (controlled != NULL && *controlled != L'\0') return full_path(controlled);
+#endif
   UINT capacity = MAX_PATH + 1;
   wchar_t *buffer = NULL;
   for (;;) {
@@ -65,6 +69,26 @@ static wchar_t *os_windows_directory(void) {
     capacity = length + 1;
   }
 }
+
+#ifdef PURE_ODBC_TEST_SEAM
+static int mark_test_query(void) {
+  const wchar_t *marker = _wgetenv(L"PURE_ODBC_TEST_QUERY_MARKER");
+  const char event[] = "query executed\n";
+  HANDLE file;
+  DWORD written;
+  if (marker == NULL || *marker == L'\0') return 0;
+  file = CreateFileW(marker, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS,
+                     FILE_ATTRIBUTE_NORMAL, NULL);
+  if (file == INVALID_HANDLE_VALUE) return fail(L"cannot create query marker", marker);
+  if (!WriteFile(file, event, (DWORD)(sizeof(event) - 1), &written, NULL) ||
+      written != (DWORD)(sizeof(event) - 1)) {
+    CloseHandle(file);
+    return fail(L"cannot write query marker", marker);
+  }
+  CloseHandle(file);
+  return 0;
+}
+#endif
 
 static int path_has_reparse_component(const wchar_t *path) {
   wchar_t *probe = full_path(path);
@@ -434,6 +458,12 @@ int wmain(int argc, wchar_t **argv) {
   }
   free(queried_windows);
   if (argc == 2 && wcscmp(argv[1], L"--print-windows-directory") == 0) {
+#ifdef PURE_ODBC_TEST_SEAM
+    if (mark_test_query() != 0) {
+      free(windows);
+      return 1;
+    }
+#endif
     wprintf(L"%ls\n", windows);
     free(windows);
     return 0;

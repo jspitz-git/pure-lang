@@ -55,6 +55,21 @@ if(BUILD_TESTING)
       target_link_options(pure-odbc-run-pure-test PRIVATE -municode)
       set(pure_odbc_try_run_link_options LINK_OPTIONS -municode)
     endif()
+    add_executable(
+      pure-odbc-run-pure-test-alternate tests/run_pure_test.c)
+    target_compile_features(
+      pure-odbc-run-pure-test-alternate PRIVATE c_std_11)
+    target_compile_definitions(
+      pure-odbc-run-pure-test-alternate PRIVATE PURE_ODBC_TEST_SEAM)
+    set_target_properties(
+      pure-odbc-run-pure-test-alternate
+      PROPERTIES OUTPUT_NAME run_pure_test_alternate)
+    if(MINGW)
+      target_compile_options(
+        pure-odbc-run-pure-test-alternate PRIVATE -Wall -Wextra -Werror)
+      target_link_options(
+        pure-odbc-run-pure-test-alternate PRIVATE -municode)
+    endif()
     try_run(
       windows_directory_result windows_directory_compiled
       SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/tests/run_pure_test.c"
@@ -117,6 +132,7 @@ if(BUILD_TESTING)
       "-DMODULE_DIR=$<TARGET_FILE_DIR:odbc>"
       "-DSCRIPT=${CMAKE_CURRENT_SOURCE_DIR}/tests/smoke.pure"
       "-DWORK_DIRECTORY=${manager_work_directory}"
+      "-DPURE_ODBC_AUTHORITATIVE_WINDOWS_DIRECTORY=${PURE_ODBC_AUTHORITATIVE_WINDOWS_DIRECTORY}"
       -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunPureTest.cmake"
   )
   set(manager_required_files
@@ -170,6 +186,7 @@ if(BUILD_TESTING)
       COMMAND "${CMAKE_COMMAND}"
         "-DBINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}"
         "-DRUN_PURE_TEST_EXECUTABLE=$<TARGET_FILE:pure-odbc-run-pure-test>"
+        "-DALTERNATE_RUN_PURE_TEST_EXECUTABLE=$<TARGET_FILE:pure-odbc-run-pure-test-alternate>"
         "-DACTUAL_PURE_EXECUTABLE=${PURE_EXECUTABLE}"
         "-DACTUAL_MODULE_DIR=$<TARGET_FILE_DIR:odbc>"
         "-DACCESS_SCRIPT=${CMAKE_CURRENT_SOURCE_DIR}/tests/access_smoke.pure"

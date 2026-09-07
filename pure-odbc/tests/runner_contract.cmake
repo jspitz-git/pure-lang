@@ -229,7 +229,8 @@ function(expect_runner_link_rejected label link_kind link_path link_target
 endfunction()
 
 foreach(required IN ITEMS RUN_PURE_TEST_EXECUTABLE ACTUAL_PURE_EXECUTABLE
-    ACTUAL_MODULE_DIR ACCESS_SCRIPT ACCESS_WORK_DIRECTORY
+    ALTERNATE_RUN_PURE_TEST_EXECUTABLE ACTUAL_MODULE_DIR ACCESS_SCRIPT
+    ACCESS_WORK_DIRECTORY
     PURE_ODBC_AUTHORITATIVE_WINDOWS_DIRECTORY)
   if(NOT DEFINED ${required} OR "${${required}}" STREQUAL "")
     message(FATAL_ERROR "${required} is required")
@@ -240,8 +241,8 @@ if(NOT IS_DIRECTORY "${PURE_ODBC_AUTHORITATIVE_WINDOWS_DIRECTORY}")
     "PURE_ODBC_AUTHORITATIVE_WINDOWS_DIRECTORY must be an existing directory: "
     "${PURE_ODBC_AUTHORITATIVE_WINDOWS_DIRECTORY}")
 endif()
-foreach(file_input IN ITEMS RUN_PURE_TEST_EXECUTABLE ACTUAL_PURE_EXECUTABLE
-    ACCESS_SCRIPT)
+foreach(file_input IN ITEMS RUN_PURE_TEST_EXECUTABLE
+    ALTERNATE_RUN_PURE_TEST_EXECUTABLE ACTUAL_PURE_EXECUTABLE ACCESS_SCRIPT)
   if(NOT EXISTS "${${file_input}}" OR IS_DIRECTORY "${${file_input}}")
     message(FATAL_ERROR
       "${file_input} must be an existing file: ${${file_input}}")
@@ -270,17 +271,47 @@ if(NOT windows_query_result EQUAL 0 OR
     "Native runner did not return the OS-authoritative Windows directory\n"
     "${windows_query_output}${windows_query_error}")
 endif()
+set(oracle_powershell
+  "${PURE_ODBC_AUTHORITATIVE_WINDOWS_DIRECTORY}/System32/WindowsPowerShell/v1.0/powershell.exe")
+execute_process(
+  COMMAND "${CMAKE_COMMAND}" -E env
+    "SystemRoot=${PURE_ODBC_AUTHORITATIVE_WINDOWS_DIRECTORY}"
+    "windir=${PURE_ODBC_AUTHORITATIVE_WINDOWS_DIRECTORY}"
+    "${oracle_powershell}" -NoProfile -NonInteractive -ExecutionPolicy Bypass
+    -Command "[Environment]::SystemDirectory"
+  RESULT_VARIABLE windows_oracle_result
+  OUTPUT_VARIABLE windows_oracle_output
+  ERROR_VARIABLE windows_oracle_error
+  ENCODING UTF-8
+)
+string(STRIP "${windows_oracle_output}" windows_oracle_system_directory)
+if(NOT windows_oracle_result EQUAL 0 OR
+    NOT windows_oracle_error STREQUAL "" OR
+    NOT IS_DIRECTORY "${windows_oracle_system_directory}")
+  message(FATAL_ERROR
+    "Independent SystemDirectory oracle failed\n"
+    "${windows_oracle_output}${windows_oracle_error}")
+endif()
+cmake_path(GET windows_oracle_system_directory PARENT_PATH
+  OS_WINDOWS_DIRECTORY_ORACLE)
+file(REAL_PATH "${OS_WINDOWS_DIRECTORY_ORACLE}"
+  OS_WINDOWS_DIRECTORY_ORACLE)
 _pure_odbc_fold_path(
   "${PURE_ODBC_AUTHORITATIVE_WINDOWS_DIRECTORY}"
   folded_configure_windows_directory)
 _pure_odbc_fold_path(
   "${OS_WINDOWS_DIRECTORY}" folded_queried_windows_directory)
+_pure_odbc_fold_path(
+  "${OS_WINDOWS_DIRECTORY_ORACLE}" folded_oracle_windows_directory)
 if(NOT folded_configure_windows_directory STREQUAL
-    folded_queried_windows_directory)
+      folded_oracle_windows_directory OR
+    NOT folded_queried_windows_directory STREQUAL
+      folded_oracle_windows_directory)
   message(FATAL_ERROR
-    "Configure-time and runtime OS Windows directories disagree\n"
+    "Configure-time, runtime, and independent Windows directories disagree\n"
     "configure: ${PURE_ODBC_AUTHORITATIVE_WINDOWS_DIRECTORY}\n"
-    "runtime: ${OS_WINDOWS_DIRECTORY}")
+    "runtime: ${OS_WINDOWS_DIRECTORY}\n"
+    "oracle: ${OS_WINDOWS_DIRECTORY_ORACLE}")
 endif()
 
 pure_odbc_validate_contract_test_root("runner" initial_test_root)
@@ -297,6 +328,53 @@ expect_windows_directory_accepted(
   "${alternate_windows_directory}")
 expect_windows_directory_rejected(
   "${non_windows_directory}" "${alternate_windows_directory}")
+execute_process(
+  COMMAND "${CMAKE_COMMAND}" -E env
+    "PURE_ODBC_TEST_WINDOWS_DIRECTORY=${alternate_windows_directory}"
+    "${ALTERNATE_RUN_PURE_TEST_EXECUTABLE}" --print-windows-directory
+  RESULT_VARIABLE alternate_query_result
+  OUTPUT_VARIABLE alternate_query_output
+  ERROR_VARIABLE alternate_query_error
+  ENCODING UTF-8
+)
+string(STRIP "${alternate_query_output}" alternate_query_directory)
+_pure_odbc_fold_path(
+  "${alternate_query_directory}" folded_alternate_query_directory)
+_pure_odbc_fold_path(
+  "${alternate_windows_directory}" folded_alternate_windows_directory)
+if(NOT alternate_query_result EQUAL 0 OR
+    NOT alternate_query_error STREQUAL "" OR
+    NOT folded_alternate_query_directory STREQUAL
+      folded_alternate_windows_directory)
+  message(FATAL_ERROR
+    "Test-seam launcher did not use its controlled alternate Windows "
+    "directory\n${alternate_query_output}${alternate_query_error}")
+endif()
+set(production_seam_marker
+  "${TEST_ROOT}/production-seam-must-stay-disabled.marker")
+file(REMOVE "${production_seam_marker}")
+execute_process(
+  COMMAND "${CMAKE_COMMAND}" -E env
+    "PURE_ODBC_TEST_WINDOWS_DIRECTORY=${alternate_windows_directory}"
+    "PURE_ODBC_TEST_QUERY_MARKER=${production_seam_marker}"
+    "${RUN_PURE_TEST_EXECUTABLE}" --print-windows-directory
+  RESULT_VARIABLE production_query_result
+  OUTPUT_VARIABLE production_query_output
+  ERROR_VARIABLE production_query_error
+  ENCODING UTF-8
+)
+string(STRIP "${production_query_output}" production_query_directory)
+_pure_odbc_fold_path(
+  "${production_query_directory}" folded_production_query_directory)
+if(NOT production_query_result EQUAL 0 OR
+    NOT production_query_error STREQUAL "" OR
+    EXISTS "${production_seam_marker}" OR
+    NOT folded_production_query_directory STREQUAL
+      folded_oracle_windows_directory)
+  message(FATAL_ERROR
+    "Production native launcher enabled a test-only authority seam\n"
+    "${production_query_output}${production_query_error}")
+endif()
 
 expect_root_rejected(
   "source descendant" validate runner "${SOURCE_DIR}/tests"
@@ -423,7 +501,8 @@ pure_odbc_reset_contract_test_root("runner")
 file(MAKE_DIRECTORY
   "${TEST_ROOT}/pure/bin"
   "${TEST_ROOT}/module"
-  "${TEST_ROOT}/work")
+  "${TEST_ROOT}/work"
+  "${TEST_ROOT}/alternate-windows")
 file(COPY_FILE
   "${RUN_PURE_TEST_EXECUTABLE}" "${TEST_ROOT}/module/run_pure_test.exe")
 foreach(fake_name IN ITEMS fake-success fake-stderr fake-exit37 fake-exit77)
@@ -439,15 +518,131 @@ set(all_args
   "-DPURE_SOURCE_DIR=${SOURCE_DIR}"
   "-DMODULE_DIR=${TEST_ROOT}/module"
   "-DSCRIPT=${TEST_ROOT}/test.pure"
-  "-DWORK_DIRECTORY=${TEST_ROOT}")
+  "-DWORK_DIRECTORY=${TEST_ROOT}"
+  "-DPURE_ODBC_AUTHORITATIVE_WINDOWS_DIRECTORY=${PURE_ODBC_AUTHORITATIVE_WINDOWS_DIRECTORY}")
 
 foreach(missing IN ITEMS
-    PURE_EXECUTABLE PURE_SOURCE_DIR MODULE_DIR SCRIPT WORK_DIRECTORY)
+    PURE_EXECUTABLE PURE_SOURCE_DIR MODULE_DIR SCRIPT WORK_DIRECTORY
+    PURE_ODBC_AUTHORITATIVE_WINDOWS_DIRECTORY)
   set(args ${all_args})
   list(FILTER args EXCLUDE REGEX "^-D${missing}=")
   expect_runner_rejected(
     "a missing ${missing}" "${missing} is required" ${args})
 endforeach()
+
+set(marker_target_module "${TEST_ROOT}/marker-target-module")
+set(marker_module_junction "${TEST_ROOT}/marker-module-junction")
+set(query_execution_marker "${TEST_ROOT}/untrusted-runner-executed.marker")
+file(MAKE_DIRECTORY "${marker_target_module}")
+file(COPY_FILE
+  "${ALTERNATE_RUN_PURE_TEST_EXECUTABLE}"
+  "${marker_target_module}/run_pure_test.exe")
+file(REMOVE "${query_execution_marker}")
+execute_process(
+  COMMAND "${CMAKE_COMMAND}" -E env
+    "PURE_ODBC_LINK_PATH=${marker_module_junction}"
+    "PURE_ODBC_LINK_TARGET=${marker_target_module}"
+    "${powershell}" -NoProfile -NonInteractive -ExecutionPolicy Bypass
+    -Command
+    "$ErrorActionPreference='Stop'; New-Item -ItemType Junction -Path $env:PURE_ODBC_LINK_PATH -Target $env:PURE_ODBC_LINK_TARGET | Out-Null"
+  RESULT_VARIABLE marker_junction_result
+  OUTPUT_VARIABLE marker_junction_output
+  ERROR_VARIABLE marker_junction_error
+  ENCODING UTF-8
+)
+if(NOT marker_junction_result EQUAL 0)
+  message(FATAL_ERROR
+    "Unable to create runner-execution junction probe\n"
+    "${marker_junction_output}${marker_junction_error}")
+endif()
+set(marker_args ${all_args})
+list(FILTER marker_args EXCLUDE REGEX "^-DMODULE_DIR=")
+list(PREPEND marker_args "-DMODULE_DIR=${marker_module_junction}")
+execute_process(
+  COMMAND "${CMAKE_COMMAND}" -E env
+    "PURE_ODBC_TEST_QUERY_MARKER=${query_execution_marker}"
+    "${CMAKE_COMMAND}" ${marker_args}
+    -P "${SOURCE_DIR}/cmake/RunPureTest.cmake"
+  RESULT_VARIABLE marker_probe_result
+  OUTPUT_VARIABLE marker_probe_output
+  ERROR_VARIABLE marker_probe_error
+  ENCODING UTF-8
+)
+execute_process(
+  COMMAND "${CMAKE_COMMAND}" -E env
+    "PURE_ODBC_LINK_PATH=${marker_module_junction}"
+    "${powershell}" -NoProfile -NonInteractive -ExecutionPolicy Bypass
+    -Command
+    "$ErrorActionPreference='Stop'; $item=Get-Item -LiteralPath $env:PURE_ODBC_LINK_PATH -Force; if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -eq 0) { throw 'not a reparse point' }; [IO.Directory]::Delete($env:PURE_ODBC_LINK_PATH, $false)"
+  RESULT_VARIABLE marker_cleanup_result
+  OUTPUT_VARIABLE marker_cleanup_output
+  ERROR_VARIABLE marker_cleanup_error
+  ENCODING UTF-8
+)
+if(NOT marker_cleanup_result EQUAL 0)
+  message(FATAL_ERROR
+    "Unable to remove runner-execution junction probe\n"
+    "${marker_cleanup_output}${marker_cleanup_error}")
+endif()
+set(marker_probe_diagnostics "${marker_probe_output}\n${marker_probe_error}")
+if(EXISTS "${query_execution_marker}")
+  message(FATAL_ERROR
+    "RunPureTest executed an untrusted junction-path runner before validation\n"
+    "${marker_probe_diagnostics}")
+endif()
+if(marker_probe_result EQUAL 0 OR
+    NOT marker_probe_diagnostics MATCHES "MODULE_DIR.*[Rr]eparse")
+  message(FATAL_ERROR
+    "RunPureTest did not reject a junction-path runner before execution\n"
+    "${marker_probe_diagnostics}")
+endif()
+
+execute_process(
+  COMMAND "${CMAKE_COMMAND}" -E env
+    "PURE_ODBC_TEST_WINDOWS_DIRECTORY=${TEST_ROOT}/alternate-windows"
+    "${ALTERNATE_RUN_PURE_TEST_EXECUTABLE}"
+    "${TEST_ROOT}/pure/bin/fake-success.exe"
+    "${SOURCE_DIR}"
+    "${TEST_ROOT}/module"
+    "${TEST_ROOT}/test.pure"
+    "${TEST_ROOT}/alternate-windows"
+  RESULT_VARIABLE alternate_launch_result
+  OUTPUT_VARIABLE alternate_launch_output
+  ERROR_VARIABLE alternate_launch_error
+  ENCODING UTF-8
+)
+if(NOT alternate_launch_result EQUAL 0 OR
+    NOT alternate_launch_error STREQUAL "")
+  message(FATAL_ERROR
+    "Alternate-authority native launcher failed\n"
+    "${alternate_launch_output}${alternate_launch_error}")
+endif()
+string(REGEX MATCH "EFFECTIVE_CWD=([^\r\n]+)" unused
+  "${alternate_launch_output}")
+_pure_odbc_fold_path("${CMAKE_MATCH_1}" folded_alternate_launch_cwd)
+_pure_odbc_fold_path(
+  "${TEST_ROOT}/alternate-windows" folded_alternate_windows_directory)
+if(NOT folded_alternate_launch_cwd STREQUAL
+    folded_alternate_windows_directory)
+  message(FATAL_ERROR
+    "Alternate-authority launcher ignored its controlled CWD\n"
+    "${alternate_launch_output}")
+endif()
+string(REGEX MATCH "EFFECTIVE_PATH=([^\r\n]+)" unused
+  "${alternate_launch_output}")
+set(alternate_actual_path "${CMAKE_MATCH_1}")
+set(alternate_expected_path
+  "${TEST_ROOT}/module;${TEST_ROOT}/pure/bin"
+  "${TEST_ROOT}/alternate-windows/System32"
+  "${TEST_ROOT}/alternate-windows")
+_pure_odbc_fold_path("${alternate_actual_path}" alternate_actual_path)
+_pure_odbc_fold_path("${alternate_expected_path}" alternate_expected_path)
+if(NOT alternate_actual_path STREQUAL alternate_expected_path)
+  message(FATAL_ERROR
+    "Alternate-authority launcher ignored its controlled PATH\n"
+    "expected: ${alternate_expected_path}\n"
+    "actual: ${alternate_actual_path}")
+endif()
 
 foreach(file_input IN ITEMS PURE_EXECUTABLE SCRIPT)
   set(args ${all_args})
