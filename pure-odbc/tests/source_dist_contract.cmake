@@ -1,5 +1,101 @@
 cmake_minimum_required(VERSION 3.25)
 
+function(require_no_forbidden_text label content)
+  string(REPLACE "\\" "/" normalized_content "${content}")
+  string(TOLOWER "${normalized_content}" normalized_content)
+  foreach(forbidden IN LISTS FORBIDDEN_PATHS)
+    cmake_path(CONVERT "${forbidden}" TO_CMAKE_PATH_LIST normalized NORMALIZE)
+    string(TOLOWER "${normalized}" normalized)
+    string(FIND "${normalized_content}" "${normalized}" leak_offset)
+    if(NOT leak_offset EQUAL -1)
+      message(FATAL_ERROR "Checkout path leaked through ${label}")
+    endif()
+  endforeach()
+endfunction()
+
+function(require_no_forbidden_file path)
+  set(needles)
+  set(max_needle_bytes 0)
+  foreach(forbidden IN LISTS FORBIDDEN_PATHS)
+    cmake_path(CONVERT "${forbidden}" TO_CMAKE_PATH_LIST normalized NORMALIZE)
+    string(REPLACE "/" "\\" native "${normalized}")
+    foreach(spelling IN ITEMS "${normalized}" "${native}")
+      string(TOLOWER "${spelling}" lower)
+      string(TOUPPER "${spelling}" upper)
+      foreach(variant IN ITEMS "${spelling}" "${lower}" "${upper}")
+        string(HEX "${variant}" needle)
+        list(APPEND needles "${needle}")
+        string(LENGTH "${needle}" needle_hex_length)
+        math(EXPR needle_bytes "${needle_hex_length} / 2")
+        if(needle_bytes GREATER max_needle_bytes)
+          set(max_needle_bytes "${needle_bytes}")
+        endif()
+      endforeach()
+    endforeach()
+  endforeach()
+  list(REMOVE_DUPLICATES needles)
+
+  file(SIZE "${path}" file_size)
+  set(chunk_bytes 1048576)
+  if(max_needle_bytes GREATER 0)
+    math(EXPR overlap_bytes "${max_needle_bytes} - 1")
+  else()
+    set(overlap_bytes 0)
+  endif()
+  set(offset 0)
+  while(offset LESS file_size)
+    math(EXPR read_bytes "${chunk_bytes} + ${overlap_bytes}")
+    file(READ "${path}" chunk OFFSET ${offset} LIMIT ${read_bytes} HEX)
+    string(TOLOWER "${chunk}" chunk)
+    foreach(needle IN LISTS needles)
+      string(TOLOWER "${needle}" needle)
+      string(FIND "${chunk}" "${needle}" leak_offset)
+      if(NOT leak_offset EQUAL -1)
+        message(FATAL_ERROR
+          "Checkout path leaked through generated file ${path}")
+      endif()
+    endforeach()
+    math(EXPR offset "${offset} + ${chunk_bytes}")
+  endwhile()
+endfunction()
+
+function(run_checked label result_var output_var error_var)
+  cmake_parse_arguments(PARSE_ARGV 4 run "" "WORKING_DIRECTORY" "COMMAND")
+  if(DEFINED run_WORKING_DIRECTORY)
+    execute_process(
+      COMMAND ${run_COMMAND}
+      WORKING_DIRECTORY "${run_WORKING_DIRECTORY}"
+      RESULT_VARIABLE result OUTPUT_VARIABLE output ERROR_VARIABLE error
+      ENCODING UTF-8)
+  else()
+    execute_process(
+      COMMAND ${run_COMMAND}
+      RESULT_VARIABLE result OUTPUT_VARIABLE output ERROR_VARIABLE error
+      ENCODING UTF-8)
+  endif()
+  require_no_forbidden_text("${label} stdout" "${output}")
+  require_no_forbidden_text("${label} stderr" "${error}")
+  set(${result_var} "${result}" PARENT_SCOPE)
+  set(${output_var} "${output}" PARENT_SCOPE)
+  set(${error_var} "${error}" PARENT_SCOPE)
+endfunction()
+
+if(DEFINED PURE_ODBC_SCAN_FILE_PROBE)
+  set(FORBIDDEN_PATHS "${PURE_ODBC_SCAN_FORBIDDEN}")
+  require_no_forbidden_file("${PURE_ODBC_SCAN_FILE_PROBE}")
+  return()
+endif()
+
+if(DEFINED PURE_ODBC_SCAN_OUTPUT_PROBE)
+  set(FORBIDDEN_PATHS "${PURE_ODBC_SCAN_FORBIDDEN}")
+  run_checked("probe command" result output error
+    COMMAND "${CMAKE_COMMAND}" -E echo "${PURE_ODBC_SCAN_FORBIDDEN}")
+  if(NOT result EQUAL 0)
+    message(FATAL_ERROR "Output probe command unexpectedly failed")
+  endif()
+  return()
+endif()
+
 include("${CMAKE_CURRENT_LIST_DIR}/ContractTestRoot.cmake")
 
 set(required_directories
@@ -38,6 +134,49 @@ set(extract_parent "${TEST_ROOT}/distribution source with spaces")
 set(extracted_source "${extract_parent}/pure-odbc-0.10")
 set(extracted_build "${TEST_ROOT}/b")
 file(MAKE_DIRECTORY "${checkout_source}" "${extract_parent}")
+set(FORBIDDEN_PATHS "${SOURCE_DIR}" "${checkout_source}")
+
+set(scan_probe "${dist_root}/large-scan-probe.bin")
+string(REPEAT "x" 9437184 scan_probe_prefix)
+file(WRITE "${scan_probe}" "${scan_probe_prefix}${SOURCE_DIR}")
+unset(scan_probe_prefix)
+execute_process(
+  COMMAND "${CMAKE_COMMAND}"
+    "-DPURE_ODBC_SCAN_FILE_PROBE=${scan_probe}"
+    "-DPURE_ODBC_SCAN_FORBIDDEN=${SOURCE_DIR}"
+    -P "${CMAKE_CURRENT_LIST_FILE}"
+  RESULT_VARIABLE scan_probe_result
+  OUTPUT_VARIABLE scan_probe_output
+  ERROR_VARIABLE scan_probe_error
+  ENCODING UTF-8)
+file(REMOVE "${scan_probe}")
+if(scan_probe_result EQUAL 0)
+  message(FATAL_ERROR
+    "Large generated-file scan accepted a checkout path after 8 MiB")
+endif()
+if(NOT scan_probe_error MATCHES "Checkout path leaked")
+  message(FATAL_ERROR
+    "Large generated-file scan failed with the wrong diagnostic\n"
+    "${scan_probe_output}${scan_probe_error}")
+endif()
+
+execute_process(
+  COMMAND "${CMAKE_COMMAND}"
+    -DPURE_ODBC_SCAN_OUTPUT_PROBE=ON
+    "-DPURE_ODBC_SCAN_FORBIDDEN=${SOURCE_DIR}"
+    -P "${CMAKE_CURRENT_LIST_FILE}"
+  RESULT_VARIABLE output_probe_result
+  OUTPUT_VARIABLE output_probe_output
+  ERROR_VARIABLE output_probe_error
+  ENCODING UTF-8)
+if(output_probe_result EQUAL 0)
+  message(FATAL_ERROR "Command-output scan accepted a checkout path")
+endif()
+if(NOT output_probe_error MATCHES "Checkout path leaked")
+  message(FATAL_ERROR
+    "Command-output scan failed with the wrong diagnostic\n"
+    "${output_probe_output}${output_probe_error}")
+endif()
 
 _pure_odbc_require_no_reparse("${SOURCE_DIR}" "distribution input" TRUE)
 file(COPY "${SOURCE_DIR}/" DESTINATION "${checkout_source}")
@@ -45,16 +184,74 @@ _pure_odbc_require_no_reparse(
   "${checkout_source}" "copied distribution checkout" TRUE)
 cmake_path(GET MAKE_EXECUTABLE PARENT_PATH msys_usr_bin)
 
+set(real_data_directory "${checkout_source}/tests/data-real")
+set(junction_data_directory "${checkout_source}/tests/data")
+file(RENAME "${junction_data_directory}" "${real_data_directory}")
+set(powershell
+  "${WINDOWS_DIRECTORY}/System32/WindowsPowerShell/v1.0/powershell.exe")
+execute_process(
+  COMMAND "${CMAKE_COMMAND}" -E env
+    "PURE_ODBC_LINK_PATH=${junction_data_directory}"
+    "PURE_ODBC_LINK_TARGET=${real_data_directory}"
+    "SystemRoot=${WINDOWS_DIRECTORY}" "windir=${WINDOWS_DIRECTORY}"
+    "${powershell}" -NoProfile -NonInteractive -ExecutionPolicy Bypass
+    -Command "$ErrorActionPreference='Stop'; New-Item -ItemType Junction -Path $env:PURE_ODBC_LINK_PATH -Target $env:PURE_ODBC_LINK_TARGET | Out-Null"
+  RESULT_VARIABLE junction_create_result
+  OUTPUT_VARIABLE junction_create_output
+  ERROR_VARIABLE junction_create_error
+  ENCODING UTF-8)
+if(NOT junction_create_result EQUAL 0)
+  message(FATAL_ERROR
+    "Unable to create the distribution reparse fixture "
+    "(${junction_create_result})\n${junction_create_output}${junction_create_error}")
+endif()
 execute_process(
   COMMAND "${CMAKE_COMMAND}" -E env
     "PATH=${msys_usr_bin};${CLANG64_PREFIX}/bin;${WINDOWS_DIRECTORY}/System32"
     "PKG_CONFIG_PATH=${PKG_CONFIG_PATH}"
     "${MAKE_EXECUTABLE}" date=September\ 7,\ 2026 dist
   WORKING_DIRECTORY "${checkout_source}"
-  RESULT_VARIABLE dist_result
-  OUTPUT_VARIABLE dist_output
-  ERROR_VARIABLE dist_error
+  RESULT_VARIABLE junction_dist_result
+  OUTPUT_VARIABLE junction_dist_output
+  ERROR_VARIABLE junction_dist_error
   ENCODING UTF-8)
+execute_process(
+  COMMAND "${CMAKE_COMMAND}" -E env
+    "PURE_ODBC_LINK_PATH=${junction_data_directory}"
+    "SystemRoot=${WINDOWS_DIRECTORY}" "windir=${WINDOWS_DIRECTORY}"
+    "${powershell}" -NoProfile -NonInteractive -ExecutionPolicy Bypass
+    -Command "$ErrorActionPreference='Stop'; $item=Get-Item -LiteralPath $env:PURE_ODBC_LINK_PATH -Force; if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -eq 0) { throw 'fixture is not a reparse point' }; [IO.Directory]::Delete($env:PURE_ODBC_LINK_PATH, $false)"
+  RESULT_VARIABLE junction_remove_result
+  OUTPUT_VARIABLE junction_remove_output
+  ERROR_VARIABLE junction_remove_error
+  ENCODING UTF-8)
+if(NOT junction_remove_result EQUAL 0)
+  message(FATAL_ERROR
+    "Unable to remove the distribution reparse fixture "
+    "(${junction_remove_result})\n${junction_remove_output}${junction_remove_error}")
+endif()
+file(RENAME "${real_data_directory}" "${junction_data_directory}")
+file(REMOVE "${checkout_source}/pure-odbc-0.10.tar.gz")
+if(junction_dist_result EQUAL 0)
+  message(FATAL_ERROR
+    "make dist accepted a required asset through a junction parent")
+endif()
+if(NOT junction_dist_error MATCHES
+    "refusing reparse distribution input: tests/data/people\\.csv")
+  message(FATAL_ERROR
+    "make dist rejected the junction fixture with the wrong diagnostic\n"
+    "${junction_dist_output}${junction_dist_error}")
+endif()
+_pure_odbc_require_no_reparse(
+  "${checkout_source}" "restored copied distribution checkout" TRUE)
+
+run_checked("make dist" dist_result dist_output dist_error
+  WORKING_DIRECTORY "${checkout_source}"
+  COMMAND "${CMAKE_COMMAND}" -E env
+    "PATH=${msys_usr_bin};${CLANG64_PREFIX}/bin;${WINDOWS_DIRECTORY}/System32"
+    "PKG_CONFIG_PATH=${PKG_CONFIG_PATH}"
+    "${MAKE_EXECUTABLE}" date=September\ 7,\ 2026 dist
+)
 if(NOT dist_result EQUAL 0)
   message(FATAL_ERROR
     "make dist failed (${dist_result})\nstdout:\n${dist_output}\n"
@@ -66,13 +263,10 @@ if(NOT EXISTS "${archive}" OR IS_DIRECTORY "${archive}" OR
     IS_SYMLINK "${archive}")
   message(FATAL_ERROR "make dist did not create a regular archive: ${archive}")
 endif()
-execute_process(
-  COMMAND "${CMAKE_COMMAND}" -E tar xzf "${archive}"
+run_checked("source archive extraction"
+  extract_result extract_output extract_error
   WORKING_DIRECTORY "${extract_parent}"
-  RESULT_VARIABLE extract_result
-  OUTPUT_VARIABLE extract_output
-  ERROR_VARIABLE extract_error
-  ENCODING UTF-8)
+  COMMAND "${CMAKE_COMMAND}" -E tar xzf "${archive}")
 if(NOT extract_result EQUAL 0)
   message(FATAL_ERROR
     "Unable to extract source archive (${extract_result})\n"
@@ -204,76 +398,48 @@ set(configure_command
   "-DODBC_HEADER=${ODBC_HEADER}"
   "-DODBC_IMPORT_LIBRARY=${ODBC_IMPORT_LIBRARY}"
   "-DSYSTEM_ODBC_DLL=${SYSTEM_ODBC_DLL}")
-execute_process(
-  COMMAND ${configure_command}
-  RESULT_VARIABLE configure_result
-  OUTPUT_VARIABLE configure_output
-  ERROR_VARIABLE configure_error
-  ENCODING UTF-8)
+run_checked("extracted strict configure"
+  configure_result configure_output configure_error
+  COMMAND ${configure_command})
 if(NOT configure_result EQUAL 0)
   message(FATAL_ERROR
     "Extracted strict configure failed (${configure_result})\n"
     "stdout:\n${configure_output}\nstderr:\n${configure_error}")
 endif()
 
-execute_process(
-  COMMAND "${CMAKE_EXECUTABLE}" --build "${extracted_build}" --parallel 4
-  RESULT_VARIABLE build_result
-  OUTPUT_VARIABLE build_output
-  ERROR_VARIABLE build_error
-  ENCODING UTF-8)
+run_checked("extracted four-worker build"
+  build_result build_output build_error
+  COMMAND "${CMAKE_EXECUTABLE}" --build "${extracted_build}" --parallel 4)
 if(NOT build_result EQUAL 0)
   message(FATAL_ERROR
     "Extracted four-worker build failed (${build_result})\n"
     "${build_output}${build_error}")
 endif()
-execute_process(
+run_checked("extracted PE verification" pe_result pe_output pe_error
   COMMAND "${CMAKE_EXECUTABLE}" --build "${extracted_build}"
     --target verify-windows-dependencies --parallel 4
-  RESULT_VARIABLE pe_result
-  OUTPUT_VARIABLE pe_output
-  ERROR_VARIABLE pe_error
-  ENCODING UTF-8)
+)
 if(NOT pe_result EQUAL 0)
   message(FATAL_ERROR
     "Extracted PE verification failed (${pe_result})\n${pe_output}${pe_error}")
 endif()
-execute_process(
+run_checked("extracted verbose CTest including install and verifier output"
+  test_result test_output test_error
   COMMAND "${CMAKE_CTEST_COMMAND}" --test-dir "${extracted_build}"
-    -LE source-distribution --output-on-failure --no-tests=error
-  RESULT_VARIABLE test_result
-  OUTPUT_VARIABLE test_output
-  ERROR_VARIABLE test_error
-  ENCODING UTF-8)
+    -LE source-distribution --verbose --output-on-failure --no-tests=error)
 if(NOT test_result EQUAL 0)
   message(FATAL_ERROR
     "Extracted full ODBC test suite failed (${test_result})\n"
     "${test_output}${test_error}")
 endif()
 
-set(forbidden_paths "${SOURCE_DIR}" "${checkout_source}")
 file(GLOB_RECURSE generated_files LIST_DIRECTORIES FALSE
   "${extracted_build}/*")
 foreach(generated IN LISTS generated_files)
   if(IS_SYMLINK "${generated}")
     message(FATAL_ERROR "Extracted build produced a symlink: ${generated}")
   endif()
-  file(SIZE "${generated}" generated_size)
-  if(generated_size GREATER 8388608)
-    continue()
-  endif()
-  file(READ "${generated}" generated_content LIMIT 8388608)
-  string(REPLACE "\\" "/" generated_content "${generated_content}")
-  string(TOLOWER "${generated_content}" generated_content)
-  foreach(forbidden IN LISTS forbidden_paths)
-    cmake_path(CONVERT "${forbidden}" TO_CMAKE_PATH_LIST forbidden NORMALIZE)
-    string(TOLOWER "${forbidden}" forbidden)
-    string(FIND "${generated_content}" "${forbidden}" leak_offset)
-    if(NOT leak_offset EQUAL -1)
-      message(FATAL_ERROR
-        "Checkout path leaked into extracted build output: ${generated}")
-    endif()
-  endforeach()
+  require_no_forbidden_file("${generated}")
 endforeach()
 
 message(STATUS

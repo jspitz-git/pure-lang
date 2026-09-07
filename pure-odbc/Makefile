@@ -84,7 +84,17 @@ dist: check-dist-name
 	rm -rf "$(dist)"
 	mkdir "$(dist)"
 	@for x in $(DISTFILES); do \
-	  test -f "$$x" && test ! -L "$$x" || { \
+	  component="$$x"; \
+	  while :; do \
+	    test ! -L "$$component" || { \
+	      echo "refusing reparse distribution input: $$x" >&2; exit 1; \
+	    }; \
+	    case "$$component" in \
+	      */*) component="$${component%/*}" ;; \
+	      *) break ;; \
+	    esac; \
+	  done; \
+	  test -f "$$x" || { \
 	    echo "refusing non-regular distribution input: $$x" >&2; exit 1; \
 	  }; \
 	  target="$(dist)/$$x"; \
