@@ -10,13 +10,15 @@ CFLAGS = -O3
 
 # platform-specific setup
 
-DLL         = $(shell pkg-config pure --variable DLL)
-PIC         = $(shell pkg-config pure --variable PIC)
-shared      = $(shell pkg-config pure --variable shared)
+PKG_CONFIG ?= pkg-config
 
-prefix      = $(shell pkg-config pure --variable prefix)
+DLL         = $(shell $(PKG_CONFIG) pure --variable DLL)
+PIC         = $(shell $(PKG_CONFIG) pure --variable PIC)
+shared      = $(shell $(PKG_CONFIG) pure --variable shared)
+
+prefix      = $(shell $(PKG_CONFIG) pure --variable prefix)
 bindir      = $(prefix)/bin
-libdir      = $(shell pkg-config pure --variable libdir)
+libdir      = $(shell $(PKG_CONFIG) pure --variable libdir)
 
 ODBCLIB = -lodbc
 
@@ -31,8 +33,8 @@ endif
 
 LIBS = $(ODBCLIB) -lgmp
 
-MOD_CFLAGS  = $(PIC) $(shell pkg-config pure --cflags) $(CFLAGS) $(CPPFLAGS)
-MOD_LDFLAGS = $(shell pkg-config pure --libs) $(LDFLAGS) $(LIBS)
+MOD_CFLAGS  = $(PIC) $(shell $(PKG_CONFIG) pure --cflags) $(CFLAGS) $(CPPFLAGS)
+MOD_LDFLAGS = $(shell $(PKG_CONFIG) pure --libs) $(LDFLAGS) $(LIBS)
 
 DISTFILES = COPYING COPYING.LESSER Makefile README \
 debian/* examples/*.pure odbc.c odbc.pure
@@ -44,8 +46,10 @@ odbc$(DLL): odbc.c
 	$(CC) $(shared) $(dllname) -o $@ $(MOD_CFLAGS) $< $(MOD_LDFLAGS)
 
 clean:
-	@test -n "$(DLL)" || { echo "refusing to clean: Pure DLL suffix is empty" >&2; exit 1; }
-	rm -f *$(DLL) *~ *.a *.o
+	@case "$(DLL)" in .dll|.so|.dylib) ;; *) \
+	  echo "refusing to clean: Pure DLL suffix is invalid" >&2; \
+	  exit 1 ;; esac
+	rm -f "odbc$(DLL)" odbc.a odbc.o
 
 install:
 	test -d "$(DESTDIR)$(libdir)/pure" || mkdir -p "$(DESTDIR)$(libdir)/pure"
