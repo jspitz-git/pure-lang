@@ -1,4 +1,5 @@
 #include <stdbool.h>
+#include <limits.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -46,6 +47,20 @@ enum operation_fault {
   FAIL_RESULT_METADATA_ALLOCATION
 };
 
+enum diagnostic_mode {
+  DIAGNOSTIC_SINGLE,
+  DIAGNOSTIC_LONG_MULTIPLE
+};
+
+enum metadata_operation {
+  METADATA_NONE,
+  METADATA_TYPE_INFO,
+  METADATA_TABLES,
+  METADATA_COLUMNS,
+  METADATA_PRIMARY_KEYS,
+  METADATA_FOREIGN_KEYS
+};
+
 static enum fault_mode mode;
 static SQLRETURN getdata_return;
 static int getdata_calls;
@@ -60,6 +75,7 @@ static bool check_info_input;
 static bool getinfo_request_ok;
 static int fail_next_allocation;
 static int fail_allocation_countdown;
+static int realloc_attempts;
 static size_t allocation_count;
 static void *allocations[32];
 static enum operation_fault operation_fault;
@@ -82,6 +98,23 @@ static int num_result_cols_calls;
 static int row_count_calls;
 static int describe_col_calls;
 static int more_results_calls;
+static int bind_col_calls;
+static int fail_bind_col_call;
+static int unbind_calls;
+static int metadata_operation_calls;
+static enum metadata_operation active_metadata_operation;
+static SQLUSMALLINT last_parameter_number;
+static SQLUSMALLINT maximum_parameter_number;
+static bool parameter_number_protocol_ok;
+static enum diagnostic_mode diagnostic_mode;
+static int diagnostic_calls;
+static int driver_calls;
+static int source_calls;
+static int driver_record;
+static int source_record;
+static bool driver_retry_pending;
+static bool source_retry_pending;
+static bool enumeration_fail_on_growth;
 static bool handle_protocol_ok;
 static short result_cols[4];
 static SQLLEN result_rows[4];
@@ -163,6 +196,7 @@ static void *fault_realloc(void *ptr, size_t size)
 
   if (!ptr)
     return fault_malloc(size);
+  ++realloc_attempts;
   if (fail_next_allocation) {
     fail_next_allocation = 0;
     return NULL;
@@ -225,6 +259,8 @@ static bool fault_forget(void *ptr)
 static SQLRETURN SQL_API fake_SQLFetch(SQLHSTMT statement)
 {
   (void)statement;
+  if (active_metadata_operation != METADATA_NONE)
+    return SQL_NO_DATA;
   return SQL_SUCCESS;
 }
 
@@ -339,6 +375,8 @@ static SQLRETURN SQL_API fake_SQLFreeStmt(SQLHSTMT statement,
     ++close_statement_calls;
     record_resource_event(EVENT_CLOSE_STATEMENT, 0);
     cursor_open = false;
+  } else if (option == SQL_UNBIND) {
+    ++unbind_calls;
   } else
     handle_protocol_ok = false;
   return SQL_SUCCESS;
@@ -367,11 +405,128 @@ static SQLRETURN SQL_API fake_SQLBindParameter(
   (void)buffer_length;
   (void)indicator;
   ++bind_parameter_calls;
+  last_parameter_number = parameter;
+  parameter_number_protocol_ok = parameter_number_protocol_ok &&
+    parameter >= 1 && parameter <= maximum_parameter_number;
   handle_protocol_ok = handle_protocol_ok && statement == FAKE_STMT &&
-    parameter >= 1 && parameter <= 2 &&
     input_output_type == SQL_PARAM_INPUT;
   return operation_fault == FAIL_PARAMETER_BIND && parameter == 2 ?
     SQL_ERROR : SQL_SUCCESS;
+}
+
+static SQLRETURN SQL_API fake_SQLBindCol(SQLHSTMT statement,
+                                         SQLUSMALLINT column,
+                                         SQLSMALLINT target_type,
+                                         SQLPOINTER target,
+                                         SQLLEN buffer_length,
+                                         SQLLEN *length)
+{
+  (void)column;
+  (void)target_type;
+  (void)target;
+  (void)buffer_length;
+  (void)length;
+  ++bind_col_calls;
+  handle_protocol_ok = handle_protocol_ok && statement == FAKE_STMT;
+  return bind_col_calls == fail_bind_col_call ? SQL_ERROR : SQL_SUCCESS;
+}
+
+static SQLRETURN SQL_API fake_SQLGetTypeInfo(SQLHSTMT statement,
+                                             SQLSMALLINT data_type)
+{
+  (void)data_type;
+  ++metadata_operation_calls;
+  active_metadata_operation = METADATA_TYPE_INFO;
+  return statement == FAKE_STMT ? SQL_SUCCESS : SQL_ERROR;
+}
+
+static SQLRETURN SQL_API fake_SQLTables(SQLHSTMT statement, SQLCHAR *catalog,
+                                        SQLSMALLINT catalog_length,
+                                        SQLCHAR *schema,
+                                        SQLSMALLINT schema_length,
+                                        SQLCHAR *table,
+                                        SQLSMALLINT table_length,
+                                        SQLCHAR *type,
+                                        SQLSMALLINT type_length)
+{
+  (void)catalog;
+  (void)catalog_length;
+  (void)schema;
+  (void)schema_length;
+  (void)table;
+  (void)table_length;
+  (void)type;
+  (void)type_length;
+  ++metadata_operation_calls;
+  active_metadata_operation = METADATA_TABLES;
+  return statement == FAKE_STMT ? SQL_SUCCESS : SQL_ERROR;
+}
+
+static SQLRETURN SQL_API fake_SQLColumns(SQLHSTMT statement, SQLCHAR *catalog,
+                                         SQLSMALLINT catalog_length,
+                                         SQLCHAR *schema,
+                                         SQLSMALLINT schema_length,
+                                         SQLCHAR *table,
+                                         SQLSMALLINT table_length,
+                                         SQLCHAR *column,
+                                         SQLSMALLINT column_length)
+{
+  (void)catalog;
+  (void)catalog_length;
+  (void)schema;
+  (void)schema_length;
+  (void)table;
+  (void)table_length;
+  (void)column;
+  (void)column_length;
+  ++metadata_operation_calls;
+  active_metadata_operation = METADATA_COLUMNS;
+  return statement == FAKE_STMT ? SQL_SUCCESS : SQL_ERROR;
+}
+
+static SQLRETURN SQL_API fake_SQLPrimaryKeys(SQLHSTMT statement,
+                                             SQLCHAR *catalog,
+                                             SQLSMALLINT catalog_length,
+                                             SQLCHAR *schema,
+                                             SQLSMALLINT schema_length,
+                                             SQLCHAR *table,
+                                             SQLSMALLINT table_length)
+{
+  (void)catalog;
+  (void)catalog_length;
+  (void)schema;
+  (void)schema_length;
+  (void)table;
+  (void)table_length;
+  ++metadata_operation_calls;
+  active_metadata_operation = METADATA_PRIMARY_KEYS;
+  return statement == FAKE_STMT ? SQL_SUCCESS : SQL_ERROR;
+}
+
+static SQLRETURN SQL_API fake_SQLForeignKeys(
+  SQLHSTMT statement, SQLCHAR *primary_catalog,
+  SQLSMALLINT primary_catalog_length, SQLCHAR *primary_schema,
+  SQLSMALLINT primary_schema_length, SQLCHAR *primary_table,
+  SQLSMALLINT primary_table_length, SQLCHAR *foreign_catalog,
+  SQLSMALLINT foreign_catalog_length, SQLCHAR *foreign_schema,
+  SQLSMALLINT foreign_schema_length, SQLCHAR *foreign_table,
+  SQLSMALLINT foreign_table_length)
+{
+  (void)primary_catalog;
+  (void)primary_catalog_length;
+  (void)primary_schema;
+  (void)primary_schema_length;
+  (void)primary_table;
+  (void)primary_table_length;
+  (void)foreign_catalog;
+  (void)foreign_catalog_length;
+  (void)foreign_schema;
+  (void)foreign_schema_length;
+  (void)foreign_table;
+  (void)foreign_table_length;
+  ++metadata_operation_calls;
+  active_metadata_operation = METADATA_FOREIGN_KEYS;
+  return statement == FAKE_STMT ? SQL_SUCCESS : SQL_ERROR;
 }
 
 static SQLRETURN SQL_API fake_SQLExecute(SQLHSTMT statement)
@@ -561,6 +716,152 @@ static SQLRETURN SQL_API fake_SQLGetData(SQLHSTMT statement,
   return getdata_return;
 }
 
+#define ENUMERATION_RECORDS 12
+
+static void make_repeated_text(char *buffer, size_t length, char value)
+{
+  memset(buffer, value, length);
+  buffer[length] = 0;
+}
+
+static bool copy_enumeration_text(SQLCHAR *output, SQLSMALLINT capacity,
+                                  SQLSMALLINT *reported_length,
+                                  const char *value, size_t length,
+                                  bool extra_terminator)
+{
+  size_t required = length + 1 + (extra_terminator ? 1U : 0U);
+  size_t available = capacity > 0 ? (size_t)capacity : 0;
+  size_t count = required < available ? required : available;
+
+  if (length > (size_t)SHRT_MAX) {
+    *reported_length = SHRT_MAX;
+    return true;
+  }
+  *reported_length = (SQLSMALLINT)length;
+  if (output && count > 0) {
+    memcpy(output, value, count < length ? count : length);
+    if (count > length)
+      output[length] = 0;
+    if (extra_terminator && count > length + 1)
+      output[length + 1] = 0;
+    output[count - 1] = 0;
+  }
+  return available < required;
+}
+
+static SQLRETURN enumeration_record(SQLUSMALLINT direction, int *record,
+                                    bool *retry_pending)
+{
+  if (direction == SQL_FETCH_FIRST) {
+    if (!*retry_pending)
+      *record = 0;
+  } else if (direction == SQL_FETCH_NEXT) {
+    if (!*retry_pending)
+      ++*record;
+  } else {
+    return SQL_ERROR;
+  }
+  if (*record >= ENUMERATION_RECORDS)
+    return SQL_NO_DATA;
+  return SQL_SUCCESS;
+}
+
+static SQLRETURN SQL_API fake_SQLDrivers(SQLHENV environment,
+                                         SQLUSMALLINT direction,
+                                         SQLCHAR *description,
+                                         SQLSMALLINT description_capacity,
+                                         SQLSMALLINT *description_length,
+                                         SQLCHAR *attributes,
+                                         SQLSMALLINT attributes_capacity,
+                                         SQLSMALLINT *attributes_length)
+{
+  char name[321];
+  char attr[513];
+  size_t name_length;
+  size_t attr_length;
+  bool name_truncated;
+  bool attr_truncated;
+  SQLRETURN step;
+
+  ++driver_calls;
+  handle_protocol_ok = handle_protocol_ok && environment == FAKE_ENV;
+  step = enumeration_record(direction, &driver_record, &driver_retry_pending);
+  if (!SQL_SUCCEEDED(step))
+    return step;
+  if (driver_record == 0) {
+    make_repeated_text(name, 320, 'D');
+    make_repeated_text(attr, 512, 'A');
+    name_length = 320;
+    attr_length = 512;
+  } else {
+    int name_result = snprintf(name, sizeof(name), "Driver-%02d", driver_record);
+    int attr_result = snprintf(attr, sizeof(attr), "Key=Value-%02d", driver_record);
+    if (name_result < 0 || attr_result < 0)
+      return SQL_ERROR;
+    name_length = (size_t)name_result;
+    attr_length = (size_t)attr_result;
+  }
+  name_truncated = copy_enumeration_text(description, description_capacity,
+                                         description_length, name,
+                                         name_length, false);
+  attr_truncated = copy_enumeration_text(attributes, attributes_capacity,
+                                         attributes_length, attr,
+                                         attr_length, true);
+  driver_retry_pending = name_truncated || attr_truncated;
+  return driver_retry_pending ? SQL_SUCCESS_WITH_INFO : SQL_SUCCESS;
+}
+
+static SQLRETURN SQL_API fake_SQLDataSources(SQLHENV environment,
+                                             SQLUSMALLINT direction,
+                                             SQLCHAR *name,
+                                             SQLSMALLINT name_capacity,
+                                             SQLSMALLINT *name_length,
+                                             SQLCHAR *description,
+                                             SQLSMALLINT description_capacity,
+                                             SQLSMALLINT *description_length)
+{
+  char source_name[385];
+  char source_description[449];
+  size_t source_name_length;
+  size_t source_description_length;
+  bool name_truncated;
+  bool description_truncated;
+  SQLRETURN step;
+
+  ++source_calls;
+  handle_protocol_ok = handle_protocol_ok && environment == FAKE_ENV;
+  step = enumeration_record(direction, &source_record, &source_retry_pending);
+  if (!SQL_SUCCEEDED(step))
+    return step;
+  if (source_record == 0) {
+    make_repeated_text(source_name, 384, 'S');
+    make_repeated_text(source_description, 448, 'E');
+    source_name_length = 384;
+    source_description_length = 448;
+  } else {
+    int name_result = snprintf(source_name, sizeof(source_name),
+                               "Source-%02d", source_record);
+    int description_result = snprintf(source_description,
+                                      sizeof(source_description),
+                                      "Description-%02d", source_record);
+    if (name_result < 0 || description_result < 0)
+      return SQL_ERROR;
+    source_name_length = (size_t)name_result;
+    source_description_length = (size_t)description_result;
+  }
+  name_truncated = copy_enumeration_text(name, name_capacity, name_length,
+                                         source_name, source_name_length,
+                                         false);
+  description_truncated = copy_enumeration_text(
+    description, description_capacity, description_length,
+    source_description, source_description_length, false);
+  source_retry_pending = name_truncated || description_truncated;
+  if (enumeration_fail_on_growth && source_record == 8 &&
+      !source_retry_pending)
+    fail_next_allocation = 1;
+  return source_retry_pending ? SQL_SUCCESS_WITH_INFO : SQL_SUCCESS;
+}
+
 static SQLRETURN SQL_API fake_SQLGetInfo(SQLHDBC connection,
                                          SQLUSMALLINT info_type,
                                          SQLPOINTER value,
@@ -659,20 +960,45 @@ static SQLRETURN SQL_API fake_SQLGetDiagRec(SQLSMALLINT handle_type,
 {
   static const char state_value[] = "HY000";
   static const char message_value[] = "injected fault";
+  const char *selected_state = state_value;
+  size_t selected_length = strlen(message_value);
+  char selected_fill = 0;
+  size_t copy_length;
 
-  (void)handle_type;
   (void)handle;
-  (void)record;
-  memcpy(state, state_value, sizeof(state_value));
+  ++diagnostic_calls;
+  if (diagnostic_mode == DIAGNOSTIC_LONG_MULTIPLE) {
+    if (handle_type != SQL_HANDLE_STMT || record > 2)
+      return SQL_NO_DATA;
+    if (record == 1) {
+      selected_state = "HY001";
+      selected_length = 700;
+      selected_fill = 'L';
+    } else {
+      selected_state = "01004";
+      selected_length = 420;
+      selected_fill = 'M';
+    }
+  } else if (record > 1) {
+    return SQL_NO_DATA;
+  }
+  memcpy(state, selected_state, 6);
   *native_error = 1;
   if (buffer_length > 0) {
-    size_t count = sizeof(message_value);
-    if (count > (size_t)buffer_length)
-      count = (size_t)buffer_length;
-    memcpy(message, message_value, count);
-    message[count - 1] = 0;
+    copy_length = selected_length;
+    if (copy_length >= (size_t)buffer_length)
+      copy_length = (size_t)buffer_length - 1;
+    if (selected_fill)
+      memset(message, selected_fill, copy_length);
+    else
+      memcpy(message, message_value, copy_length);
+    message[copy_length] = 0;
   }
-  *text_length = (SQLSMALLINT)strlen(message_value);
+  *text_length = (SQLSMALLINT)selected_length;
+  if (diagnostic_mode == DIAGNOSTIC_LONG_MULTIPLE && record == 2)
+    return SQL_SUCCESS_WITH_INFO;
+  if (selected_length >= (size_t)buffer_length)
+    return SQL_SUCCESS_WITH_INFO;
   return SQL_SUCCESS;
 }
 
@@ -719,6 +1045,7 @@ static void reset_operation_state(void)
   operation_fault = OPERATION_OK;
   fail_next_allocation = 0;
   fail_allocation_countdown = 0;
+  realloc_attempts = 0;
   alloc_env_calls = 0;
   alloc_dbc_calls = 0;
   alloc_stmt_calls = 0;
@@ -738,6 +1065,23 @@ static void reset_operation_state(void)
   row_count_calls = 0;
   describe_col_calls = 0;
   more_results_calls = 0;
+  bind_col_calls = 0;
+  fail_bind_col_call = 0;
+  unbind_calls = 0;
+  metadata_operation_calls = 0;
+  active_metadata_operation = METADATA_NONE;
+  last_parameter_number = 0;
+  maximum_parameter_number = 2;
+  parameter_number_protocol_ok = true;
+  diagnostic_mode = DIAGNOSTIC_SINGLE;
+  diagnostic_calls = 0;
+  driver_calls = 0;
+  source_calls = 0;
+  driver_record = -1;
+  source_record = -1;
+  driver_retry_pending = false;
+  source_retry_pending = false;
+  enumeration_fail_on_growth = false;
   handle_protocol_ok = true;
   memset(result_cols, 0, sizeof(result_cols));
   memset(result_rows, 0, sizeof(result_rows));
@@ -829,6 +1173,92 @@ static bool is_odbc_error(pure_expr *value)
   return value && pure_is_app(value, &head, &state) &&
     pure_is_app(head, &constructor, &message) &&
     pure_is_symbol(constructor, &symbol) && symbol == pure_sym("odbc::error");
+}
+
+static bool odbc_error_contents(pure_expr *value, const char **message_text,
+                                const char **state_text)
+{
+  pure_expr *head = NULL;
+  pure_expr *state = NULL;
+  pure_expr *constructor = NULL;
+  pure_expr *message = NULL;
+  int32_t symbol = 0;
+
+  return value && pure_is_app(value, &head, &state) &&
+    pure_is_app(head, &constructor, &message) &&
+    pure_is_symbol(constructor, &symbol) && symbol == pure_sym("odbc::error") &&
+    pure_is_string(message, message_text) && pure_is_string(state, state_text);
+}
+
+static bool repeated_character_string(const char *value, size_t length,
+                                      char expected)
+{
+  size_t i;
+
+  if (!value || strlen(value) != length)
+    return false;
+  for (i = 0; i < length; ++i)
+    if (value[i] != expected)
+      return false;
+  return true;
+}
+
+static bool repeated_character_region(const char *value, size_t length,
+                                      char expected)
+{
+  size_t i;
+
+  if (!value)
+    return false;
+  for (i = 0; i < length; ++i)
+    if (value[i] != expected)
+      return false;
+  return true;
+}
+
+static bool driver_list_is_exact(pure_expr *value)
+{
+  pure_expr **records = NULL;
+  pure_expr **first = NULL;
+  pure_expr **attributes = NULL;
+  size_t record_count = 0;
+  size_t first_count = 0;
+  size_t attribute_count = 0;
+  const char *name = NULL;
+  const char *attribute = NULL;
+  bool result = value && pure_is_listv(value, &record_count, &records) &&
+    record_count == ENUMERATION_RECORDS &&
+    pure_is_tuplev(records[0], &first_count, &first) && first_count == 2 &&
+    pure_is_string(first[0], &name) &&
+    pure_is_listv(first[1], &attribute_count, &attributes) &&
+    attribute_count == 1 && pure_is_string(attributes[0], &attribute) &&
+    repeated_character_string(name, 320, 'D') &&
+    repeated_character_string(attribute, 512, 'A');
+
+  free(attributes);
+  free(first);
+  free(records);
+  return result;
+}
+
+static bool source_list_is_exact(pure_expr *value)
+{
+  pure_expr **records = NULL;
+  pure_expr **first = NULL;
+  size_t record_count = 0;
+  size_t first_count = 0;
+  const char *name = NULL;
+  const char *description = NULL;
+  bool result = value && pure_is_listv(value, &record_count, &records) &&
+    record_count == ENUMERATION_RECORDS &&
+    pure_is_tuplev(records[0], &first_count, &first) && first_count == 2 &&
+    pure_is_string(first[0], &name) && pure_is_string(first[1], &description) &&
+    repeated_character_string(name, 384, 'S') &&
+    repeated_character_string(description, 448, 'E');
+
+  free(first);
+  free(records);
+  return result;
 }
 
 static bool is_int_value(pure_expr *value, int32_t expected)
@@ -1263,6 +1693,313 @@ static void run_wide_update_count(void)
   pure_freenew(database_value);
 }
 
+struct row_count_case {
+  const char *name;
+  int64_t value;
+  bool narrow;
+};
+
+static void run_row_count_boundary_cases(void)
+{
+  static const struct row_count_case cases[] = {
+    {"INT32_MIN row count stays a Pure int", INT32_MIN, true},
+    {"INT32_MAX row count stays a Pure int", INT32_MAX, true},
+    {"row count below INT32_MIN becomes an exact Pure int64",
+     (int64_t)INT32_MIN - 1, false},
+    {"row count above INT32_MAX becomes an exact Pure int64",
+     (int64_t)INT32_MAX + 1, false}
+  };
+  size_t i;
+
+  for (i = 0; i < sizeof(cases) / sizeof(cases[0]); ++i) {
+    ODBCHandle database;
+    pure_expr *database_value;
+    pure_expr *args;
+    pure_expr *result;
+    bool exact;
+
+    reset_operation_state();
+    result_cols[0] = 0;
+    result_rows[0] = (SQLLEN)cases[i].value;
+    initialize_test_database(&database);
+    database_value = pure_pointer(&database);
+    args = pure_listl(0);
+    result = odbc_sql_exec(database_value, "row count boundary", args);
+    exact = cases[i].narrow ?
+      is_int_value(result, (int32_t)cases[i].value) :
+      is_wide_int_value(result, cases[i].value);
+    check(exact, cases[i].name);
+    release_pure_result(result);
+    pure_freenew(args);
+    sql_close(&database);
+    pure_freenew(database_value);
+    check(allocation_count == 0,
+          "row count boundary cleanup has zero net allocations");
+  }
+}
+
+static pure_expr *make_integer_argument_list(size_t count)
+{
+  pure_expr **items;
+  pure_expr *list;
+  size_t i;
+
+  if (count > SIZE_MAX / sizeof(*items) ||
+      !(items = (pure_expr **)malloc(count * sizeof(*items))))
+    return NULL;
+  for (i = 0; i < count; ++i)
+    items[i] = pure_int(1);
+  list = pure_listv(count, items);
+  free(items);
+  return list;
+}
+
+static void run_parameter_number_boundaries(void)
+{
+  static const size_t valid_count = 65535;
+  static const size_t invalid_count = 65536;
+  ODBCHandle database;
+  pure_expr *database_value;
+  pure_expr *args;
+  pure_expr *result;
+
+  reset_operation_state();
+  maximum_parameter_number = (SQLUSMALLINT)USHRT_MAX;
+  result_cols[0] = 0;
+  initialize_test_database(&database);
+  database_value = pure_pointer(&database);
+  args = make_integer_argument_list(valid_count);
+  check(args != NULL, "65535-parameter fixture is constructed");
+  result = args ? odbc_sql_exec(database_value, "65535 parameters", args) : NULL;
+  check(is_int_value(result, 0), "parameter index 65535 is accepted");
+  check(bind_parameter_calls == (int)valid_count &&
+        last_parameter_number == (SQLUSMALLINT)USHRT_MAX &&
+        parameter_number_protocol_ok,
+        "parameter index 65535 reaches SQLBindParameter without narrowing");
+  release_pure_result(result);
+  release_pure_result(args);
+  sql_close(&database);
+  pure_freenew(database_value);
+  check(allocation_count == 0,
+        "65535-parameter cleanup has zero net allocations");
+
+  reset_operation_state();
+  maximum_parameter_number = (SQLUSMALLINT)USHRT_MAX;
+  result_cols[0] = 0;
+  initialize_test_database(&database);
+  database_value = pure_pointer(&database);
+  args = make_integer_argument_list(invalid_count);
+  check(args != NULL, "65536-parameter fixture is constructed");
+  result = args ? odbc_sql_exec(database_value, "65536 parameters", args) : NULL;
+  check(is_odbc_error(result), "parameter index 65536 is rejected");
+  check(bind_parameter_calls == 0 && execute_calls == 0,
+        "parameter index 65536 is rejected before binding");
+  release_pure_result(result);
+  release_pure_result(args);
+  if (database.argv || database.exec)
+    sql_close(&database);
+  pure_freenew(database_value);
+  check(allocation_count == 0,
+        "65536-parameter rejection has zero net allocations");
+}
+
+static pure_expr *make_bigint(const char *decimal)
+{
+  mpz_t value;
+  pure_expr *result;
+
+  mpz_init(value);
+  if (mpz_set_str(value, decimal, 10) != 0) {
+    mpz_clear(value);
+    return NULL;
+  }
+  result = pure_mpz(value);
+  mpz_clear(value);
+  return result;
+}
+
+static void run_invalid_parameter_case(const char *name, pure_expr *argument)
+{
+  ODBCHandle database;
+  pure_expr *database_value;
+  pure_expr *args;
+  pure_expr *result;
+
+  reset_operation_state();
+  initialize_test_database(&database);
+  database_value = pure_pointer(&database);
+  args = pure_listl(1, argument);
+  result = odbc_sql_exec(database_value, name, args);
+  check(result == NULL, name);
+  check(bind_parameter_calls == 0 && execute_calls == 0,
+        "invalid parameter is rejected before ODBC binding");
+  release_pure_result(result);
+  release_pure_result(args);
+  if (database.argv || database.exec)
+    sql_close(&database);
+  pure_freenew(database_value);
+  check(allocation_count == 0,
+        "invalid parameter rejection has zero net allocations");
+}
+
+static void run_parameter_value_boundaries(void)
+{
+  unsigned char byte = 0x5a;
+
+  run_invalid_parameter_case(
+    "Pure bigint above INT64_MAX is rejected",
+    make_bigint("9223372036854775808"));
+  run_invalid_parameter_case(
+    "Pure bigint below INT64_MIN is rejected",
+    make_bigint("-9223372036854775809"));
+  run_invalid_parameter_case(
+    "negative binary size is rejected",
+    pure_tuplel(2, pure_int(-1), pure_pointer(&byte)));
+  run_invalid_parameter_case(
+    "binary size above INT64_MAX is rejected",
+    pure_tuplel(2, make_bigint("9223372036854775808"),
+                pure_pointer(&byte)));
+}
+
+static void run_enumeration_cases(void)
+{
+  pure_expr *result;
+
+  reset_operation_state();
+  result = odbc_drivers();
+  check(driver_list_is_exact(result),
+        "driver enumeration preserves long names and attributes while growing");
+  check(driver_calls == ENUMERATION_RECORDS + 2,
+        "driver enumeration retries truncation and terminates only on SQL_NO_DATA");
+  check(alloc_env_calls == 1 && free_env_calls == 1 && handle_protocol_ok,
+        "driver enumeration balances its environment handle");
+  release_pure_result(result);
+  check(allocation_count == 0,
+        "driver enumeration has zero net allocations");
+
+  reset_operation_state();
+  result = odbc_sources();
+  check(source_list_is_exact(result),
+        "data-source enumeration preserves long names and descriptions while growing");
+  check(source_calls == ENUMERATION_RECORDS + 2,
+        "data-source enumeration retries truncation and terminates only on SQL_NO_DATA");
+  check(alloc_env_calls == 1 && free_env_calls == 1 && handle_protocol_ok,
+        "data-source enumeration balances its environment handle");
+  release_pure_result(result);
+  check(allocation_count == 0,
+        "data-source enumeration has zero net allocations");
+
+  reset_operation_state();
+  enumeration_fail_on_growth = true;
+  result = odbc_sources();
+  check(is_odbc_error(result),
+        "allocator failure during data-source collection growth is reported");
+  check(realloc_attempts > 0,
+        "data-source allocation failure occurs on a growing collector");
+  check(alloc_env_calls == 1 && free_env_calls == 1 && allocation_count == 0,
+        "collector growth failure releases expressions, buffers, and environment");
+  fail_next_allocation = 0;
+  release_pure_result(result);
+  if (allocation_count != 0)
+    drain_tracked_allocations();
+}
+
+static void run_diagnostic_collection_case(void)
+{
+  pure_expr *result;
+  const char *message = NULL;
+  const char *state = NULL;
+  bool exact;
+
+  reset_operation_state();
+  diagnostic_mode = DIAGNOSTIC_LONG_MULTIPLE;
+  result = pure_err(FAKE_ENV, FAKE_DBC, FAKE_STMT);
+  exact = odbc_error_contents(result, &message, &state) &&
+    strcmp(state, "HY001") == 0 && strlen(message) == 1121 &&
+    repeated_character_region(message, 700, 'L') &&
+    message[700] == '\n' &&
+    repeated_character_region(message + 701, 420, 'M');
+  check(exact,
+        "truncated SQL_SUCCESS_WITH_INFO diagnostics retain every complete record");
+  check(diagnostic_calls == 4,
+        "diagnostic collection retries once and reads through SQL_NO_DATA");
+  release_pure_result(result);
+  check(allocation_count == 0,
+        "diagnostic collection has zero net allocations");
+}
+
+struct metadata_case {
+  const char *name;
+  enum metadata_operation operation;
+  int bind_count;
+};
+
+static pure_expr *run_metadata_operation(enum metadata_operation operation,
+                                         pure_expr *database_value)
+{
+  switch (operation) {
+  case METADATA_TYPE_INFO:
+    return odbc_typeinfo(database_value, SQL_ALL_TYPES);
+  case METADATA_TABLES:
+    return odbc_tables(database_value);
+  case METADATA_COLUMNS:
+    return odbc_columns(database_value, "table");
+  case METADATA_PRIMARY_KEYS:
+    return odbc_primary_keys(database_value, "table");
+  case METADATA_FOREIGN_KEYS:
+    return odbc_foreign_keys(database_value, "table");
+  default:
+    return NULL;
+  }
+}
+
+static void run_failed_bind_col_cases(void)
+{
+  static const struct metadata_case cases[] = {
+    {"type-info", METADATA_TYPE_INFO, 19},
+    {"tables", METADATA_TABLES, 2},
+    {"columns", METADATA_COLUMNS, 4},
+    {"primary-keys", METADATA_PRIMARY_KEYS, 1},
+    {"foreign-keys", METADATA_FOREIGN_KEYS, 3}
+  };
+  size_t case_index;
+
+  for (case_index = 0;
+       case_index < sizeof(cases) / sizeof(cases[0]); ++case_index) {
+    int bind_index;
+
+    for (bind_index = 1; bind_index <= cases[case_index].bind_count;
+         ++bind_index) {
+      ODBCHandle database;
+      pure_expr *database_value;
+      pure_expr *result;
+      char assertion[192];
+
+      reset_operation_state();
+      fail_bind_col_call = bind_index;
+      initialize_test_database(&database);
+      database_value = pure_pointer(&database);
+      result = run_metadata_operation(cases[case_index].operation,
+                                      database_value);
+      snprintf(assertion, sizeof(assertion),
+               "%s bind %d failure is returned before bound storage is read",
+               cases[case_index].name, bind_index);
+      check(is_odbc_error(result) && bind_col_calls == bind_index &&
+            metadata_operation_calls == 0, assertion);
+      snprintf(assertion, sizeof(assertion),
+               "%s bind %d failure follows metadata cleanup",
+               cases[case_index].name, bind_index);
+      check(unbind_calls == 1 && close_statement_calls == 1 &&
+            allocation_count == 0 && handle_protocol_ok, assertion);
+      release_pure_result(result);
+      pure_freenew(database_value);
+      if (allocation_count != 0)
+        drain_tracked_allocations();
+    }
+  }
+  active_metadata_operation = METADATA_NONE;
+}
+
 static bool is_singleton_list(pure_expr *value)
 {
   pure_expr **items = NULL;
@@ -1671,6 +2408,14 @@ int main(void)
     test_api.close_cursor = fake_SQLCloseCursor;
     test_api.get_info = fake_SQLGetInfo;
     test_api.get_diag_rec = fake_SQLGetDiagRec;
+    test_api.drivers = fake_SQLDrivers;
+    test_api.data_sources = fake_SQLDataSources;
+    test_api.get_type_info = fake_SQLGetTypeInfo;
+    test_api.bind_col = fake_SQLBindCol;
+    test_api.tables = fake_SQLTables;
+    test_api.columns = fake_SQLColumns;
+    test_api.primary_keys = fake_SQLPrimaryKeys;
+    test_api.foreign_keys = fake_SQLForeignKeys;
     pure_odbc_set_api_for_test(&test_api);
   }
   run_connection_failure_cases();
@@ -1681,6 +2426,12 @@ int main(void)
   run_update_count_to_result_set();
   run_result_set_to_update_count();
   run_wide_update_count();
+  run_row_count_boundary_cases();
+  run_parameter_number_boundaries();
+  run_parameter_value_boundaries();
+  run_enumeration_cases();
+  run_diagnostic_collection_case();
+  run_failed_bind_col_cases();
   run_getdata_cases();
   run_binary_cases();
   run_getinfo_cases();

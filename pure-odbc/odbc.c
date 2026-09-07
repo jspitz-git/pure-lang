@@ -26,6 +26,7 @@
 #include <string.h>
 #include <ctype.h>
 #include <limits.h>
+#include <stdint.h>
 
 #ifdef __MINGW32__
 #include <malloc.h>
@@ -166,14 +167,14 @@ static inline bool pure_is_sqlnull(pure_expr *x)
 /* Query parameter structure */
 
 typedef struct {
-  short type; /* SQL parameter type */
-  short ctype; /* C parameter type */
+  SQLSMALLINT type; /* SQL parameter type */
+  SQLSMALLINT ctype; /* C parameter type */
   SQLLEN len; /* length or indicator */
-  long buflen; /* real buffer length */
-  long prec; /* precision */
+  SQLLEN buflen; /* real buffer length */
+  SQLULEN prec; /* precision */
   void *ptr; /* buffer pointer */
   union {
-    long iv; /* integer parameter */
+    SQLINTEGER iv; /* integer parameter */
     double fv; /* floating point parameter */
     char *buf; /* string or byte string parameter */
   } data;
@@ -189,10 +190,10 @@ typedef struct {
   SQLHDBC hdbc; /* connection handle */
   SQLHSTMT hstmt; /* statement handle */
   unsigned char exec; /* set while statement is being executed */
-  short *coltype; /* column types in current result set */
-  short cols; /* number of columns */
+  SQLSMALLINT *coltype; /* column types in current result set */
+  SQLSMALLINT cols; /* number of columns */
   ODBCParam *argv; /* marked parameters */
-  int argc; /* number of marked parameters */
+  size_t argc; /* number of marked parameters */
 } ODBCHandle;
 
 static inline bool is_db_pointer(pure_expr *x, ODBCHandle **db)
@@ -201,18 +202,71 @@ static inline bool is_db_pointer(pure_expr *x, ODBCHandle **db)
     (*db)->magic == ODBC_MAGIC && (*db)->henv;
 }
 
-static int init_args(ODBCHandle *db, int argc)
+static bool checked_multiply(size_t count, size_t element_size, size_t *bytes)
 {
-  int i;
-  size_t count;
+  if (element_size != 0 && count > SIZE_MAX / element_size)
+    return false;
+  *bytes = count * element_size;
+  return true;
+}
 
-  if (argc <= 0)
-    return argc == 0;
-  count = (size_t)argc;
-  if (count > (size_t)-1/sizeof(ODBCParam) ||
-      !(db->argv = malloc(count*sizeof(ODBCParam))))
+static SQLLEN sql_len_max(void)
+{
+  return (SQLLEN)(((SQLULEN)~(SQLULEN)0) >> 1);
+}
+
+static bool size_to_sql_len(size_t value, SQLLEN *result)
+{
+  if (sizeof(size_t) >= sizeof(SQLLEN) && value > (size_t)sql_len_max())
+    return false;
+  *result = (SQLLEN)value;
+  return true;
+}
+
+static bool size_to_sql_ulen(size_t value, SQLULEN *result)
+{
+  SQLULEN maximum = (SQLULEN)~(SQLULEN)0;
+
+  if (sizeof(size_t) > sizeof(SQLULEN) && value > (size_t)maximum)
+    return false;
+  *result = (SQLULEN)value;
+  return true;
+}
+
+static bool int64_to_size(int64_t value, size_t *result)
+{
+  if (value < 0 ||
+      (sizeof(size_t) < sizeof(uint64_t) &&
+       (uint64_t)value > (uint64_t)SIZE_MAX))
+    return false;
+  *result = (size_t)value;
+  return true;
+}
+
+static bool mpz_fits_int64(const mpz_t value)
+{
+  mpz_t limit;
+  int comparison;
+  int sign = mpz_sgn(value);
+
+  mpz_init_set_ui(limit, 1);
+  mpz_mul_2exp(limit, limit, 63);
+  comparison = mpz_cmpabs(value, limit);
+  mpz_clear(limit);
+  return sign < 0 ? comparison <= 0 : comparison < 0;
+}
+
+static int init_args(ODBCHandle *db, size_t argc)
+{
+  size_t i;
+  size_t bytes;
+
+  if (argc == 0)
+    return 1;
+  if (!checked_multiply(argc, sizeof(ODBCParam), &bytes) ||
+      !(db->argv = malloc(bytes)))
     return 0;
-  memset(db->argv, 0, count*sizeof(ODBCParam));
+  memset(db->argv, 0, bytes);
   db->argc = argc;
   for (i = 0; i < argc; i++) {
     db->argv[i].type = SQL_UNKNOWN_TYPE;
@@ -225,8 +279,8 @@ static void free_args(ODBCHandle *db)
 {
   if (db->argv) {
     ODBCParam *argv = db->argv;
-    int argc = db->argc;
-    int i;
+    size_t argc = db->argc;
+    size_t i;
 
     db->argv = NULL;
     db->argc = 0;
@@ -240,7 +294,7 @@ static void free_args(ODBCHandle *db)
   }
 }
 
-static int set_arg(ODBCHandle *db, int i, pure_expr *x)
+static int set_arg(ODBCHandle *db, size_t i, pure_expr *x)
 {
   int32_t iv;
   double fv;
@@ -248,12 +302,15 @@ static int set_arg(ODBCHandle *db, int i, pure_expr *x)
   mpz_t z;
   size_t nelems;
   unsigned char *buf;
-  int64_t buflen;
+  int64_t length_value;
+  size_t buffer_size;
+  SQLLEN buffer_length;
+  SQLULEN precision;
   if (pure_is_int(x, &iv)) {
     db->argv[i].type = SQL_INTEGER;
     db->argv[i].ctype = SQL_C_SLONG;
-    db->argv[i].len = sizeof(long);
-    db->argv[i].buflen = sizeof(long);
+    db->argv[i].len = (SQLLEN)sizeof(SQLINTEGER);
+    db->argv[i].buflen = (SQLLEN)sizeof(SQLINTEGER);
     db->argv[i].prec = 10;
     db->argv[i].data.iv = iv;
     db->argv[i].ptr = &db->argv[i].data.iv;
@@ -261,35 +318,55 @@ static int set_arg(ODBCHandle *db, int i, pure_expr *x)
   } else if (pure_is_mpz(x, &z)) {
     /* convert big integer values to BIGINTs via a string representation,
        so we don't have to fiddle with long long's here */
+    char *value;
+
+    if (!mpz_fits_int64(z)) {
+      mpz_clear(z);
+      return 0;
+    }
+    value = mpz_get_str(NULL, 10, z);
+    mpz_clear(z);
+    if (!value)
+      return 0;
+    buffer_size = strlen(value) + 1;
+    if (!size_to_sql_len(buffer_size, &buffer_length) ||
+        !size_to_sql_ulen(buffer_size - 1, &precision)) {
+      free(value);
+      return 0;
+    }
     db->argv[i].type = SQL_BIGINT;
     db->argv[i].ctype = SQL_C_CHAR;
     db->argv[i].len = SQL_NTS;
-    db->argv[i].data.buf = mpz_get_str(NULL, 10, z);
-    if (!db->argv[i].data.buf) return 0;
-    db->argv[i].buflen = strlen(db->argv[i].data.buf)+1;
-    db->argv[i].prec = db->argv[i].buflen-1;
+    db->argv[i].data.buf = value;
+    db->argv[i].buflen = buffer_length;
+    db->argv[i].prec = precision;
     db->argv[i].ptr = db->argv[i].data.buf;
-    mpz_clear(z);
     return 1;
   } else if (pure_is_double(x, &fv)) {
     db->argv[i].type = SQL_DOUBLE;
     db->argv[i].ctype = SQL_C_DOUBLE;
-    db->argv[i].len = sizeof(double);
-    db->argv[i].buflen = sizeof(double);
+    db->argv[i].len = (SQLLEN)sizeof(double);
+    db->argv[i].buflen = (SQLLEN)sizeof(double);
     db->argv[i].prec = 15;
     db->argv[i].data.fv = fv;
     db->argv[i].ptr = &db->argv[i].data.fv;
     return 1;
   } else if (pure_is_cstring_dup(x, &s)) {
     if (!s) return 0;
+    buffer_size = strlen(s) + 1;
+    if (!size_to_sql_len(buffer_size, &buffer_length) ||
+        !size_to_sql_ulen(buffer_size, &precision)) {
+      free(s);
+      return 0;
+    }
     db->argv[i].type = SQL_CHAR;
     db->argv[i].ctype = SQL_C_CHAR;
     db->argv[i].len = SQL_NTS;
-    db->argv[i].buflen = strlen(s)+1;
+    db->argv[i].buflen = buffer_length;
     /* FIXME: The prec value should actually be buflen-1 here, but the MS
        Access ODBC interface barks at these. Hopefully this doesn't mess
        things up with other ODBC drivers. */
-    db->argv[i].prec = db->argv[i].buflen;
+    db->argv[i].prec = precision;
     db->argv[i].data.buf = s;
     db->argv[i].ptr = s;
     return 1;
@@ -301,24 +378,34 @@ static int set_arg(ODBCHandle *db, int i, pure_expr *x)
       return 0;
     }
     if (pure_is_int(elems[0], &iv))
-      buflen = (int64_t)iv;
-    else if (pure_is_mpz(elems[0], NULL)) {
-      buflen = pure_get_int64(elems[0]);
+      length_value = (int64_t)iv;
+    else if (pure_is_mpz(elems[0], &z)) {
+      if (!mpz_fits_int64(z)) {
+        mpz_clear(z);
+        free(elems);
+        return 0;
+      }
+      mpz_clear(z);
+      length_value = pure_get_int64(elems[0]);
     } else {
       free(elems);
       return 0;
     }
     free(elems);
-    if (buflen<0 || !buf) buflen = 0;
+    if (!int64_to_size(length_value, &buffer_size) ||
+        (buffer_size > 0 && !buf) ||
+        !size_to_sql_len(buffer_size, &buffer_length) ||
+        !size_to_sql_ulen(buffer_size, &precision))
+      return 0;
     db->argv[i].type = SQL_BINARY;
     db->argv[i].ctype = SQL_C_BINARY;
-    db->argv[i].len = (SQLLEN) buflen;
-    db->argv[i].buflen = (SQLLEN) buflen;
-    db->argv[i].prec = (SQLLEN) buflen;
-    if (buflen > 0) {
-      if (!(db->argv[i].data.buf = malloc(buflen)))
+    db->argv[i].len = buffer_length;
+    db->argv[i].buflen = buffer_length;
+    db->argv[i].prec = precision;
+    if (buffer_size > 0) {
+      if (!(db->argv[i].data.buf = malloc(buffer_size)))
 	return 0;
-      memcpy(db->argv[i].data.buf, buf, (size_t) buflen);
+      memcpy(db->argv[i].data.buf, buf, buffer_size);
     } else
       db->argv[i].data.buf = NULL;
     db->argv[i].ptr = db->argv[i].data.buf;
@@ -342,7 +429,7 @@ static int set_arg(ODBCHandle *db, int i, pure_expr *x)
 static void sql_close(ODBCHandle *db)
 {
   if (db->exec) {
-    short *coltype = db->coltype;
+    SQLSMALLINT *coltype = db->coltype;
 
     db->coltype = NULL;
     db->cols = 0;
@@ -353,30 +440,6 @@ static void sql_close(ODBCHandle *db)
   }
 }
 
-static pure_expr *pure_err(SQLHENV henv, SQLHDBC hdbc, SQLHSTMT hstmt)
-{
-  SQLCHAR stat[10], msg[300];
-  SQLINTEGER err;
-  short len;
-  /* check for SQL statement errors */
-  if (hstmt && SQLGetDiagRec(SQL_HANDLE_STMT, hstmt, 1, stat, &err,
-			     msg, sizeof(msg), &len) == SQL_SUCCESS)
-    goto exit;
-  /* check for connection errors */
-  if (hdbc && SQLGetDiagRec(SQL_HANDLE_DBC, hdbc, 1, stat, &err,
-			    msg, sizeof(msg), &len) == SQL_SUCCESS)
-    goto exit;
-  /* check for environment errors */
-  if (henv && SQLGetDiagRec(SQL_HANDLE_ENV, henv, 1, stat, &err,
-			    msg, sizeof(msg), &len) == SQL_SUCCESS)
-    goto exit;
-  return 0;
- exit:
-  return pure_app(pure_app(pure_symbol(pure_sym("odbc::error")),
-			   pure_cstring_dup((const char*)msg)),
-		  pure_cstring_dup((const char*)stat));
-}
-
 static inline pure_expr* pure_err_internal(const char *msg)
 {
   return pure_app(pure_app(pure_symbol(pure_sym("odbc::error")),
@@ -384,121 +447,327 @@ static inline pure_expr* pure_err_internal(const char *msg)
 		  pure_cstring_dup(msg));
 }
 
+static pure_expr *pure_odbc_error(const char *message, const char *state)
+{
+  return pure_app(pure_app(pure_symbol(pure_sym("odbc::error")),
+			   pure_cstring_dup(message)),
+		  pure_cstring_dup(state));
+}
+
+static pure_expr *pure_err_for_handle(SQLSMALLINT handle_type,
+                                      SQLHANDLE handle, bool *found)
+{
+  SQLCHAR state[6] = {0};
+  SQLCHAR *record_message = NULL;
+  char *messages = NULL;
+  size_t record_capacity = 256;
+  size_t messages_capacity = 0;
+  size_t messages_length = 0;
+  SQLSMALLINT record = 1;
+  char first_state[6] = {0};
+
+  *found = false;
+  if (!(record_message = (SQLCHAR *)malloc(record_capacity)))
+    return pure_err_internal("insufficient memory");
+  while (record > 0) {
+    SQLINTEGER native_error = 0;
+    SQLSMALLINT text_length = 0;
+    SQLRETURN ret = SQLGetDiagRec(handle_type, handle, record, state,
+                                  &native_error, record_message,
+                                  (SQLSMALLINT)record_capacity, &text_length);
+    size_t required;
+
+    if (ret == SQL_NO_DATA)
+      break;
+    if (!SQL_SUCCEEDED(ret) || text_length < 0)
+      break;
+    required = (size_t)text_length + 1;
+    if (required > record_capacity) {
+      SQLCHAR *grown;
+
+      if (required > (size_t)SHRT_MAX ||
+          !(grown = (SQLCHAR *)realloc(record_message, required))) {
+        free(messages);
+        free(record_message);
+        *found = true;
+        return pure_err_internal("insufficient memory");
+      }
+      record_message = grown;
+      record_capacity = required;
+      continue;
+    }
+    record_message[text_length] = 0;
+    if (!*found) {
+      memcpy(first_state, state, sizeof(first_state));
+      first_state[sizeof(first_state) - 1] = 0;
+    }
+    if (messages_length > SIZE_MAX - (size_t)text_length -
+                            (*found ? 2U : 1U)) {
+      free(messages);
+      free(record_message);
+      *found = true;
+      return pure_err_internal("insufficient memory");
+    }
+    required = messages_length + (size_t)text_length + (*found ? 2U : 1U);
+    if (required > messages_capacity) {
+      size_t grown_capacity = messages_capacity ? messages_capacity : 256;
+      char *grown;
+
+      while (grown_capacity < required) {
+        if (grown_capacity > SIZE_MAX / 2) {
+          grown_capacity = required;
+          break;
+        }
+        grown_capacity *= 2;
+      }
+      if (!(grown = (char *)realloc(messages, grown_capacity))) {
+        free(messages);
+        free(record_message);
+        *found = true;
+        return pure_err_internal("insufficient memory");
+      }
+      messages = grown;
+      messages_capacity = grown_capacity;
+    }
+    if (*found)
+      messages[messages_length++] = '\n';
+    memcpy(messages + messages_length, record_message, (size_t)text_length);
+    messages_length += (size_t)text_length;
+    messages[messages_length] = 0;
+    *found = true;
+    if (record == SHRT_MAX)
+      break;
+    ++record;
+  }
+  free(record_message);
+  if (*found) {
+    pure_expr *result = pure_odbc_error(messages, first_state);
+    free(messages);
+    return result;
+  }
+  free(messages);
+  return NULL;
+}
+
+static pure_expr *pure_err(SQLHENV henv, SQLHDBC hdbc, SQLHSTMT hstmt)
+{
+  SQLSMALLINT types[3];
+  SQLHANDLE handles[3];
+  size_t count = 0;
+  size_t i;
+  if (hstmt) {
+    types[count] = SQL_HANDLE_STMT;
+    handles[count++] = hstmt;
+  }
+  if (hdbc) {
+    types[count] = SQL_HANDLE_DBC;
+    handles[count++] = hdbc;
+  }
+  if (henv) {
+    types[count] = SQL_HANDLE_ENV;
+    handles[count++] = henv;
+  }
+  for (i = 0; i < count; ++i) {
+    bool found;
+    pure_expr *result = pure_err_for_handle(types[i], handles[i], &found);
+
+    if (found || result)
+      return result;
+  }
+  return NULL;
+}
+
+typedef SQLRETURN (SQL_API *odbc_enumerator)(
+  SQLHENV, SQLUSMALLINT, SQLCHAR *, SQLSMALLINT, SQLSMALLINT *, SQLCHAR *,
+  SQLSMALLINT, SQLSMALLINT *);
+
+static bool grow_enumeration_buffer(SQLCHAR **buffer, size_t *capacity,
+                                    size_t required)
+{
+  SQLCHAR *grown;
+
+  if (required > (size_t)SHRT_MAX)
+    return false;
+  if (required <= *capacity)
+    return true;
+  grown = (SQLCHAR *)realloc(*buffer, required);
+  if (!grown)
+    return false;
+  *buffer = grown;
+  *capacity = required;
+  return true;
+}
+
+static bool grow_expression_vector(pure_expr ***values, size_t *capacity,
+                                   size_t required)
+{
+  size_t grown_capacity = *capacity ? *capacity : 8;
+  size_t bytes;
+  pure_expr **grown;
+
+  while (grown_capacity < required) {
+    if (grown_capacity > SIZE_MAX / 2) {
+      grown_capacity = required;
+      break;
+    }
+    grown_capacity *= 2;
+  }
+  if (!checked_multiply(grown_capacity, sizeof(**values), &bytes) ||
+      !(grown = (pure_expr **)realloc(*values, bytes)))
+    return false;
+  *values = grown;
+  *capacity = grown_capacity;
+  return true;
+}
+
+static pure_expr *driver_attributes(SQLCHAR *attributes, size_t length)
+{
+  pure_expr **values = NULL;
+  pure_expr *result;
+  size_t count = 0;
+  size_t capacity = 0;
+  size_t offset = 0;
+
+  while (offset < length && attributes[offset] != 0) {
+    SQLCHAR *terminator = (SQLCHAR *)memchr(attributes + offset, 0,
+                                             length - offset);
+    size_t item_length = terminator ?
+      (size_t)(terminator - (attributes + offset)) : length - offset;
+
+    if (!grow_expression_vector(&values, &capacity, count + 1))
+      goto error;
+    values[count] = pure_cstring_dup((const char *)(attributes + offset));
+    if (!values[count])
+      goto error;
+    ++count;
+    offset += item_length + 1;
+  }
+  result = pure_listv(count, values);
+  free(values);
+  return result;
+
+ error:
+  while (count > 0)
+    pure_freenew(values[--count]);
+  free(values);
+  return NULL;
+}
+
+static pure_expr *odbc_enumeration(bool drivers)
+{
+  odbc_enumerator enumerate = drivers ? api->drivers : api->data_sources;
+  SQLHENV henv = (SQLHENV)SQL_NULL_HANDLE;
+  SQLCHAR *name = NULL;
+  SQLCHAR *detail = NULL;
+  pure_expr **values = NULL;
+  pure_expr *result = NULL;
+  size_t name_capacity = 128;
+  size_t detail_capacity = 128;
+  size_t value_capacity = 0;
+  size_t value_count = 0;
+  SQLUSMALLINT direction = SQL_FETCH_FIRST;
+  SQLRETURN ret;
+  bool odbc_failure = false;
+
+  if ((ret = SQLAllocHandle(SQL_HANDLE_ENV, SQL_NULL_HANDLE, &henv)) !=
+      SQL_SUCCESS && ret != SQL_SUCCESS_WITH_INFO)
+    return NULL;
+  if ((ret = SQLSetEnvAttr(henv, SQL_ATTR_ODBC_VERSION,
+			   (SQLPOINTER)SQL_OV_ODBC3, SQL_IS_UINTEGER)) !=
+      SQL_SUCCESS && ret != SQL_SUCCESS_WITH_INFO) {
+    result = pure_err(henv, 0, 0);
+    goto cleanup;
+  }
+  name = (SQLCHAR *)malloc(name_capacity);
+  detail = (SQLCHAR *)malloc(detail_capacity);
+  if (!name || !detail)
+    goto allocation_failure;
+  while (1) {
+    SQLSMALLINT name_length = 0;
+    SQLSMALLINT detail_length = 0;
+    size_t required_name;
+    size_t required_detail;
+    bool retry;
+
+    ret = enumerate(henv, direction, name, (SQLSMALLINT)name_capacity,
+                    &name_length, detail, (SQLSMALLINT)detail_capacity,
+                    &detail_length);
+    if (ret == SQL_NO_DATA)
+      break;
+    if (!SQL_SUCCEEDED(ret) || name_length < 0 || detail_length < 0) {
+      odbc_failure = true;
+      break;
+    }
+    required_name = (size_t)name_length + 1;
+    required_detail = (size_t)detail_length + (drivers ? 2U : 1U);
+    retry = required_name > name_capacity ||
+      required_detail > detail_capacity;
+    if (required_detail < (size_t)detail_length ||
+        !grow_enumeration_buffer(&name, &name_capacity, required_name) ||
+        !grow_enumeration_buffer(&detail, &detail_capacity, required_detail))
+      goto allocation_failure;
+    if (retry)
+      continue;
+    name[name_length] = 0;
+    detail[detail_length] = 0;
+    if (drivers)
+      detail[(size_t)detail_length + 1] = 0;
+    if (!grow_expression_vector(&values, &value_capacity, value_count + 1))
+      goto allocation_failure;
+    if (drivers) {
+      pure_expr *attributes = driver_attributes(detail, (size_t)detail_length);
+
+      if (!attributes)
+        goto allocation_failure;
+      values[value_count] = pure_tuplel(
+        2, pure_cstring_dup((const char *)name), attributes);
+    } else {
+      values[value_count] = pure_tuplel(
+        2, pure_cstring_dup((const char *)name),
+        pure_cstring_dup((const char *)detail));
+    }
+    if (!values[value_count])
+      goto allocation_failure;
+    ++value_count;
+    direction = SQL_FETCH_NEXT;
+  }
+  if (odbc_failure)
+    result = pure_err(henv, 0, 0);
+  else {
+    result = pure_listv(value_count, values);
+    if (result)
+      value_count = 0;
+  }
+  goto cleanup;
+
+ allocation_failure:
+  result = pure_err_internal("insufficient memory");
+ cleanup:
+  while (value_count > 0)
+    pure_freenew(values[--value_count]);
+  free(values);
+  free(detail);
+  free(name);
+  SQLFreeHandle(SQL_HANDLE_ENV, henv);
+  return result;
+}
+
 pure_expr *odbc_sources()
 {
-  SQLHENV henv;
-  long ret;
-  pure_expr **xv, *res;
-  int n;
-  SQLCHAR l_dsn[100],l_desc[100];
-  short l_len1, l_len2, l_next;
-  /* create an environment handle */
-  if ((ret = SQLAllocHandle(SQL_HANDLE_ENV, NULL, &henv)) != SQL_SUCCESS &&
-      ret != SQL_SUCCESS_WITH_INFO)
-    return 0;
-  if ((ret = SQLSetEnvAttr(henv, SQL_ATTR_ODBC_VERSION,
-			   (SQLPOINTER) SQL_OV_ODBC3,
-			   SQL_IS_UINTEGER)) != SQL_SUCCESS &&
-      ret != SQL_SUCCESS_WITH_INFO) {
-    pure_expr *msg = pure_err(henv, 0, 0);
-    SQLFreeHandle(SQL_HANDLE_ENV, henv);
-    return msg;
-  }
-  /* count the number of data sources */
-  for (n = 0, l_next = SQL_FETCH_FIRST;
-	SQLDataSources(henv, l_next, l_dsn, sizeof(l_dsn), &l_len1,
-		       l_desc, sizeof(l_desc), &l_len2) == SQL_SUCCESS;
-	l_next = SQL_FETCH_NEXT)
-    n++;
-  if (!(xv = (pure_expr**)malloc(n*sizeof(pure_expr*)))) {
-    SQLFreeHandle(SQL_HANDLE_ENV, henv);
-    return 0;
-  }
-  /* retrieve the data source names and descriptions */
-  for (n = 0, l_next = SQL_FETCH_FIRST;
-    SQLDataSources(henv, l_next, l_dsn, sizeof(l_dsn), &l_len1,
-		l_desc, sizeof(l_desc), &l_len2) == SQL_SUCCESS;
-    l_next = SQL_FETCH_NEXT)
-    xv[n++] = pure_tuplel(2, pure_cstring_dup((const char*)l_dsn),
-			  pure_cstring_dup((const char*)l_desc));
-  /* free the environment handle */
-  SQLFreeHandle(SQL_HANDLE_ENV, henv);
-  res = pure_listv(n, xv);
-  free(xv);
-  return res;
+  return odbc_enumeration(false);
 }
 
 pure_expr *odbc_drivers()
 {
-  SQLHENV henv;
-  long ret;
-  pure_expr **xv, *res;
-  int n;
-  SQLCHAR l_drv[100],l_attr[10000];
-  short l_len1, l_len2, l_next;
-  /* create an environment handle */
-  if ((ret = SQLAllocHandle(SQL_HANDLE_ENV, NULL, &henv)) != SQL_SUCCESS &&
-    ret != SQL_SUCCESS_WITH_INFO)
-    return 0;
-  if ((ret = SQLSetEnvAttr(henv, SQL_ATTR_ODBC_VERSION,
-			   (SQLPOINTER) SQL_OV_ODBC3,
-			   SQL_IS_UINTEGER)) != SQL_SUCCESS &&
-      ret != SQL_SUCCESS_WITH_INFO) {
-    pure_expr *msg = pure_err(henv, 0, 0);
-    SQLFreeHandle(SQL_HANDLE_ENV, henv);
-    return msg;
-  }
-  /* count the number of driver descriptions */
-  for (n = 0, l_next = SQL_FETCH_FIRST;
-       SQLDrivers(henv, l_next, l_drv, sizeof(l_drv), &l_len1,
-		  l_attr, sizeof(l_attr), &l_len2) == SQL_SUCCESS;
-       l_next = SQL_FETCH_NEXT)
-    n++;
-  if (!(xv = (pure_expr **) malloc(n*sizeof(pure_expr*)))) {
-    SQLFreeHandle(SQL_HANDLE_ENV, henv);
-    return pure_err_internal("insufficient memory");
-  }
-  /* retrieve the driver and descriptions */
-  for (n = 0, l_next = SQL_FETCH_FIRST;
-       SQLDrivers(henv, l_next, l_drv, sizeof(l_drv), &l_len1,
-		  l_attr, sizeof(l_attr), &l_len2) == SQL_SUCCESS;
-       l_next = SQL_FETCH_NEXT) {
-    int k;
-    SQLCHAR *l_attrp;
-    pure_expr **yv;
-    /* count the number of attributes */
-    for (k = 0, l_attrp = l_attr; *l_attrp;
-	 l_attrp = l_attrp+strlen((char*)l_attrp)+1)
-      k++;
-    if (!(yv = malloc(k*sizeof(pure_expr*)))) {
-      int i;
-      for (i = 0; i < n; i++)
-	pure_freenew(xv[i]);
-      free(xv);
-      SQLFreeHandle(SQL_HANDLE_ENV, henv);
-      return pure_err_internal("insufficient memory");
-    }
-    /* get the attribute strings */
-    for (k = 0, l_attrp = l_attr; *l_attrp;
-	 l_attrp = l_attrp+strlen((char*)l_attrp)+1)
-      yv[k++] = pure_cstring_dup((const char*)l_attrp);
-    xv[n++] = pure_tuplel(2, pure_cstring_dup((const char*)l_drv),
-			  pure_listv(k, yv));
-    free(yv);
-  }
-  /* free the environment handle */
-  SQLFreeHandle(SQL_HANDLE_ENV, henv);
-  res = pure_listv(n, xv);
-  free(xv);
-  return res;
+  return odbc_enumeration(true);
 }
 
 pure_expr *odbc_connect(char* conn)
 {
   ODBCHandle *db = NULL;
   pure_expr *res = NULL;
-  long ret;
-  short buflen = 0;
+  SQLRETURN ret;
+  SQLSMALLINT buflen = 0;
   char buf[1024] = {0};
   bool connected = false;
 
@@ -586,11 +855,11 @@ pure_expr *odbc_info(pure_expr *dbx)
 {
   ODBCHandle *db;
   if (is_db_pointer(dbx, &db)) {
-    long ret;
-    int n = 0;
+    SQLRETURN ret;
+    size_t n = 0;
     pure_expr *xv[8], *res;
     char info[1024];
-    short len;
+    SQLSMALLINT len;
     if ((ret  = SQLGetInfo(db->hdbc, SQL_DATA_SOURCE_NAME,
 			   info, sizeof(info), &len)) == SQL_SUCCESS ||
 	ret == SQL_SUCCESS_WITH_INFO)
@@ -960,49 +1229,64 @@ pure_expr *odbc_getinfo(pure_expr *dbx, unsigned int info_type)
 
 #define checkstr(s,l) ((l==SQL_NULL_DATA)?pure_sqlnull():pure_cstring_dup((char*)s))
 #define checkint(x,l) ((l==SQL_NULL_DATA)?pure_sqlnull():pure_int(x))
-#define checkuint(x,l) ((l==SQL_NULL_DATA)?pure_sqlnull():pure_int(x))
+#define checkuint(x,l) ((l==SQL_NULL_DATA)?pure_sqlnull(): \
+  ((x) <= (SQLUINTEGER)INT32_MAX ? pure_int((int32_t)(x)) : \
+   pure_int64((int64_t)(x))))
 #define checkbool(x,l) ((l==SQL_NULL_DATA)?pure_sqlnull():pure_int(x))
+
+static bool odbc_bind_col(ODBCHandle *db, SQLUSMALLINT column,
+                          SQLSMALLINT target_type, SQLPOINTER target,
+                          SQLLEN buffer_length, SQLLEN *length)
+{
+  return SQL_SUCCEEDED(SQLBindCol(db->hstmt, column, target_type, target,
+                                  buffer_length, length));
+}
 
 pure_expr *odbc_typeinfo(pure_expr *dbx, int id)
 {
   ODBCHandle *db;
   if (is_db_pointer(dbx, &db)) {
-    pure_expr *res, **xs = (pure_expr**)malloc(NMAX*sizeof(pure_expr*)), **xs1;
-    int i, n = 0, m = NMAX;
+    pure_expr *res, **xs = (pure_expr**)malloc(NMAX*sizeof(pure_expr*));
+    size_t i, n = 0, m = NMAX;
 
     UCHAR  name[SL], prefix[SL], suffix[SL], params[SL], local_name[SL];
-    SWORD  type, nullable, case_sen, searchable, unsign, money, auto_inc;
-    SWORD  min_scale, max_scale;
-    UDWORD prec;
+    SQLSMALLINT type, nullable, case_sen, searchable, unsign, money, auto_inc;
+    SQLSMALLINT min_scale, max_scale;
+    SQLUINTEGER prec;
     SQLLEN len[20];
-    SDWORD ret;
-    SWORD  sql_type, subcode, intv_prec;
-    UDWORD prec_radix;
+    SQLRETURN ret;
+    SQLSMALLINT sql_type, subcode, intv_prec;
+    SQLUINTEGER prec_radix;
 
     if (!xs) return pure_err_internal("insufficient memory");
+    if (id < SHRT_MIN || id > SHRT_MAX) {
+      free(xs);
+      return pure_err_internal("invalid SQL data type");
+    }
     sql_close(db);
 
-    ret = SQLBindCol(db->hstmt,  1, SQL_C_CHAR,  name,       SL, &len[1]);
-    ret = SQLBindCol(db->hstmt,  2, SQL_C_SHORT, &type,       0, &len[2]);
-    ret = SQLBindCol(db->hstmt,  3, SQL_C_LONG,  &prec,       0, &len[3]);
-    ret = SQLBindCol(db->hstmt,  4, SQL_C_CHAR,  prefix,     SL, &len[4]);
-    ret = SQLBindCol(db->hstmt,  5, SQL_C_CHAR,  suffix,     SL, &len[5]);
-    ret = SQLBindCol(db->hstmt,  6, SQL_C_CHAR,  params,     SL, &len[6]);
-    ret = SQLBindCol(db->hstmt,  7, SQL_C_SHORT, &nullable,   0, &len[7]);
-    ret = SQLBindCol(db->hstmt,  8, SQL_C_SHORT, &case_sen,   0, &len[8]);
-    ret = SQLBindCol(db->hstmt,  9, SQL_C_SHORT, &searchable, 0, &len[9]);
-    ret = SQLBindCol(db->hstmt, 10, SQL_C_SHORT, &unsign,     0, &len[10]);
-    ret = SQLBindCol(db->hstmt, 11, SQL_C_SHORT, &money,      0, &len[11]);
-    ret = SQLBindCol(db->hstmt, 12, SQL_C_SHORT, &auto_inc,   0, &len[12]);
-    ret = SQLBindCol(db->hstmt, 13, SQL_C_CHAR,  local_name, SL, &len[13]);
-    ret = SQLBindCol(db->hstmt, 14, SQL_C_SHORT, &min_scale,  0, &len[14]);
-    ret = SQLBindCol(db->hstmt, 15, SQL_C_SHORT, &max_scale,  0, &len[15]);
-    ret = SQLBindCol(db->hstmt, 16, SQL_C_SHORT, &sql_type,   0, &len[16]);
-    ret = SQLBindCol(db->hstmt, 17, SQL_C_SHORT, &subcode,    0, &len[17]);
-    ret = SQLBindCol(db->hstmt, 18, SQL_C_LONG,  &prec_radix, 0, &len[18]);
-    ret = SQLBindCol(db->hstmt, 19, SQL_C_SHORT, &intv_prec,  0, &len[19]);
+    if (!odbc_bind_col(db, 1, SQL_C_CHAR, name, SL, &len[1]) ||
+        !odbc_bind_col(db, 2, SQL_C_SHORT, &type, 0, &len[2]) ||
+        !odbc_bind_col(db, 3, SQL_C_LONG, &prec, 0, &len[3]) ||
+        !odbc_bind_col(db, 4, SQL_C_CHAR, prefix, SL, &len[4]) ||
+        !odbc_bind_col(db, 5, SQL_C_CHAR, suffix, SL, &len[5]) ||
+        !odbc_bind_col(db, 6, SQL_C_CHAR, params, SL, &len[6]) ||
+        !odbc_bind_col(db, 7, SQL_C_SHORT, &nullable, 0, &len[7]) ||
+        !odbc_bind_col(db, 8, SQL_C_SHORT, &case_sen, 0, &len[8]) ||
+        !odbc_bind_col(db, 9, SQL_C_SHORT, &searchable, 0, &len[9]) ||
+        !odbc_bind_col(db, 10, SQL_C_SHORT, &unsign, 0, &len[10]) ||
+        !odbc_bind_col(db, 11, SQL_C_SHORT, &money, 0, &len[11]) ||
+        !odbc_bind_col(db, 12, SQL_C_SHORT, &auto_inc, 0, &len[12]) ||
+        !odbc_bind_col(db, 13, SQL_C_CHAR, local_name, SL, &len[13]) ||
+        !odbc_bind_col(db, 14, SQL_C_SHORT, &min_scale, 0, &len[14]) ||
+        !odbc_bind_col(db, 15, SQL_C_SHORT, &max_scale, 0, &len[15]) ||
+        !odbc_bind_col(db, 16, SQL_C_SHORT, &sql_type, 0, &len[16]) ||
+        !odbc_bind_col(db, 17, SQL_C_SHORT, &subcode, 0, &len[17]) ||
+        !odbc_bind_col(db, 18, SQL_C_LONG, &prec_radix, 0, &len[18]) ||
+        !odbc_bind_col(db, 19, SQL_C_SHORT, &intv_prec, 0, &len[19]))
+      goto err;
 
-    ret = SQLGetTypeInfo(db->hstmt, id);
+    ret = SQLGetTypeInfo(db->hstmt, (SQLSMALLINT)id);
     if (ret != SQL_SUCCESS && ret != SQL_SUCCESS_WITH_INFO) goto err;
 
     do {
@@ -1010,12 +1294,8 @@ pure_expr *odbc_typeinfo(pure_expr *dbx, int id)
       switch (ret) {
        case SQL_SUCCESS_WITH_INFO:
        case SQL_SUCCESS:
-	 if (n >= m) {
-	   if ((xs1 = (pure_expr**)realloc(xs, (m+=NMAX)*sizeof(pure_expr*))))
-	     xs = xs1;
-	   else
-	     goto fatal;
-	 }
+	 if (n >= m && !grow_expression_vector(&xs, &m, n + 1))
+	   goto fatal;
 	 xs[n++] = pure_tuplel(19,
 			       checkstr(name, len[1]),
 			       checkint(type, len[2]),
@@ -1074,18 +1354,19 @@ pure_expr *odbc_tables(pure_expr *dbx)
 {
   ODBCHandle *db;
   if (is_db_pointer(dbx, &db)) {
-    pure_expr *res, **xs = (pure_expr**)malloc(NMAX*sizeof(pure_expr*)), **xs1;
-    int i, n = 0, m = NMAX;
+    pure_expr *res, **xs = (pure_expr**)malloc(NMAX*sizeof(pure_expr*));
+    size_t i, n = 0, m = NMAX;
 
     UCHAR  name[SL], type[SL];
     SQLLEN len[6];
-    SDWORD ret;
+    SQLRETURN ret;
 
     if (!xs) return pure_err_internal("insufficient memory");
     sql_close(db);
 
-    ret = SQLBindCol(db->hstmt,  3, SQL_C_CHAR,  name,       SL, &len[3]);
-    ret = SQLBindCol(db->hstmt,  4, SQL_C_CHAR,  type,       SL, &len[4]);
+    if (!odbc_bind_col(db, 3, SQL_C_CHAR, name, SL, &len[3]) ||
+        !odbc_bind_col(db, 4, SQL_C_CHAR, type, SL, &len[4]))
+      goto err;
 
     ret = SQLTables(db->hstmt, NULL, 0, NULL, 0, NULL, 0, NULL, 0);
     if (ret != SQL_SUCCESS && ret != SQL_SUCCESS_WITH_INFO) goto err;
@@ -1095,12 +1376,8 @@ pure_expr *odbc_tables(pure_expr *dbx)
       switch (ret) {
        case SQL_SUCCESS_WITH_INFO:
        case SQL_SUCCESS:
-	 if (n >= m) {
-	   if ((xs1 = (pure_expr**)realloc(xs, (m+=NMAX)*sizeof(pure_expr*))))
-	     xs = xs1;
-	   else
-	     goto fatal;
-	 }
+	 if (n >= m && !grow_expression_vector(&xs, &m, n + 1))
+	   goto fatal;
 	 xs[n++] = pure_tuplel(2,
 			       checkstr(name, len[3]),
 			       checkstr(type, len[4]));
@@ -1142,12 +1419,12 @@ pure_expr *odbc_columns(pure_expr *dbx, const char *tab)
 {
   ODBCHandle *db;
   if (is_db_pointer(dbx, &db)) {
-    pure_expr *res, **xs = (pure_expr**)malloc(NMAX*sizeof(pure_expr*)), **xs1;
-    int i, n = 0, m = NMAX;
+    pure_expr *res, **xs = (pure_expr**)malloc(NMAX*sizeof(pure_expr*));
+    size_t i, n = 0, m = NMAX;
 
     UCHAR  name[SL], type[SL], nullable[SL], deflt[SL];
     SQLLEN len[19];
-    SDWORD ret;
+    SQLRETURN ret;
 
     if (!xs) return pure_err_internal("insufficient memory");
     if (!tab) {
@@ -1156,10 +1433,11 @@ pure_expr *odbc_columns(pure_expr *dbx, const char *tab)
     }
     sql_close(db);
 
-    ret = SQLBindCol(db->hstmt,  4, SQL_C_CHAR,  name,       SL, &len[4]);
-    ret = SQLBindCol(db->hstmt,  6, SQL_C_CHAR,  type,       SL, &len[6]);
-    ret = SQLBindCol(db->hstmt, 13, SQL_C_CHAR,  deflt,      SL, &len[13]);
-    ret = SQLBindCol(db->hstmt, 18, SQL_C_CHAR,  nullable,   SL, &len[18]);
+    if (!odbc_bind_col(db, 4, SQL_C_CHAR, name, SL, &len[4]) ||
+        !odbc_bind_col(db, 6, SQL_C_CHAR, type, SL, &len[6]) ||
+        !odbc_bind_col(db, 13, SQL_C_CHAR, deflt, SL, &len[13]) ||
+        !odbc_bind_col(db, 18, SQL_C_CHAR, nullable, SL, &len[18]))
+      goto err;
 
     ret = SQLColumns(db->hstmt, NULL, 0, NULL, 0, (SQLCHAR*)tab, SQL_NTS,
 		     NULL, 0);
@@ -1170,12 +1448,8 @@ pure_expr *odbc_columns(pure_expr *dbx, const char *tab)
       switch (ret) {
        case SQL_SUCCESS_WITH_INFO:
        case SQL_SUCCESS:
-	 if (n >= m) {
-	   if ((xs1 = (pure_expr**)realloc(xs, (m+=NMAX)*sizeof(pure_expr*))))
-	     xs = xs1;
-	   else
-	     goto fatal;
-	 }
+	 if (n >= m && !grow_expression_vector(&xs, &m, n + 1))
+	   goto fatal;
 	 xs[n++] = pure_tuplel(4,
 			       checkstr(name, len[4]),
 			       checkstr(type, len[6]),
@@ -1219,12 +1493,12 @@ pure_expr *odbc_primary_keys(pure_expr *dbx, const char *tab)
 {
   ODBCHandle *db;
   if (is_db_pointer(dbx, &db)) {
-    pure_expr *res, **xs = (pure_expr**)malloc(NMAX*sizeof(pure_expr*)), **xs1;
-    int i, n = 0, m = NMAX;
+    pure_expr *res, **xs = (pure_expr**)malloc(NMAX*sizeof(pure_expr*));
+    size_t i, n = 0, m = NMAX;
 
     UCHAR  name[SL];
     SQLLEN len[5];
-    SDWORD ret;
+    SQLRETURN ret;
 
     if (!xs) return pure_err_internal("insufficient memory");
     if (!tab) {
@@ -1233,7 +1507,8 @@ pure_expr *odbc_primary_keys(pure_expr *dbx, const char *tab)
     }
     sql_close(db);
 
-    ret = SQLBindCol(db->hstmt,  4, SQL_C_CHAR,  name,       SL, &len[4]);
+    if (!odbc_bind_col(db, 4, SQL_C_CHAR, name, SL, &len[4]))
+      goto err;
 
     ret = SQLPrimaryKeys(db->hstmt, NULL, 0, NULL, 0, (SQLCHAR*)tab, SQL_NTS);
     if (ret != SQL_SUCCESS && ret != SQL_SUCCESS_WITH_INFO) goto err;
@@ -1243,12 +1518,8 @@ pure_expr *odbc_primary_keys(pure_expr *dbx, const char *tab)
       switch (ret) {
        case SQL_SUCCESS_WITH_INFO:
        case SQL_SUCCESS:
-	 if (n >= m) {
-	   if ((xs1 = (pure_expr**)realloc(xs, (m+=NMAX)*sizeof(pure_expr*))))
-	     xs = xs1;
-	   else
-	     goto fatal;
-	 }
+	 if (n >= m && !grow_expression_vector(&xs, &m, n + 1))
+	   goto fatal;
 	 xs[n++] = checkstr(name, len[4]);
 	 break;
        case SQL_NO_DATA_FOUND:
@@ -1288,12 +1559,12 @@ pure_expr *odbc_foreign_keys(pure_expr *dbx, const char *tab)
 {
   ODBCHandle *db;
   if (is_db_pointer(dbx, &db)) {
-    pure_expr *res, **xs = (pure_expr**)malloc(NMAX*sizeof(pure_expr*)), **xs1;
-    int i, n = 0, m = NMAX;
+    pure_expr *res, **xs = (pure_expr**)malloc(NMAX*sizeof(pure_expr*));
+    size_t i, n = 0, m = NMAX;
 
     UCHAR  name[SL], pktabname[SL], pkname[SL];
     SQLLEN len[9];
-    SDWORD ret;
+    SQLRETURN ret;
 
     if (!xs) return pure_err_internal("insufficient memory");
     if (!tab) {
@@ -1302,9 +1573,10 @@ pure_expr *odbc_foreign_keys(pure_expr *dbx, const char *tab)
     }
     sql_close(db);
 
-    ret = SQLBindCol(db->hstmt,  3, SQL_C_CHAR,  pktabname,  SL, &len[3]);
-    ret = SQLBindCol(db->hstmt,  4, SQL_C_CHAR,  pkname,     SL, &len[4]);
-    ret = SQLBindCol(db->hstmt,  8, SQL_C_CHAR,  name,       SL, &len[8]);
+    if (!odbc_bind_col(db, 3, SQL_C_CHAR, pktabname, SL, &len[3]) ||
+        !odbc_bind_col(db, 4, SQL_C_CHAR, pkname, SL, &len[4]) ||
+        !odbc_bind_col(db, 8, SQL_C_CHAR, name, SL, &len[8]))
+      goto err;
 
     ret = SQLForeignKeys(db->hstmt, NULL, 0, NULL, 0, NULL, 0, NULL, 0,
 			 NULL, 0, (SQLCHAR*)tab, SQL_NTS);
@@ -1315,12 +1587,8 @@ pure_expr *odbc_foreign_keys(pure_expr *dbx, const char *tab)
       switch (ret) {
        case SQL_SUCCESS_WITH_INFO:
        case SQL_SUCCESS:
-	 if (n >= m) {
-	   if ((xs1 = (pure_expr**)realloc(xs, (m+=NMAX)*sizeof(pure_expr*))))
-	     xs = xs1;
-	   else
-	     goto fatal;
-	 }
+	 if (n >= m && !grow_expression_vector(&xs, &m, n + 1))
+	   goto fatal;
 	 xs[n++] = pure_tuplel(3,
 			       checkstr(name, len[8]),
 			       checkstr(pktabname, len[3]),
@@ -1362,7 +1630,7 @@ pure_expr *odbc_foreign_keys(pure_expr *dbx, const char *tab)
 #define BUFSZ 65536
 #define BUFSZ2 5000
 
-static pure_expr *pure_sql_count(SQLLEN value)
+static pure_expr *pure_odbc_integer(SQLLEN value)
 {
   if (value >= (SQLLEN)INT32_MIN && value <= (SQLLEN)INT32_MAX)
     return pure_int((int32_t)value);
@@ -1375,11 +1643,11 @@ pure_expr *odbc_sql_exec(pure_expr *dbx, const char *query, pure_expr *args)
   pure_expr **xv = NULL;
   size_t n = 0;
   if (is_db_pointer(dbx, &db) && pure_is_listv(args, &n, &xv)) {
-    long ret;
+    SQLRETURN ret;
     pure_expr *res = NULL, **xs = NULL;
     size_t i;
     size_t xs_count = 0;
-    short cols = 0, *coltype = NULL;
+    SQLSMALLINT cols = 0, *coltype = NULL;
     char buf[BUFSZ2];
     bool statement_started = false;
     bool operation_succeeded = false;
@@ -1399,7 +1667,11 @@ pure_expr *odbc_sql_exec(pure_expr *dbx, const char *query, pure_expr *args)
     }
     /* bind parameters */
     if (n > 0) {
-      if (n > INT_MAX || !init_args(db, (int)n)) {
+      if (n > (size_t)USHRT_MAX) {
+	res = pure_err_internal("too many parameters");
+	goto cleanup;
+      }
+      if (!init_args(db, n)) {
 	res = pure_err_internal("insufficient memory");
 	goto cleanup;
       }
@@ -1415,8 +1687,10 @@ pure_expr *odbc_sql_exec(pure_expr *dbx, const char *query, pure_expr *args)
 	}
       }
     }
-    for (i = 0; i < (size_t)db->argc; i++)
-      if ((ret = SQLBindParameter(db->hstmt, i+1, SQL_PARAM_INPUT,
+    for (i = 0; i < db->argc; i++) {
+      SQLUSMALLINT parameter_number = (SQLUSMALLINT)(i + 1);
+
+      if ((ret = SQLBindParameter(db->hstmt, parameter_number, SQL_PARAM_INPUT,
 				  db->argv[i].ctype,
 				  db->argv[i].type,
 				  db->argv[i].prec, 0,
@@ -1427,6 +1701,7 @@ pure_expr *odbc_sql_exec(pure_expr *dbx, const char *query, pure_expr *args)
 	res = pure_err(db->henv, db->hdbc, db->hstmt);
 	goto cleanup;
       }
+    }
     /* execute statement */
     if ((ret = SQLExecute(db->hstmt)) != SQL_SUCCESS &&
 	ret != SQL_SUCCESS_WITH_INFO) {
@@ -1443,7 +1718,7 @@ pure_expr *odbc_sql_exec(pure_expr *dbx, const char *query, pure_expr *args)
       SQLLEN rows;
       if ((ret = SQLRowCount(db->hstmt, &rows)) == SQL_SUCCESS ||
 	  ret == SQL_SUCCESS_WITH_INFO)
-	res = pure_sql_count(rows);
+	res = pure_odbc_integer(rows);
       else
 	res = pure_int(0);
       db->exec = 1;
@@ -1451,16 +1726,31 @@ pure_expr *odbc_sql_exec(pure_expr *dbx, const char *query, pure_expr *args)
       goto cleanup;
     }
     /* get the column names and types */
-    if (cols < 0 || (size_t)cols > (size_t)-1/sizeof(short) ||
-        !(coltype = malloc((size_t)cols*sizeof(short))) ||
-        (size_t)cols > (size_t)-1/sizeof(pure_expr*) ||
-        !(xs = malloc((size_t)cols*sizeof(pure_expr*)))) {
-      res = pure_err_internal("insufficient memory");
-      goto cleanup;
+    {
+      size_t column_count;
+      size_t coltype_bytes;
+      size_t expression_bytes;
+
+      if (cols < 0) {
+        res = pure_err_internal("invalid result column count");
+        goto cleanup;
+      }
+      column_count = (size_t)cols;
+      if (!checked_multiply(column_count, sizeof(SQLSMALLINT),
+                            &coltype_bytes) ||
+          !checked_multiply(column_count, sizeof(pure_expr *),
+                            &expression_bytes) ||
+          !(coltype = (SQLSMALLINT *)malloc(coltype_bytes)) ||
+          !(xs = (pure_expr **)malloc(expression_bytes))) {
+        res = pure_err_internal("insufficient memory");
+        goto cleanup;
+      }
     }
     for (i = 0; i < (size_t)cols; i++) {
       buf[0] = 0;
-      if ((ret = SQLDescribeCol(db->hstmt, i+1, (SQLCHAR*)buf, sizeof(buf),
+
+      if ((ret = SQLDescribeCol(db->hstmt, (SQLUSMALLINT)(i + 1),
+                                (SQLCHAR*)buf, (SQLSMALLINT)sizeof(buf),
 				NULL, &coltype[i], NULL, NULL, NULL))
 	  != SQL_SUCCESS &&
 	  ret != SQL_SUCCESS_WITH_INFO) {
@@ -1474,9 +1764,9 @@ pure_expr *odbc_sql_exec(pure_expr *dbx, const char *query, pure_expr *args)
       }
       xs_count = i+1;
     }
-    res = pure_listv(cols, xs);
+    res = pure_listv((size_t)cols, xs);
     if (res) {
-      short *old_coltype = db->coltype;
+      SQLSMALLINT *old_coltype = db->coltype;
 
       xs_count = 0;
       if (old_coltype)
@@ -1513,11 +1803,17 @@ pure_expr *odbc_sql_fetch(pure_expr *dbx)
   if (is_db_pointer(dbx, &db) && db->coltype) {
     SQLRETURN ret;
     pure_expr *res, **xs;
-    short i, j, cols = db->cols, *coltype = db->coltype;
-    long iv, sz = BUFSZ;
+    size_t i, j, cols, sz = BUFSZ;
+    size_t xs_bytes;
+    SQLSMALLINT *coltype = db->coltype;
+    SQLINTEGER iv;
     double fv;
     char *buf = malloc(sz);
     SQLLEN len;
+    if (db->cols <= 0 ||
+        !checked_multiply((size_t)db->cols, sizeof(pure_expr *), &xs_bytes))
+      goto fatal;
+    cols = (size_t)db->cols;
     if (!buf) goto fatal;
     /* fetch the next record */
     if ((ret = SQLFetch(db->hstmt)) == SQL_NO_DATA_FOUND) {
@@ -1525,16 +1821,19 @@ pure_expr *odbc_sql_fetch(pure_expr *dbx)
       goto exit;
     } else if (ret != SQL_SUCCESS && ret != SQL_SUCCESS_WITH_INFO)
       goto err;
-    if (!(xs = malloc(cols*sizeof(pure_expr*))))
+    if (!(xs = malloc(xs_bytes)))
       goto fatal;
     /* get the columns */
     for (i = 0; i < cols; i++) {
+      SQLUSMALLINT column = (SQLUSMALLINT)(i + 1);
+
       switch (coltype[i]) {
       case SQL_BIT:
       case SQL_TINYINT:
       case SQL_SMALLINT:
       case SQL_INTEGER:
-	ret = SQLGetData(db->hstmt, i+1, SQL_INTEGER, &iv, sizeof(iv), &len);
+	ret = SQLGetData(db->hstmt, column, SQL_INTEGER, &iv,
+                         (SQLLEN)sizeof(iv), &len);
 	if (!SQL_SUCCEEDED(ret))
 	  goto err2;
 	if (len == SQL_NULL_DATA)
@@ -1546,7 +1845,7 @@ pure_expr *odbc_sql_fetch(pure_expr *dbx)
 	/* hack to get bigint values converted to mpz_t, without having to
 	   fiddle around with long long values
 	   FIXME: we should really avoid the string conversion here */
-	ret = SQLGetData(db->hstmt, i+1, SQL_CHAR, buf, sz, &len);
+	ret = SQLGetData(db->hstmt, column, SQL_CHAR, buf, (SQLLEN)sz, &len);
 	if (!SQL_SUCCEEDED(ret))
 	  goto err2;
 	if (len == SQL_NULL_DATA)
@@ -1564,7 +1863,8 @@ pure_expr *odbc_sql_fetch(pure_expr *dbx)
       case SQL_NUMERIC:
       case SQL_FLOAT:
       case SQL_REAL:
-	ret = SQLGetData(db->hstmt, i+1, SQL_DOUBLE, &fv, sizeof(fv), &len);
+	ret = SQLGetData(db->hstmt, column, SQL_DOUBLE, &fv,
+                         (SQLLEN)sizeof(fv), &len);
 	if (!SQL_SUCCEEDED(ret))
 	  goto err2;
 	if (len == SQL_NULL_DATA)
@@ -1576,11 +1876,12 @@ pure_expr *odbc_sql_fetch(pure_expr *dbx)
       case SQL_VARBINARY:
       case SQL_LONGVARBINARY: {
 	char *bufp = buf;
-	SQLLEN total = 0, actsz = sz;
+	size_t total = 0;
+	SQLLEN actsz = (SQLLEN)sz;
 	bool is_null = false;
 	*buf = 0;
 	while (1) {
-	  ret = SQLGetData(db->hstmt, i+1, SQL_BINARY, bufp, actsz, &len);
+	  ret = SQLGetData(db->hstmt, column, SQL_BINARY, bufp, actsz, &len);
 	  if (ret == SQL_NO_DATA) {
 	    if (total == 0)
 	      goto err2;
@@ -1598,9 +1899,9 @@ pure_expr *odbc_sql_fetch(pure_expr *dbx)
 	    /* A successful read must describe the exact bytes in this buffer. */
 	    if (len == SQL_NO_TOTAL || len > actsz)
 	      goto err2;
-	    if (total+len < total)
+	    if (total > SIZE_MAX - (size_t)len)
 	      goto fatal2;
-	    total += len;
+	    total += (size_t)len;
 	    break;
 	  } else {
 	    SQLLEN received;
@@ -1613,15 +1914,15 @@ pure_expr *odbc_sql_fetch(pure_expr *dbx)
 	       needed; only then is the entire chunk known to be initialized. */
 	    if (len != SQL_NO_TOTAL && len < actsz) {
 	      received = len;
-	      if (total+received < total)
+	      if (total > SIZE_MAX - (size_t)received)
 		goto fatal2;
-	      total += received;
+	      total += (size_t)received;
 	      break;
 	    }
 	    received = actsz;
-	    if (total+received < total || sz > LONG_MAX-BUFSZ)
+	    if (total > SIZE_MAX - (size_t)received || sz > SIZE_MAX-BUFSZ)
 	      goto fatal2;
-	    total += received;
+	    total += (size_t)received;
 	    if (!(buf1 = realloc(buf, sz+BUFSZ)))
 	      goto fatal2;
 	    buf = buf1;
@@ -1651,11 +1952,12 @@ pure_expr *odbc_sql_fetch(pure_expr *dbx)
       }
       default: {
 	char *bufp = buf;
-	long total = 0, actsz = sz;
+	size_t total = 0;
+	SQLLEN actsz = (SQLLEN)sz;
 	bool is_null = false;
 	*buf = 0;
 	while (1) {
-	  ret = SQLGetData(db->hstmt, i+1, SQL_CHAR, bufp, actsz, &len);
+	  ret = SQLGetData(db->hstmt, column, SQL_CHAR, bufp, actsz, &len);
 	  if (ret == SQL_NO_DATA) {
 	    if (total == 0)
 	      goto err2;
@@ -1668,10 +1970,10 @@ pure_expr *odbc_sql_fetch(pure_expr *dbx)
 	      is_null = true;
 	      break;
 	    }
-	    if (total+len < total)
+	    if (len < 0 || total > SIZE_MAX - (size_t)len)
 	      goto fatal2;
 	    else
-	      total += len;
+	      total += (size_t)len;
 	    break;
 	  } else {
 	    /* we probably need to make room for additional data */
@@ -1680,12 +1982,11 @@ pure_expr *odbc_sql_fetch(pure_expr *dbx)
 	      is_null = true;
 	      break;
 	    }
-#if 0
-	    if (total+BUFSZ < total)
+	    if (actsz <= 0 || total > SIZE_MAX - ((size_t)actsz - 1))
 	      goto fatal2;
-	    else
-#endif
-	      total += actsz-1;
+	    total += (size_t)actsz - 1;
+	    if (sz > SIZE_MAX - BUFSZ)
+	      goto fatal2;
 	    if (!(buf1 = realloc(buf, sz+BUFSZ)))
 	      goto fatal2;
 	    buf = buf1;
@@ -1735,9 +2036,10 @@ pure_expr *odbc_sql_more(pure_expr *dbx)
 {
   ODBCHandle *db;
   if (is_db_pointer(dbx, &db) && db->exec) {
-    long ret;
+    SQLRETURN ret;
     pure_expr *res = NULL, **xs = NULL;
-    short i, cols = 0, *coltype = NULL;
+    size_t i;
+    SQLSMALLINT cols = 0, *coltype = NULL;
     size_t xs_count = 0;
     char buf[BUFSZ2];
     /* get the next result set */
@@ -1752,11 +2054,11 @@ pure_expr *odbc_sql_more(pure_expr *dbx)
       goto err;
     if (cols == 0) {
       SQLLEN rows;
-      short *old_coltype;
+      SQLSMALLINT *old_coltype;
 
       if ((ret = SQLRowCount(db->hstmt, &rows)) == SQL_SUCCESS ||
 	  ret == SQL_SUCCESS_WITH_INFO)
-	res = pure_sql_count(rows);
+	res = pure_odbc_integer(rows);
       else
 	res = pure_int(0);
       old_coltype = db->coltype;
@@ -1766,14 +2068,27 @@ pure_expr *odbc_sql_more(pure_expr *dbx)
       goto exit;
     }
     /* get the column names and types */
-    if (cols < 0 || (size_t)cols > (size_t)-1/sizeof(short) ||
-        !(coltype = malloc((size_t)cols*sizeof(short))) ||
-        (size_t)cols > (size_t)-1/sizeof(pure_expr*) ||
-        !(xs = malloc((size_t)cols*sizeof(pure_expr*))))
-      goto fatal;
-    for (i = 0; i < cols; i++) {
+    {
+      size_t column_count;
+      size_t coltype_bytes;
+      size_t expression_bytes;
+
+      if (cols < 0)
+        goto fatal;
+      column_count = (size_t)cols;
+      if (!checked_multiply(column_count, sizeof(SQLSMALLINT),
+                            &coltype_bytes) ||
+          !checked_multiply(column_count, sizeof(pure_expr *),
+                            &expression_bytes) ||
+          !(coltype = (SQLSMALLINT *)malloc(coltype_bytes)) ||
+          !(xs = (pure_expr **)malloc(expression_bytes)))
+        goto fatal;
+    }
+    for (i = 0; i < (size_t)cols; i++) {
       buf[0] = 0;
-      if ((ret = SQLDescribeCol(db->hstmt, i+1, (SQLCHAR*)buf, sizeof(buf),
+
+      if ((ret = SQLDescribeCol(db->hstmt, (SQLUSMALLINT)(i + 1),
+                                (SQLCHAR*)buf, (SQLSMALLINT)sizeof(buf),
 				NULL, &coltype[i], NULL, NULL, NULL))
 	  != SQL_SUCCESS &&
 	  ret != SQL_SUCCESS_WITH_INFO)
@@ -1783,9 +2098,9 @@ pure_expr *odbc_sql_more(pure_expr *dbx)
 	goto fatal;
       xs_count = (size_t)i+1;
     }
-    res = pure_listv(cols, xs);
+    res = pure_listv((size_t)cols, xs);
     if (res) {
-      short *old_coltype = db->coltype;
+      SQLSMALLINT *old_coltype = db->coltype;
 
       xs_count = 0;
       db->coltype = NULL;

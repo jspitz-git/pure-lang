@@ -11,6 +11,20 @@ check name condition
 has_driver [] = 0;
 has_driver ((name,_):xs) = name == text_driver || has_driver xs;
 
+stringsp [] = 1;
+stringsp (x:xs) = stringp x && stringsp xs;
+stringsp _ = 0;
+
+driver_recordsp [] = 1;
+driver_recordsp ((name,attributes):xs)
+  = stringp name && stringsp attributes && driver_recordsp xs;
+driver_recordsp _ = 0;
+
+source_recordsp [] = 1;
+source_recordsp ((name,description):xs)
+  = stringp name && stringp description && source_recordsp xs;
+source_recordsp _ = 0;
+
 diagnosticp (odbc::error msg state)
   = stringp msg && stringp state && state == "IM002";
 diagnosticp _ = 0;
@@ -49,6 +63,8 @@ when
   sources = odbc::sources;
   check "driver enumeration" (listp drivers);
   check "data-source enumeration" (listp sources);
+  check "driver record shape" (driver_recordsp drivers);
+  check "data-source record shape" (source_recordsp sources);
   missing =
     odbc::connect "DRIVER={__PURE_MISSING_ODBC_DRIVER__};";
   check "diagnostic propagation" (diagnosticp missing);
