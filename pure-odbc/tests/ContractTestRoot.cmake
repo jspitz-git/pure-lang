@@ -24,8 +24,14 @@ function(_pure_odbc_require_no_reparse path label scan_descendants)
     return()
   endif()
 
+  if(NOT DEFINED PURE_ODBC_AUTHORITATIVE_WINDOWS_DIRECTORY OR
+      "${PURE_ODBC_AUTHORITATIVE_WINDOWS_DIRECTORY}" STREQUAL "")
+    message(FATAL_ERROR
+      "OS-authoritative Windows directory is required for ${label}")
+  endif()
+  set(windows_directory "${PURE_ODBC_AUTHORITATIVE_WINDOWS_DIRECTORY}")
   set(powershell
-    "$ENV{SystemRoot}/System32/WindowsPowerShell/v1.0/powershell.exe")
+    "${windows_directory}/System32/WindowsPowerShell/v1.0/powershell.exe")
   if(NOT EXISTS "${powershell}" OR IS_DIRECTORY "${powershell}")
     message(FATAL_ERROR
       "Cannot inspect ${label} for Windows reparse points: ${powershell}")
@@ -60,6 +66,8 @@ if ($scanDescendants -and (Test-Path -LiteralPath $target)) {
     COMMAND "${CMAKE_COMMAND}" -E env
       "PURE_ODBC_CHECK_PATH=${path}"
       "PURE_ODBC_SCAN_DESCENDANTS=${scan_descendants}"
+      "SystemRoot=${windows_directory}"
+      "windir=${windows_directory}"
       "${powershell}" -NoProfile -NonInteractive -ExecutionPolicy Bypass
       -Command "${check_script}"
     RESULT_VARIABLE result
@@ -301,7 +309,8 @@ function(pure_odbc_prepare_contract_test_root leaf configure_source
   set(${output_test_root} "${test_root}" PARENT_SCOPE)
 endfunction()
 
-function(pure_odbc_require_owned_or_neutral_work_directory input output)
+function(pure_odbc_require_owned_or_neutral_work_directory input
+    authoritative_windows_directory output)
   cmake_path(ABSOLUTE_PATH input NORMALIZE OUTPUT_VARIABLE work_directory)
   if(NOT IS_DIRECTORY "${work_directory}")
     message(FATAL_ERROR
@@ -312,14 +321,21 @@ function(pure_odbc_require_owned_or_neutral_work_directory input output)
   file(REAL_PATH "${work_directory}" canonical_work_directory)
   _pure_odbc_fold_path("${canonical_work_directory}" folded_work_directory)
 
-  if(WIN32 AND IS_DIRECTORY "C:/Windows")
-    _pure_odbc_require_no_reparse("C:/Windows" "neutral WORK_DIRECTORY" FALSE)
-    file(REAL_PATH "C:/Windows" neutral_work_directory)
-    _pure_odbc_fold_path("${neutral_work_directory}" folded_neutral_directory)
-    if(folded_work_directory STREQUAL folded_neutral_directory)
-      set(${output} "${canonical_work_directory}" PARENT_SCOPE)
-      return()
-    endif()
+  cmake_path(ABSOLUTE_PATH authoritative_windows_directory NORMALIZE
+    OUTPUT_VARIABLE windows_directory)
+  if(NOT IS_DIRECTORY "${windows_directory}")
+    message(FATAL_ERROR
+      "Authoritative Windows directory must be an existing directory: "
+      "${windows_directory}")
+  endif()
+  _pure_odbc_require_no_reparse(
+    "${windows_directory}" "authoritative Windows directory" FALSE)
+  file(REAL_PATH "${windows_directory}" canonical_windows_directory)
+  _pure_odbc_fold_path(
+    "${canonical_windows_directory}" folded_windows_directory)
+  if(folded_work_directory STREQUAL folded_windows_directory)
+    set(${output} "${canonical_windows_directory}" PARENT_SCOPE)
+    return()
   endif()
 
   cmake_path(GET canonical_work_directory FILENAME leaf)
@@ -329,7 +345,8 @@ function(pure_odbc_require_owned_or_neutral_work_directory input output)
   if(NOT contract_name STREQUAL "pure-odbc-contract" OR
       NOT leaf MATCHES "^(runner|cleanup|access)$")
     message(FATAL_ERROR
-      "WORK_DIRECTORY must be C:/Windows or an owned pure-odbc contract leaf")
+      "WORK_DIRECTORY must be the OS Windows directory or an owned "
+      "pure-odbc contract leaf")
   endif()
 
   set(BINARY_DIR "${derived_binary}")

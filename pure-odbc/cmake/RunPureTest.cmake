@@ -7,9 +7,53 @@ foreach(required IN ITEMS
   if(NOT DEFINED ${required} OR "${${required}}" STREQUAL "")
     message(FATAL_ERROR "${required} is required")
   endif()
-  cmake_path(ABSOLUTE_PATH ${required} NORMALIZE OUTPUT_VARIABLE normalized)
-  set(${required} "${normalized}")
 endforeach()
+foreach(path_input IN ITEMS PURE_EXECUTABLE PURE_SOURCE_DIR MODULE_DIR SCRIPT)
+  cmake_path(ABSOLUTE_PATH ${path_input} NORMALIZE OUTPUT_VARIABLE normalized)
+  set(${path_input} "${normalized}")
+endforeach()
+
+foreach(directory_input IN ITEMS PURE_SOURCE_DIR MODULE_DIR)
+  if(NOT IS_DIRECTORY "${${directory_input}}")
+    message(FATAL_ERROR
+      "${directory_input} must be an existing directory: ${${directory_input}}")
+  endif()
+endforeach()
+
+if(WIN32)
+  set(runner "${MODULE_DIR}/run_pure_test.exe")
+  if(NOT EXISTS "${runner}" OR IS_DIRECTORY "${runner}")
+    message(FATAL_ERROR
+      "Native test runner must be an existing file: ${runner}")
+  endif()
+  execute_process(
+    COMMAND "${runner}" --print-windows-directory
+    RESULT_VARIABLE windows_directory_result
+    OUTPUT_VARIABLE windows_directory_output
+    ERROR_VARIABLE windows_directory_error
+    ENCODING UTF-8
+  )
+  string(STRIP "${windows_directory_output}" windows_directory)
+  if(NOT windows_directory_result EQUAL 0 OR
+      NOT windows_directory_error STREQUAL "" OR
+      NOT IS_DIRECTORY "${windows_directory}")
+    message(FATAL_ERROR
+      "Native test runner did not return the OS Windows directory\n"
+      "stdout:\n${windows_directory_output}\n"
+      "stderr:\n${windows_directory_error}")
+  endif()
+  cmake_path(ABSOLUTE_PATH windows_directory NORMALIZE
+    OUTPUT_VARIABLE windows_directory)
+  unset(PURE_ODBC_AUTHORITATIVE_WINDOWS_DIRECTORY)
+  unset(PURE_ODBC_AUTHORITATIVE_WINDOWS_DIRECTORY CACHE)
+  set(PURE_ODBC_AUTHORITATIVE_WINDOWS_DIRECTORY "${windows_directory}")
+  _pure_odbc_require_no_reparse("${runner}" "native test runner" FALSE)
+  cmake_path(ABSOLUTE_PATH WORK_DIRECTORY NORMALIZE
+    OUTPUT_VARIABLE WORK_DIRECTORY)
+else()
+  cmake_path(ABSOLUTE_PATH WORK_DIRECTORY NORMALIZE
+    OUTPUT_VARIABLE WORK_DIRECTORY)
+endif()
 
 foreach(file_input IN ITEMS PURE_EXECUTABLE SCRIPT)
   if(NOT EXISTS "${${file_input}}" OR IS_DIRECTORY "${${file_input}}")
@@ -19,25 +63,17 @@ foreach(file_input IN ITEMS PURE_EXECUTABLE SCRIPT)
   _pure_odbc_require_no_reparse(
     "${${file_input}}" "${file_input}" FALSE)
 endforeach()
-foreach(directory_input IN ITEMS PURE_SOURCE_DIR MODULE_DIR WORK_DIRECTORY)
-  if(NOT IS_DIRECTORY "${${directory_input}}")
-    message(FATAL_ERROR
-      "${directory_input} must be an existing directory: ${${directory_input}}")
-  endif()
-endforeach()
+if(NOT IS_DIRECTORY "${WORK_DIRECTORY}")
+  message(FATAL_ERROR
+    "WORK_DIRECTORY must be an existing directory: ${WORK_DIRECTORY}")
+endif()
 if(WIN32)
   pure_odbc_require_owned_or_neutral_work_directory(
-    "${WORK_DIRECTORY}" validated_work_directory)
+    "${WORK_DIRECTORY}" "${windows_directory}" validated_work_directory)
   set(WORK_DIRECTORY "${validated_work_directory}")
 endif()
 
 if(WIN32)
-  set(runner "${MODULE_DIR}/run_pure_test.exe")
-  if(NOT EXISTS "${runner}" OR IS_DIRECTORY "${runner}")
-    message(FATAL_ERROR
-      "Native test runner must be an existing file: ${runner}")
-  endif()
-  _pure_odbc_require_no_reparse("${runner}" "native test runner" FALSE)
   set(command
     "${runner}" "${PURE_EXECUTABLE}" "${PURE_SOURCE_DIR}" "${MODULE_DIR}"
     "${SCRIPT}" "${WORK_DIRECTORY}")

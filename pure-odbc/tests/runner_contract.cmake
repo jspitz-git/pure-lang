@@ -27,12 +27,38 @@ if(DEFINED ROOT_PROBE_MODE)
   message(FATAL_ERROR "ROOT_SAFETY_PROBE accepted unsafe input")
 endif()
 
+if(DEFINED WINDOWS_DIRECTORY_PROBE_MODE)
+  foreach(required IN ITEMS PROBE_WORK_DIRECTORY PROBE_WINDOWS_DIRECTORY)
+    if(NOT DEFINED ${required} OR "${${required}}" STREQUAL "")
+      message(FATAL_ERROR "${required} is required")
+    endif()
+  endforeach()
+  pure_odbc_require_owned_or_neutral_work_directory(
+    "${PROBE_WORK_DIRECTORY}" "${PROBE_WINDOWS_DIRECTORY}"
+    validated_probe_work_directory)
+  if(WINDOWS_DIRECTORY_PROBE_MODE STREQUAL "validate-positive")
+    _pure_odbc_fold_path(
+      "${validated_probe_work_directory}" folded_probe_work_directory)
+    _pure_odbc_fold_path(
+      "${PROBE_WINDOWS_DIRECTORY}" folded_probe_windows_directory)
+    if(NOT folded_probe_work_directory STREQUAL folded_probe_windows_directory)
+      message(FATAL_ERROR
+        "Windows-directory helper returned a different canonical identity")
+    endif()
+    message(STATUS
+      "WINDOWS_DIRECTORY_PROBE accepted authoritative case-only identity")
+    return()
+  endif()
+  message(FATAL_ERROR "WINDOWS_DIRECTORY_PROBE accepted unsafe input")
+endif()
+
 function(expect_root_rejected label mode leaf candidate expected)
   execute_process(
     COMMAND "${CMAKE_COMMAND}"
       "-DBINARY_DIR=${candidate}"
       "-DEXPECTED_LEAF=${leaf}"
       "-DROOT_PROBE_MODE=${mode}"
+      "-DPURE_ODBC_AUTHORITATIVE_WINDOWS_DIRECTORY=${PURE_ODBC_AUTHORITATIVE_WINDOWS_DIRECTORY}"
       -P "${CMAKE_CURRENT_LIST_FILE}"
     RESULT_VARIABLE result
     OUTPUT_VARIABLE output
@@ -60,6 +86,7 @@ function(expect_root_accepted label leaf candidate)
       "-DBINARY_DIR=${candidate}"
       "-DEXPECTED_LEAF=${leaf}"
       -DROOT_PROBE_MODE=validate-positive
+      "-DPURE_ODBC_AUTHORITATIVE_WINDOWS_DIRECTORY=${PURE_ODBC_AUTHORITATIVE_WINDOWS_DIRECTORY}"
       -P "${CMAKE_CURRENT_LIST_FILE}"
     RESULT_VARIABLE result
     OUTPUT_VARIABLE output
@@ -69,6 +96,49 @@ function(expect_root_accepted label leaf candidate)
   if(NOT result EQUAL 0)
     message(FATAL_ERROR
       "Root-safety probe rejected safe ${label}: ${candidate}\n${output}${error}")
+  endif()
+endfunction()
+
+function(expect_windows_directory_accepted work_directory windows_directory)
+  execute_process(
+    COMMAND "${CMAKE_COMMAND}"
+      -DWINDOWS_DIRECTORY_PROBE_MODE=validate-positive
+      "-DPROBE_WORK_DIRECTORY=${work_directory}"
+      "-DPROBE_WINDOWS_DIRECTORY=${windows_directory}"
+      "-DPURE_ODBC_AUTHORITATIVE_WINDOWS_DIRECTORY=${PURE_ODBC_AUTHORITATIVE_WINDOWS_DIRECTORY}"
+      -P "${CMAKE_CURRENT_LIST_FILE}"
+    RESULT_VARIABLE result
+    OUTPUT_VARIABLE output
+    ERROR_VARIABLE error
+    ENCODING UTF-8
+  )
+  if(NOT result EQUAL 0 OR
+      NOT output MATCHES "authoritative case-only identity")
+    message(FATAL_ERROR
+      "Windows-directory helper rejected an authoritative case-only "
+      "identity\n${output}${error}")
+  endif()
+endfunction()
+
+function(expect_windows_directory_rejected work_directory windows_directory)
+  execute_process(
+    COMMAND "${CMAKE_COMMAND}"
+      -DWINDOWS_DIRECTORY_PROBE_MODE=validate-negative
+      "-DPROBE_WORK_DIRECTORY=${work_directory}"
+      "-DPROBE_WINDOWS_DIRECTORY=${windows_directory}"
+      "-DPURE_ODBC_AUTHORITATIVE_WINDOWS_DIRECTORY=${PURE_ODBC_AUTHORITATIVE_WINDOWS_DIRECTORY}"
+      -P "${CMAKE_CURRENT_LIST_FILE}"
+    RESULT_VARIABLE result
+    OUTPUT_VARIABLE output
+    ERROR_VARIABLE error
+    ENCODING UTF-8
+  )
+  if(result EQUAL 0 OR
+      NOT "${output}\n${error}" MATCHES
+        "WORK_DIRECTORY must be the OS Windows directory")
+    message(FATAL_ERROR
+      "Windows-directory helper accepted a non-authoritative identity\n"
+      "${output}${error}")
   endif()
 endfunction()
 
@@ -159,11 +229,17 @@ function(expect_runner_link_rejected label link_kind link_path link_target
 endfunction()
 
 foreach(required IN ITEMS RUN_PURE_TEST_EXECUTABLE ACTUAL_PURE_EXECUTABLE
-    ACTUAL_MODULE_DIR ACCESS_SCRIPT ACCESS_WORK_DIRECTORY)
+    ACTUAL_MODULE_DIR ACCESS_SCRIPT ACCESS_WORK_DIRECTORY
+    PURE_ODBC_AUTHORITATIVE_WINDOWS_DIRECTORY)
   if(NOT DEFINED ${required} OR "${${required}}" STREQUAL "")
     message(FATAL_ERROR "${required} is required")
   endif()
 endforeach()
+if(NOT IS_DIRECTORY "${PURE_ODBC_AUTHORITATIVE_WINDOWS_DIRECTORY}")
+  message(FATAL_ERROR
+    "PURE_ODBC_AUTHORITATIVE_WINDOWS_DIRECTORY must be an existing directory: "
+    "${PURE_ODBC_AUTHORITATIVE_WINDOWS_DIRECTORY}")
+endif()
 foreach(file_input IN ITEMS RUN_PURE_TEST_EXECUTABLE ACTUAL_PURE_EXECUTABLE
     ACCESS_SCRIPT)
   if(NOT EXISTS "${${file_input}}" OR IS_DIRECTORY "${${file_input}}")
@@ -179,8 +255,48 @@ foreach(directory_input IN ITEMS ACTUAL_MODULE_DIR ACCESS_WORK_DIRECTORY)
   endif()
 endforeach()
 
+execute_process(
+  COMMAND "${RUN_PURE_TEST_EXECUTABLE}" --print-windows-directory
+  RESULT_VARIABLE windows_query_result
+  OUTPUT_VARIABLE windows_query_output
+  ERROR_VARIABLE windows_query_error
+  ENCODING UTF-8
+)
+string(STRIP "${windows_query_output}" OS_WINDOWS_DIRECTORY)
+if(NOT windows_query_result EQUAL 0 OR
+    NOT windows_query_error STREQUAL "" OR
+    NOT IS_DIRECTORY "${OS_WINDOWS_DIRECTORY}")
+  message(FATAL_ERROR
+    "Native runner did not return the OS-authoritative Windows directory\n"
+    "${windows_query_output}${windows_query_error}")
+endif()
+_pure_odbc_fold_path(
+  "${PURE_ODBC_AUTHORITATIVE_WINDOWS_DIRECTORY}"
+  folded_configure_windows_directory)
+_pure_odbc_fold_path(
+  "${OS_WINDOWS_DIRECTORY}" folded_queried_windows_directory)
+if(NOT folded_configure_windows_directory STREQUAL
+    folded_queried_windows_directory)
+  message(FATAL_ERROR
+    "Configure-time and runtime OS Windows directories disagree\n"
+    "configure: ${PURE_ODBC_AUTHORITATIVE_WINDOWS_DIRECTORY}\n"
+    "runtime: ${OS_WINDOWS_DIRECTORY}")
+endif()
+
 pure_odbc_validate_contract_test_root("runner" initial_test_root)
 pure_odbc_reset_contract_test_root("runner")
+
+set(alternate_windows_directory "${TEST_ROOT}/alternate-windows")
+set(non_windows_directory "${TEST_ROOT}/not-windows")
+file(MAKE_DIRECTORY
+  "${alternate_windows_directory}" "${non_windows_directory}")
+string(TOUPPER "${alternate_windows_directory}"
+  case_only_alternate_windows_directory)
+expect_windows_directory_accepted(
+  "${case_only_alternate_windows_directory}"
+  "${alternate_windows_directory}")
+expect_windows_directory_rejected(
+  "${non_windows_directory}" "${alternate_windows_directory}")
 
 expect_root_rejected(
   "source descendant" validate runner "${SOURCE_DIR}/tests"
@@ -195,7 +311,7 @@ expect_root_rejected(
 
 set(junction "${TEST_ROOT}/binary-reparse-alias")
 set(powershell
-  "$ENV{SystemRoot}/System32/WindowsPowerShell/v1.0/powershell.exe")
+  "${OS_WINDOWS_DIRECTORY}/System32/WindowsPowerShell/v1.0/powershell.exe")
 execute_process(
   COMMAND "${CMAKE_COMMAND}" -E env
     "PURE_ODBC_JUNCTION_PATH=${junction}"
@@ -218,6 +334,7 @@ execute_process(
     "-DBINARY_DIR=${junction}"
     -DEXPECTED_LEAF=runner
     -DROOT_PROBE_MODE=validate
+    "-DPURE_ODBC_AUTHORITATIVE_WINDOWS_DIRECTORY=${PURE_ODBC_AUTHORITATIVE_WINDOWS_DIRECTORY}"
     -P "${CMAKE_CURRENT_LIST_FILE}"
   RESULT_VARIABLE reparse_result
   OUTPUT_VARIABLE reparse_output
@@ -377,8 +494,50 @@ list(FILTER arbitrary_work_args EXCLUDE REGEX "^-DWORK_DIRECTORY=")
 list(PREPEND arbitrary_work_args "-DWORK_DIRECTORY=${TEST_ROOT}/work")
 expect_runner_rejected(
   "an arbitrary existing WORK_DIRECTORY"
-  "WORK_DIRECTORY must be C:/Windows or an owned pure-odbc contract leaf"
+  "WORK_DIRECTORY must be the OS Windows directory"
   ${arbitrary_work_args})
+
+set(os_windows_args ${all_args})
+list(FILTER os_windows_args EXCLUDE REGEX "^-DWORK_DIRECTORY=")
+list(PREPEND os_windows_args "-DWORK_DIRECTORY=${OS_WINDOWS_DIRECTORY}")
+execute_process(
+  COMMAND "${CMAKE_COMMAND}" -E env
+    "PATH=C:/ambient-msys2/bin;C:/ambient-tools"
+    "PURELIB=C:/ambient-purelib"
+    "SystemRoot=C:/controlled-untrusted-system-root"
+    "${CMAKE_COMMAND}" ${os_windows_args}
+    -P "${SOURCE_DIR}/cmake/RunPureTest.cmake"
+  RESULT_VARIABLE os_windows_result
+  OUTPUT_VARIABLE os_windows_output
+  ERROR_VARIABLE os_windows_error
+  ENCODING UTF-8
+)
+if(NOT os_windows_result EQUAL 0 OR NOT os_windows_error STREQUAL "")
+  message(FATAL_ERROR
+    "RunPureTest did not use the native OS Windows directory\n"
+    "${os_windows_output}${os_windows_error}")
+endif()
+string(REGEX MATCH "EFFECTIVE_CWD=([^\r\n]+)" unused "${os_windows_output}")
+_pure_odbc_fold_path("${CMAKE_MATCH_1}" folded_os_windows_cwd)
+_pure_odbc_fold_path("${OS_WINDOWS_DIRECTORY}" folded_os_windows_directory)
+if(NOT folded_os_windows_cwd STREQUAL folded_os_windows_directory)
+  message(FATAL_ERROR
+    "RunPureTest CWD disagrees with the native OS Windows directory\n"
+    "${os_windows_output}")
+endif()
+string(REGEX MATCH "EFFECTIVE_PATH=([^\r\n]+)" unused "${os_windows_output}")
+set(os_windows_actual_path "${CMAKE_MATCH_1}")
+set(os_windows_expected_path
+  "${TEST_ROOT}/module;${TEST_ROOT}/pure/bin"
+  "${OS_WINDOWS_DIRECTORY}/System32;${OS_WINDOWS_DIRECTORY}")
+_pure_odbc_fold_path("${os_windows_actual_path}" os_windows_actual_path)
+_pure_odbc_fold_path("${os_windows_expected_path}" os_windows_expected_path)
+if(NOT os_windows_actual_path STREQUAL os_windows_expected_path)
+  message(FATAL_ERROR
+    "RunPureTest PATH disagrees with the native OS Windows directory\n"
+    "expected: ${os_windows_expected_path}\n"
+    "actual: ${os_windows_actual_path}")
+endif()
 
 execute_process(
   COMMAND "${CMAKE_COMMAND}" -E env
@@ -422,7 +581,8 @@ endif()
 string(REGEX MATCH "EFFECTIVE_PATH=([^\r\n]+)" unused "${output}")
 set(actual_path "${CMAKE_MATCH_1}")
 set(expected_path
-  "${TEST_ROOT}/module;${TEST_ROOT}/pure/bin;$ENV{SystemRoot}/System32;$ENV{SystemRoot}")
+  "${TEST_ROOT}/module;${TEST_ROOT}/pure/bin"
+  "${OS_WINDOWS_DIRECTORY}/System32;${OS_WINDOWS_DIRECTORY}")
 string(REPLACE "\\" "/" actual_path "${actual_path}")
 string(REPLACE "\\" "/" expected_path "${expected_path}")
 string(TOLOWER "${actual_path}" actual_path)

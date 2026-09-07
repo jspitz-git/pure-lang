@@ -53,7 +53,28 @@ if(BUILD_TESTING)
       target_compile_options(
         pure-odbc-run-pure-test PRIVATE -Wall -Wextra -Werror)
       target_link_options(pure-odbc-run-pure-test PRIVATE -municode)
+      set(pure_odbc_try_run_link_options LINK_OPTIONS -municode)
     endif()
+    try_run(
+      windows_directory_result windows_directory_compiled
+      SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/tests/run_pure_test.c"
+      ${pure_odbc_try_run_link_options}
+      RUN_OUTPUT_VARIABLE windows_directory_output
+      ARGS --print-windows-directory
+    )
+    string(STRIP "${windows_directory_output}"
+      PURE_ODBC_AUTHORITATIVE_WINDOWS_DIRECTORY)
+    if(NOT windows_directory_compiled OR
+        NOT "${windows_directory_result}" STREQUAL "0" OR
+        NOT IS_DIRECTORY "${PURE_ODBC_AUTHORITATIVE_WINDOWS_DIRECTORY}")
+      message(FATAL_ERROR
+        "Unable to obtain the OS Windows directory from run_pure_test.c\n"
+        "compile: ${windows_directory_compiled}\n"
+        "result: ${windows_directory_result}\n"
+        "output: ${windows_directory_output}")
+    endif()
+    cmake_path(ABSOLUTE_PATH PURE_ODBC_AUTHORITATIVE_WINDOWS_DIRECTORY
+      NORMALIZE OUTPUT_VARIABLE PURE_ODBC_AUTHORITATIVE_WINDOWS_DIRECTORY)
   endif()
 
   pkg_get_variable(PURE_PREFIX pure prefix)
@@ -82,7 +103,8 @@ if(BUILD_TESTING)
     COPYONLY
   )
   if(WIN32)
-    set(manager_work_directory "C:/Windows")
+    set(manager_work_directory
+      "${PURE_ODBC_AUTHORITATIVE_WINDOWS_DIRECTORY}")
   else()
     set(manager_work_directory "${CMAKE_CURRENT_BINARY_DIR}")
   endif()
@@ -152,6 +174,7 @@ if(BUILD_TESTING)
         "-DACTUAL_MODULE_DIR=$<TARGET_FILE_DIR:odbc>"
         "-DACCESS_SCRIPT=${CMAKE_CURRENT_SOURCE_DIR}/tests/access_smoke.pure"
         "-DACCESS_WORK_DIRECTORY=${access_work_directory}"
+        "-DPURE_ODBC_AUTHORITATIVE_WINDOWS_DIRECTORY=${PURE_ODBC_AUTHORITATIVE_WINDOWS_DIRECTORY}"
         -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/runner_contract.cmake"
     )
     add_test(
@@ -160,6 +183,7 @@ if(BUILD_TESTING)
         "-DBINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}"
         "-DMAKE_EXECUTABLE=${PURE_ODBC_MAKE_EXECUTABLE}"
         "-DPKG_CONFIG_EXECUTABLE=${PKG_CONFIG_EXECUTABLE}"
+        "-DPURE_ODBC_AUTHORITATIVE_WINDOWS_DIRECTORY=${PURE_ODBC_AUTHORITATIVE_WINDOWS_DIRECTORY}"
         -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/cleanup_contract.cmake"
     )
     set_tests_properties(

@@ -40,6 +40,32 @@ static wchar_t *full_path(const wchar_t *path) {
   return result;
 }
 
+static wchar_t *os_windows_directory(void) {
+  UINT capacity = MAX_PATH + 1;
+  wchar_t *buffer = NULL;
+  for (;;) {
+    UINT length;
+    wchar_t *replacement = (wchar_t *)realloc(
+        buffer, (size_t)capacity * sizeof(*replacement));
+    if (replacement == NULL) {
+      free(buffer);
+      return NULL;
+    }
+    buffer = replacement;
+    length = GetWindowsDirectoryW(buffer, capacity);
+    if (length == 0) {
+      free(buffer);
+      return NULL;
+    }
+    if (length < capacity) {
+      wchar_t *normalized = full_path(buffer);
+      free(buffer);
+      return normalized;
+    }
+    capacity = length + 1;
+  }
+}
+
 static int path_has_reparse_component(const wchar_t *path) {
   wchar_t *probe = full_path(path);
   wchar_t *root_end;
@@ -156,8 +182,8 @@ static char *sentinel_path_text(const wchar_t *path) {
 }
 
 static int validate_work_directory(const wchar_t *work,
-                                   const wchar_t *source) {
-  wchar_t *neutral = full_path(L"C:/Windows");
+                                   const wchar_t *source,
+                                   const wchar_t *neutral) {
   wchar_t *contract = NULL;
   wchar_t *binary = NULL;
   wchar_t *sentinel = NULL;
@@ -171,11 +197,7 @@ static int validate_work_directory(const wchar_t *work,
   DWORD read_size;
   int result = 1;
 
-  if (neutral != NULL && _wcsicmp(work, neutral) == 0) {
-    free(neutral);
-    return 0;
-  }
-  free(neutral);
+  if (_wcsicmp(work, neutral) == 0) return 0;
 
   leaf = base_name(work);
   if (_wcsicmp(leaf, L"runner") != 0 &&
@@ -386,6 +408,7 @@ int wmain(int argc, wchar_t **argv) {
   wchar_t *windows = NULL;
   wchar_t *environment_path = NULL;
   wchar_t *command = NULL;
+  wchar_t *queried_windows = NULL;
   SECURITY_ATTRIBUTES security = {sizeof(security), NULL, TRUE};
   HANDLE stdout_read = NULL, stdout_write = NULL;
   HANDLE stderr_read = NULL, stderr_write = NULL;
@@ -402,8 +425,23 @@ int wmain(int argc, wchar_t **argv) {
     return fail(L"cannot identify executable", NULL);
   fake_result = fake_child(argc, argv, base_name(module_name));
   if (fake_result >= 0) return fake_result;
-  if (argc != 6)
+  queried_windows = os_windows_directory();
+  if (queried_windows == NULL ||
+      validate_path(queried_windows, 1, 1, L"OS Windows directory",
+                    &windows) != 0) {
+    free(queried_windows);
+    return fail(L"cannot obtain the OS Windows directory", NULL);
+  }
+  free(queried_windows);
+  if (argc == 2 && wcscmp(argv[1], L"--print-windows-directory") == 0) {
+    wprintf(L"%ls\n", windows);
+    free(windows);
+    return 0;
+  }
+  if (argc != 6) {
+    free(windows);
     return fail(L"usage: run_pure_test PURE SOURCE MODULE SCRIPT WORK", NULL);
+  }
   startup.cb = sizeof(startup);
 
   if (validate_path(argv[1], 0, 1, L"PURE_EXECUTABLE", &pure) != 0 ||
@@ -412,10 +450,9 @@ int wmain(int argc, wchar_t **argv) {
       validate_path(argv[4], 0, 1, L"SCRIPT", &script) != 0 ||
       validate_path(argv[5], 1, 1, L"WORK_DIRECTORY", &work) != 0)
     goto done;
-  if (validate_work_directory(work, source) != 0) goto done;
+  if (validate_work_directory(work, source, windows) != 0) goto done;
 
   pure_bin = parent_path(pure);
-  windows = full_path(L"C:/Windows");
   if (pure_bin == NULL || windows == NULL) {
     fail(L"cannot construct child PATH", NULL);
     goto done;
