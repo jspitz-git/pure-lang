@@ -23,6 +23,7 @@ on:
       - "pure-xml/**"
       - "pure-gsl/**"
       - "pure-glpk/**"
+      - "pure-odbc/**"
       - "purepad/**"
       - "pure/todo/TODO-45-windows-pure-bonjour.md"
       - "pure/todo/TODO-20-modernize-purepad.md"
@@ -37,10 +38,12 @@ on:
       - "pure/todo/TODO-29-windows-pure-xml.md"
       - "pure/todo/TODO-30-windows-pure-gsl.md"
       - "pure/todo/TODO-31-windows-pure-glpk.md"
+      - "pure/todo/TODO-32-windows-pure-odbc.md"
       - "docs/superpowers/specs/2026-08-18-windows-pure-bonjour-design.md"
       - "docs/superpowers/specs/2026-08-22-purepad-lifecycle-hardening-design.md"
       - "docs/superpowers/plans/2026-08-18-windows-pure-bonjour.md"
       - "docs/superpowers/plans/2026-08-22-purepad-lifecycle-hardening.md"
+      - ".github/scripts/validate_non_linux_release_workflow.py"
       - ".github/workflows/non-linux-release-validation.yml"
   pull_request:
     branches:
@@ -62,6 +65,7 @@ on:
       - "pure-xml/**"
       - "pure-gsl/**"
       - "pure-glpk/**"
+      - "pure-odbc/**"
       - "purepad/**"
       - "pure/todo/TODO-45-windows-pure-bonjour.md"
       - "pure/todo/TODO-20-modernize-purepad.md"
@@ -76,10 +80,12 @@ on:
       - "pure/todo/TODO-29-windows-pure-xml.md"
       - "pure/todo/TODO-30-windows-pure-gsl.md"
       - "pure/todo/TODO-31-windows-pure-glpk.md"
+      - "pure/todo/TODO-32-windows-pure-odbc.md"
       - "docs/superpowers/specs/2026-08-18-windows-pure-bonjour-design.md"
       - "docs/superpowers/specs/2026-08-22-purepad-lifecycle-hardening-design.md"
       - "docs/superpowers/plans/2026-08-18-windows-pure-bonjour.md"
       - "docs/superpowers/plans/2026-08-22-purepad-lifecycle-hardening.md"
+      - ".github/scripts/validate_non_linux_release_workflow.py"
       - ".github/workflows/non-linux-release-validation.yml"
 
 concurrency:
@@ -138,6 +144,7 @@ jobs:
             mingw-w64-clang-x86_64-ninja
             mingw-w64-clang-x86_64-pcre
             mingw-w64-clang-x86_64-pkgconf
+            mingw-w64-clang-x86_64-python-yaml
             mingw-w64-clang-x86_64-readline
 
       - name: Initialize validation logs
@@ -252,6 +259,130 @@ jobs:
             & C:/msys64/clang64/bin/pkgconf.exe --modversion pure
             if ($LASTEXITCODE -ne 0) { throw 'Installed pkg-config probe failed' }
           } 2>&1 | Tee-Object -FilePath "$env:LOG_DIR/installed-runtime.log"
+
+      - name: Configure strict pure-odbc audit
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $prefix = [IO.Path]::GetFullPath($env:INSTALL_PREFIX).Replace('\', '/')
+          $odbcBuild = 'build/windows-pure-odbc-audit'
+          & $env:CMAKE_EXE -S ../pure-odbc -B $odbcBuild -G Ninja `
+            -DCMAKE_BUILD_TYPE=Release `
+            -DCMAKE_MAKE_PROGRAM=C:/msys64/clang64/bin/ninja.exe `
+            -DCMAKE_C_COMPILER=C:/msys64/clang64/bin/clang.exe `
+            -DCMAKE_C_COMPILER_TARGET=x86_64-w64-windows-gnu `
+            -DBUILD_TESTING=ON `
+            -DPURE_ODBC_STRICT_WINDOWS_AUDIT=ON `
+            -DPURE_ODBC_BUILD_FAULT_TESTS=ON `
+            -DPURE_ODBC_CLANG64_PREFIX=C:/msys64/clang64 `
+            "-DPURE_ODBC_PKG_CONFIG_PATH=$prefix/lib/pkgconfig" `
+            -DPKG_CONFIG_EXECUTABLE=C:/msys64/clang64/bin/pkgconf.exe `
+            -DLLVM_READOBJ_EXECUTABLE=C:/msys64/clang64/bin/llvm-readobj.exe `
+            -DPURE_ODBC_MAKE_EXECUTABLE=C:/msys64/usr/bin/make.exe `
+            "-DPURE_PREFIX=$prefix" `
+            "-DPURE_EXECUTABLE=$prefix/bin/pure.exe" `
+            "-DPURE_RUNTIME_DLL=$prefix/bin/libpure.dll" `
+            -DGMP_RUNTIME_DLL=C:/msys64/clang64/bin/libgmp-10.dll `
+            -DODBC_HEADER=C:/msys64/clang64/include/sql.h `
+            -DODBC_IMPORT_LIBRARY=C:/msys64/clang64/lib/libodbc32.a `
+            -DSYSTEM_ODBC_DLL=C:/Windows/System32/odbc32.dll `
+            -DPURE_ODBC_AUTHORITATIVE_WINDOWS_DIRECTORY=C:/Windows `
+            2>&1 | Tee-Object -FilePath "$env:LOG_DIR/configure-pure-odbc.log"
+          if ($LASTEXITCODE -ne 0) { throw 'Strict pure-odbc configure failed' }
+
+      - name: Build and verify pure-odbc PE closure
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $odbcBuild = 'build/windows-pure-odbc-audit'
+          & $env:CMAKE_EXE --build $odbcBuild --parallel 4 `
+            2>&1 | Tee-Object -FilePath "$env:LOG_DIR/build-pure-odbc.log"
+          if ($LASTEXITCODE -ne 0) { throw 'pure-odbc build failed' }
+          & $env:CMAKE_EXE --build $odbcBuild `
+            --target verify-windows-dependencies --parallel 4 `
+            2>&1 | Tee-Object -FilePath "$env:LOG_DIR/pe-pure-odbc.log"
+          if ($LASTEXITCODE -ne 0) { throw 'pure-odbc PE closure failed' }
+
+      - name: Run pure-odbc tests and source distribution contract
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $prefix = [IO.Path]::GetFullPath($env:INSTALL_PREFIX).Replace('\', '/')
+          $odbcBuild = 'build/windows-pure-odbc-audit'
+          $env:Path = "$prefix/bin;C:/msys64/clang64/bin;C:/msys64/usr/bin;$env:SystemRoot/System32/WindowsPowerShell/v1.0;$env:SystemRoot/System32;$env:SystemRoot"
+          Remove-Item Env:PURELIB -ErrorAction SilentlyContinue
+          & $env:CTEST_EXE --test-dir $odbcBuild -L odbc `
+            --output-on-failure --no-tests=error `
+            2>&1 | Tee-Object -FilePath "$env:LOG_DIR/ctest-pure-odbc.log"
+          if ($LASTEXITCODE -ne 0) {
+            throw 'pure-odbc tests, including the source-distribution contract, failed'
+          }
+
+      - name: Install and verify the pure-odbc package
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $prefix = [IO.Path]::GetFullPath($env:INSTALL_PREFIX)
+          $odbcBuild = [IO.Path]::GetFullPath('build/windows-pure-odbc-audit')
+          $stage = [IO.Path]::GetFullPath('build/windows-pure-odbc-stage')
+          $baseline = Join-Path $odbcBuild 'ci-baseline.sha256'
+          $runtimeManifest = Join-Path $odbcBuild 'ci-install-manifest-runtime.txt'
+          $documentationManifest = Join-Path $odbcBuild 'ci-install-manifest-documentation.txt'
+          if (Test-Path -LiteralPath $stage) {
+            throw "Fresh pure-odbc stage already exists: $stage"
+          }
+          Get-ChildItem -LiteralPath $prefix -File -Recurse |
+            Sort-Object FullName | ForEach-Object {
+              $relative = [IO.Path]::GetRelativePath($prefix, $_.FullName).Replace('\', '/')
+              $hash = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+              "$hash|$relative"
+            } | Set-Content -LiteralPath $baseline -Encoding utf8
+          New-Item -ItemType Directory -Path $stage | Out-Null
+          Get-ChildItem -LiteralPath $prefix -Force |
+            Copy-Item -Destination $stage -Recurse -Force
+          & $env:CMAKE_EXE --install $odbcBuild --prefix $stage --component runtime
+          if ($LASTEXITCODE -ne 0) { throw 'pure-odbc runtime install failed' }
+          Copy-Item -LiteralPath "$odbcBuild/install_manifest_runtime.txt" `
+            -Destination $runtimeManifest
+          & $env:CMAKE_EXE --install $odbcBuild --prefix $stage --component documentation
+          if ($LASTEXITCODE -ne 0) { throw 'pure-odbc documentation install failed' }
+          Copy-Item -LiteralPath "$odbcBuild/install_manifest_documentation.txt" `
+            -Destination $documentationManifest
+
+          $stageArg = $stage.Replace('\', '/')
+          $buildArg = $odbcBuild.Replace('\', '/')
+          $repo = [IO.Path]::GetFullPath('..').Replace('\', '/')
+          & $env:CMAKE_EXE `
+            "-DSTAGE_PREFIX=$stageArg" `
+            "-DBASELINE_MANIFEST=$($baseline.Replace('\', '/'))" `
+            "-DRUNTIME_COMPONENT_MANIFEST=$($runtimeManifest.Replace('\', '/'))" `
+            "-DDOCUMENTATION_COMPONENT_MANIFEST=$($documentationManifest.Replace('\', '/'))" `
+            -DLLVM_READOBJ=C:/msys64/clang64/bin/llvm-readobj.exe `
+            "-DODBC_MODULE_SOURCE=$buildArg/odbc.dll" `
+            "-DODBC_INTERFACE_SOURCE=$repo/pure-odbc/odbc.pure" `
+            "-DREADME_SOURCE=$buildArg/README" `
+            "-DCOPYING_SOURCE=$repo/pure-odbc/COPYING" `
+            "-DCOPYING_LESSER_SOURCE=$repo/pure-odbc/COPYING.LESSER" `
+            "-DWINDOWS_SOURCE=$repo/pure-odbc/WINDOWS.md" `
+            "-DEXAMPLE_SOURCE=$repo/pure-odbc/examples/menagerie.pure" `
+            "-DSMOKE_SOURCE=$repo/pure-odbc/tests/smoke.pure" `
+            "-DPEOPLE_SOURCE=$repo/pure-odbc/tests/data/people.csv" `
+            "-DSCHEMA_SOURCE=$repo/pure-odbc/tests/data/Schema.ini" `
+            -DGMP_DLL_SOURCE=C:/msys64/clang64/bin/libgmp-10.dll `
+            "$('-DPURE_RUNTIME_DLL_SOURCE=' + $prefix.Replace('\', '/') + '/bin/libpure.dll')" `
+            "-DRUN_PURE_TEST_EXECUTABLE=$buildArg/run_pure_test.exe" `
+            "-DWINDOWS_DEPENDENCY_VERIFIER=$repo/pure-odbc/cmake/VerifyWindowsDependencies.cmake" `
+            -DWINDOWS_DIRECTORY=C:/Windows `
+            -DSYSTEM_ODBC_DLL=C:/Windows/System32/odbc32.dll `
+            -DPURE_ODBC_AUTHORITATIVE_WINDOWS_DIRECTORY=C:/Windows `
+            -P ../pure-odbc/cmake/VerifyInstalledPackage.cmake `
+            2>&1 | Tee-Object -FilePath "$env:LOG_DIR/installed-pure-odbc.log"
+          if ($LASTEXITCODE -ne 0) { throw 'Installed pure-odbc verification failed' }
+
+      - name: Validate non-Linux workflow semantics
+        run: |
+          $ErrorActionPreference = 'Stop'
+          & C:/msys64/clang64/bin/python.exe `
+            ../.github/scripts/validate_non_linux_release_workflow.py `
+            ../.github/workflows/non-linux-release-validation.yml `
+            2>&1 | Tee-Object -FilePath "$env:LOG_DIR/workflow-semantics.log"
+          if ($LASTEXITCODE -ne 0) { throw 'Workflow semantic validation failed' }
 
       - name: Audit the portable Windows prefix
         run: |

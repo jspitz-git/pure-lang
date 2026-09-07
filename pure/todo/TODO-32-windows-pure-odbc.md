@@ -1,6 +1,6 @@
 # TODO-32 - Windows pure-odbc Package
 
-Status: Closed
+Status: Closed on 2026-09-07
 Branch: todo/32-windows-pure-odbc
 
 ## Purpose
@@ -68,3 +68,54 @@ Build and validate `pure-odbc` against an explicitly selected Windows ODBC layer
   smoke test and staged PE audit passed. The complete portable-prefix audit
   reported 12 DLLs, 12 resolved non-system dependency paths, and 50 files
   without forbidden build/MSYS2 path leakage.
+- 2026-09-07: Reopened for a SuperPowers audit of native memory safety,
+  hermetic tests, exact package/runtime closure, source distribution, and CI.
+- 2026-09-07: Audited the native binding with a production-default ODBC
+  dispatch seam and fault injection. Fixed unsafe `SQLGetData`/`SQLGetInfo`
+  reads, width truncation, unchecked binds, enumeration/diagnostic truncation,
+  partial connection/execution cleanup, and result-metadata ownership. The
+  public Pure symbols and tuple shapes remain unchanged; row counts outside the
+  32-bit Pure `int` range now use `int64` instead of narrowing.
+- 2026-09-07: Replaced inherited-environment smoke helpers with one strict
+  runner. Mandatory manager/enumeration/`IM002` coverage is separate from the
+  exact Access Text Driver test; only absence of that exact 64-bit driver maps
+  to CTest skip 77. Root/sentinel/reparse contracts protect recursive cleanup,
+  and legacy `make clean` accepts only an explicit module suffix and owned
+  generated files.
+- 2026-09-07: Added opt-in strict Release configuration for Clang 22 CLANG64,
+  exact regular-file tool/SDK/header/import inputs, recursive AMD64 PE closure,
+  and a full-prefix installation contract. The PE check covered 14 staged
+  binaries and resolved `ODBC32.dll` only to the native 64-bit System32 file.
+  The install check proved the exact documented ten-file component delta,
+  unchanged baseline files, byte-identical staged Pure/GMP runtimes, and no
+  packaged manager or database driver.
+- 2026-09-07: Made the real 36-input `make dist` archive self-contained. Its
+  contract extracts under a path containing spaces, removes the checkout-side
+  driver, rejects symlink/reparse inputs and checkout-path leakage, then runs
+  strict configure, four-worker build, tests, installation, and verification
+  solely from extracted sources. Closure testing exposed a CMake regex group
+  limit in the arbitrary-case binary path scanner for long checkout paths; the
+  scanner now folds delimiter-aligned ASCII byte tokens without regex groups.
+  The >9 MiB mixed-case boundary fixture passed in 11.65 s and the full archive
+  contract passed in 585.05 s.
+- 2026-09-07: Added both `pure-odbc/**` and this TODO to push and pull-request
+  workflow filters. Windows CI installs `make` and PyYAML, consumes every strict
+  input explicitly after portable Pure staging, builds and PE-checks with
+  exactly four workers, runs the complete sanitized `odbc` label, installs
+  runtime and documentation components into a fresh stage, directly invokes
+  the installed verifier, and validates workflow structure with PyYAML 6.0.3
+  `BaseLoader`.
+- 2026-09-07: Fresh closure used CMake 4.4.0, Clang 22.1.8 targeting
+  `x86_64-w64-windows-gnu`, pkgconf 3.0.4, Pure 0.68, and GMP 6.3.0. Strict
+  configure completed in 8.6 s; the eight-edge build and exact PE target passed
+  with `--parallel 4`; all 9/9 ODBC tests passed in 983.15 s with no skip
+  (manager 6.04 s, Access 4.56 s, configure mutations 58.23 s, PE mutations
+  87.82 s, source distribution 585.05 s, ASan fault harness 23.21 s, install
+  136.07 s). A separate fresh-stage two-component install added exactly ten
+  files and the direct installed manager/IM002/PE verifier passed. PyYAML
+  semantic validation and `git diff --check` also passed.
+- 2026-09-07: Residual limits are intentional: no third-party database driver
+  or external database server is certified; Access coverage is optional and
+  host-dependent; System32 `odbc32.dll` internal imports may change through
+  Windows servicing; and exact CLANG64/Pure import manifests require a new
+  audit when the audited toolchain or SDK changes.
