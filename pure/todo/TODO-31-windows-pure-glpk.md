@@ -137,12 +137,15 @@ Build, validate, and package `pure-glpk` with a controlled Windows GLPK runtime.
   equal to the owner package source, and the obsolete conflated notice was
   absent.
 - 2026-09-07: Final review hardened the remaining destructive contract
-  fixtures. Runner and nested-configure tests now normalize explicit binary,
-  contract, and test roots; accept only the intended direct-child layout;
-  reject protected roots through non-destructive self-probes; and only then
-  remove their isolated test directories. The runner contract also proves
-  `C:/Windows` as the effective working directory and rejects a zero-exit
-  child that emits stderr.
+  fixtures. A first lexical direct-child guard was later found insufficient
+  against a protected descendant, a case-only path alias, or a junction.
+  The final shared guard anchors source identity to its own script, verifies
+  the explicit build directory against its regular `CMakeCache.txt`, derives
+  fixed contract leaves internally, compares Windows identities without case,
+  rejects reparse components and descendants, and requires an exact ownership
+  sentinel before recursive cleanup. Non-destructive probes cover all three
+  former bypasses. The runner contract also proves `C:/Windows` as the
+  effective working directory and rejects a zero-exit child that emits stderr.
 - 2026-09-07: The callback smoke test now records `glp::ios_reason` while the
   callback handle is live and requires one of all seven documented reason
   symbols. After `glp::intopt` returns, the retained cleared handle must not
@@ -160,3 +163,9 @@ Build, validate, and package `pure-glpk` with a controlled Windows GLPK runtime.
   Release build used Clang 22.1.8 and exactly four workers, exact imports
   passed for eight AMD64 binaries, and all seven sanitized `glpk` tests passed
   in 56.73 seconds.
+- 2026-09-07: The filesystem-identity fix configured a new strict Release
+  tree with Clang 22.1.8, built with exactly four workers, and passed all seven
+  sanitized `glpk` tests in 104.60 seconds. The exact PE target again verified
+  all eight AMD64 binaries. A deliberately altered test-root sentinel was
+  rejected without cleanup, restored, and followed by a passing runner
+  contract.

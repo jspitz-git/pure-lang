@@ -146,24 +146,17 @@ if(BUILD_TESTING)
       TIMEOUT 60
   )
   if(WIN32)
-    set(contract_root "${CMAKE_CURRENT_BINARY_DIR}/pure-glpk-contract")
     find_program(PURE_GLPK_MAKE_EXECUTABLE NAMES make REQUIRED)
     add_test(
       NAME pure-glpk-runner-contract
       COMMAND "${CMAKE_COMMAND}"
-        "-DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
         "-DBINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}"
-        "-DCONTRACT_ROOT=${contract_root}"
-        "-DTEST_ROOT=${contract_root}/runner"
         -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/runner_contract.cmake"
     )
     add_test(
       NAME pure-glpk-configure-contract
       COMMAND "${CMAKE_COMMAND}"
-        "-DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
         "-DBINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}"
-        "-DCONTRACT_ROOT=${contract_root}"
-        "-DTEST_ROOT=${contract_root}/configure"
         "-DGENERATOR=${CMAKE_GENERATOR}"
         "-DMAKE_PROGRAM=${CMAKE_MAKE_PROGRAM}"
         "-DC_COMPILER=${CMAKE_C_COMPILER}"
@@ -176,10 +169,7 @@ if(BUILD_TESTING)
     add_test(
       NAME pure-glpk-source-dist-contract
       COMMAND "${CMAKE_COMMAND}"
-        "-DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
         "-DBINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}"
-        "-DCONTRACT_ROOT=${contract_root}"
-        "-DTEST_ROOT=${contract_root}/source-dist"
         "-DMAKE_EXECUTABLE=${PURE_GLPK_MAKE_EXECUTABLE}"
         "-DGENERATOR=${CMAKE_GENERATOR}"
         "-DMAKE_PROGRAM=${CMAKE_MAKE_PROGRAM}"
@@ -206,20 +196,14 @@ if(BUILD_TESTING AND WIN32)
   add_test(
     NAME pure-glpk-runtime-verifier-contract
     COMMAND "${CMAKE_COMMAND}"
-      "-DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
       "-DBINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}"
-      "-DCONTRACT_ROOT=${contract_root}"
       "-DPORTABLE_PURE_PREFIX=${PURE_PREFIX}"
-      "-DTEST_ROOT=${contract_root}/runtime verifier"
       -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/runtime_verifier_contract.cmake"
   )
   add_test(
     NAME pure-glpk-install-contract
     COMMAND "${CMAKE_COMMAND}"
-      "-DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
       "-DBINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}"
-      "-DCONTRACT_ROOT=${contract_root}"
-      "-DTEST_ROOT=${contract_root}/install"
       "-DPORTABLE_PURE_PREFIX=${PURE_PREFIX}"
       "-DSOURCE_RUNTIME_DIR=${GLPK_RUNTIME_DIR}"
       "-DLLVM_READOBJ=${LLVM_READOBJ_EXECUTABLE}"

@@ -1,16 +1,18 @@
 cmake_minimum_required(VERSION 3.25)
 
+include("${CMAKE_CURRENT_LIST_DIR}/ContractTestRoot.cmake")
+pure_glpk_validate_contract_test_root("source-dist" unused_test_root)
+
 foreach(required IN ITEMS
-    SOURCE_DIR BINARY_DIR CONTRACT_ROOT TEST_ROOT MAKE_EXECUTABLE GENERATOR
-    MAKE_PROGRAM C_COMPILER PKG_CONFIG_EXECUTABLE PKG_CONFIG_PATH
+    MAKE_EXECUTABLE GENERATOR MAKE_PROGRAM C_COMPILER
+    PKG_CONFIG_EXECUTABLE PKG_CONFIG_PATH
     MSYSTEM_PREFIX LLVM_READOBJ_EXECUTABLE)
   if(NOT DEFINED ${required} OR "${${required}}" STREQUAL "")
     message(FATAL_ERROR "${required} is required")
   endif()
 endforeach()
 
-foreach(path_var IN ITEMS SOURCE_DIR BINARY_DIR CONTRACT_ROOT TEST_ROOT
-    MAKE_EXECUTABLE MAKE_PROGRAM C_COMPILER PKG_CONFIG_EXECUTABLE
+foreach(path_var IN ITEMS MAKE_EXECUTABLE MAKE_PROGRAM C_COMPILER PKG_CONFIG_EXECUTABLE
     MSYSTEM_PREFIX LLVM_READOBJ_EXECUTABLE)
   cmake_path(ABSOLUTE_PATH ${path_var} NORMALIZE OUTPUT_VARIABLE normalized)
   set(${path_var} "${normalized}")
@@ -18,8 +20,8 @@ endforeach()
 cmake_path(GET MAKE_EXECUTABLE PARENT_PATH make_bin_dir)
 set(msys_bash "${make_bin_dir}/bash.exe")
 
-function(require_safe_test_root)
-  foreach(directory IN ITEMS SOURCE_DIR BINARY_DIR MSYSTEM_PREFIX)
+function(require_source_dist_inputs)
+  foreach(directory IN ITEMS MSYSTEM_PREFIX)
     if(NOT IS_DIRECTORY "${${directory}}")
       message(FATAL_ERROR
         "${directory} must be an existing directory: ${${directory}}")
@@ -31,71 +33,11 @@ function(require_safe_test_root)
       message(FATAL_ERROR "${tool} must be an existing file: ${${tool}}")
     endif()
   endforeach()
-  cmake_path(GET CONTRACT_ROOT PARENT_PATH contract_parent)
-  if(NOT "${contract_parent}" STREQUAL "${BINARY_DIR}")
-    message(FATAL_ERROR
-      "Unsafe CONTRACT_ROOT; expected a direct child of BINARY_DIR\n"
-      "CONTRACT_ROOT: ${CONTRACT_ROOT}\nBINARY_DIR: ${BINARY_DIR}")
-  endif()
-  cmake_path(GET TEST_ROOT PARENT_PATH test_parent)
-  if(NOT "${test_parent}" STREQUAL "${CONTRACT_ROOT}")
-    message(FATAL_ERROR
-      "Unsafe TEST_ROOT; expected a direct child of CONTRACT_ROOT\n"
-      "TEST_ROOT: ${TEST_ROOT}\nCONTRACT_ROOT: ${CONTRACT_ROOT}")
-  endif()
-  foreach(protected IN ITEMS SOURCE_DIR BINARY_DIR MSYSTEM_PREFIX)
-    cmake_path(IS_PREFIX TEST_ROOT "${${protected}}" NORMALIZE
-      test_root_contains_protected)
-    if(test_root_contains_protected)
-      message(FATAL_ERROR
-        "Unsafe TEST_ROOT contains protected ${protected}: ${${protected}}")
-    endif()
-  endforeach()
 endfunction()
 
-function(expect_unsafe_root_rejected label unsafe_root)
-  execute_process(
-    COMMAND "${CMAKE_COMMAND}"
-      "-DSOURCE_DIR=${SOURCE_DIR}"
-      "-DBINARY_DIR=${BINARY_DIR}"
-      "-DCONTRACT_ROOT=${CONTRACT_ROOT}"
-      "-DTEST_ROOT=${unsafe_root}"
-      "-DMAKE_EXECUTABLE=${MAKE_EXECUTABLE}"
-      "-DGENERATOR=${GENERATOR}"
-      "-DMAKE_PROGRAM=${MAKE_PROGRAM}"
-      "-DC_COMPILER=${C_COMPILER}"
-      "-DPKG_CONFIG_EXECUTABLE=${PKG_CONFIG_EXECUTABLE}"
-      "-DPKG_CONFIG_PATH=${PKG_CONFIG_PATH}"
-      "-DMSYSTEM_PREFIX=${MSYSTEM_PREFIX}"
-      "-DLLVM_READOBJ_EXECUTABLE=${LLVM_READOBJ_EXECUTABLE}"
-      -DROOT_SAFETY_PROBE=ON
-      -P "${CMAKE_CURRENT_LIST_FILE}"
-    RESULT_VARIABLE result
-    OUTPUT_VARIABLE output
-    ERROR_VARIABLE error
-    ENCODING UTF-8
-  )
-  if(result EQUAL 0)
-    message(FATAL_ERROR
-      "Cleanup guard accepted unsafe ${label} TEST_ROOT: ${unsafe_root}")
-  endif()
-  if(NOT "${output}\n${error}" MATCHES "Unsafe TEST_ROOT")
-    message(FATAL_ERROR
-      "Unsafe ${label} TEST_ROOT produced the wrong diagnostic\n"
-      "${output}\n${error}")
-  endif()
-endfunction()
-
-require_safe_test_root()
-if(ROOT_SAFETY_PROBE)
-  return()
-endif()
-expect_unsafe_root_rejected("source" "${SOURCE_DIR}")
-expect_unsafe_root_rejected("binary" "${BINARY_DIR}")
-expect_unsafe_root_rejected("MSYSTEM prefix" "${MSYSTEM_PREFIX}")
-
-file(REMOVE_RECURSE "${TEST_ROOT}")
-file(MAKE_DIRECTORY "${TEST_ROOT}")
+require_source_dist_inputs()
+pure_glpk_run_root_safety_probes("source-dist")
+pure_glpk_reset_contract_test_root("source-dist")
 
 set(distribution_driver "${TEST_ROOT}/distribution driver")
 set(extract_root "${TEST_ROOT}/extracted")

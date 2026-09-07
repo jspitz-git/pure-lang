@@ -1,83 +1,23 @@
-foreach(required IN ITEMS
-    SOURCE_DIR BINARY_DIR CONTRACT_ROOT PORTABLE_PURE_PREFIX TEST_ROOT)
+include("${CMAKE_CURRENT_LIST_DIR}/ContractTestRoot.cmake")
+pure_glpk_validate_contract_test_root("runtime-verifier" unused_test_root)
+
+foreach(required IN ITEMS PORTABLE_PURE_PREFIX)
   if(NOT DEFINED ${required} OR "${${required}}" STREQUAL "")
     message(FATAL_ERROR "${required} is required")
   endif()
 endforeach()
 
-cmake_path(ABSOLUTE_PATH SOURCE_DIR NORMALIZE OUTPUT_VARIABLE source_dir)
-cmake_path(ABSOLUTE_PATH BINARY_DIR NORMALIZE OUTPUT_VARIABLE binary_dir)
-cmake_path(ABSOLUTE_PATH CONTRACT_ROOT NORMALIZE OUTPUT_VARIABLE contract_root)
+set(source_dir "${SOURCE_DIR}")
 cmake_path(ABSOLUTE_PATH PORTABLE_PURE_PREFIX NORMALIZE
   OUTPUT_VARIABLE portable_pure_prefix)
-cmake_path(ABSOLUTE_PATH TEST_ROOT NORMALIZE OUTPUT_VARIABLE test_root)
-
-set(self_arguments
-  "-DSOURCE_DIR=${source_dir}"
-  "-DBINARY_DIR=${binary_dir}"
-  "-DCONTRACT_ROOT=${contract_root}"
-  "-DPORTABLE_PURE_PREFIX=${portable_pure_prefix}"
-)
-function(expect_unsafe_root_rejected label unsafe_root)
-  execute_process(
-    COMMAND "${CMAKE_COMMAND}" ${self_arguments}
-      "-DTEST_ROOT=${unsafe_root}"
-      -DROOT_SAFETY_PROBE=ON
-      -P "${CMAKE_CURRENT_LIST_FILE}"
-    RESULT_VARIABLE result
-    OUTPUT_VARIABLE output
-    ERROR_VARIABLE error
-    ENCODING UTF-8
-  )
-  if(result EQUAL 0)
-    message(FATAL_ERROR
-      "Cleanup guard accepted unsafe ${label} TEST_ROOT: ${unsafe_root}")
-  endif()
-  if(NOT "${output}\n${error}" MATCHES "Unsafe TEST_ROOT")
-    message(FATAL_ERROR
-      "Unsafe ${label} TEST_ROOT produced the wrong diagnostic\n"
-      "${output}\n${error}")
-  endif()
-endfunction()
-
-function(require_safe_test_root)
-  foreach(directory IN ITEMS source_dir binary_dir portable_pure_prefix)
-    if(NOT IS_DIRECTORY "${${directory}}")
-      message(FATAL_ERROR
-        "${directory} must be an existing directory: ${${directory}}")
-    endif()
-  endforeach()
-  cmake_path(GET contract_root PARENT_PATH contract_parent)
-  if(NOT "${contract_parent}" STREQUAL "${binary_dir}")
-    message(FATAL_ERROR
-      "Unsafe CONTRACT_ROOT; expected a direct child of BINARY_DIR\n"
-      "CONTRACT_ROOT: ${contract_root}\nBINARY_DIR: ${binary_dir}")
-  endif()
-  cmake_path(GET test_root PARENT_PATH test_parent)
-  if(NOT "${test_parent}" STREQUAL "${contract_root}")
-    message(FATAL_ERROR
-      "Unsafe TEST_ROOT; expected a direct child of CONTRACT_ROOT\n"
-      "TEST_ROOT: ${test_root}\nCONTRACT_ROOT: ${contract_root}")
-  endif()
-  foreach(protected IN ITEMS source_dir binary_dir portable_pure_prefix)
-    cmake_path(IS_PREFIX test_root "${${protected}}" NORMALIZE
-      test_root_contains_protected)
-    if(test_root_contains_protected)
-      message(FATAL_ERROR
-        "Unsafe TEST_ROOT contains protected ${protected}: ${${protected}}")
-    endif()
-  endforeach()
-endfunction()
-
-require_safe_test_root()
-if(ROOT_SAFETY_PROBE)
-  return()
+set(test_root "${TEST_ROOT}")
+if(NOT IS_DIRECTORY "${portable_pure_prefix}")
+  message(FATAL_ERROR
+    "PORTABLE_PURE_PREFIX must be an existing directory: ${portable_pure_prefix}")
 endif()
-expect_unsafe_root_rejected("source" "${source_dir}")
-expect_unsafe_root_rejected("binary" "${binary_dir}")
-expect_unsafe_root_rejected("portable-prefix" "${portable_pure_prefix}")
-
-file(REMOVE_RECURSE "${test_root}")
+pure_glpk_run_root_safety_probes("runtime-verifier")
+pure_glpk_reset_contract_test_root("runtime-verifier")
+set(test_root "${TEST_ROOT}")
 file(MAKE_DIRECTORY "${test_root}/modules")
 
 set(module_names
@@ -248,7 +188,8 @@ if(unexpected_result EQUAL 0)
   message(FATAL_ERROR
     "PE verifier accepted unexpected import libunexpected.dll")
 endif()
-if(NOT unexpected_diagnostics MATCHES "glpk\\.dll import mismatch" OR
+if(NOT unexpected_diagnostics MATCHES "glpk\\.dll" OR
+    NOT unexpected_diagnostics MATCHES "import mismatch" OR
     NOT unexpected_diagnostics MATCHES "libunexpected\\.dll")
   message(FATAL_ERROR
     "PE verifier rejected the mutation without naming glpk.dll and "
@@ -296,7 +237,8 @@ set(omitted_diagnostics "${omitted_output}\n${omitted_error}")
 if(omitted_result EQUAL 0)
   message(FATAL_ERROR "PE verifier accepted omitted known import libpure.dll")
 endif()
-if(NOT omitted_diagnostics MATCHES "glpk\\.dll import mismatch" OR
+if(NOT omitted_diagnostics MATCHES "glpk\\.dll" OR
+    NOT omitted_diagnostics MATCHES "import mismatch" OR
     NOT omitted_diagnostics MATCHES "missing:.*libpure\\.dll")
   message(FATAL_ERROR
     "Missing-import diagnostic omitted glpk.dll or libpure.dll\n"

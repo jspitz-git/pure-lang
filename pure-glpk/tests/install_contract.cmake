@@ -1,5 +1,8 @@
+include("${CMAKE_CURRENT_LIST_DIR}/ContractTestRoot.cmake")
+pure_glpk_validate_contract_test_root("install" unused_test_root)
+
 foreach(required IN ITEMS
-    SOURCE_DIR BINARY_DIR PORTABLE_PURE_PREFIX SOURCE_RUNTIME_DIR
+    PORTABLE_PURE_PREFIX SOURCE_RUNTIME_DIR
     LLVM_READOBJ GLPK_MODULE_SOURCE GLPK_INTERFACE_SOURCE README_SOURCE
     COPYING_SOURCE WINDOWS_SOURCE EXAMPLE_SOURCE TEST_SOURCE GLPK_DLL_SOURCE
     COLAMD_DLL_SOURCE AMD_DLL_SOURCE SUITESPARSECONFIG_DLL_SOURCE
@@ -15,18 +18,8 @@ foreach(required IN ITEMS
   endif()
 endforeach()
 
-foreach(required IN ITEMS CONTRACT_ROOT TEST_ROOT)
-  if(NOT DEFINED ${required} OR "${${required}}" STREQUAL "")
-    message(FATAL_ERROR "${required} is required")
-  endif()
-endforeach()
-cmake_path(ABSOLUTE_PATH CONTRACT_ROOT NORMALIZE OUTPUT_VARIABLE CONTRACT_ROOT)
-cmake_path(ABSOLUTE_PATH TEST_ROOT NORMALIZE OUTPUT_VARIABLE TEST_ROOT)
-
 set(self_arguments
-  "-DSOURCE_DIR=${SOURCE_DIR}"
   "-DBINARY_DIR=${BINARY_DIR}"
-  "-DCONTRACT_ROOT=${CONTRACT_ROOT}"
   "-DSOURCE_RUNTIME_DIR=${SOURCE_RUNTIME_DIR}"
   "-DLLVM_READOBJ=${LLVM_READOBJ}"
   "-DGLPK_MODULE_SOURCE=${GLPK_MODULE_SOURCE}"
@@ -62,34 +55,6 @@ function(expect_probe_rejected label expected_diagnostic)
       "Unsafe ${label} produced the wrong diagnostic\n${output}\n${error}")
   endif()
 endfunction()
-
-function(require_safe_test_root)
-  cmake_path(GET CONTRACT_ROOT PARENT_PATH contract_parent)
-  if(NOT "${contract_parent}" STREQUAL "${BINARY_DIR}")
-    message(FATAL_ERROR
-      "Unsafe CONTRACT_ROOT; expected a direct child of BINARY_DIR\n"
-      "CONTRACT_ROOT: ${CONTRACT_ROOT}\nBINARY_DIR: ${BINARY_DIR}")
-  endif()
-  cmake_path(GET TEST_ROOT PARENT_PATH test_parent)
-  if(NOT "${test_parent}" STREQUAL "${CONTRACT_ROOT}")
-    message(FATAL_ERROR
-      "Unsafe TEST_ROOT; expected a direct child of CONTRACT_ROOT\n"
-      "TEST_ROOT: ${TEST_ROOT}\nCONTRACT_ROOT: ${CONTRACT_ROOT}")
-  endif()
-  foreach(protected IN ITEMS SOURCE_DIR BINARY_DIR PORTABLE_PURE_PREFIX)
-    cmake_path(IS_PREFIX TEST_ROOT "${${protected}}" NORMALIZE
-      test_root_contains_protected)
-    if(test_root_contains_protected)
-      message(FATAL_ERROR
-        "Unsafe TEST_ROOT contains protected ${protected}: ${${protected}}")
-    endif()
-  endforeach()
-endfunction()
-
-require_safe_test_root()
-if(ROOT_SAFETY_PROBE)
-  return()
-endif()
 
 function(require_clean_portable_prefix)
   file(GLOB prefix_module_owned LIST_DIRECTORIES FALSE
@@ -216,8 +181,11 @@ if(DELTA_OWNERSHIP_PROBE)
     message(FATAL_ERROR "DELTA_STAGE is required")
   endif()
   cmake_path(ABSOLUTE_PATH DELTA_STAGE NORMALIZE OUTPUT_VARIABLE DELTA_STAGE)
+  _pure_glpk_require_no_reparse("${DELTA_STAGE}" "DELTA_STAGE" TRUE)
   cmake_path(GET DELTA_STAGE PARENT_PATH delta_parent)
-  if(NOT "${delta_parent}" STREQUAL "${TEST_ROOT}")
+  _pure_glpk_fold_path("${delta_parent}" folded_delta_parent)
+  _pure_glpk_fold_path("${TEST_ROOT}" folded_test_root)
+  if(NOT folded_delta_parent STREQUAL folded_test_root)
     message(FATAL_ERROR
       "Unsafe DELTA_STAGE; expected a direct child of TEST_ROOT: ${DELTA_STAGE}")
   endif()
@@ -225,18 +193,8 @@ if(DELTA_OWNERSHIP_PROBE)
   require_exact_install_delta(baseline_paths baseline_hashes "${DELTA_STAGE}")
   return()
 endif()
-expect_probe_rejected("source TEST_ROOT" "Unsafe TEST_ROOT"
-  "-DPORTABLE_PURE_PREFIX=${PORTABLE_PURE_PREFIX}"
-  "-DTEST_ROOT=${SOURCE_DIR}" -DROOT_SAFETY_PROBE=ON)
-expect_probe_rejected("binary TEST_ROOT" "Unsafe TEST_ROOT"
-  "-DPORTABLE_PURE_PREFIX=${PORTABLE_PURE_PREFIX}"
-  "-DTEST_ROOT=${BINARY_DIR}" -DROOT_SAFETY_PROBE=ON)
-expect_probe_rejected("portable-prefix TEST_ROOT" "Unsafe TEST_ROOT"
-  "-DPORTABLE_PURE_PREFIX=${PORTABLE_PURE_PREFIX}"
-  "-DTEST_ROOT=${PORTABLE_PURE_PREFIX}" -DROOT_SAFETY_PROBE=ON)
-
-file(REMOVE_RECURSE "${TEST_ROOT}")
-file(MAKE_DIRECTORY "${TEST_ROOT}")
+pure_glpk_run_root_safety_probes("install")
+pure_glpk_reset_contract_test_root("install")
 
 set(contaminated_prefix "${TEST_ROOT}/contaminated prefix")
 file(MAKE_DIRECTORY "${contaminated_prefix}/lib/pure")
@@ -244,7 +202,6 @@ file(WRITE "${contaminated_prefix}/lib/pure/glpk.pure" "stale package\n")
 expect_probe_rejected("GLPK-contaminated portable prefix"
   "Portable Pure prefix already contains pure-glpk-owned files:[ \r\n]+lib/pure/glpk\\.pure"
   "-DPORTABLE_PURE_PREFIX=${contaminated_prefix}"
-  "-DTEST_ROOT=${CONTRACT_ROOT}/prefix ownership probe"
   -DPREFIX_OWNERSHIP_PROBE=ON)
 
 set(stage "${TEST_ROOT}/stage")
@@ -332,7 +289,6 @@ file(WRITE "${out_of_namespace_file}" "not package-owned\n")
 expect_probe_rejected("out-of-namespace installed file"
   "unexpected-outside-owned-globs\\.txt"
   "-DPORTABLE_PURE_PREFIX=${PORTABLE_PURE_PREFIX}"
-  "-DTEST_ROOT=${TEST_ROOT}"
   "-DDELTA_STAGE=${stage}"
   -DDELTA_OWNERSHIP_PROBE=ON)
 file(REMOVE "${out_of_namespace_file}")
