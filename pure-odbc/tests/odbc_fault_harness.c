@@ -19,6 +19,7 @@ enum fault_mode {
   INFO_USMALLINT,
   INFO_UINTEGER,
   INFO_XOPEN_TEXT,
+  INFO_YN_TEXT,
   INFO_HSTMT,
   INFO_HDESC
 };
@@ -274,6 +275,14 @@ static SQLRETURN SQL_API fake_SQLGetInfo(SQLHDBC connection,
       buffer_length == expected_info_buffer_length;
     memcpy(value, xopen_year, sizeof(xopen_year));
     *length = sizeof(xopen_year) - 1;
+    return SQL_SUCCESS;
+  }
+  if (mode == INFO_YN_TEXT) {
+    static const char yn_value[] = "Y";
+    getinfo_request_ok = info_type == expected_info_type &&
+      buffer_length == expected_info_buffer_length;
+    memcpy(value, yn_value, sizeof(yn_value));
+    *length = sizeof(yn_value) - 1;
     return SQL_SUCCESS;
   }
   if (mode == INFO_HSTMT) {
@@ -722,6 +731,14 @@ static void run_getinfo_cases(void)
         "SQL_XOPEN_CLI_YEAR text value is exact");
   release_pure_result(result);
   check(allocation_count == 0, "X/Open text cleanup has zero net allocations");
+
+  result = run_checked_getinfo(INFO_YN_TEXT, SQL_ROW_UPDATES, 1024, false);
+  check(getinfo_request_ok, "SQL_ROW_UPDATES uses the text buffer");
+  check(pure_is_pointer(result, &pointer) &&
+        strcmp((const char *)pointer, "Y") == 0,
+        "SQL_ROW_UPDATES Y/N value is exact");
+  release_pure_result(result);
+  check(allocation_count == 0, "Y/N text cleanup has zero net allocations");
 
   result = run_checked_getinfo(INFO_HSTMT, SQL_DRIVER_HSTMT,
                                sizeof(SQLHANDLE), true);
