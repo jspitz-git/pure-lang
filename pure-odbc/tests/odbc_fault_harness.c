@@ -121,6 +121,8 @@ static int source_catalog_changes;
 static bool enumeration_retry_protocol_ok;
 static bool enumeration_never_stabilizes;
 static bool enumeration_many_truncations;
+static bool enumeration_prefix_churn;
+static bool enumeration_churn_limit_hit;
 static bool enumeration_fail_on_growth;
 static int driver_truncations;
 static bool handle_protocol_ok;
@@ -727,6 +729,8 @@ static SQLRETURN SQL_API fake_SQLGetData(SQLHSTMT statement,
 #define ENUMERATION_RECORDS 12
 #define INITIAL_ENUMERATION_RECORDS 11
 #define MANY_TRUNCATION_RECORDS 20
+#define CHURN_ENUMERATION_RECORDS 4
+#define CHURN_FAKE_CALL_LIMIT 100
 
 static const size_t many_driver_name_lengths[MANY_TRUNCATION_RECORDS] = {
   200U, 300U, 400U, 500U, 600U, 700U, 800U, 900U, 1000U, 1100U,
@@ -810,20 +814,49 @@ static SQLRETURN SQL_API fake_SQLDrivers(SQLHENV environment,
 
   ++driver_calls;
   handle_protocol_ok = handle_protocol_ok && environment == FAKE_ENV;
-  if (direction == SQL_FETCH_FIRST && driver_last_call_truncated &&
-      !driver_catalog_final && !enumeration_never_stabilizes &&
-      !enumeration_many_truncations) {
-    driver_catalog_final = true;
-    ++driver_catalog_changes;
+  if (enumeration_prefix_churn &&
+      driver_calls > CHURN_FAKE_CALL_LIMIT) {
+    enumeration_churn_limit_hit = true;
+    return SQL_ERROR;
   }
-  record_count = enumeration_many_truncations ? MANY_TRUNCATION_RECORDS :
-    (driver_catalog_final ? ENUMERATION_RECORDS :
-     INITIAL_ENUMERATION_RECORDS);
+  if (direction == SQL_FETCH_FIRST && driver_last_call_truncated) {
+    if (enumeration_prefix_churn) {
+      ++driver_catalog_changes;
+    } else if (!driver_catalog_final && !enumeration_never_stabilizes &&
+               !enumeration_many_truncations) {
+      driver_catalog_final = true;
+      ++driver_catalog_changes;
+    }
+  }
+  record_count = enumeration_prefix_churn ? CHURN_ENUMERATION_RECORDS :
+    (enumeration_many_truncations ? MANY_TRUNCATION_RECORDS :
+     (driver_catalog_final ? ENUMERATION_RECORDS :
+      INITIAL_ENUMERATION_RECORDS));
   step = enumeration_record(direction, &driver_record,
                             &driver_last_call_truncated, record_count);
   if (!SQL_SUCCEEDED(step))
     return step;
-  if (enumeration_many_truncations) {
+  if (enumeration_prefix_churn) {
+    int name_result;
+
+    if (driver_record == 3) {
+      name_length = description_capacity > 0 ?
+        (size_t)description_capacity : 1U;
+      make_repeated_text(name, name_length, 'C');
+      memcpy(attr, "Churn=Yes", sizeof("Churn=Yes"));
+      attr_length = sizeof("Churn=Yes") - 1U;
+    } else {
+      name_result = driver_record == 0 ?
+        snprintf(name, sizeof(name), "Churn-Prefix-%02d",
+                 driver_catalog_changes) :
+        snprintf(name, sizeof(name), "Churn-Stable-%02d", driver_record);
+      if (name_result < 0)
+        return SQL_ERROR;
+      memcpy(attr, "Churn-Attr", sizeof("Churn-Attr"));
+      name_length = (size_t)name_result;
+      attr_length = sizeof("Churn-Attr") - 1U;
+    }
+  } else if (enumeration_many_truncations) {
     int attr_result;
 
     name_length = many_driver_name_lengths[driver_record];
@@ -1177,6 +1210,8 @@ static void reset_operation_state(void)
   enumeration_retry_protocol_ok = true;
   enumeration_never_stabilizes = false;
   enumeration_many_truncations = false;
+  enumeration_prefix_churn = false;
+  enumeration_churn_limit_hit = false;
   enumeration_fail_on_growth = false;
   driver_truncations = 0;
   handle_protocol_ok = true;
@@ -2081,6 +2116,20 @@ static void run_enumeration_cases(void)
   check(alloc_env_calls == 1 && free_env_calls == 1 && allocation_count == 0,
         "collector growth failure releases expressions, buffers, and environment");
   fail_next_allocation = 0;
+  release_pure_result(result);
+  if (allocation_count != 0)
+    drain_tracked_allocations();
+
+  reset_operation_state();
+  enumeration_prefix_churn = true;
+  result = odbc_drivers();
+  check(is_odbc_error(result) && !enumeration_churn_limit_hit,
+        "catalog prefix churn fails closed before the fake call limit");
+  check(driver_calls == 44 && driver_catalog_changes == 8 &&
+        driver_truncations == 9 && enumeration_retry_protocol_ok,
+        "catalog prefix churn uses the exact bounded retry budget");
+  check(alloc_env_calls == 1 && free_env_calls == 1 && allocation_count == 0,
+        "catalog prefix churn balances handles and allocations");
   release_pure_result(result);
   if (allocation_count != 0)
     drain_tracked_allocations();

@@ -731,6 +731,7 @@ static pure_expr *odbc_enumeration(bool drivers)
   size_t detail_capacity = 128;
   size_t value_capacity = 0;
   size_t value_count = 0;
+  size_t durable_value_high_water = 0;
   size_t replay_index = 0;
   unsigned int restart_count = 0;
   SQLUSMALLINT direction = SQL_FETCH_FIRST;
@@ -830,7 +831,10 @@ static pure_expr *odbc_enumeration(bool drivers)
     if (!values[value_count])
       goto allocation_failure;
     ++value_count;
-    restart_count = 0;
+    if (value_count > durable_value_high_water) {
+      durable_value_high_water = value_count;
+      restart_count = 0;
+    }
     replay_index = 0;
     replaying = false;
     direction = SQL_FETCH_NEXT;
