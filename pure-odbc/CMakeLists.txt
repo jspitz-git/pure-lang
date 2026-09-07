@@ -511,6 +511,29 @@ if(BUILD_TESTING)
           "-DPURE_ODBC_AUTHORITATIVE_WINDOWS_DIRECTORY=${PURE_ODBC_AUTHORITATIVE_WINDOWS_DIRECTORY}"
           -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/runtime_verifier_contract.cmake"
       )
+      add_test(
+        NAME pure-odbc-source-distribution-contract
+        COMMAND "${CMAKE_COMMAND}"
+          "-DBINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}"
+          "-DCMAKE_EXECUTABLE=${CMAKE_COMMAND}"
+          "-DMAKE_EXECUTABLE=${PURE_ODBC_MAKE_EXECUTABLE}"
+          "-DNINJA_EXECUTABLE=${CMAKE_MAKE_PROGRAM}"
+          "-DC_COMPILER=${CMAKE_C_COMPILER}"
+          "-DPKG_CONFIG_EXECUTABLE=${PKG_CONFIG_EXECUTABLE}"
+          "-DPKG_CONFIG_PATH=${PURE_ODBC_PKG_CONFIG_PATH}"
+          "-DPURE_EXECUTABLE=${PURE_EXECUTABLE}"
+          "-DPURE_RUNTIME_DLL=${PURE_RUNTIME_DLL}"
+          "-DLLVM_READOBJ=${LLVM_READOBJ_EXECUTABLE}"
+          "-DGMP_RUNTIME_DLL=${GMP_RUNTIME_DLL}"
+          "-DODBC_HEADER=${ODBC_HEADER}"
+          "-DODBC_IMPORT_LIBRARY=${ODBC_IMPORT_LIBRARY}"
+          "-DSYSTEM_ODBC_DLL=${SYSTEM_ODBC_DLL}"
+          "-DCLANG64_PREFIX=${PURE_ODBC_CLANG64_PREFIX}"
+          "-DPORTABLE_PURE_PREFIX=${PURE_PREFIX}"
+          "-DWINDOWS_DIRECTORY=${PURE_ODBC_AUTHORITATIVE_WINDOWS_DIRECTORY}"
+          "-DPURE_ODBC_AUTHORITATIVE_WINDOWS_DIRECTORY=${PURE_ODBC_AUTHORITATIVE_WINDOWS_DIRECTORY}"
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/source_dist_contract.cmake"
+      )
     endif()
     set_tests_properties(
       pure-odbc-runner-contract pure-odbc-cleanup-contract
@@ -520,6 +543,7 @@ if(BUILD_TESTING)
       set_tests_properties(
         pure-odbc-cleanup-contract pure-odbc-configure-contract
         pure-odbc-runtime-verifier-contract
+        pure-odbc-source-distribution-contract
         PROPERTIES RUN_SERIAL TRUE)
       set_tests_properties(
         pure-odbc-configure-contract
@@ -527,6 +551,9 @@ if(BUILD_TESTING)
       set_tests_properties(
         pure-odbc-runtime-verifier-contract
         PROPERTIES LABELS "odbc;contract;pe" TIMEOUT 300)
+      set_tests_properties(
+        pure-odbc-source-distribution-contract
+        PROPERTIES LABELS "odbc;contract;source-distribution" TIMEOUT 1800)
     endif()
   endif()
 

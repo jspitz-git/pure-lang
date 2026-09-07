@@ -36,8 +36,18 @@ LIBS = $(ODBCLIB) -lgmp
 MOD_CFLAGS  = $(PIC) $(shell $(PKG_CONFIG) pure --cflags) $(CFLAGS) $(CPPFLAGS)
 MOD_LDFLAGS = $(shell $(PKG_CONFIG) pure --libs) $(LDFLAGS) $(LIBS)
 
-DISTFILES = COPYING COPYING.LESSER Makefile README \
-debian/* examples/*.pure odbc.c odbc.pure
+DISTFILES = CMakeLists.txt COPYING COPYING.LESSER Makefile README WINDOWS.md \
+cmake/Install.cmake cmake/RunPureTest.cmake \
+cmake/VerifyInstalledPackage.cmake cmake/VerifyWindowsDependencies.cmake \
+debian/changelog debian/compat debian/control debian/copyright debian/docs \
+debian/rules debian/source/format debian/watch examples/menagerie.pure \
+odbc.c odbc.pure odbc_api.h tests/ContractTestRoot.cmake \
+tests/access_smoke.pure tests/cleanup_contract.cmake \
+tests/configure_contract.cmake tests/data/people.csv tests/data/Schema.ini \
+tests/install_contract.cmake tests/load.pure tests/odbc_fault_harness.c \
+tests/run_pure_test.c tests/runner_contract.cmake \
+tests/runtime_verifier_contract.cmake tests/smoke.pure \
+tests/source_dist_contract.cmake
 SEDFILES = README
 
 all: odbc$(DLL)
@@ -61,26 +71,44 @@ uninstall:
 date = $(shell date "+%B %-d, %Y")
 datesubst = sed -e "s?@version@?$(version)?g" -e "s?|today|?$(date)?g" < $(1) > $(2)
 
-dist:
-	rm -rf $(dist)
-	mkdir $(dist) && mkdir $(dist)/debian && mkdir $(dist)/examples
-	for x in $(DISTFILES); do ln -sf $$PWD/$$x $(dist)/$$x; done
-	for x in $(SEDFILES); do rm -f $(dist)/$$x; $(call datesubst,$$PWD/$$x,$(dist)/$$x); done
-	rm -f $(dist).tar.gz
-	tar cfzh $(dist).tar.gz $(dist)
-	rm -rf $(dist)
+check-dist-name:
+	@case "$(dist)" in \
+	  pure-odbc-[0-9]*) ;; \
+	  *) echo "refusing unsafe distribution name: $(dist)" >&2; exit 1 ;; \
+	esac; \
+	case "$(dist)" in *..*|*/*|*\\*) \
+	  echo "refusing unsafe distribution name: $(dist)" >&2; exit 1 ;; \
+	esac
+
+dist: check-dist-name
+	rm -rf "$(dist)"
+	mkdir "$(dist)"
+	@for x in $(DISTFILES); do \
+	  test -f "$$x" && test ! -L "$$x" || { \
+	    echo "refusing non-regular distribution input: $$x" >&2; exit 1; \
+	  }; \
+	  target="$(dist)/$$x"; \
+	  mkdir -p "$${target%/*}"; \
+	  cp -p "$$x" "$$target"; \
+	done
+	@for x in $(SEDFILES); do \
+	  $(call datesubst,"$$PWD/$$x","$(dist)/$$x"); \
+	done
+	rm -f "$(dist).tar.gz"
+	tar cfz "$(dist).tar.gz" "$(dist)"
+	rm -rf "$(dist)"
 
 distcheck: dist
-	tar xfz $(dist).tar.gz
-	cd $(dist) && make && make install DESTDIR=./BUILD
-	rm -rf $(dist)
+	tar xfz "$(dist).tar.gz"
+	cd "$(dist)" && make && make install DESTDIR=./BUILD
+	rm -rf "$(dist)"
 
 debsrc = $(shell echo $(dist) | sed -e 's/-$(version)/_$(version)/').orig.tar.gz
 
 deb: $(debsrc) dist
-	tar xfz $(dist).tar.gz
-	cd $(dist) && debuild $(DEBUILD_FLAGS)
-	rm -rf $(dist)
+	tar xfz "$(dist).tar.gz"
+	cd "$(dist)" && debuild $(DEBUILD_FLAGS)
+	rm -rf "$(dist)"
 
 $(debsrc):
 	wget -nv https://bitbucket.org/purelang/pure-lang/downloads/$(dist).tar.gz -O $@
