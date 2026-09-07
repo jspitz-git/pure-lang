@@ -120,7 +120,9 @@ static int driver_catalog_changes;
 static int source_catalog_changes;
 static bool enumeration_retry_protocol_ok;
 static bool enumeration_never_stabilizes;
+static bool enumeration_many_truncations;
 static bool enumeration_fail_on_growth;
+static int driver_truncations;
 static bool handle_protocol_ok;
 static SQLSMALLINT result_cols[4];
 static SQLLEN result_rows[4];
@@ -723,6 +725,19 @@ static SQLRETURN SQL_API fake_SQLGetData(SQLHSTMT statement,
 }
 
 #define ENUMERATION_RECORDS 12
+#define INITIAL_ENUMERATION_RECORDS 11
+#define MANY_TRUNCATION_RECORDS 20
+
+static const size_t many_driver_name_lengths[MANY_TRUNCATION_RECORDS] = {
+  200U, 300U, 400U, 500U, 600U, 700U, 800U, 900U, 1000U, 1100U,
+  1200U, 1300U, 1400U, 1500U, 1600U, 1700U, 1800U, 1900U, 2000U,
+  2100U
+};
+
+static const char many_driver_name_characters[MANY_TRUNCATION_RECORDS] = {
+  'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j',
+  'k', 'l', 'm', 'n', 'o', 'p', 'q', 'r', 's', 't'
+};
 
 static void make_repeated_text(char *buffer, size_t length, char value)
 {
@@ -756,7 +771,8 @@ static bool copy_enumeration_text(SQLCHAR *output, SQLSMALLINT capacity,
 }
 
 static SQLRETURN enumeration_record(SQLUSMALLINT direction, int *record,
-                                    bool *last_call_truncated)
+                                    bool *last_call_truncated,
+                                    int record_count)
 {
   if (direction == SQL_FETCH_FIRST)
     *record = 0;
@@ -768,7 +784,7 @@ static SQLRETURN enumeration_record(SQLUSMALLINT direction, int *record,
     return SQL_ERROR;
   }
   *last_call_truncated = false;
-  if (*record >= ENUMERATION_RECORDS)
+  if (*record >= record_count)
     return SQL_NO_DATA;
   return SQL_SUCCESS;
 }
@@ -782,48 +798,73 @@ static SQLRETURN SQL_API fake_SQLDrivers(SQLHENV environment,
                                          SQLSMALLINT attributes_capacity,
                                          SQLSMALLINT *attributes_length)
 {
-  char name[321];
+  char name[2101];
   char attr[513];
   size_t name_length;
   size_t attr_length;
   bool name_truncated;
   bool attr_truncated;
   SQLRETURN step;
+  int record_count;
+  int logical_record;
 
   ++driver_calls;
   handle_protocol_ok = handle_protocol_ok && environment == FAKE_ENV;
   if (direction == SQL_FETCH_FIRST && driver_last_call_truncated &&
-      !driver_catalog_final) {
+      !driver_catalog_final && !enumeration_never_stabilizes &&
+      !enumeration_many_truncations) {
     driver_catalog_final = true;
     ++driver_catalog_changes;
   }
+  record_count = enumeration_many_truncations ? MANY_TRUNCATION_RECORDS :
+    (driver_catalog_final ? ENUMERATION_RECORDS :
+     INITIAL_ENUMERATION_RECORDS);
   step = enumeration_record(direction, &driver_record,
-                            &driver_last_call_truncated);
+                            &driver_last_call_truncated, record_count);
   if (!SQL_SUCCEEDED(step))
     return step;
-  if (driver_record == 3) {
-    if (enumeration_never_stabilizes) {
+  if (enumeration_many_truncations) {
+    int attr_result;
+
+    name_length = many_driver_name_lengths[driver_record];
+    make_repeated_text(name, name_length,
+                       many_driver_name_characters[driver_record]);
+    attr_result = snprintf(attr, sizeof(attr), "Many-Attr-%02d",
+                           driver_record);
+    if (attr_result < 0)
+      return SQL_ERROR;
+    attr_length = (size_t)attr_result;
+  } else {
+    bool inserted = driver_catalog_final && driver_record == 1;
+
+    logical_record = driver_catalog_final && driver_record > 1 ?
+      driver_record - 1 : driver_record;
+    if (enumeration_never_stabilizes && driver_record == 3) {
       name_length = description_capacity > 0 ?
         (size_t)description_capacity : 1U;
       make_repeated_text(name, name_length, 'D');
       attr_length = 12;
       memcpy(attr, "Unstable=Yes", attr_length + 1);
-    } else {
+    } else if (logical_record == 3) {
       make_repeated_text(name, 320, 'D');
       make_repeated_text(attr, 512, 'A');
       name_length = 320;
       attr_length = 512;
+    } else if (inserted) {
+      memcpy(name, "Driver-Inserted", sizeof("Driver-Inserted"));
+      memcpy(attr, "Attr-Inserted", sizeof("Attr-Inserted"));
+      name_length = sizeof("Driver-Inserted") - 1U;
+      attr_length = sizeof("Attr-Inserted") - 1U;
+    } else {
+      int name_result = snprintf(name, sizeof(name), "Driver-%02d",
+                                 logical_record);
+      int attr_result = snprintf(attr, sizeof(attr), "Attr-%02d",
+                                 logical_record);
+      if (name_result < 0 || attr_result < 0)
+        return SQL_ERROR;
+      name_length = (size_t)name_result;
+      attr_length = (size_t)attr_result;
     }
-  } else {
-    const char *catalog = driver_catalog_final ? "Final" : "Initial";
-    int name_result = snprintf(name, sizeof(name), "Driver-%s-%02d",
-                               catalog, driver_record);
-    int attr_result = snprintf(attr, sizeof(attr), "Attr-%s-%02d",
-                               catalog, driver_record);
-    if (name_result < 0 || attr_result < 0)
-      return SQL_ERROR;
-    name_length = (size_t)name_result;
-    attr_length = (size_t)attr_result;
   }
   name_truncated = copy_enumeration_text(description, description_capacity,
                                          description_length, name,
@@ -832,6 +873,8 @@ static SQLRETURN SQL_API fake_SQLDrivers(SQLHENV environment,
                                          attributes_length, attr,
                                          attr_length, true);
   driver_last_call_truncated = name_truncated || attr_truncated;
+  if (driver_last_call_truncated)
+    ++driver_truncations;
   return driver_last_call_truncated ? SQL_SUCCESS_WITH_INFO : SQL_SUCCESS;
 }
 
@@ -851,6 +894,8 @@ static SQLRETURN SQL_API fake_SQLDataSources(SQLHENV environment,
   bool name_truncated;
   bool description_truncated;
   SQLRETURN step;
+  int record_count;
+  int logical_record;
 
   ++source_calls;
   handle_protocol_ok = handle_protocol_ok && environment == FAKE_ENV;
@@ -859,23 +904,31 @@ static SQLRETURN SQL_API fake_SQLDataSources(SQLHENV environment,
     source_catalog_final = true;
     ++source_catalog_changes;
   }
+  record_count = source_catalog_final ? ENUMERATION_RECORDS :
+    INITIAL_ENUMERATION_RECORDS;
   step = enumeration_record(direction, &source_record,
-                            &source_last_call_truncated);
+                            &source_last_call_truncated, record_count);
   if (!SQL_SUCCEEDED(step))
     return step;
-  if (source_record == 5) {
+  logical_record = source_catalog_final && source_record > 2 ?
+    source_record - 1 : source_record;
+  if (logical_record == 5) {
     make_repeated_text(source_name, 384, 'S');
     make_repeated_text(source_description, 448, 'E');
     source_name_length = 384;
     source_description_length = 448;
+  } else if (source_catalog_final && source_record == 2) {
+    memcpy(source_name, "Source-Inserted", sizeof("Source-Inserted"));
+    memcpy(source_description, "Description-Inserted",
+           sizeof("Description-Inserted"));
+    source_name_length = sizeof("Source-Inserted") - 1U;
+    source_description_length = sizeof("Description-Inserted") - 1U;
   } else {
-    const char *catalog = source_catalog_final ? "Final" : "Initial";
     int name_result = snprintf(source_name, sizeof(source_name),
-                               "Source-%s-%02d", catalog, source_record);
+                               "Source-%02d", logical_record);
     int description_result = snprintf(source_description,
-                                      sizeof(source_description),
-                                      "Description-%s-%02d", catalog,
-                                      source_record);
+                                       sizeof(source_description),
+                                       "Description-%02d", logical_record);
     if (name_result < 0 || description_result < 0)
       return SQL_ERROR;
     source_name_length = (size_t)name_result;
@@ -1123,7 +1176,9 @@ static void reset_operation_state(void)
   source_catalog_changes = 0;
   enumeration_retry_protocol_ok = true;
   enumeration_never_stabilizes = false;
+  enumeration_many_truncations = false;
   enumeration_fail_on_growth = false;
+  driver_truncations = 0;
   handle_protocol_ok = true;
   memset(result_cols, 0, sizeof(result_cols));
   memset(result_rows, 0, sizeof(result_rows));
@@ -1261,15 +1316,13 @@ static bool repeated_character_region(const char *value, size_t length,
 static bool driver_list_is_exact(pure_expr *value)
 {
   static const char *const expected_names[ENUMERATION_RECORDS] = {
-    "Driver-Final-00", "Driver-Final-01", "Driver-Final-02", NULL,
-    "Driver-Final-04", "Driver-Final-05", "Driver-Final-06",
-    "Driver-Final-07", "Driver-Final-08", "Driver-Final-09",
-    "Driver-Final-10", "Driver-Final-11"
+    "Driver-00", "Driver-Inserted", "Driver-01", "Driver-02", NULL,
+    "Driver-04", "Driver-05", "Driver-06", "Driver-07", "Driver-08",
+    "Driver-09", "Driver-10"
   };
   static const char *const expected_attributes[ENUMERATION_RECORDS] = {
-    "Attr-Final-00", "Attr-Final-01", "Attr-Final-02", NULL,
-    "Attr-Final-04", "Attr-Final-05", "Attr-Final-06", "Attr-Final-07",
-    "Attr-Final-08", "Attr-Final-09", "Attr-Final-10", "Attr-Final-11"
+    "Attr-00", "Attr-Inserted", "Attr-01", "Attr-02", NULL, "Attr-04",
+    "Attr-05", "Attr-06", "Attr-07", "Attr-08", "Attr-09", "Attr-10"
   };
   pure_expr **records = NULL;
   size_t record_count = 0;
@@ -1289,7 +1342,7 @@ static bool driver_list_is_exact(pure_expr *value)
       field_count == 2 && pure_is_string(fields[0], &name) &&
       pure_is_listv(fields[1], &attribute_count, &attributes) &&
       attribute_count == 1 && pure_is_string(attributes[0], &attribute);
-    if (result && i == 3)
+    if (result && i == 4)
       result = repeated_character_string(name, 320, 'D') &&
         repeated_character_string(attribute, 512, 'A');
     else if (result)
@@ -1305,18 +1358,15 @@ static bool driver_list_is_exact(pure_expr *value)
 static bool source_list_is_exact(pure_expr *value)
 {
   static const char *const expected_names[ENUMERATION_RECORDS] = {
-    "Source-Final-00", "Source-Final-01", "Source-Final-02",
-    "Source-Final-03", "Source-Final-04", NULL, "Source-Final-06",
-    "Source-Final-07", "Source-Final-08", "Source-Final-09",
-    "Source-Final-10", "Source-Final-11"
+    "Source-00", "Source-01", "Source-Inserted", "Source-02", "Source-03",
+    "Source-04", NULL, "Source-06", "Source-07", "Source-08", "Source-09",
+    "Source-10"
   };
   static const char *const expected_descriptions[ENUMERATION_RECORDS] = {
-    "Description-Final-00", "Description-Final-01",
-    "Description-Final-02", "Description-Final-03",
-    "Description-Final-04", NULL, "Description-Final-06",
-    "Description-Final-07", "Description-Final-08",
-    "Description-Final-09", "Description-Final-10",
-    "Description-Final-11"
+    "Description-00", "Description-01", "Description-Inserted",
+    "Description-02", "Description-03", "Description-04", NULL,
+    "Description-06", "Description-07", "Description-08", "Description-09",
+    "Description-10"
   };
   pure_expr **records = NULL;
   size_t record_count = 0;
@@ -1333,12 +1383,58 @@ static bool source_list_is_exact(pure_expr *value)
     result = pure_is_tuplev(records[i], &field_count, &fields) &&
       field_count == 2 && pure_is_string(fields[0], &name) &&
       pure_is_string(fields[1], &description);
-    if (result && i == 5)
+    if (result && i == 6)
       result = repeated_character_string(name, 384, 'S') &&
         repeated_character_string(description, 448, 'E');
     else if (result)
       result = strcmp(name, expected_names[i]) == 0 &&
         strcmp(description, expected_descriptions[i]) == 0;
+    free(fields);
+  }
+  free(records);
+  return result;
+}
+
+static bool many_truncation_driver_list_is_exact(pure_expr *value)
+{
+  static const size_t expected_name_lengths[MANY_TRUNCATION_RECORDS] = {
+    200U, 300U, 400U, 500U, 600U, 700U, 800U, 900U, 1000U, 1100U,
+    1200U, 1300U, 1400U, 1500U, 1600U, 1700U, 1800U, 1900U, 2000U,
+    2100U
+  };
+  static const char expected_name_characters[MANY_TRUNCATION_RECORDS] = {
+    'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j',
+    'k', 'l', 'm', 'n', 'o', 'p', 'q', 'r', 's', 't'
+  };
+  static const char *const expected_attributes[MANY_TRUNCATION_RECORDS] = {
+    "Many-Attr-00", "Many-Attr-01", "Many-Attr-02", "Many-Attr-03",
+    "Many-Attr-04", "Many-Attr-05", "Many-Attr-06", "Many-Attr-07",
+    "Many-Attr-08", "Many-Attr-09", "Many-Attr-10", "Many-Attr-11",
+    "Many-Attr-12", "Many-Attr-13", "Many-Attr-14", "Many-Attr-15",
+    "Many-Attr-16", "Many-Attr-17", "Many-Attr-18", "Many-Attr-19"
+  };
+  pure_expr **records = NULL;
+  size_t record_count = 0;
+  size_t i;
+  bool result = value && pure_is_listv(value, &record_count, &records) &&
+    record_count == MANY_TRUNCATION_RECORDS;
+
+  for (i = 0; result && i < record_count; ++i) {
+    pure_expr **fields = NULL;
+    pure_expr **attributes = NULL;
+    size_t field_count = 0;
+    size_t attribute_count = 0;
+    const char *name = NULL;
+    const char *attribute = NULL;
+
+    result = pure_is_tuplev(records[i], &field_count, &fields) &&
+      field_count == 2 && pure_is_string(fields[0], &name) &&
+      pure_is_listv(fields[1], &attribute_count, &attributes) &&
+      attribute_count == 1 && pure_is_string(attributes[0], &attribute) &&
+      repeated_character_string(name, expected_name_lengths[i],
+                                expected_name_characters[i]) &&
+      strcmp(attribute, expected_attributes[i]) == 0;
+    free(attributes);
     free(fields);
   }
   free(records);
@@ -1953,9 +2049,9 @@ static void run_enumeration_cases(void)
   result = odbc_drivers();
   check(driver_list_is_exact(result),
         "driver enumeration returns every final-catalog tuple in exact order");
-  check(driver_calls == 18 && driver_catalog_changes == 1 &&
+  check(driver_calls == 19 && driver_catalog_changes == 1 &&
         enumeration_retry_protocol_ok,
-        "driver truncation restarts with FIRST and replays after catalog change");
+        "driver truncation replays with FIRST across an inserted catalog record");
   check(alloc_env_calls == 1 && free_env_calls == 1 && handle_protocol_ok,
         "driver enumeration balances its environment handle");
   release_pure_result(result);
@@ -1966,9 +2062,9 @@ static void run_enumeration_cases(void)
   result = odbc_sources();
   check(source_list_is_exact(result),
         "data-source enumeration returns every final-catalog tuple in exact order");
-  check(source_calls == 20 && source_catalog_changes == 1 &&
+  check(source_calls == 22 && source_catalog_changes == 1 &&
         enumeration_retry_protocol_ok,
-        "data-source truncation restarts with FIRST and replays after catalog change");
+        "data-source truncation replays with FIRST across an inserted catalog record");
   check(alloc_env_calls == 1 && free_env_calls == 1 && handle_protocol_ok,
         "data-source enumeration balances its environment handle");
   release_pure_result(result);
@@ -1985,6 +2081,21 @@ static void run_enumeration_cases(void)
   check(alloc_env_calls == 1 && free_env_calls == 1 && allocation_count == 0,
         "collector growth failure releases expressions, buffers, and environment");
   fail_next_allocation = 0;
+  release_pure_result(result);
+  if (allocation_count != 0)
+    drain_tracked_allocations();
+
+  reset_operation_state();
+  enumeration_many_truncations = true;
+  result = odbc_drivers();
+  check(many_truncation_driver_list_is_exact(result),
+        "stable driver catalog survives more than sixteen truncation points");
+  check(driver_calls == 231 &&
+        driver_truncations == MANY_TRUNCATION_RECORDS &&
+        enumeration_retry_protocol_ok,
+        "each stable driver truncation restarts with FIRST and preserves order");
+  check(alloc_env_calls == 1 && free_env_calls == 1 && allocation_count == 0,
+        "many-truncation enumeration balances handles and allocations");
   release_pure_result(result);
   if (allocation_count != 0)
     drain_tracked_allocations();

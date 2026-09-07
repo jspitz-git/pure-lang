@@ -830,6 +830,7 @@ static pure_expr *odbc_enumeration(bool drivers)
     if (!values[value_count])
       goto allocation_failure;
     ++value_count;
+    restart_count = 0;
     replay_index = 0;
     replaying = false;
     direction = SQL_FETCH_NEXT;
