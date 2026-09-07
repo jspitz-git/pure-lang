@@ -16,21 +16,42 @@ endfunction()
 function(require_no_forbidden_file path)
   set(needles)
   set(max_needle_bytes 0)
+  set(ascii_upper_hex
+    41 42 43 44 45 46 47 48 49 4a 4b 4c 4d
+    4e 4f 50 51 52 53 54 55 56 57 58 59 5a)
+  set(ascii_lower_hex
+    61 62 63 64 65 66 67 68 69 6a 6b 6c 6d
+    6e 6f 70 71 72 73 74 75 76 77 78 79 7a)
   foreach(forbidden IN LISTS FORBIDDEN_PATHS)
     cmake_path(CONVERT "${forbidden}" TO_CMAKE_PATH_LIST normalized NORMALIZE)
     string(REPLACE "/" "\\" native "${normalized}")
     foreach(spelling IN ITEMS "${normalized}" "${native}")
-      string(TOLOWER "${spelling}" lower)
-      string(TOUPPER "${spelling}" upper)
-      foreach(variant IN ITEMS "${spelling}" "${lower}" "${upper}")
-        string(HEX "${variant}" needle)
-        list(APPEND needles "${needle}")
-        string(LENGTH "${needle}" needle_hex_length)
-        math(EXPR needle_bytes "${needle_hex_length} / 2")
-        if(needle_bytes GREATER max_needle_bytes)
-          set(max_needle_bytes "${needle_bytes}")
+      string(HEX "${spelling}" spelling_hex)
+      string(LENGTH "${spelling_hex}" needle_hex_length)
+      math(EXPR needle_bytes "${needle_hex_length} / 2")
+      if(needle_bytes GREATER max_needle_bytes)
+        set(max_needle_bytes "${needle_bytes}")
+      endif()
+      set(needle)
+      set(hex_offset 0)
+      while(hex_offset LESS needle_hex_length)
+        string(SUBSTRING "${spelling_hex}" ${hex_offset} 2 byte)
+        list(FIND ascii_upper_hex "${byte}" letter_index)
+        if(letter_index GREATER_EQUAL 0)
+          list(GET ascii_lower_hex ${letter_index} other_case)
+          string(APPEND needle "(${byte}|${other_case}):")
+        else()
+          list(FIND ascii_lower_hex "${byte}" letter_index)
+          if(letter_index GREATER_EQUAL 0)
+            list(GET ascii_upper_hex ${letter_index} other_case)
+            string(APPEND needle "(${other_case}|${byte}):")
+          else()
+            string(APPEND needle "${byte}:")
+          endif()
         endif()
-      endforeach()
+        math(EXPR hex_offset "${hex_offset} + 2")
+      endwhile()
+      list(APPEND needles "${needle}")
     endforeach()
   endforeach()
   list(REMOVE_DUPLICATES needles)
@@ -47,10 +68,10 @@ function(require_no_forbidden_file path)
     math(EXPR read_bytes "${chunk_bytes} + ${overlap_bytes}")
     file(READ "${path}" chunk OFFSET ${offset} LIMIT ${read_bytes} HEX)
     string(TOLOWER "${chunk}" chunk)
+    string(REGEX REPLACE "([0-9a-f][0-9a-f])" "\\1:" chunk "${chunk}")
     foreach(needle IN LISTS needles)
-      string(TOLOWER "${needle}" needle)
-      string(FIND "${chunk}" "${needle}" leak_offset)
-      if(NOT leak_offset EQUAL -1)
+      string(REGEX MATCH "${needle}" leak "${chunk}")
+      if(NOT "${leak}" STREQUAL "")
         message(FATAL_ERROR
           "Checkout path leaked through generated file ${path}")
       endif()
@@ -96,6 +117,40 @@ if(DEFINED PURE_ODBC_SCAN_OUTPUT_PROBE)
   return()
 endif()
 
+if(DEFINED PURE_ODBC_MIXED_CASE_SCAN_SELF_TEST)
+  if(NOT DEFINED PURE_ODBC_SCAN_TEST_FILE OR
+      "${PURE_ODBC_SCAN_TEST_FILE}" STREQUAL "")
+    message(FATAL_ERROR "PURE_ODBC_SCAN_TEST_FILE is required")
+  endif()
+  set(mixed_forbidden "C:/Pure-Lang/Checkout-Source")
+  set(mixed_embedding "c:/pUrE-LaNg/cHeCkOuT-sOuRcE")
+  string(REPEAT "binary-prefix-" 700000 mixed_prefix)
+  file(WRITE "${PURE_ODBC_SCAN_TEST_FILE}"
+    "${mixed_prefix}${mixed_embedding}-binary-suffix")
+  unset(mixed_prefix)
+  execute_process(
+    COMMAND "${CMAKE_COMMAND}"
+      "-DPURE_ODBC_SCAN_FILE_PROBE=${PURE_ODBC_SCAN_TEST_FILE}"
+      "-DPURE_ODBC_SCAN_FORBIDDEN=${mixed_forbidden}"
+      -P "${CMAKE_CURRENT_LIST_FILE}"
+    RESULT_VARIABLE mixed_result
+    OUTPUT_VARIABLE mixed_output
+    ERROR_VARIABLE mixed_error
+    ENCODING UTF-8)
+  file(REMOVE "${PURE_ODBC_SCAN_TEST_FILE}")
+  if(mixed_result EQUAL 0)
+    message(FATAL_ERROR
+      "Binary scanner accepted an arbitrary ASCII case mixture")
+  endif()
+  if(NOT mixed_error MATCHES "Checkout path leaked")
+    message(FATAL_ERROR
+      "Mixed-case scanner probe failed with the wrong diagnostic\n"
+      "${mixed_output}${mixed_error}")
+  endif()
+  message(STATUS "mixed-case binary scanner regression passed")
+  return()
+endif()
+
 include("${CMAKE_CURRENT_LIST_DIR}/ContractTestRoot.cmake")
 
 set(required_directories
@@ -135,6 +190,21 @@ set(extracted_source "${extract_parent}/pure-odbc-0.10")
 set(extracted_build "${TEST_ROOT}/b")
 file(MAKE_DIRECTORY "${checkout_source}" "${extract_parent}")
 set(FORBIDDEN_PATHS "${SOURCE_DIR}" "${checkout_source}")
+
+execute_process(
+  COMMAND "${CMAKE_COMMAND}"
+    -DPURE_ODBC_MIXED_CASE_SCAN_SELF_TEST=ON
+    "-DPURE_ODBC_SCAN_TEST_FILE=${dist_root}/mixed-case-scan-probe.bin"
+    -P "${CMAKE_CURRENT_LIST_FILE}"
+  RESULT_VARIABLE mixed_self_test_result
+  OUTPUT_VARIABLE mixed_self_test_output
+  ERROR_VARIABLE mixed_self_test_error
+  ENCODING UTF-8)
+if(NOT mixed_self_test_result EQUAL 0)
+  message(FATAL_ERROR
+    "Mixed-case binary scanner self-test failed (${mixed_self_test_result})\n"
+    "${mixed_self_test_output}${mixed_self_test_error}")
+endif()
 
 set(scan_probe "${dist_root}/large-scan-probe.bin")
 string(REPEAT "x" 9437184 scan_probe_prefix)
