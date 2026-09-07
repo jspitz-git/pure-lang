@@ -15,7 +15,7 @@ set(required_files
   OMP_DLL_SOURCE
   GLPK_LICENSE_SOURCE
   SUITESPARSE_LICENSE_SOURCE
-  LLVM_LICENSE_SOURCE
+  OPENMP_LICENSE_SOURCE
   RUN_PURE_TEST_SCRIPT
   WINDOWS_DEPENDENCY_VERIFIER
 )
@@ -50,7 +50,7 @@ set(expected_owned_files
   share/doc/pure-glpk/WINDOWS.md
   share/doc/pure-glpk/examples/lp.pure
   share/doc/pure-glpk/glpk-LICENSE
-  share/doc/pure-glpk/llvm-openmp-LICENSE
+  share/doc/pure-glpk/openmp-LICENSE
   share/doc/pure-glpk/suitesparse-LICENSE
   share/doc/pure-glpk/tests/smoke.pure
 )
@@ -67,7 +67,7 @@ set(owned_sources
   "${WINDOWS_SOURCE}"
   "${EXAMPLE_SOURCE}"
   "${GLPK_LICENSE_SOURCE}"
-  "${LLVM_LICENSE_SOURCE}"
+  "${OPENMP_LICENSE_SOURCE}"
   "${SUITESPARSE_LICENSE_SOURCE}"
   "${TEST_SOURCE}"
 )

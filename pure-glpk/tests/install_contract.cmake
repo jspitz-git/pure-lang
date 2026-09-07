@@ -4,7 +4,7 @@ foreach(required IN ITEMS
     COPYING_SOURCE WINDOWS_SOURCE EXAMPLE_SOURCE TEST_SOURCE GLPK_DLL_SOURCE
     COLAMD_DLL_SOURCE AMD_DLL_SOURCE SUITESPARSECONFIG_DLL_SOURCE
     OMP_DLL_SOURCE GLPK_LICENSE_SOURCE SUITESPARSE_LICENSE_SOURCE
-    LLVM_LICENSE_SOURCE)
+    OPENMP_LICENSE_SOURCE)
   if(NOT DEFINED ${required} OR "${${required}}" STREQUAL "")
     message(FATAL_ERROR "${required} is required")
   endif()
@@ -43,7 +43,7 @@ set(self_arguments
   "-DOMP_DLL_SOURCE=${OMP_DLL_SOURCE}"
   "-DGLPK_LICENSE_SOURCE=${GLPK_LICENSE_SOURCE}"
   "-DSUITESPARSE_LICENSE_SOURCE=${SUITESPARSE_LICENSE_SOURCE}"
-  "-DLLVM_LICENSE_SOURCE=${LLVM_LICENSE_SOURCE}"
+  "-DOPENMP_LICENSE_SOURCE=${OPENMP_LICENSE_SOURCE}"
 )
 function(expect_probe_rejected label expected_diagnostic)
   execute_process(
@@ -194,7 +194,7 @@ set(verifier_arguments
   "-DOMP_DLL_SOURCE=${OMP_DLL_SOURCE}"
   "-DGLPK_LICENSE_SOURCE=${GLPK_LICENSE_SOURCE}"
   "-DSUITESPARSE_LICENSE_SOURCE=${SUITESPARSE_LICENSE_SOURCE}"
-  "-DLLVM_LICENSE_SOURCE=${LLVM_LICENSE_SOURCE}"
+  "-DOPENMP_LICENSE_SOURCE=${OPENMP_LICENSE_SOURCE}"
   "-DRUN_PURE_TEST_SCRIPT=${SOURCE_DIR}/cmake/RunPureTest.cmake"
   "-DWINDOWS_DEPENDENCY_VERIFIER=${SOURCE_DIR}/cmake/VerifyWindowsDependencies.cmake"
 )
@@ -204,6 +204,7 @@ function(run_verifier stage_prefix result_var diagnostics_var)
     COMMAND "${CMAKE_COMMAND}"
       "-DSTAGE_PREFIX=${stage_prefix}"
       ${verifier_arguments}
+      ${ARGN}
       -P "${verifier}"
     RESULT_VARIABLE result
     OUTPUT_VARIABLE output
@@ -219,6 +220,19 @@ if(NOT pristine_result EQUAL 0)
   message(FATAL_ERROR
     "Untouched installed package was rejected (${pristine_result})\n"
     "${pristine_diagnostics}")
+endif()
+
+run_verifier("${stage}" wrong_openmp_license_result wrong_openmp_license_diagnostics
+  "-DOPENMP_LICENSE_SOURCE=${GLPK_LICENSE_SOURCE}")
+if(wrong_openmp_license_result EQUAL 0)
+  message(FATAL_ERROR
+    "Install verifier accepted a license from a package other than OpenMP")
+endif()
+if(NOT wrong_openmp_license_diagnostics MATCHES
+    "Installed pure-glpk hash mismatch for share/doc/pure-glpk/openmp-LICENSE")
+  message(FATAL_ERROR
+    "Wrong OpenMP license source produced the wrong diagnostic:\n"
+    "${wrong_openmp_license_diagnostics}")
 endif()
 
 set(extra_file "${stage}/share/doc/pure-glpk/unexpected.txt")

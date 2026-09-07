@@ -116,3 +116,23 @@ Build, validate, and package `pure-glpk` with a controlled Windows GLPK runtime.
   complete verifier then passed for the physical Unicode-and-space stage: 15
   exact package-owned files and hashes, deduplicated GMP/zlib, solver and
   callback smoke coverage, and exact staged PE imports.
+- 2026-09-07: Review found that the Windows job installed no MSYS `make`
+  package even though `BUILD_TESTING=ON` registers a source-distribution
+  contract whose configure requires `find_program(make)`. CI now installs
+  `make` explicitly, and the Windows guide lists it as a prerequisite.
+- 2026-09-07: Review also traced `libomp.dll` to
+  `mingw-w64-clang-x86_64-llvm-openmp 22.1.8-1`. Its owning notice is
+  `share/licenses/openmp/LICENSE`; the previously staged LLVM notice belongs
+  to a different package and has a different SHA-256. Installation, manifest,
+  hash, contract, CI, and documentation inputs now use the OpenMP notice under
+  `openmp-LICENSE`. The install contract rejects a wrong-package license
+  source with an exact OpenMP-license hash diagnostic.
+- 2026-09-07: Fresh review-fix verification configured a clean strict Release
+  tree with Clang 22.1.8, built with four workers, verified exact imports for
+  eight AMD64 binaries, and passed all seven sanitized `glpk` tests in 52.82
+  seconds. A newly recreated Unicode-and-space final stage passed its complete
+  verifier through the documented short-path helper; its installed
+  `openmp-LICENSE` SHA-256 was
+  `fdad1758a9e1f9d5a81e18879b3406772115edc92c24bfa36b70c654f325e8e4`,
+  equal to the owner package source, and the obsolete conflated notice was
+  absent.

@@ -1,9 +1,12 @@
 # pure-glpk on native Windows
 
 The supported native Windows build uses the MSYS2 CLANG64 compiler and
-`mingw-w64-clang-x86_64-glpk`. Building requires MSYS2, but the installed
-module and solver tests run without an MSYS2 directory in `PATH`. The build
-consumes an already installed portable Pure SDK.
+`mingw-w64-clang-x86_64-glpk`. Install the MSYS `make` package as well as the
+CLANG64 compiler, CMake, Ninja, pkgconf, LLVM, GMP, and GLPK packages; the
+source-distribution contract runs `make dist` when `BUILD_TESTING=ON`.
+Building requires MSYS2, but the installed module and solver tests run without
+an MSYS2 directory in `PATH`. The build consumes an already installed portable
+Pure SDK.
 
 ## Configure, build, and test
 
@@ -64,10 +67,36 @@ Copy-Item -Path "$purePrefix/*" -Destination $stage -Recurse
 & C:/msys64/clang64/bin/cmake.exe --install $build --prefix $stage `
   --component documentation
 
+$verifyStage = $stage
+if ($verifyStage -match '[^\x00-\x7f]') {
+  if (-not ('PureGlpkWindowsPath' -as [type])) {
+    Add-Type @'
+using System;
+using System.Runtime.InteropServices;
+using System.Text;
+public static class PureGlpkWindowsPath {
+  [DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true)]
+  public static extern uint GetShortPathName(
+    string longPath, StringBuilder shortPath, int bufferLength);
+}
+'@
+  }
+  $buffer = [Text.StringBuilder]::new(32768)
+  $length = [PureGlpkWindowsPath]::GetShortPathName(
+    $stage, $buffer, $buffer.Capacity)
+  if ($length -eq 0 -or $length -ge $buffer.Capacity) {
+    throw "Cannot obtain a Windows short alias for $stage"
+  }
+  $verifyStage = $buffer.ToString()
+  if ($verifyStage -eq $stage -or $verifyStage -match '[^\x00-\x7f]') {
+    throw "No ASCII short alias is available for $stage; choose an ASCII stage path"
+  }
+}
+
 Remove-Item Env:PURELIB -ErrorAction SilentlyContinue
-$env:Path = "$stage/bin;$env:SystemRoot/System32/WindowsPowerShell/v1.0;$env:SystemRoot/System32;$env:SystemRoot"
+$env:Path = "$verifyStage/bin;$env:SystemRoot/System32/WindowsPowerShell/v1.0;$env:SystemRoot/System32;$env:SystemRoot"
 & C:/msys64/clang64/bin/cmake.exe `
-  "-DSTAGE_PREFIX=$stage" `
+  "-DSTAGE_PREFIX=$verifyStage" `
   -DSOURCE_RUNTIME_DIR=C:/msys64/clang64/bin `
   -DLLVM_READOBJ=C:/msys64/clang64/bin/llvm-readobj.exe `
   "-DGLPK_MODULE_SOURCE=$build/glpk.dll" `
@@ -84,7 +113,7 @@ $env:Path = "$stage/bin;$env:SystemRoot/System32/WindowsPowerShell/v1.0;$env:Sys
   -DOMP_DLL_SOURCE=C:/msys64/clang64/bin/libomp.dll `
   -DGLPK_LICENSE_SOURCE=C:/msys64/clang64/share/licenses/glpk/LICENSE `
   -DSUITESPARSE_LICENSE_SOURCE=C:/msys64/clang64/share/licenses/suitesparse/LICENSE `
-  -DLLVM_LICENSE_SOURCE=C:/msys64/clang64/share/licenses/llvm/LICENSE `
+  -DOPENMP_LICENSE_SOURCE=C:/msys64/clang64/share/licenses/openmp/LICENSE `
   -DRUN_PURE_TEST_SCRIPT=pure-glpk/cmake/RunPureTest.cmake `
   -DWINDOWS_DEPENDENCY_VERIFIER=pure-glpk/cmake/VerifyWindowsDependencies.cmake `
   -P pure-glpk/cmake/VerifyInstalledPackage.cmake
@@ -95,10 +124,12 @@ resolve correctly. The verifier requires every argument shown, compares every
 installed package file with its declared source by SHA-256, runs the staged
 solver and callback test under the sanitized environment, and reruns the exact
 PE audit. Pure 0.68 does not reliably parse its libraries when its executable
-prefix contains non-ASCII characters. For such a physical stage, obtain its
-Windows 8.3 alias with `GetShortPathNameW` and use that ASCII alias for `$stage`
-when setting `PATH` and invoking the verifier; the files being verified remain
-in the original Unicode directory. Ordinary spaces need no alias.
+prefix contains non-ASCII characters. The executable helper above calls
+`GetShortPathNameW` through .NET interop and uses the returned ASCII alias for
+`PATH` and verifier arguments; the files being verified remain in the original
+Unicode directory. If 8.3 aliases are disabled or the result is not ASCII, the
+helper fails closed and directs the user to choose an ASCII stage path.
+Ordinary spaces need no alias.
 
 ## Runtime and package ownership
 
@@ -128,7 +159,9 @@ imports both fail.
 
 `libgmp-10.dll` and `zlib1.dll` belong to the portable Pure SDK. They are not
 installed by pure-glpk and must remain byte-identical to the selected CLANG64
-files. pure-glpk owns exactly these 15 files:
+files. `libomp.dll` and `share/licenses/openmp/LICENSE` are both owned by the
+CLANG64 `llvm-openmp` package; the distinct notice from the `llvm` package is
+not a substitute and is not installed. pure-glpk owns exactly these 15 files:
 
 ```text
 bin/libamd.dll
@@ -143,7 +176,7 @@ share/doc/pure-glpk/README
 share/doc/pure-glpk/WINDOWS.md
 share/doc/pure-glpk/examples/lp.pure
 share/doc/pure-glpk/glpk-LICENSE
-share/doc/pure-glpk/llvm-openmp-LICENSE
+share/doc/pure-glpk/openmp-LICENSE
 share/doc/pure-glpk/suitesparse-LICENSE
 share/doc/pure-glpk/tests/smoke.pure
 ```

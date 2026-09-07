@@ -68,9 +68,9 @@ if(WIN32)
     REQUIRED
   )
   find_file(
-    LLVM_RUNTIME_LICENSE
+    OPENMP_RUNTIME_LICENSE
     NAMES LICENSE
-    HINTS "$ENV{MSYSTEM_PREFIX}/share/licenses/llvm"
+    HINTS "$ENV{MSYSTEM_PREFIX}/share/licenses/openmp"
     NO_DEFAULT_PATH
     REQUIRED
   )
@@ -97,9 +97,9 @@ if(WIN32)
     COMPONENT documentation
   )
   install(
-    FILES "${LLVM_RUNTIME_LICENSE}"
+    FILES "${OPENMP_RUNTIME_LICENSE}"
     DESTINATION "${PURE_DOCUMENTATION_INSTALL_DIR}"
-    RENAME llvm-openmp-LICENSE
+    RENAME openmp-LICENSE
     COMPONENT documentation
   )
 endif()

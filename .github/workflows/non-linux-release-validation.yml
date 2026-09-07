@@ -123,6 +123,7 @@ jobs:
             bison
             diffutils
             flex
+            make
             mingw-w64-clang-x86_64-clang
             mingw-w64-clang-x86_64-cmake
             mingw-w64-clang-x86_64-flang
@@ -585,7 +586,7 @@ jobs:
             -DOMP_DLL_SOURCE=C:/msys64/clang64/bin/libomp.dll `
             -DGLPK_LICENSE_SOURCE=C:/msys64/clang64/share/licenses/glpk/LICENSE `
             -DSUITESPARSE_LICENSE_SOURCE=C:/msys64/clang64/share/licenses/suitesparse/LICENSE `
-            -DLLVM_LICENSE_SOURCE=C:/msys64/clang64/share/licenses/llvm/LICENSE `
+            -DOPENMP_LICENSE_SOURCE=C:/msys64/clang64/share/licenses/openmp/LICENSE `
             "-DRUN_PURE_TEST_SCRIPT=$source/cmake/RunPureTest.cmake" `
             "-DWINDOWS_DEPENDENCY_VERIFIER=$source/cmake/VerifyWindowsDependencies.cmake" `
             -P "$source/cmake/VerifyInstalledPackage.cmake" `
