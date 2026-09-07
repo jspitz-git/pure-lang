@@ -32,6 +32,20 @@ enum binary_mode {
   BINARY_INFO_THEN_NO_DATA
 };
 
+enum operation_fault {
+  OPERATION_OK,
+  FAIL_ENV_ALLOC,
+  FAIL_ENV_ATTR,
+  FAIL_DBC_ALLOC,
+  FAIL_DRIVER_CONNECT,
+  FAIL_STMT_ALLOC,
+  FAIL_PREPARE,
+  FAIL_PARAMETER_CONVERSION,
+  FAIL_PARAMETER_BIND,
+  FAIL_EXECUTE,
+  FAIL_RESULT_METADATA_ALLOCATION
+};
+
 static enum fault_mode mode;
 static SQLRETURN getdata_return;
 static int getdata_calls;
@@ -45,8 +59,40 @@ static SQLHANDLE expected_info_input;
 static bool check_info_input;
 static bool getinfo_request_ok;
 static int fail_next_allocation;
+static int fail_allocation_countdown;
 static size_t allocation_count;
 static void *allocations[32];
+static enum operation_fault operation_fault;
+static int alloc_env_calls;
+static int alloc_dbc_calls;
+static int alloc_stmt_calls;
+static int free_env_calls;
+static int free_dbc_calls;
+static int free_stmt_calls;
+static int set_env_attr_calls;
+static int driver_connect_calls;
+static int disconnect_calls;
+static int close_cursor_calls;
+static int reset_params_calls;
+static int close_statement_calls;
+static int prepare_calls;
+static int bind_parameter_calls;
+static int execute_calls;
+static int num_result_cols_calls;
+static int row_count_calls;
+static int describe_col_calls;
+static int more_results_calls;
+static bool handle_protocol_ok;
+static short result_cols[4];
+static SQLLEN result_rows[4];
+static int result_count;
+static int result_index;
+static void *watched_descriptor;
+static int watched_descriptor_free_calls;
+
+#define FAKE_ENV ((SQLHENV)(uintptr_t)0x101)
+#define FAKE_DBC ((SQLHDBC)(uintptr_t)0x202)
+#define FAKE_STMT ((SQLHSTMT)(uintptr_t)0x303)
 
 static void *fault_malloc(size_t size)
 {
@@ -57,6 +103,8 @@ static void *fault_malloc(size_t size)
     fail_next_allocation = 0;
     return NULL;
   }
+  if (fail_allocation_countdown > 0 && --fail_allocation_countdown == 0)
+    return NULL;
   ptr = malloc(size);
   if (!ptr)
     return NULL;
@@ -101,6 +149,8 @@ static void fault_free(void *ptr)
 
   if (!ptr)
     return;
+  if (ptr == watched_descriptor)
+    ++watched_descriptor_free_calls;
   for (i = 0; i < sizeof(allocations) / sizeof(allocations[0]); ++i) {
     if (allocations[i] == ptr) {
       allocations[i] = NULL;
@@ -109,8 +159,9 @@ static void fault_free(void *ptr)
       return;
     }
   }
-  fprintf(stderr, "untracked free\n");
-  abort();
+  /* Pure's vector accessors allocate their returned arrays outside the
+     interposed allocator.  odbc.c owns and releases those arrays normally. */
+  free(ptr);
 }
 
 static bool fault_forget(void *ptr)
@@ -132,6 +183,213 @@ static bool fault_forget(void *ptr)
 static SQLRETURN SQL_API fake_SQLFetch(SQLHSTMT statement)
 {
   (void)statement;
+  return SQL_SUCCESS;
+}
+
+static SQLRETURN SQL_API fake_SQLAllocHandle(SQLSMALLINT handle_type,
+                                             SQLHANDLE input_handle,
+                                             SQLHANDLE *output_handle)
+{
+  switch (handle_type) {
+  case SQL_HANDLE_ENV:
+    ++alloc_env_calls;
+    handle_protocol_ok = handle_protocol_ok && output_handle != NULL &&
+      *output_handle == SQL_NULL_HANDLE && input_handle == SQL_NULL_HANDLE;
+    if (operation_fault == FAIL_ENV_ALLOC)
+      return SQL_ERROR;
+    *output_handle = FAKE_ENV;
+    return SQL_SUCCESS;
+  case SQL_HANDLE_DBC:
+    ++alloc_dbc_calls;
+    handle_protocol_ok = handle_protocol_ok && output_handle != NULL &&
+      *output_handle == SQL_NULL_HANDLE && input_handle == FAKE_ENV;
+    if (operation_fault == FAIL_DBC_ALLOC)
+      return SQL_ERROR;
+    *output_handle = FAKE_DBC;
+    return SQL_SUCCESS;
+  case SQL_HANDLE_STMT:
+    ++alloc_stmt_calls;
+    handle_protocol_ok = handle_protocol_ok && output_handle != NULL &&
+      *output_handle == SQL_NULL_HANDLE && input_handle == FAKE_DBC;
+    if (operation_fault == FAIL_STMT_ALLOC)
+      return SQL_ERROR;
+    *output_handle = FAKE_STMT;
+    return SQL_SUCCESS;
+  default:
+    handle_protocol_ok = false;
+    return SQL_ERROR;
+  }
+}
+
+static SQLRETURN SQL_API fake_SQLFreeHandle(SQLSMALLINT handle_type,
+                                            SQLHANDLE handle)
+{
+  switch (handle_type) {
+  case SQL_HANDLE_ENV:
+    ++free_env_calls;
+    handle_protocol_ok = handle_protocol_ok && handle == FAKE_ENV;
+    break;
+  case SQL_HANDLE_DBC:
+    ++free_dbc_calls;
+    handle_protocol_ok = handle_protocol_ok && handle == FAKE_DBC;
+    break;
+  case SQL_HANDLE_STMT:
+    ++free_stmt_calls;
+    handle_protocol_ok = handle_protocol_ok && handle == FAKE_STMT;
+    break;
+  default:
+    handle_protocol_ok = false;
+    return SQL_ERROR;
+  }
+  return SQL_SUCCESS;
+}
+
+static SQLRETURN SQL_API fake_SQLSetEnvAttr(SQLHENV environment,
+                                            SQLINTEGER attribute,
+                                            SQLPOINTER value,
+                                            SQLINTEGER length)
+{
+  ++set_env_attr_calls;
+  handle_protocol_ok = handle_protocol_ok && environment == FAKE_ENV &&
+    attribute == SQL_ATTR_ODBC_VERSION && value == (SQLPOINTER)SQL_OV_ODBC3 &&
+    length == SQL_IS_UINTEGER;
+  return operation_fault == FAIL_ENV_ATTR ? SQL_ERROR : SQL_SUCCESS;
+}
+
+static SQLRETURN SQL_API fake_SQLDriverConnect(SQLHDBC connection,
+                                               SQLHWND window,
+                                               SQLCHAR *input,
+                                               SQLSMALLINT input_length,
+                                               SQLCHAR *output,
+                                               SQLSMALLINT output_length,
+                                               SQLSMALLINT *actual_length,
+                                               SQLUSMALLINT completion)
+{
+  (void)output;
+  (void)output_length;
+  (void)actual_length;
+  ++driver_connect_calls;
+  handle_protocol_ok = handle_protocol_ok && connection == FAKE_DBC &&
+    window == NULL && input != NULL && input_length == SQL_NTS &&
+    completion == SQL_DRIVER_NOPROMPT;
+  return operation_fault == FAIL_DRIVER_CONNECT ? SQL_ERROR : SQL_SUCCESS;
+}
+
+static SQLRETURN SQL_API fake_SQLDisconnect(SQLHDBC connection)
+{
+  ++disconnect_calls;
+  handle_protocol_ok = handle_protocol_ok && connection == FAKE_DBC;
+  return SQL_SUCCESS;
+}
+
+static SQLRETURN SQL_API fake_SQLFreeStmt(SQLHSTMT statement,
+                                         SQLUSMALLINT option)
+{
+  handle_protocol_ok = handle_protocol_ok && statement == FAKE_STMT;
+  if (option == SQL_RESET_PARAMS)
+    ++reset_params_calls;
+  else if (option == SQL_CLOSE)
+    ++close_statement_calls;
+  else
+    handle_protocol_ok = false;
+  return SQL_SUCCESS;
+}
+
+static SQLRETURN SQL_API fake_SQLPrepare(SQLHSTMT statement, SQLCHAR *query,
+                                        SQLINTEGER length)
+{
+  ++prepare_calls;
+  handle_protocol_ok = handle_protocol_ok && statement == FAKE_STMT &&
+    query != NULL && length == SQL_NTS;
+  return operation_fault == FAIL_PREPARE ? SQL_ERROR : SQL_SUCCESS;
+}
+
+static SQLRETURN SQL_API fake_SQLBindParameter(
+  SQLHSTMT statement, SQLUSMALLINT parameter, SQLSMALLINT input_output_type,
+  SQLSMALLINT value_type, SQLSMALLINT parameter_type, SQLULEN column_size,
+  SQLSMALLINT decimal_digits, SQLPOINTER value, SQLLEN buffer_length,
+  SQLLEN *indicator)
+{
+  (void)value_type;
+  (void)parameter_type;
+  (void)column_size;
+  (void)decimal_digits;
+  (void)value;
+  (void)buffer_length;
+  (void)indicator;
+  ++bind_parameter_calls;
+  handle_protocol_ok = handle_protocol_ok && statement == FAKE_STMT &&
+    parameter == 1 && input_output_type == SQL_PARAM_INPUT;
+  return operation_fault == FAIL_PARAMETER_BIND ? SQL_ERROR : SQL_SUCCESS;
+}
+
+static SQLRETURN SQL_API fake_SQLExecute(SQLHSTMT statement)
+{
+  ++execute_calls;
+  handle_protocol_ok = handle_protocol_ok && statement == FAKE_STMT;
+  return operation_fault == FAIL_EXECUTE ? SQL_ERROR : SQL_SUCCESS;
+}
+
+static SQLRETURN SQL_API fake_SQLNumResultCols(SQLHSTMT statement,
+                                              SQLSMALLINT *columns)
+{
+  ++num_result_cols_calls;
+  handle_protocol_ok = handle_protocol_ok && statement == FAKE_STMT &&
+    result_index >= 0 && result_index < result_count;
+  if (!handle_protocol_ok)
+    return SQL_ERROR;
+  *columns = result_cols[result_index];
+  return SQL_SUCCESS;
+}
+
+static SQLRETURN SQL_API fake_SQLRowCount(SQLHSTMT statement, SQLLEN *rows)
+{
+  ++row_count_calls;
+  handle_protocol_ok = handle_protocol_ok && statement == FAKE_STMT &&
+    result_index >= 0 && result_index < result_count;
+  if (!handle_protocol_ok)
+    return SQL_ERROR;
+  *rows = result_rows[result_index];
+  return SQL_SUCCESS;
+}
+
+static SQLRETURN SQL_API fake_SQLDescribeCol(
+  SQLHSTMT statement, SQLUSMALLINT column, SQLCHAR *name,
+  SQLSMALLINT name_capacity, SQLSMALLINT *name_length, SQLSMALLINT *type,
+  SQLULEN *column_size, SQLSMALLINT *decimal_digits, SQLSMALLINT *nullable)
+{
+  static const char column_name[] = "value";
+  size_t copy_length = sizeof(column_name);
+
+  (void)column_size;
+  (void)decimal_digits;
+  (void)nullable;
+  ++describe_col_calls;
+  handle_protocol_ok = handle_protocol_ok && statement == FAKE_STMT &&
+    column == 1 && name_capacity >= (SQLSMALLINT)sizeof(column_name);
+  if (!handle_protocol_ok)
+    return SQL_ERROR;
+  memcpy(name, column_name, copy_length);
+  if (name_length)
+    *name_length = (SQLSMALLINT)(copy_length - 1);
+  *type = SQL_INTEGER;
+  return SQL_SUCCESS;
+}
+
+static SQLRETURN SQL_API fake_SQLMoreResults(SQLHSTMT statement)
+{
+  ++more_results_calls;
+  handle_protocol_ok = handle_protocol_ok && statement == FAKE_STMT;
+  if (!handle_protocol_ok || result_index + 1 >= result_count)
+    return SQL_NO_DATA;
+  ++result_index;
+  return SQL_SUCCESS;
+}
+
+static SQLRETURN SQL_API fake_SQLCloseCursor(SQLHSTMT statement)
+{
+  ++close_cursor_calls;
+  handle_protocol_ok = handle_protocol_ok && statement == FAKE_STMT;
   return SQL_SUCCESS;
 }
 
@@ -377,6 +635,428 @@ static void check(bool condition, const char *name)
     ++failures;
   }
   fflush(stdout);
+}
+
+static bool is_singleton_list(pure_expr *value);
+static void release_pure_result(pure_expr *value);
+
+static void check_case(bool condition, const char *case_name,
+                       const char *expectation)
+{
+  char name[192];
+
+  snprintf(name, sizeof(name), "%s: %s", case_name, expectation);
+  check(condition, name);
+}
+
+static void reset_operation_state(void)
+{
+  operation_fault = OPERATION_OK;
+  fail_next_allocation = 0;
+  fail_allocation_countdown = 0;
+  alloc_env_calls = 0;
+  alloc_dbc_calls = 0;
+  alloc_stmt_calls = 0;
+  free_env_calls = 0;
+  free_dbc_calls = 0;
+  free_stmt_calls = 0;
+  set_env_attr_calls = 0;
+  driver_connect_calls = 0;
+  disconnect_calls = 0;
+  close_cursor_calls = 0;
+  reset_params_calls = 0;
+  close_statement_calls = 0;
+  prepare_calls = 0;
+  bind_parameter_calls = 0;
+  execute_calls = 0;
+  num_result_cols_calls = 0;
+  row_count_calls = 0;
+  describe_col_calls = 0;
+  more_results_calls = 0;
+  handle_protocol_ok = true;
+  memset(result_cols, 0, sizeof(result_cols));
+  memset(result_rows, 0, sizeof(result_rows));
+  result_count = 1;
+  result_index = 0;
+  watched_descriptor = NULL;
+  watched_descriptor_free_calls = 0;
+}
+
+static bool is_odbc_error(pure_expr *value)
+{
+  pure_expr *head = NULL;
+  pure_expr *state = NULL;
+  pure_expr *constructor = NULL;
+  pure_expr *message = NULL;
+  int32_t symbol = 0;
+
+  return value && pure_is_app(value, &head, &state) &&
+    pure_is_app(head, &constructor, &message) &&
+    pure_is_symbol(constructor, &symbol) && symbol == pure_sym("odbc::error");
+}
+
+static bool is_int_value(pure_expr *value, int32_t expected)
+{
+  int32_t actual = 0;
+
+  return value && pure_is_int(value, &actual) && actual == expected;
+}
+
+static bool is_wide_int_value(pure_expr *value, int64_t expected)
+{
+  int32_t narrow = 0;
+
+  return value && !pure_is_int(value, &narrow) &&
+    pure_get_int64(value) == expected;
+}
+
+static void initialize_test_database(ODBCHandle *database)
+{
+  memset(database, 0, sizeof(*database));
+  database->magic = ODBC_MAGIC;
+  database->henv = FAKE_ENV;
+  database->hdbc = FAKE_DBC;
+  database->hstmt = FAKE_STMT;
+}
+
+static void drain_tracked_allocations(void)
+{
+  size_t i;
+
+  for (i = 0; i < sizeof(allocations) / sizeof(allocations[0]); ++i)
+    if (allocations[i])
+      fault_free(allocations[i]);
+}
+
+struct connection_case {
+  const char *name;
+  enum operation_fault fault;
+  int alloc_env;
+  int alloc_dbc;
+  int alloc_stmt;
+  int set_env_attr;
+  int driver_connect;
+  int free_env;
+  int free_dbc;
+  int disconnect;
+  bool null_result;
+};
+
+static void run_connection_failure_cases(void)
+{
+  static const struct connection_case cases[] = {
+    {"environment allocation failure", FAIL_ENV_ALLOC,
+     1, 0, 0, 0, 0, 0, 0, 0, true},
+    {"failure after environment allocation", FAIL_ENV_ATTR,
+     1, 0, 0, 1, 0, 1, 0, 0, false},
+    {"connection allocation failure", FAIL_DBC_ALLOC,
+     1, 1, 0, 1, 0, 1, 0, 0, false},
+    {"failure after connection allocation", FAIL_DRIVER_CONNECT,
+     1, 1, 0, 1, 1, 1, 1, 0, false},
+    {"failure after driver connect", FAIL_STMT_ALLOC,
+     1, 1, 1, 1, 1, 1, 1, 1, false}
+  };
+  size_t i;
+
+  for (i = 0; i < sizeof(cases) / sizeof(cases[0]); ++i) {
+    pure_expr *result;
+
+    check(allocation_count == 0, "connection case starts without allocations");
+    reset_operation_state();
+    operation_fault = cases[i].fault;
+    result = odbc_connect("Driver={deterministic-missing-driver}");
+    check_case(cases[i].null_result ? result == NULL : is_odbc_error(result),
+               cases[i].name, "preserves the public failure result shape");
+    release_pure_result(result);
+    check_case(alloc_env_calls == cases[i].alloc_env &&
+               alloc_dbc_calls == cases[i].alloc_dbc &&
+               alloc_stmt_calls == cases[i].alloc_stmt &&
+               set_env_attr_calls == cases[i].set_env_attr &&
+               driver_connect_calls == cases[i].driver_connect,
+               cases[i].name, "acquires only the expected handles");
+    check_case(free_env_calls == cases[i].free_env &&
+               free_dbc_calls == cases[i].free_dbc && free_stmt_calls == 0,
+               cases[i].name, "frees each acquired handle exactly once");
+    check_case(disconnect_calls == cases[i].disconnect &&
+               close_cursor_calls == 0,
+               cases[i].name, "disconnects only an established connection");
+    check_case(handle_protocol_ok, cases[i].name,
+               "uses initialized handles in reverse-order cleanup");
+    check_case(allocation_count == 0, cases[i].name,
+               "retains no connection storage");
+    if (allocation_count != 0)
+      drain_tracked_allocations();
+  }
+}
+
+static void run_successful_connection_cleanup(void)
+{
+  pure_expr *database_value;
+  pure_expr *disconnect_result;
+  ODBCHandle *database = NULL;
+
+  check(allocation_count == 0, "successful connection starts without allocations");
+  reset_operation_state();
+  database_value = odbc_connect("Driver={deterministic-success}");
+  check(pure_is_pointer(database_value, (void **)&database) &&
+        database && database->magic == ODBC_MAGIC,
+        "successful connection preserves the public database pointer shape");
+  disconnect_result = odbc_disconnect(database_value);
+  check(disconnect_result != NULL,
+        "successful disconnect preserves the public unit result shape");
+  release_pure_result(disconnect_result);
+  pure_freenew(database_value);
+  check(alloc_env_calls == 1 && alloc_dbc_calls == 1 && alloc_stmt_calls == 1,
+        "successful connection acquires each handle exactly once");
+  check(set_env_attr_calls == 1 && driver_connect_calls == 1,
+        "successful connection configures and connects exactly once");
+  check(free_env_calls == 1 && free_dbc_calls == 1 && free_stmt_calls == 1,
+        "successful disconnect frees each handle exactly once");
+  check(disconnect_calls == 1 && close_cursor_calls == 1,
+        "successful disconnect closes the cursor and connection exactly once");
+  check(handle_protocol_ok, "successful connection uses the exact handles");
+  check(allocation_count == 0,
+        "successful disconnect retains no connection storage");
+}
+
+static void run_repeated_driver_failure(void)
+{
+  int i;
+
+  check(allocation_count == 0,
+        "repeated missing-driver test starts without allocations");
+  reset_operation_state();
+  operation_fault = FAIL_DRIVER_CONNECT;
+  for (i = 0; i < 16; ++i) {
+    pure_expr *result =
+      odbc_connect("Driver={deterministic-missing-driver}");
+
+    check_case(is_odbc_error(result), "repeated missing-driver connection",
+               "preserves the public error shape");
+    release_pure_result(result);
+    check_case(allocation_count == 0, "repeated missing-driver connection",
+               "releases storage before the next attempt");
+    if (allocation_count != 0)
+      drain_tracked_allocations();
+  }
+  check(alloc_env_calls == 16 && alloc_dbc_calls == 16 &&
+        set_env_attr_calls == 16 && driver_connect_calls == 16,
+        "repeated missing-driver connections perform every attempted acquisition");
+  check(free_env_calls == 16 && free_dbc_calls == 16 &&
+        disconnect_calls == 0,
+        "repeated missing-driver connections exactly balance acquired handles");
+  check(handle_protocol_ok, "repeated missing-driver handle use remains valid");
+}
+
+struct execution_case {
+  const char *name;
+  enum operation_fault fault;
+  int expected_prepare;
+  int expected_bind;
+  int expected_execute;
+  int expected_num_cols;
+  int expected_reset;
+  int expected_close;
+};
+
+static void run_execution_failure_cases(void)
+{
+  static const struct execution_case cases[] = {
+    {"prepare failure", FAIL_PREPARE, 1, 0, 0, 0, 0, 1},
+    {"parameter conversion failure", FAIL_PARAMETER_CONVERSION,
+     1, 0, 0, 0, 1, 1},
+    {"parameter bind failure", FAIL_PARAMETER_BIND, 1, 1, 0, 0, 1, 1},
+    {"execute failure", FAIL_EXECUTE, 1, 1, 1, 0, 1, 1},
+    {"result metadata allocation failure", FAIL_RESULT_METADATA_ALLOCATION,
+     1, 0, 1, 1, 0, 1}
+  };
+  size_t i;
+
+  for (i = 0; i < sizeof(cases) / sizeof(cases[0]); ++i) {
+    unsigned char bytes[] = {0xde, 0xad, 0xbe, 0xef};
+    ODBCHandle database;
+    pure_expr *database_value;
+    pure_expr *args;
+    pure_expr *result;
+    bool binary_parameter = cases[i].fault == FAIL_PARAMETER_CONVERSION ||
+      cases[i].fault == FAIL_EXECUTE;
+    bool integer_parameter = cases[i].fault == FAIL_PARAMETER_BIND;
+
+    check(allocation_count == 0, "execution case starts without allocations");
+    reset_operation_state();
+    operation_fault = cases[i].fault;
+    result_cols[0] = cases[i].fault == FAIL_RESULT_METADATA_ALLOCATION ? 1 : 0;
+    if (cases[i].fault == FAIL_PARAMETER_CONVERSION)
+      fail_allocation_countdown = 2;
+    else if (cases[i].fault == FAIL_RESULT_METADATA_ALLOCATION)
+      fail_allocation_countdown = 2;
+    initialize_test_database(&database);
+    database_value = pure_pointer(&database);
+    if (binary_parameter)
+      args = pure_listl(1, pure_tuplel(2, pure_int((int)sizeof(bytes)),
+                                     pure_pointer(bytes)));
+    else if (integer_parameter)
+      args = pure_listl(1, pure_int(7));
+    else
+      args = pure_listl(0);
+    result = odbc_sql_exec(database_value, "select ?", args);
+    check_case(is_odbc_error(result), cases[i].name,
+               "preserves the public error constructor");
+    release_pure_result(result);
+    pure_freenew(args);
+    pure_freenew(database_value);
+    check_case(prepare_calls == cases[i].expected_prepare &&
+               bind_parameter_calls == cases[i].expected_bind &&
+               execute_calls == cases[i].expected_execute &&
+               num_result_cols_calls == cases[i].expected_num_cols,
+               cases[i].name, "stops at the injected phase");
+    check_case(reset_params_calls == cases[i].expected_reset &&
+               close_statement_calls == cases[i].expected_close,
+               cases[i].name, "resets and closes the statement exactly once");
+    check_case(database.argv == NULL && database.argc == 0 &&
+               database.coltype == NULL && database.exec == 0,
+               cases[i].name, "clears every database-side owner");
+    check_case(handle_protocol_ok, cases[i].name,
+               "uses the existing statement handle consistently");
+    check_case(allocation_count == 0, cases[i].name,
+               "retains no converted arguments or metadata");
+
+    /* Keep later RED cases independent if the implementation leaked state. */
+    if (database.argv)
+      free_args(&database);
+    if (database.coltype) {
+      fault_free(database.coltype);
+      database.coltype = NULL;
+    }
+    if (allocation_count != 0)
+      drain_tracked_allocations();
+  }
+}
+
+static void run_update_count_to_result_set(void)
+{
+  ODBCHandle database;
+  pure_expr *database_value;
+  pure_expr *args;
+  pure_expr *result;
+  pure_expr *next;
+  pure_expr *row;
+
+  check(allocation_count == 0,
+        "update-to-result transition starts without allocations");
+  reset_operation_state();
+  result_count = 2;
+  result_cols[0] = 0;
+  result_rows[0] = 7;
+  result_cols[1] = 1;
+  initialize_test_database(&database);
+  database_value = pure_pointer(&database);
+  args = pure_listl(0);
+  result = odbc_sql_exec(database_value, "update then select", args);
+  check(is_int_value(result, 7),
+        "update-count to result-set starts with the exact row count");
+  release_pure_result(result);
+  pure_freenew(args);
+  next = odbc_sql_more(database_value);
+  check(is_singleton_list(next),
+        "update-count to result-set returns one column descriptor");
+  check(database.coltype != NULL && database.cols == 1,
+        "update-count to result-set transfers the new descriptor owner");
+  watched_descriptor = database.coltype;
+  release_pure_result(next);
+  getdata_return = SQL_SUCCESS;
+  binary_read_mode = BINARY_DEFAULT;
+  row = odbc_sql_fetch(database_value);
+  check(is_singleton_list(row),
+        "update-count to result-set permits the next row fetch");
+  release_pure_result(row);
+  sql_close(&database);
+  check(watched_descriptor != NULL && watched_descriptor_free_calls == 1,
+        "update-count to result-set releases its descriptor exactly once");
+  check(close_statement_calls == 1,
+        "update-count to result-set closes the statement exactly once");
+  check(handle_protocol_ok,
+        "update-count to result-set keeps statement handle ownership valid");
+  check(allocation_count == 0,
+        "update-count to result-set retains no descriptor");
+  pure_freenew(database_value);
+  if (allocation_count != 0)
+    drain_tracked_allocations();
+}
+
+static void run_result_set_to_update_count(void)
+{
+  ODBCHandle database;
+  pure_expr *database_value;
+  pure_expr *args;
+  pure_expr *result;
+  pure_expr *next;
+
+  check(allocation_count == 0,
+        "result-to-update transition starts without allocations");
+  reset_operation_state();
+  result_count = 2;
+  result_cols[0] = 1;
+  result_cols[1] = 0;
+  result_rows[1] = 11;
+  initialize_test_database(&database);
+  database_value = pure_pointer(&database);
+  args = pure_listl(0);
+  result = odbc_sql_exec(database_value, "select then update", args);
+  check(is_singleton_list(result),
+        "result-set to update-count starts with one column descriptor");
+  check(database.coltype != NULL && database.cols == 1,
+        "result-set to update-count owns its initial descriptor");
+  watched_descriptor = database.coltype;
+  release_pure_result(result);
+  pure_freenew(args);
+  next = odbc_sql_more(database_value);
+  check(is_int_value(next, 11),
+        "result-set to update-count returns the exact next row count");
+  check(database.coltype == NULL && database.cols == 0,
+        "result-set to update-count clears the old descriptor owner");
+  check(watched_descriptor_free_calls == 1,
+        "result-set to update-count releases the old descriptor exactly once");
+  release_pure_result(next);
+  sql_close(&database);
+  check(watched_descriptor_free_calls == 1,
+        "result-set to update-count does not release the descriptor twice");
+  check(close_statement_calls == 1,
+        "result-set to update-count closes the statement exactly once");
+  check(handle_protocol_ok,
+        "result-set to update-count keeps statement handle ownership valid");
+  check(allocation_count == 0,
+        "result-set to update-count retains no descriptor");
+  pure_freenew(database_value);
+  if (allocation_count != 0)
+    drain_tracked_allocations();
+}
+
+static void run_wide_update_count(void)
+{
+  const int64_t expected = (int64_t)INT32_MAX + 1;
+  ODBCHandle database;
+  pure_expr *database_value;
+  pure_expr *args;
+  pure_expr *result;
+
+  check(allocation_count == 0,
+        "wide update-count case starts without allocations");
+  reset_operation_state();
+  result_cols[0] = 0;
+  result_rows[0] = (SQLLEN)expected;
+  initialize_test_database(&database);
+  database_value = pure_pointer(&database);
+  args = pure_listl(0);
+  result = odbc_sql_exec(database_value, "wide update count", args);
+  check(is_wide_int_value(result, expected),
+        "row counts outside 32-bit range use an exact Pure wide integer");
+  release_pure_result(result);
+  pure_freenew(args);
+  sql_close(&database);
+  check(close_statement_calls == 1 && allocation_count == 0,
+        "wide update-count cleanup releases the statement exactly once");
+  pure_freenew(database_value);
 }
 
 static bool is_singleton_list(pure_expr *value)
@@ -769,12 +1449,33 @@ int main(void)
   }
   {
     struct pure_odbc_api test_api = {0};
+    test_api.alloc_handle = fake_SQLAllocHandle;
+    test_api.free_handle = fake_SQLFreeHandle;
+    test_api.set_env_attr = fake_SQLSetEnvAttr;
+    test_api.driver_connect = fake_SQLDriverConnect;
+    test_api.disconnect = fake_SQLDisconnect;
     test_api.fetch = fake_SQLFetch;
+    test_api.free_stmt = fake_SQLFreeStmt;
+    test_api.prepare = fake_SQLPrepare;
+    test_api.bind_parameter = fake_SQLBindParameter;
+    test_api.execute = fake_SQLExecute;
+    test_api.num_result_cols = fake_SQLNumResultCols;
+    test_api.row_count = fake_SQLRowCount;
+    test_api.describe_col = fake_SQLDescribeCol;
     test_api.get_data = fake_SQLGetData;
+    test_api.more_results = fake_SQLMoreResults;
+    test_api.close_cursor = fake_SQLCloseCursor;
     test_api.get_info = fake_SQLGetInfo;
     test_api.get_diag_rec = fake_SQLGetDiagRec;
     pure_odbc_set_api_for_test(&test_api);
   }
+  run_connection_failure_cases();
+  run_successful_connection_cleanup();
+  run_repeated_driver_failure();
+  run_execution_failure_cases();
+  run_update_count_to_result_set();
+  run_result_set_to_update_count();
+  run_wide_update_count();
   run_getdata_cases();
   run_binary_cases();
   run_getinfo_cases();
