@@ -13,11 +13,19 @@ set(runtime_root "${TEST_ROOT}/task5-runtime")
 set(stage "${runtime_root}/stage")
 set(stage_bin "${stage}/bin")
 set(module_dir "${stage}/lib/pure")
-set(windows_directory "${runtime_root}/Windows")
+cmake_path(ABSOLUTE_PATH PURE_ODBC_AUTHORITATIVE_WINDOWS_DIRECTORY NORMALIZE
+  OUTPUT_VARIABLE windows_directory)
+if(NOT IS_DIRECTORY "${windows_directory}")
+  message(FATAL_ERROR
+    "Authoritative Windows directory does not exist: ${windows_directory}")
+endif()
+file(REAL_PATH "${windows_directory}" windows_directory)
 set(system_directory "${windows_directory}/System32")
+set(forged_windows_directory "${runtime_root}/forged-Windows")
+set(forged_system_directory "${forged_windows_directory}/System32")
 set(fixture_dir "${runtime_root}/readobj")
 file(MAKE_DIRECTORY
-  "${stage_bin}" "${module_dir}" "${system_directory}" "${fixture_dir}")
+  "${stage_bin}" "${module_dir}" "${forged_system_directory}" "${fixture_dir}")
 
 # Literal manifests captured independently from the audited CLANG64 build.
 set(imports_odbc_dll
@@ -198,7 +206,13 @@ foreach(pe IN LISTS staged_pe_names)
   manifest_variable("${pe}" imports_variable)
   write_readobj_fixture("${pe}" "${imports_variable}")
 endforeach()
-file(WRITE "${system_directory}/odbc32.dll" "native system ODBC fixture\n")
+if(NOT EXISTS "${system_directory}/odbc32.dll" OR
+    IS_DIRECTORY "${system_directory}/odbc32.dll" OR
+    IS_SYMLINK "${system_directory}/odbc32.dll")
+  message(FATAL_ERROR
+    "Authoritative System32 odbc32.dll is not a regular file: "
+    "${system_directory}/odbc32.dll")
+endif()
 set(no_imports)
 write_readobj_fixture("odbc32.dll" no_imports)
 
@@ -264,6 +278,13 @@ if(NOT pristine_result EQUAL 0)
     "${pristine_diagnostics}")
 endif()
 
+file(COPY_FILE "${system_directory}/odbc32.dll"
+  "${forged_system_directory}/odbc32.dll")
+expect_rejected("a forged Windows directory with copied system ODBC"
+  "WINDOWS_DIRECTORY.*authoritative|authoritative.*WINDOWS_DIRECTORY"
+  "-DWINDOWS_DIRECTORY=${forged_windows_directory}"
+  "-DSYSTEM_ODBC_DLL=${forged_system_directory}/odbc32.dll")
+
 set(odbc_fixture "${fixture_dir}/odbc.dll.txt")
 file(READ "${odbc_fixture}" original_odbc_fixture)
 string(APPEND original_with_extra
@@ -282,6 +303,17 @@ file(WRITE "${odbc_fixture}" "${original_odbc_fixture}")
 
 file(APPEND "${odbc_fixture}" "Import {\n  Name: LiBpUrE.DlL\n}\n")
 expect_rejected("a duplicate import" "duplicate import.*libpure\\.dll")
+file(WRITE "${odbc_fixture}" "${original_odbc_fixture}")
+
+set(adjacent_import_blocks
+  "Import {\n  Name: libgmp-10.dll\n}\nImport {\n  Name: libpure.dll\n}\n")
+set(unpaired_import_names
+  "Import {\n  Name: libgmp-10.dll\n  Name: libpure.dll\n}\nImport {\n}\n")
+string(REPLACE "${adjacent_import_blocks}" "${unpaired_import_names}"
+  malformed_import_blocks "${original_odbc_fixture}")
+file(WRITE "${odbc_fixture}" "${malformed_import_blocks}")
+expect_rejected("unpaired import block names"
+  "exactly one Name.*import block|import block.*exactly one Name")
 file(WRITE "${odbc_fixture}" "${original_odbc_fixture}")
 
 string(REPLACE "Arch: x86_64" "Arch: i386" wrong_arch "${original_odbc_fixture}")

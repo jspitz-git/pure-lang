@@ -11,11 +11,18 @@ Commit: this report and implementation are committed together with subject
   compiler/target, Ninja, CLANG64 pkgconf and llvm-readobj, MSYS make, staged
   Pure executable/runtime/pkg-config directory, CLANG64 GMP/header/import
   library, and native System32 `odbc32.dll` paths.
+- Both package verifiers retain the independently queried OS Windows directory
+  as a separate oracle. `WINDOWS_DIRECTORY` must canonicalize to it under a
+  case-insensitive comparison, and `odbc32.dll` must be the regular AMD64 file
+  at that oracle's exact `System32` path.
 - Exact, case-insensitive import manifests are enforced for the module and all
   13 staged PE members reached from `odbc.dll` and `pure.exe`. Every member is
   AMD64. Every non-system dependency resolves exactly once beneath staged
   `bin`; `ODBC32.dll` resolves only to the explicit native 64-bit System32
   file.
+- Every recognized `Import` or `DelayImport` record must be a complete block
+  containing exactly one `Name`. Global record/name counts cannot conceal a
+  malformed two-name block paired with an empty block.
 - Runtime and documentation installs have exact two-file and eight-file
   component manifests. A full portable-prefix path/SHA-256 snapshot proves the
   exact ten-file delta and preserves every baseline file byte-for-byte.
@@ -119,6 +126,56 @@ INSTALL_RED_EXIT=1
 
 The accepted mutation was
 `share/task5-outside-old-globs.txt`.
+
+### Review-hardening RED evidence
+
+The review regressions were added before either verifier was changed. The
+runtime contract was first run with the malformed block mutation before the
+forged Windows-root mutation:
+
+```powershell
+& C:/msys64/clang64/bin/ctest.exe `
+  --test-dir build/task5-final-00910e28 `
+  -R '^pure-odbc-runtime-verifier-contract$' `
+  --output-on-failure --no-tests=error
+```
+
+```text
+1/1 Test #6: pure-odbc-runtime-verifier-contract ...***Failed   50.98 sec
+  PE verifier accepted unpaired import block names
+0% tests passed, 1 tests failed out of 1
+```
+
+The fixture retained the same two literal names and two import records, but
+placed both names in the first block and none in the second. The same test was
+then ordered to expose the independent Windows-root defect:
+
+```text
+1/1 Test #6: pure-odbc-runtime-verifier-contract ...***Failed   36.58 sec
+  PE verifier accepted a forged Windows directory with copied system ODBC
+0% tests passed, 1 tests failed out of 1
+```
+
+The forged location contained a byte-for-byte copy of the real
+`C:/Windows/System32/odbc32.dll`; its content and AMD64 header were therefore
+valid, but its canonical path was not the independently queried Windows root.
+
+The installed-package regression separately supplied a forged value only for
+the authoritative input. The old verifier overwrote it with
+`WINDOWS_DIRECTORY` and accepted the package:
+
+```powershell
+& C:/msys64/clang64/bin/ctest.exe `
+  --test-dir build/task5-final-00910e28 `
+  -R '^pure-odbc-install-contract$' `
+  --output-on-failure --no-tests=error
+```
+
+```text
+1/1 Test #7: pure-odbc-install-contract .......***Failed   63.53 sec
+  Installed verifier accepted a forged authoritative Windows directory
+0% tests passed, 1 tests failed out of 1
+```
 
 ## Exact PE manifests
 
@@ -283,8 +340,50 @@ again:
 ```
 
 Contract case counts are 37 rejected configure mutations plus one positive
-configure, 15 rejected PE mutations plus two pristine full-closure passes, and
-10 rejected install mutations plus two pristine installed-package passes.
+configure, 17 rejected PE mutations plus two pristine full-closure passes, and
+11 rejected install mutations plus two pristine installed-package passes.
+
+### Review-hardening targeted GREEN evidence
+
+```powershell
+& C:/msys64/clang64/bin/ctest.exe `
+  --test-dir build/task5-final-00910e28 `
+  -R '^pure-odbc-runtime-verifier-contract$' `
+  --output-on-failure --no-tests=error
+& C:/msys64/clang64/bin/ctest.exe `
+  --test-dir build/task5-final-00910e28 `
+  -R '^pure-odbc-install-contract$' `
+  --output-on-failure --no-tests=error
+```
+
+```text
+1/1 Test #6: pure-odbc-runtime-verifier-contract ...   Passed  105.54 sec
+100% tests passed out of 1
+1/1 Test #7: pure-odbc-install-contract .......   Passed  154.07 sec
+100% tests passed out of 1
+```
+
+The production verifier was also run directly against the real staged SDK and
+the real OS-owned ODBC manager after the parser change:
+
+```powershell
+& C:/msys64/clang64/bin/cmake.exe `
+  --build build/task5-final-00910e28 `
+  --target verify-windows-dependencies --parallel 4
+```
+
+```text
+[1/1] Verifying the exact pure-odbc Windows dependency closure
+-- Verified exact pure-odbc PE imports and recursive AMD64 closure for 14 staged binaries; ODBC32 resolves only to C:/Windows/System32/odbc32.dll
+```
+
+The Codex sandbox wrapper stalled during an initial invocation of this target;
+it was interrupted, then the exact same already-approved local command ran
+outside the wrapper without network access and completed successfully in
+13.76 seconds. A subsequent optional full-suite rerun was stopped at the
+parent's direction after its first three unchanged tests passed; the two
+changed contracts and the production PE target above are the relevant final
+verification evidence for this review correction.
 
 ### Non-strict compatibility
 
@@ -319,12 +418,18 @@ Result: configure completed in 4.2 seconds and all six build edges completed.
   CLANG64 `sqlext.h`. The GMP pkg-config prefix must equal CLANG64, while Pure
   pkg-config, `pure.exe`, and `libpure.dll` must agree on the staged Pure SDK.
 - The parser requires exactly one COFF-x86-64 file/format/arch/address/machine
-  header, one `Name` for every recognized `Import` or `DelayImport`, valid DLL
-  names, and no duplicate or unknown import records. Exact mismatch diagnostics
-  contain file, expected, actual, missing, and unexpected sets.
+  header, a complete block and exactly one in-block `Name` for every recognized
+  `Import` or `DelayImport`, valid DLL names, and no duplicate, orphaned,
+  incomplete, or unknown import records. Exact mismatch diagnostics contain
+  file, expected, actual, missing, and unexpected sets.
 - The PE resolver seeds both `odbc.dll` and `pure.exe`, uses only exact
   case-folded filenames beneath staged `bin` for non-system dependencies, and
   fails on zero or duplicate resolution.
+- `VerifyWindowsDependencies.cmake` canonicalizes and case-folds the caller's
+  `WINDOWS_DIRECTORY` and the independent configure-time oracle before using
+  either; it then checks both original path spellings for reparse components.
+  `VerifyInstalledPackage.cmake` requires, preserves, and forwards that oracle
+  instead of deriving it from the value being checked.
 - The baseline manifest rejects malformed hashes, unsafe paths, and duplicate
   case-folded records. Component manifests reject paths outside the stage and
   duplicate records. Owned artifact hashes are compared to their source/build

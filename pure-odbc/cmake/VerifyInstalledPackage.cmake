@@ -1,6 +1,7 @@
 cmake_minimum_required(VERSION 3.25)
 
-set(required_directories STAGE_PREFIX WINDOWS_DIRECTORY)
+set(required_directories
+  STAGE_PREFIX WINDOWS_DIRECTORY PURE_ODBC_AUTHORITATIVE_WINDOWS_DIRECTORY)
 set(required_files
   BASELINE_MANIFEST RUNTIME_COMPONENT_MANIFEST DOCUMENTATION_COMPONENT_MANIFEST
   LLVM_READOBJ ODBC_MODULE_SOURCE ODBC_INTERFACE_SOURCE README_SOURCE
@@ -29,16 +30,38 @@ foreach(required IN LISTS required_files)
   endif()
 endforeach()
 
-set(PURE_ODBC_AUTHORITATIVE_WINDOWS_DIRECTORY "${WINDOWS_DIRECTORY}")
 include("${CMAKE_CURRENT_LIST_DIR}/../tests/ContractTestRoot.cmake")
+set(windows_directory_input "${WINDOWS_DIRECTORY}")
+set(authoritative_windows_directory_input
+  "${PURE_ODBC_AUTHORITATIVE_WINDOWS_DIRECTORY}")
+file(REAL_PATH "${windows_directory_input}" canonical_windows_directory)
+file(REAL_PATH "${authoritative_windows_directory_input}"
+  canonical_authoritative_windows_directory)
+_pure_odbc_fold_path("${canonical_windows_directory}"
+  folded_windows_directory)
+_pure_odbc_fold_path("${canonical_authoritative_windows_directory}"
+  folded_authoritative_windows_directory)
+if(NOT folded_windows_directory STREQUAL
+    folded_authoritative_windows_directory)
+  message(FATAL_ERROR
+    "WINDOWS_DIRECTORY does not match the authoritative Windows directory\n"
+    "WINDOWS_DIRECTORY: ${canonical_windows_directory}\n"
+    "authoritative: ${canonical_authoritative_windows_directory}")
+endif()
+
 _pure_odbc_require_no_reparse("${STAGE_PREFIX}" "STAGE_PREFIX" TRUE)
-_pure_odbc_require_no_reparse("${WINDOWS_DIRECTORY}" "WINDOWS_DIRECTORY" FALSE)
+_pure_odbc_require_no_reparse(
+  "${windows_directory_input}" "WINDOWS_DIRECTORY" FALSE)
+_pure_odbc_require_no_reparse("${authoritative_windows_directory_input}"
+  "PURE_ODBC_AUTHORITATIVE_WINDOWS_DIRECTORY" FALSE)
 foreach(required IN LISTS required_files)
   _pure_odbc_require_no_reparse("${${required}}" "${required}" FALSE)
 endforeach()
 
 file(REAL_PATH "${STAGE_PREFIX}" STAGE_PREFIX)
-file(REAL_PATH "${WINDOWS_DIRECTORY}" WINDOWS_DIRECTORY)
+set(WINDOWS_DIRECTORY "${canonical_windows_directory}")
+set(PURE_ODBC_AUTHORITATIVE_WINDOWS_DIRECTORY
+  "${canonical_authoritative_windows_directory}")
 foreach(required IN LISTS required_files)
   file(REAL_PATH "${${required}}" canonical)
   set(${required} "${canonical}")
@@ -317,7 +340,7 @@ execute_process(
     "-DPURE_EXECUTABLE=${STAGE_PREFIX}/bin/pure.exe"
     "-DWINDOWS_DIRECTORY=${WINDOWS_DIRECTORY}"
     "-DSYSTEM_ODBC_DLL=${SYSTEM_ODBC_DLL}"
-    "-DPURE_ODBC_AUTHORITATIVE_WINDOWS_DIRECTORY=${WINDOWS_DIRECTORY}"
+    "-DPURE_ODBC_AUTHORITATIVE_WINDOWS_DIRECTORY=${PURE_ODBC_AUTHORITATIVE_WINDOWS_DIRECTORY}"
     -P "${WINDOWS_DEPENDENCY_VERIFIER}"
   RESULT_VARIABLE audit_result
   OUTPUT_VARIABLE audit_output

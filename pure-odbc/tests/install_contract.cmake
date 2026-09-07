@@ -3,7 +3,8 @@ cmake_minimum_required(VERSION 3.25)
 include("${CMAKE_CURRENT_LIST_DIR}/ContractTestRoot.cmake")
 
 set(required_directories
-  PORTABLE_PURE_PREFIX WINDOWS_DIRECTORY)
+  PORTABLE_PURE_PREFIX WINDOWS_DIRECTORY
+    PURE_ODBC_AUTHORITATIVE_WINDOWS_DIRECTORY)
 set(required_files
   LLVM_READOBJ ODBC_MODULE_SOURCE
     ODBC_INTERFACE_SOURCE README_SOURCE COPYING_SOURCE COPYING_LESSER_SOURCE
@@ -140,6 +141,7 @@ set(verifier_arguments
   "-DWINDOWS_DEPENDENCY_VERIFIER=${WINDOWS_DEPENDENCY_VERIFIER}"
   "-DWINDOWS_DIRECTORY=${WINDOWS_DIRECTORY}"
   "-DSYSTEM_ODBC_DLL=${SYSTEM_ODBC_DLL}"
+  "-DPURE_ODBC_AUTHORITATIVE_WINDOWS_DIRECTORY=${PURE_ODBC_AUTHORITATIVE_WINDOWS_DIRECTORY}"
   # Compatibility input for the pre-hardening RED verifier.
   "-DSOURCE_RUNTIME_DIR=${PORTABLE_PURE_PREFIX}/bin"
 )
@@ -175,6 +177,12 @@ if(NOT pristine_result EQUAL 0)
     "Pristine installed package was rejected (${pristine_result})\n"
     "${pristine_diagnostics}")
 endif()
+
+set(forged_windows_directory "${install_root}/forged-Windows")
+file(MAKE_DIRECTORY "${forged_windows_directory}")
+expect_rejected("a forged authoritative Windows directory"
+  "WINDOWS_DIRECTORY.*authoritative|authoritative.*WINDOWS_DIRECTORY"
+  "-DPURE_ODBC_AUTHORITATIVE_WINDOWS_DIRECTORY=${forged_windows_directory}")
 
 set(outside_old_globs "${stage}/share/task5-outside-old-globs.txt")
 file(WRITE "${outside_old_globs}" "unexpected package delta\n")

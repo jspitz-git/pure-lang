@@ -27,14 +27,37 @@ foreach(required IN LISTS required_files)
 endforeach()
 
 include("${CMAKE_CURRENT_LIST_DIR}/../tests/ContractTestRoot.cmake")
+set(windows_directory_input "${WINDOWS_DIRECTORY}")
+set(authoritative_windows_directory_input
+  "${PURE_ODBC_AUTHORITATIVE_WINDOWS_DIRECTORY}")
+file(REAL_PATH "${windows_directory_input}" canonical_windows_directory)
+file(REAL_PATH "${authoritative_windows_directory_input}"
+  canonical_authoritative_windows_directory)
+_pure_odbc_fold_path("${canonical_windows_directory}"
+  folded_windows_directory)
+_pure_odbc_fold_path("${canonical_authoritative_windows_directory}"
+  folded_authoritative_windows_directory)
+if(NOT folded_windows_directory STREQUAL
+    folded_authoritative_windows_directory)
+  message(FATAL_ERROR
+    "WINDOWS_DIRECTORY does not match the authoritative Windows directory\n"
+    "WINDOWS_DIRECTORY: ${canonical_windows_directory}\n"
+    "authoritative: ${canonical_authoritative_windows_directory}")
+endif()
+
 _pure_odbc_require_no_reparse("${STAGE_PREFIX}" "STAGE_PREFIX" TRUE)
-_pure_odbc_require_no_reparse("${WINDOWS_DIRECTORY}" "WINDOWS_DIRECTORY" FALSE)
+_pure_odbc_require_no_reparse(
+  "${windows_directory_input}" "WINDOWS_DIRECTORY" FALSE)
+_pure_odbc_require_no_reparse("${authoritative_windows_directory_input}"
+  "PURE_ODBC_AUTHORITATIVE_WINDOWS_DIRECTORY" FALSE)
 foreach(required IN LISTS required_files)
   _pure_odbc_require_no_reparse("${${required}}" "${required}" FALSE)
 endforeach()
 
 file(REAL_PATH "${STAGE_PREFIX}" STAGE_PREFIX)
-file(REAL_PATH "${WINDOWS_DIRECTORY}" WINDOWS_DIRECTORY)
+set(WINDOWS_DIRECTORY "${canonical_windows_directory}")
+set(PURE_ODBC_AUTHORITATIVE_WINDOWS_DIRECTORY
+  "${canonical_authoritative_windows_directory}")
 foreach(required IN LISTS required_files)
   file(REAL_PATH "${${required}}" canonical)
   set(${required} "${canonical}")
@@ -61,7 +84,7 @@ require_exact_path("PURE_RUNTIME_DLL" "${PURE_RUNTIME_DLL}"
 require_exact_path("PURE_EXECUTABLE" "${PURE_EXECUTABLE}"
   "${STAGE_PREFIX}/bin/pure.exe")
 require_exact_path("SYSTEM_ODBC_DLL" "${SYSTEM_ODBC_DLL}"
-  "${WINDOWS_DIRECTORY}/System32/odbc32.dll")
+  "${PURE_ODBC_AUTHORITATIVE_WINDOWS_DIRECTORY}/System32/odbc32.dll")
 
 function(expected_imports filename output)
   string(TOLOWER "${filename}" filename)
@@ -276,26 +299,36 @@ function(inspect_pe module output_imports)
 
   string(REGEX MATCHALL
     "(^|\n)(Import|DelayImport|[A-Za-z][A-Za-z0-9_-]+Import) \\{"
-    import_records "${output}")
-  foreach(record IN LISTS import_records)
+    import_record_starts "${output}")
+  string(REGEX MATCHALL
+    "(^|\n)(Import|DelayImport|[A-Za-z][A-Za-z0-9_-]+Import) \\{[^}]*\\}"
+    import_blocks "${output}")
+  list(LENGTH import_record_starts record_count)
+  list(LENGTH import_blocks block_count)
+  if(NOT record_count EQUAL block_count)
+    message(FATAL_ERROR
+      "Malformed llvm-readobj output for ${module}; ${record_count} import "
+      "records but ${block_count} complete import blocks")
+  endif()
+
+  set(imports)
+  foreach(block IN LISTS import_blocks)
+    string(REGEX MATCH "^\n?[A-Za-z][A-Za-z0-9_-]* \\{" record "${block}")
     string(REGEX REPLACE "^\n?([^ ]+) \\{$" "\\1" record_name "${record}")
     if(NOT record_name STREQUAL "Import" AND
         NOT record_name STREQUAL "DelayImport")
       message(FATAL_ERROR
         "Unknown llvm-readobj record '${record_name}' for ${module}")
     endif()
-  endforeach()
-  string(REGEX MATCHALL "(^|\n)  Name: [^\n]+" import_lines "${output}")
-  list(LENGTH import_records record_count)
-  list(LENGTH import_lines name_count)
-  if(NOT record_count EQUAL name_count)
-    message(FATAL_ERROR
-      "Malformed llvm-readobj output for ${module}; ${record_count} import "
-      "records but ${name_count} names")
-  endif()
 
-  set(imports)
-  foreach(line IN LISTS import_lines)
+    string(REGEX MATCHALL "(^|\n)  Name: [^\n]+" block_name_lines "${block}")
+    list(LENGTH block_name_lines block_name_count)
+    if(NOT block_name_count EQUAL 1)
+      message(FATAL_ERROR
+        "Malformed llvm-readobj output for ${module}; expected exactly one "
+        "Name in import block '${record_name}' (found ${block_name_count})")
+    endif()
+    list(GET block_name_lines 0 line)
     string(REGEX REPLACE "^\n?  Name: " "" name "${line}")
     if(NOT name MATCHES "^[A-Za-z0-9_+.-]+\\.[Dd][Ll][Ll]$")
       message(FATAL_ERROR
@@ -308,6 +341,14 @@ function(inspect_pe module output_imports)
     endif()
     list(APPEND imports "${name}")
   endforeach()
+
+  string(REGEX MATCHALL "(^|\n)  Name: [^\n]+" all_name_lines "${output}")
+  list(LENGTH all_name_lines name_count)
+  if(NOT record_count EQUAL name_count)
+    message(FATAL_ERROR
+      "Malformed llvm-readobj output for ${module}; ${record_count} import "
+      "records but ${name_count} names")
+  endif()
   list(SORT imports)
   set(${output_imports} "${imports}" PARENT_SCOPE)
 endfunction()
