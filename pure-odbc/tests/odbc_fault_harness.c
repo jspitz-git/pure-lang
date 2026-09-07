@@ -89,10 +89,45 @@ static int result_count;
 static int result_index;
 static void *watched_descriptor;
 static int watched_descriptor_free_calls;
+static int allocation_ids[32];
+static int next_allocation_id;
+
+enum resource_event_kind {
+  EVENT_ALLOC,
+  EVENT_REALLOC,
+  EVENT_FREE,
+  EVENT_RESET_PARAMS,
+  EVENT_CLOSE_STATEMENT,
+  EVENT_CLOSE_CURSOR,
+  EVENT_FREE_STMT_HANDLE,
+  EVENT_DISCONNECT,
+  EVENT_FREE_DBC,
+  EVENT_FREE_ENV
+};
+
+struct resource_event {
+  enum resource_event_kind kind;
+  int detail;
+};
+
+static struct resource_event resource_events[256];
+static size_t resource_event_count;
+static bool cursor_open;
+static bool cursor_state_error;
 
 #define FAKE_ENV ((SQLHENV)(uintptr_t)0x101)
 #define FAKE_DBC ((SQLHDBC)(uintptr_t)0x202)
 #define FAKE_STMT ((SQLHSTMT)(uintptr_t)0x303)
+
+static void record_resource_event(enum resource_event_kind kind, int detail)
+{
+  if (resource_event_count <
+      sizeof(resource_events) / sizeof(resource_events[0])) {
+    resource_events[resource_event_count].kind = kind;
+    resource_events[resource_event_count].detail = detail;
+    ++resource_event_count;
+  }
+}
 
 static void *fault_malloc(size_t size)
 {
@@ -111,7 +146,9 @@ static void *fault_malloc(size_t size)
   for (i = 0; i < sizeof(allocations) / sizeof(allocations[0]); ++i) {
     if (!allocations[i]) {
       allocations[i] = ptr;
+      allocation_ids[i] = ++next_allocation_id;
       ++allocation_count;
+      record_resource_event(EVENT_ALLOC, allocation_ids[i]);
       return ptr;
     }
   }
@@ -136,6 +173,7 @@ static void *fault_realloc(void *ptr, size_t size)
   for (i = 0; i < sizeof(allocations) / sizeof(allocations[0]); ++i) {
     if (allocations[i] == ptr) {
       allocations[i] = new_ptr;
+      record_resource_event(EVENT_REALLOC, allocation_ids[i]);
       return new_ptr;
     }
   }
@@ -153,7 +191,9 @@ static void fault_free(void *ptr)
     ++watched_descriptor_free_calls;
   for (i = 0; i < sizeof(allocations) / sizeof(allocations[0]); ++i) {
     if (allocations[i] == ptr) {
+      record_resource_event(EVENT_FREE, allocation_ids[i]);
       allocations[i] = NULL;
+      allocation_ids[i] = 0;
       --allocation_count;
       free(ptr);
       return;
@@ -161,6 +201,7 @@ static void fault_free(void *ptr)
   }
   /* Pure's vector accessors allocate their returned arrays outside the
      interposed allocator.  odbc.c owns and releases those arrays normally. */
+  record_resource_event(EVENT_FREE, 0);
   free(ptr);
 }
 
@@ -173,6 +214,7 @@ static bool fault_forget(void *ptr)
   for (i = 0; i < sizeof(allocations) / sizeof(allocations[0]); ++i) {
     if (allocations[i] == ptr) {
       allocations[i] = NULL;
+      allocation_ids[i] = 0;
       --allocation_count;
       return true;
     }
@@ -227,14 +269,17 @@ static SQLRETURN SQL_API fake_SQLFreeHandle(SQLSMALLINT handle_type,
   switch (handle_type) {
   case SQL_HANDLE_ENV:
     ++free_env_calls;
+    record_resource_event(EVENT_FREE_ENV, 0);
     handle_protocol_ok = handle_protocol_ok && handle == FAKE_ENV;
     break;
   case SQL_HANDLE_DBC:
     ++free_dbc_calls;
+    record_resource_event(EVENT_FREE_DBC, 0);
     handle_protocol_ok = handle_protocol_ok && handle == FAKE_DBC;
     break;
   case SQL_HANDLE_STMT:
     ++free_stmt_calls;
+    record_resource_event(EVENT_FREE_STMT_HANDLE, 0);
     handle_protocol_ok = handle_protocol_ok && handle == FAKE_STMT;
     break;
   default:
@@ -278,6 +323,7 @@ static SQLRETURN SQL_API fake_SQLDriverConnect(SQLHDBC connection,
 static SQLRETURN SQL_API fake_SQLDisconnect(SQLHDBC connection)
 {
   ++disconnect_calls;
+  record_resource_event(EVENT_DISCONNECT, 0);
   handle_protocol_ok = handle_protocol_ok && connection == FAKE_DBC;
   return SQL_SUCCESS;
 }
@@ -286,11 +332,14 @@ static SQLRETURN SQL_API fake_SQLFreeStmt(SQLHSTMT statement,
                                          SQLUSMALLINT option)
 {
   handle_protocol_ok = handle_protocol_ok && statement == FAKE_STMT;
-  if (option == SQL_RESET_PARAMS)
+  if (option == SQL_RESET_PARAMS) {
     ++reset_params_calls;
-  else if (option == SQL_CLOSE)
+    record_resource_event(EVENT_RESET_PARAMS, 0);
+  } else if (option == SQL_CLOSE) {
     ++close_statement_calls;
-  else
+    record_resource_event(EVENT_CLOSE_STATEMENT, 0);
+    cursor_open = false;
+  } else
     handle_protocol_ok = false;
   return SQL_SUCCESS;
 }
@@ -319,15 +368,20 @@ static SQLRETURN SQL_API fake_SQLBindParameter(
   (void)indicator;
   ++bind_parameter_calls;
   handle_protocol_ok = handle_protocol_ok && statement == FAKE_STMT &&
-    parameter == 1 && input_output_type == SQL_PARAM_INPUT;
-  return operation_fault == FAIL_PARAMETER_BIND ? SQL_ERROR : SQL_SUCCESS;
+    parameter >= 1 && parameter <= 2 &&
+    input_output_type == SQL_PARAM_INPUT;
+  return operation_fault == FAIL_PARAMETER_BIND && parameter == 2 ?
+    SQL_ERROR : SQL_SUCCESS;
 }
 
 static SQLRETURN SQL_API fake_SQLExecute(SQLHSTMT statement)
 {
   ++execute_calls;
   handle_protocol_ok = handle_protocol_ok && statement == FAKE_STMT;
-  return operation_fault == FAIL_EXECUTE ? SQL_ERROR : SQL_SUCCESS;
+  if (operation_fault == FAIL_EXECUTE)
+    return SQL_ERROR;
+  cursor_open = true;
+  return SQL_SUCCESS;
 }
 
 static SQLRETURN SQL_API fake_SQLNumResultCols(SQLHSTMT statement,
@@ -389,7 +443,13 @@ static SQLRETURN SQL_API fake_SQLMoreResults(SQLHSTMT statement)
 static SQLRETURN SQL_API fake_SQLCloseCursor(SQLHSTMT statement)
 {
   ++close_cursor_calls;
+  record_resource_event(EVENT_CLOSE_CURSOR, 0);
   handle_protocol_ok = handle_protocol_ok && statement == FAKE_STMT;
+  if (!cursor_open) {
+    cursor_state_error = true;
+    return SQL_ERROR;
+  }
+  cursor_open = false;
   return SQL_SUCCESS;
 }
 
@@ -651,6 +711,11 @@ static void check_case(bool condition, const char *case_name,
 
 static void reset_operation_state(void)
 {
+  memset(allocation_ids, 0, sizeof(allocation_ids));
+  next_allocation_id = 0;
+  resource_event_count = 0;
+  cursor_open = false;
+  cursor_state_error = false;
   operation_fault = OPERATION_OK;
   fail_next_allocation = 0;
   fail_allocation_countdown = 0;
@@ -680,6 +745,77 @@ static void reset_operation_state(void)
   result_index = 0;
   watched_descriptor = NULL;
   watched_descriptor_free_calls = 0;
+}
+
+static int resource_event_position(enum resource_event_kind kind, int detail)
+{
+  size_t i;
+
+  for (i = 0; i < resource_event_count; ++i)
+    if (resource_events[i].kind == kind &&
+        (detail < 0 || resource_events[i].detail == detail))
+      return (int)i;
+  return -1;
+}
+
+static int resource_event_occurrences(enum resource_event_kind kind,
+                                      int detail)
+{
+  size_t i;
+  int count = 0;
+
+  for (i = 0; i < resource_event_count; ++i)
+    if (resource_events[i].kind == kind &&
+        (detail < 0 || resource_events[i].detail == detail))
+      ++count;
+  return count;
+}
+
+static bool connection_cleanup_is_ordered(bool expect_disconnect,
+                                          bool expect_free_dbc,
+                                          bool expect_free_env)
+{
+  int disconnect_position =
+    resource_event_position(EVENT_DISCONNECT, -1);
+  int dbc_position = resource_event_position(EVENT_FREE_DBC, -1);
+  int env_position = resource_event_position(EVENT_FREE_ENV, -1);
+
+  if (!expect_free_env)
+    return disconnect_position < 0 && dbc_position < 0 && env_position < 0;
+  if (env_position < 0)
+    return false;
+  if (expect_free_dbc && (dbc_position < 0 || dbc_position >= env_position))
+    return false;
+  if (expect_disconnect &&
+      (disconnect_position < 0 || disconnect_position >= dbc_position))
+    return false;
+  return true;
+}
+
+static bool owned_argument_cleanup_is_ordered(int owned_buffers)
+{
+  int reset_position = resource_event_position(EVENT_RESET_PARAMS, -1);
+  int close_position = resource_event_position(EVENT_CLOSE_STATEMENT, -1);
+  int i;
+
+  if (owned_buffers == 0)
+    return reset_position < 0 && close_position >= 0;
+  if (reset_position < 0 || close_position < 0 ||
+      reset_position >= close_position)
+    return false;
+  for (i = 0; i < owned_buffers; ++i) {
+    int allocation_id = i + 2;
+    int allocation_position =
+      resource_event_position(EVENT_ALLOC, allocation_id);
+    int free_position = resource_event_position(EVENT_FREE, allocation_id);
+
+    if (resource_event_occurrences(EVENT_ALLOC, allocation_id) != 1 ||
+        allocation_position < 0 || allocation_position >= reset_position ||
+        resource_event_occurrences(EVENT_FREE, allocation_id) != 1 ||
+        free_position <= reset_position || free_position >= close_position)
+      return false;
+  }
+  return true;
 }
 
 static bool is_odbc_error(pure_expr *value)
@@ -781,7 +917,12 @@ static void run_connection_failure_cases(void)
                close_cursor_calls == 0,
                cases[i].name, "disconnects only an established connection");
     check_case(handle_protocol_ok, cases[i].name,
-               "uses initialized handles in reverse-order cleanup");
+               "uses initialized handles throughout cleanup");
+    check_case(connection_cleanup_is_ordered(cases[i].disconnect != 0,
+                                             cases[i].free_dbc != 0,
+                                             cases[i].free_env != 0),
+               cases[i].name,
+               "orders disconnect, DBC release, and ENV release");
     check_case(allocation_count == 0, cases[i].name,
                "retains no connection storage");
     if (allocation_count != 0)
@@ -812,11 +953,68 @@ static void run_successful_connection_cleanup(void)
         "successful connection configures and connects exactly once");
   check(free_env_calls == 1 && free_dbc_calls == 1 && free_stmt_calls == 1,
         "successful disconnect frees each handle exactly once");
-  check(disconnect_calls == 1 && close_cursor_calls == 1,
-        "successful disconnect closes the cursor and connection exactly once");
+  check(disconnect_calls == 1 && close_cursor_calls == 0 &&
+        close_statement_calls == 0,
+        "inactive disconnect does not close a nonexistent cursor");
+  check(!cursor_state_error,
+        "inactive disconnect does not suppress an invalid cursor-state error");
+  check(connection_cleanup_is_ordered(true, true, true),
+        "successful disconnect orders disconnect, DBC release, and ENV release");
   check(handle_protocol_ok, "successful connection uses the exact handles");
   check(allocation_count == 0,
         "successful disconnect retains no connection storage");
+}
+
+static void run_active_statement_disconnect(void)
+{
+  pure_expr *database_value;
+  pure_expr *args;
+  pure_expr *execution_result;
+  pure_expr *disconnect_result;
+  ODBCHandle *database = NULL;
+  int close_position;
+  int free_statement_position;
+  int disconnect_position;
+
+  check(allocation_count == 0,
+        "active disconnect starts without allocations");
+  reset_operation_state();
+  database_value = odbc_connect("Driver={deterministic-success}");
+  check(pure_is_pointer(database_value, (void **)&database) && database,
+        "active disconnect obtains a production database value");
+  result_cols[0] = 0;
+  result_rows[0] = 4;
+  args = pure_listl(0);
+  execution_result = odbc_sql_exec(database_value, "active update", args);
+  check(is_int_value(execution_result, 4) && database->exec,
+        "active disconnect reaches an executed statement through production");
+  release_pure_result(execution_result);
+  pure_freenew(args);
+
+  disconnect_result = odbc_disconnect(database_value);
+  check(disconnect_result != NULL,
+        "active disconnect preserves the public unit result shape");
+  release_pure_result(disconnect_result);
+  pure_freenew(database_value);
+  check(close_statement_calls == 1 && close_cursor_calls == 0,
+        "active disconnect closes its cursor exactly once");
+  check(!cursor_open && !cursor_state_error,
+        "active disconnect neither leaves a cursor nor suppresses a state error");
+  check(free_stmt_calls == 1 && disconnect_calls == 1 &&
+        free_dbc_calls == 1 && free_env_calls == 1,
+        "active disconnect releases every native resource exactly once");
+  close_position = resource_event_position(EVENT_CLOSE_STATEMENT, -1);
+  free_statement_position =
+    resource_event_position(EVENT_FREE_STMT_HANDLE, -1);
+  disconnect_position = resource_event_position(EVENT_DISCONNECT, -1);
+  check(close_position >= 0 && close_position < free_statement_position &&
+        free_statement_position < disconnect_position &&
+        connection_cleanup_is_ordered(true, true, true),
+        "active disconnect orders cursor close, statement release, disconnect, DBC, ENV");
+  check(handle_protocol_ok,
+        "active disconnect uses the exact native handles");
+  check(allocation_count == 0,
+        "active disconnect retains no connection storage");
 }
 
 static void run_repeated_driver_failure(void)
@@ -857,18 +1055,19 @@ struct execution_case {
   int expected_num_cols;
   int expected_reset;
   int expected_close;
+  int expected_owned_buffers;
 };
 
 static void run_execution_failure_cases(void)
 {
   static const struct execution_case cases[] = {
-    {"prepare failure", FAIL_PREPARE, 1, 0, 0, 0, 0, 1},
+    {"prepare failure", FAIL_PREPARE, 1, 0, 0, 0, 0, 1, 0},
     {"parameter conversion failure", FAIL_PARAMETER_CONVERSION,
-     1, 0, 0, 0, 1, 1},
-    {"parameter bind failure", FAIL_PARAMETER_BIND, 1, 1, 0, 0, 1, 1},
-    {"execute failure", FAIL_EXECUTE, 1, 1, 1, 0, 1, 1},
+     1, 0, 0, 0, 1, 1, 1},
+    {"parameter bind failure", FAIL_PARAMETER_BIND, 1, 2, 0, 0, 1, 1, 2},
+    {"execute failure", FAIL_EXECUTE, 1, 2, 1, 0, 1, 1, 2},
     {"result metadata allocation failure", FAIL_RESULT_METADATA_ALLOCATION,
-     1, 0, 1, 1, 0, 1}
+     1, 2, 1, 1, 1, 1, 2}
   };
   size_t i;
 
@@ -878,28 +1077,29 @@ static void run_execution_failure_cases(void)
     pure_expr *database_value;
     pure_expr *args;
     pure_expr *result;
-    bool binary_parameter = cases[i].fault == FAIL_PARAMETER_CONVERSION ||
-      cases[i].fault == FAIL_EXECUTE;
-    bool integer_parameter = cases[i].fault == FAIL_PARAMETER_BIND;
+    bool binary_parameters = cases[i].expected_owned_buffers > 0;
 
     check(allocation_count == 0, "execution case starts without allocations");
     reset_operation_state();
     operation_fault = cases[i].fault;
     result_cols[0] = cases[i].fault == FAIL_RESULT_METADATA_ALLOCATION ? 1 : 0;
     if (cases[i].fault == FAIL_PARAMETER_CONVERSION)
-      fail_allocation_countdown = 2;
+      fail_allocation_countdown = 3;
     else if (cases[i].fault == FAIL_RESULT_METADATA_ALLOCATION)
-      fail_allocation_countdown = 2;
+      fail_allocation_countdown = 5;
     initialize_test_database(&database);
     database_value = pure_pointer(&database);
-    if (binary_parameter)
-      args = pure_listl(1, pure_tuplel(2, pure_int((int)sizeof(bytes)),
-                                     pure_pointer(bytes)));
-    else if (integer_parameter)
-      args = pure_listl(1, pure_int(7));
+    if (binary_parameters)
+      args = pure_listl(2,
+                        pure_tuplel(2, pure_int((int)sizeof(bytes)),
+                                    pure_pointer(bytes)),
+                        pure_tuplel(2, pure_int((int)sizeof(bytes)),
+                                    pure_pointer(bytes)));
     else
       args = pure_listl(0);
-    result = odbc_sql_exec(database_value, "select ?", args);
+    result = odbc_sql_exec(database_value,
+                           binary_parameters ? "select ?, ?" : "select ?",
+                           args);
     check_case(is_odbc_error(result), cases[i].name,
                "preserves the public error constructor");
     release_pure_result(result);
@@ -918,6 +1118,10 @@ static void run_execution_failure_cases(void)
                cases[i].name, "clears every database-side owner");
     check_case(handle_protocol_ok, cases[i].name,
                "uses the existing statement handle consistently");
+    check_case(owned_argument_cleanup_is_ordered(
+                 cases[i].expected_owned_buffers),
+               cases[i].name,
+               "orders RESET_PARAMS, owned-buffer release, and SQL_CLOSE");
     check_case(allocation_count == 0, cases[i].name,
                "retains no converted arguments or metadata");
 
@@ -1471,6 +1675,7 @@ int main(void)
   }
   run_connection_failure_cases();
   run_successful_connection_cleanup();
+  run_active_statement_disconnect();
   run_repeated_driver_failure();
   run_execution_failure_cases();
   run_update_count_to_result_set();

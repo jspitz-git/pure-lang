@@ -571,7 +571,6 @@ pure_expr *odbc_disconnect(pure_expr *dbx)
   ODBCHandle *db;
   if (is_db_pointer(dbx, &db)) {
     sql_close(db);
-    SQLCloseCursor(db->hstmt);
     SQLFreeHandle(SQL_HANDLE_STMT, db->hstmt);
     SQLDisconnect(db->hdbc);
     SQLFreeHandle(SQL_HANDLE_DBC, db->hdbc);
