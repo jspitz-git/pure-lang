@@ -581,6 +581,11 @@ typedef SQLRETURN (SQL_API *odbc_enumerator)(
   SQLHENV, SQLUSMALLINT, SQLCHAR *, SQLSMALLINT, SQLSMALLINT *, SQLCHAR *,
   SQLSMALLINT, SQLSMALLINT *);
 
+/* SQL_FETCH_NEXT always advances, even when the preceding value was
+   truncated. Bound complete FIRST/NEXT replays so a changing catalog cannot
+   turn repeated growth into an unbounded loop. */
+#define ODBC_ENUMERATION_RESTART_LIMIT 16U
+
 static bool grow_enumeration_buffer(SQLCHAR **buffer, size_t *capacity,
                                     size_t required)
 {
@@ -605,6 +610,8 @@ static bool grow_expression_vector(pure_expr ***values, size_t *capacity,
   size_t bytes;
   pure_expr **grown;
 
+  if (required <= *capacity)
+    return true;
   while (grown_capacity < required) {
     if (grown_capacity > SIZE_MAX / 2) {
       grown_capacity = required;
@@ -618,6 +625,65 @@ static bool grow_expression_vector(pure_expr ***values, size_t *capacity,
   *values = grown;
   *capacity = grown_capacity;
   return true;
+}
+
+static void clear_enumeration_values(pure_expr **values, size_t *count)
+{
+  while (*count > 0)
+    pure_freenew(values[--*count]);
+}
+
+static bool enumeration_string_matches(pure_expr *value, const SQLCHAR *text,
+                                       size_t length)
+{
+  const char *string = NULL;
+
+  return pure_is_string(value, &string) && strlen(string) == length &&
+    memcmp(string, text, length) == 0;
+}
+
+static bool driver_attributes_match(pure_expr *value,
+                                    const SQLCHAR *attributes, size_t length)
+{
+  pure_expr **values = NULL;
+  size_t count = 0;
+  size_t index = 0;
+  size_t offset = 0;
+  bool matches = pure_is_listv(value, &count, &values);
+
+  while (matches && offset < length && attributes[offset] != 0) {
+    const SQLCHAR *terminator = (const SQLCHAR *)memchr(
+      attributes + offset, 0, length - offset);
+    size_t item_length = terminator ?
+      (size_t)(terminator - (attributes + offset)) : length - offset;
+
+    matches = index < count &&
+      enumeration_string_matches(values[index], attributes + offset,
+                                 item_length);
+    ++index;
+    offset += item_length + 1;
+  }
+  matches = matches && index == count;
+  free(values);
+  return matches;
+}
+
+static bool enumeration_value_matches(pure_expr *value, bool drivers,
+                                      const SQLCHAR *name, size_t name_length,
+                                      const SQLCHAR *detail,
+                                      size_t detail_length)
+{
+  pure_expr **fields = NULL;
+  size_t count = 0;
+  bool matches = pure_is_tuplev(value, &count, &fields) && count == 2 &&
+    enumeration_string_matches(fields[0], name, name_length);
+
+  if (matches && drivers)
+    matches = driver_attributes_match(fields[1], detail, detail_length);
+  else if (matches)
+    matches = enumeration_string_matches(fields[1], detail, detail_length);
+  free(fields);
+  return matches;
 }
 
 static pure_expr *driver_attributes(SQLCHAR *attributes, size_t length)
@@ -665,9 +731,12 @@ static pure_expr *odbc_enumeration(bool drivers)
   size_t detail_capacity = 128;
   size_t value_capacity = 0;
   size_t value_count = 0;
+  size_t replay_index = 0;
+  unsigned int restart_count = 0;
   SQLUSMALLINT direction = SQL_FETCH_FIRST;
   SQLRETURN ret;
   bool odbc_failure = false;
+  bool replaying = false;
 
   if ((ret = SQLAllocHandle(SQL_HANDLE_ENV, SQL_NULL_HANDLE, &henv)) !=
       SQL_SUCCESS && ret != SQL_SUCCESS_WITH_INFO)
@@ -692,8 +761,18 @@ static pure_expr *odbc_enumeration(bool drivers)
     ret = enumerate(henv, direction, name, (SQLSMALLINT)name_capacity,
                     &name_length, detail, (SQLSMALLINT)detail_capacity,
                     &detail_length);
-    if (ret == SQL_NO_DATA)
+    if (ret == SQL_NO_DATA) {
+      if (replaying && replay_index < value_count) {
+        if (++restart_count > ODBC_ENUMERATION_RESTART_LIMIT)
+          goto unstable_enumeration;
+        clear_enumeration_values(values, &value_count);
+        replay_index = 0;
+        replaying = false;
+        direction = SQL_FETCH_FIRST;
+        continue;
+      }
       break;
+    }
     if (!SQL_SUCCEEDED(ret) || name_length < 0 || detail_length < 0) {
       odbc_failure = true;
       break;
@@ -706,12 +785,34 @@ static pure_expr *odbc_enumeration(bool drivers)
         !grow_enumeration_buffer(&name, &name_capacity, required_name) ||
         !grow_enumeration_buffer(&detail, &detail_capacity, required_detail))
       goto allocation_failure;
-    if (retry)
+    if (retry) {
+      if (++restart_count > ODBC_ENUMERATION_RESTART_LIMIT)
+        goto unstable_enumeration;
+      replay_index = 0;
+      replaying = true;
+      direction = SQL_FETCH_FIRST;
       continue;
+    }
     name[name_length] = 0;
     detail[detail_length] = 0;
     if (drivers)
       detail[(size_t)detail_length + 1] = 0;
+    if (replaying && replay_index < value_count) {
+      if (!enumeration_value_matches(values[replay_index], drivers, name,
+                                     (size_t)name_length, detail,
+                                     (size_t)detail_length)) {
+        if (++restart_count > ODBC_ENUMERATION_RESTART_LIMIT)
+          goto unstable_enumeration;
+        clear_enumeration_values(values, &value_count);
+        replay_index = 0;
+        replaying = false;
+        direction = SQL_FETCH_FIRST;
+        continue;
+      }
+      ++replay_index;
+      direction = SQL_FETCH_NEXT;
+      continue;
+    }
     if (!grow_expression_vector(&values, &value_capacity, value_count + 1))
       goto allocation_failure;
     if (drivers) {
@@ -729,6 +830,8 @@ static pure_expr *odbc_enumeration(bool drivers)
     if (!values[value_count])
       goto allocation_failure;
     ++value_count;
+    replay_index = 0;
+    replaying = false;
     direction = SQL_FETCH_NEXT;
   }
   if (odbc_failure)
@@ -740,11 +843,13 @@ static pure_expr *odbc_enumeration(bool drivers)
   }
   goto cleanup;
 
+ unstable_enumeration:
+  result = pure_err_internal("enumeration did not stabilize");
+  goto cleanup;
  allocation_failure:
   result = pure_err_internal("insufficient memory");
  cleanup:
-  while (value_count > 0)
-    pure_freenew(values[--value_count]);
+  clear_enumeration_values(values, &value_count);
   free(values);
   free(detail);
   free(name);
@@ -1203,18 +1308,23 @@ static pure_expr *odbc_getinfo_text(ODBCHandle *db, SQLUSMALLINT info_type)
 pure_expr *odbc_getinfo(pure_expr *dbx, unsigned int info_type)
 {
   ODBCHandle *db;
+  SQLUSMALLINT checked_info_type;
+
+  if (info_type > (unsigned int)USHRT_MAX)
+    return NULL;
+  checked_info_type = (SQLUSMALLINT)info_type;
   if (is_db_pointer(dbx, &db)) {
-    switch (odbc_info_value_kind((SQLUSMALLINT)info_type)) {
+    switch (odbc_info_value_kind(checked_info_type)) {
     case ODBC_INFO_USMALLINT:
-      return odbc_getinfo_numeric(db, (SQLUSMALLINT)info_type,
+      return odbc_getinfo_numeric(db, checked_info_type,
                                   sizeof(SQLUSMALLINT));
     case ODBC_INFO_UINTEGER:
-      return odbc_getinfo_numeric(db, (SQLUSMALLINT)info_type,
+      return odbc_getinfo_numeric(db, checked_info_type,
                                   sizeof(SQLUINTEGER));
     case ODBC_INFO_HANDLE:
-      return odbc_getinfo_handle(db, (SQLUSMALLINT)info_type);
+      return odbc_getinfo_handle(db, checked_info_type);
     default:
-      return odbc_getinfo_text(db, (SQLUSMALLINT)info_type);
+      return odbc_getinfo_text(db, checked_info_type);
     }
   } else
     return 0;
@@ -1249,7 +1359,7 @@ pure_expr *odbc_typeinfo(pure_expr *dbx, int id)
     pure_expr *res, **xs = (pure_expr**)malloc(NMAX*sizeof(pure_expr*));
     size_t i, n = 0, m = NMAX;
 
-    UCHAR  name[SL], prefix[SL], suffix[SL], params[SL], local_name[SL];
+    SQLCHAR name[SL], prefix[SL], suffix[SL], params[SL], local_name[SL];
     SQLSMALLINT type, nullable, case_sen, searchable, unsign, money, auto_inc;
     SQLSMALLINT min_scale, max_scale;
     SQLUINTEGER prec;
@@ -1357,7 +1467,7 @@ pure_expr *odbc_tables(pure_expr *dbx)
     pure_expr *res, **xs = (pure_expr**)malloc(NMAX*sizeof(pure_expr*));
     size_t i, n = 0, m = NMAX;
 
-    UCHAR  name[SL], type[SL];
+    SQLCHAR name[SL], type[SL];
     SQLLEN len[6];
     SQLRETURN ret;
 
@@ -1422,7 +1532,7 @@ pure_expr *odbc_columns(pure_expr *dbx, const char *tab)
     pure_expr *res, **xs = (pure_expr**)malloc(NMAX*sizeof(pure_expr*));
     size_t i, n = 0, m = NMAX;
 
-    UCHAR  name[SL], type[SL], nullable[SL], deflt[SL];
+    SQLCHAR name[SL], type[SL], nullable[SL], deflt[SL];
     SQLLEN len[19];
     SQLRETURN ret;
 
@@ -1496,7 +1606,7 @@ pure_expr *odbc_primary_keys(pure_expr *dbx, const char *tab)
     pure_expr *res, **xs = (pure_expr**)malloc(NMAX*sizeof(pure_expr*));
     size_t i, n = 0, m = NMAX;
 
-    UCHAR  name[SL];
+    SQLCHAR name[SL];
     SQLLEN len[5];
     SQLRETURN ret;
 
@@ -1562,7 +1672,7 @@ pure_expr *odbc_foreign_keys(pure_expr *dbx, const char *tab)
     pure_expr *res, **xs = (pure_expr**)malloc(NMAX*sizeof(pure_expr*));
     size_t i, n = 0, m = NMAX;
 
-    UCHAR  name[SL], pktabname[SL], pkname[SL];
+    SQLCHAR name[SL], pktabname[SL], pkname[SL];
     SQLLEN len[9];
     SQLRETURN ret;
 
