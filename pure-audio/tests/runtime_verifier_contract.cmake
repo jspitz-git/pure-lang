@@ -2,7 +2,8 @@ cmake_minimum_required(VERSION 3.25)
 
 # This producer has no dependency on the verifier's expected-import table.
 # Capture real llvm-readobj records independently and alter one contract at a
-# time; a tiny native transport returns the captured bytes for the real parser.
+# time. Only an included test driver may replace the record reader; all origin,
+# hash, stage and tool-identity tests exercise the real standalone entry point.
 foreach(required SOURCE_DIR MODULE_DIR CLANG64_PREFIX PURE_PREFIX RUNNER)
   if(NOT DEFINED ${required})
     message(FATAL_ERROR "${required} is required")
@@ -49,43 +50,58 @@ foreach(name IN LISTS names)
   endif()
 endforeach()
 file(WRITE "${work}/runtime-sources.txt" "${rows}")
-file(WRITE "${work}/reader.c" [=[
-#include <stdio.h>
-#include <string.h>
-int main(int argc, char **argv) {
-  char path[4096]; unsigned char buf[8192]; size_t n;
-  if (argc != 4 || strcmp(argv[1], "--file-headers") ||
-      strcmp(argv[2], "--coff-imports")) return 64;
-  if (snprintf(path, sizeof(path), "%s.records", argv[3]) >= (int)sizeof(path)) return 65;
-  FILE *f = fopen(path, "rb"); if (!f) return 66;
-  while ((n = fread(buf, 1, sizeof(buf), f))) if (fwrite(buf, 1, n, stdout) != n) return 67;
-  return fclose(f);
-}
+file(WRITE "${work}/recorded-driver.cmake" [=[
+cmake_minimum_required(VERSION 3.25)
+set(PURE_AUDIO_VERIFIER_HELPERS_ONLY ON)
+include("${SOURCE_DIR}/cmake/VerifyWindowsDependencies.cmake")
+function(audio_read_pe_records path output)
+  file(READ "${path}.records" records)
+  set(${output} "${records}" PARENT_SCOPE)
+endfunction()
+audio_verify_closure()
 ]=])
+file(WRITE "${work}/old-readobj.c" "#include <stdio.h>\nint main(void) { puts(\"LLVM version 21.0.0\"); return 0; }\n")
+file(MAKE_DIRECTORY "${work}/old-llvm/bin")
 execute_process(COMMAND "${CLANG64_PREFIX}/bin/clang.exe" -std=c11 -Wall -Wextra -Werror
-  "${work}/reader.c" -o "${work}/reader.exe" RESULT_VARIABLE rc)
+  "${work}/old-readobj.c" -o "${work}/old-llvm/bin/llvm-readobj.exe" RESULT_VARIABLE rc)
 if(NOT rc EQUAL 0)
-  message(FATAL_ERROR "Cannot compile independent readobj transport")
+  message(FATAL_ERROR "Cannot compile independent readobj version fixture")
 endif()
 set(negative 0)
 set(positive 0)
 set(failures)
 set(system_directory "C:/Windows/System32")
+set(inspection_tool "${CLANG64_PREFIX}/bin/llvm-readobj.exe")
+set(inspection_prefix "${CLANG64_PREFIX}")
+file(SHA256 "${inspection_tool}" inspection_hash)
+set(real_inspection_hash "${inspection_hash}")
 function(verify_case name accept)
   if(DEFINED CASE_FILTER AND NOT name MATCHES "${CASE_FILTER}")
     return()
   endif()
-  execute_process(COMMAND "${CMAKE_COMMAND}"
-    "-DLLVM_READOBJ=${work}/reader.exe" "-DRUNTIME_DIR=${CLANG64_PREFIX}/bin"
+  set(driver "${SOURCE_DIR}/cmake/VerifyWindowsDependencies.cmake")
+  if(name MATCHES "^parser-|^libpure-extra-transitive-import$|^recorded-pristine$")
+    set(driver "${work}/recorded-driver.cmake")
+  endif()
+  set(extra_arguments)
+  if(NOT omit_inspection_hash)
+    list(APPEND extra_arguments "-DPURE_AUDIO_LLVM_READOBJ_SHA256=${inspection_hash}")
+  endif()
+  if(name STREQUAL "production-cli-cannot-enable-helper")
+    list(APPEND extra_arguments -DPURE_AUDIO_VERIFIER_HELPERS_ONLY=ON)
+  endif()
+  execute_process(COMMAND "${CMAKE_COMMAND}" ${extra_arguments}
+    "-DSOURCE_DIR=${SOURCE_DIR}"
+    "-DLLVM_READOBJ=${inspection_tool}" "-DRUNTIME_DIR=${CLANG64_PREFIX}/bin"
     "-DAUDIO_MODULE=${MODULE_DIR}/audio.dll" "-DFFTW_MODULE=${MODULE_DIR}/fftw.dll"
     "-DSRCPROCESS_MODULE=${MODULE_DIR}/srcprocess.dll" "-DSFINFO_MODULE=${MODULE_DIR}/sfinfo.dll"
     "-DREALTIME_MODULE=${MODULE_DIR}/realtime.dll"
-    "-DAUDIO_MODULE_DIR=${MODULE_DIR}" "-DPURE_AUDIO_CLANG64_PREFIX=${CLANG64_PREFIX}"
+    "-DAUDIO_MODULE_DIR=${MODULE_DIR}" "-DPURE_AUDIO_CLANG64_PREFIX=${inspection_prefix}"
     "-DPURE_AUDIO_PURE_PREFIX=${PURE_PREFIX}"
     "-DPURE_AUDIO_WINDOWS_SYSTEM_DIRECTORY=${system_directory}"
     "-DPURE_AUDIO_RUNTIME_MANIFEST=${work}/runtime-sources.txt"
     "-DSTAGE_PREFIX=${work}/stage"
-    -P "${SOURCE_DIR}/cmake/VerifyWindowsDependencies.cmake"
+    -P "${driver}"
     RESULT_VARIABLE rc OUTPUT_VARIABLE out ERROR_VARIABLE err TIMEOUT 45)
   file(WRITE "${work}/${name}.log" "${out}\n${err}")
   if(accept)
@@ -95,7 +111,10 @@ function(verify_case name accept)
     math(EXPR count "${positive}+1")
     set(positive "${count}" PARENT_SCOPE)
   else()
-    if(rc EQUAL 0 OR NOT "${out}${err}" MATCHES "audio audit:")
+    if(NOT DEFINED expected_rejection)
+      set(expected_rejection "audio audit:")
+    endif()
+    if(rc EQUAL 0 OR NOT "${out}${err}" MATCHES "${expected_rejection}")
       list(APPEND failures "${name}")
       set(failures "${failures}" PARENT_SCOPE)
     endif()
@@ -122,7 +141,40 @@ if(RED_ONLY)
   return()
 endif()
 
+file(COPY_FILE "${inspection_tool}" "${work}/llvm-readobj.exe")
+set(inspection_tool "${work}/llvm-readobj.exe")
+set(expected_rejection "audio audit: wrong origin")
+verify_case(tool-foreign-origin FALSE)
+set(inspection_tool "${CLANG64_PREFIX}/bin/llvm-readobj.exe")
+set(inspection_hash "0000000000000000000000000000000000000000000000000000000000000000")
+set(expected_rejection "audio audit: llvm-readobj configured hash mismatch")
+verify_case(tool-wrong-hash FALSE)
+set(inspection_hash "${real_inspection_hash}")
+file(MAKE_DIRECTORY "${work}/altered-llvm/bin")
+file(COPY_FILE "${inspection_tool}" "${work}/altered-llvm/bin/llvm-readobj.exe")
+file(APPEND "${work}/altered-llvm/bin/llvm-readobj.exe" "changed-after-configure")
+set(inspection_prefix "${work}/altered-llvm")
+set(inspection_tool "${inspection_prefix}/bin/llvm-readobj.exe")
+verify_case(tool-altered-after-pin FALSE)
+set(inspection_prefix "${CLANG64_PREFIX}")
+set(inspection_tool "${CLANG64_PREFIX}/bin/llvm-readobj.exe")
+set(omit_inspection_hash ON)
+set(expected_rejection "audio audit: PURE_AUDIO_LLVM_READOBJ_SHA256 is required")
+verify_case(tool-missing-hash FALSE)
+unset(omit_inspection_hash)
+set(inspection_prefix "${work}/old-llvm")
+set(inspection_tool "${inspection_prefix}/bin/llvm-readobj.exe")
+file(SHA256 "${inspection_tool}" inspection_hash)
+set(expected_rejection "audio audit: standalone llvm-readobj major 22 required")
+verify_case(tool-wrong-major FALSE)
+set(inspection_prefix "${CLANG64_PREFIX}")
+set(inspection_tool "${CLANG64_PREFIX}/bin/llvm-readobj.exe")
+set(inspection_hash "${real_inspection_hash}")
+set(expected_rejection "audio audit: helpers-only mode requires inclusion by a driver")
+verify_case(production-cli-cannot-enable-helper FALSE)
+unset(expected_rejection)
 verify_case(pristine TRUE)
+verify_case(recorded-pristine TRUE)
 foreach(mutation unknown missing duplicate forbidden-msys forbidden-gcc forbidden-cxx
     delay malformed no-name multiple-name wrong-machine wrong-format wrong-magic
     extra-header stray-name unknown-record trailing-garbage truncated-header

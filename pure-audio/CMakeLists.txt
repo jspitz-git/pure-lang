@@ -63,13 +63,60 @@ if(PURE_AUDIO_STRICT_WINDOWS_AUDIT)
   audio_equal_path("${PURE_INCLUDE_DIR}" "${expected_PURE_INCLUDE_DIR}")
   audio_runtime_rows("${PURE_AUDIO_RUNTIME_SOURCES}" FALSE runtime_paths runtime_manifest)
   audio_no_reparse(${audit_paths} ${runtime_paths})
-  foreach(var CMAKE_TOOLCHAIN_FILE CMAKE_C_COMPILER_ARG1 CMAKE_C_COMPILER_LAUNCHER
-      CMAKE_C_LINKER_LAUNCHER CMAKE_SYSROOT CMAKE_C_FLAGS CMAKE_SHARED_LINKER_FLAGS
-      CMAKE_MODULE_LINKER_FLAGS)
-    if(DEFINED ${var} AND NOT "${${var}}" STREQUAL "")
-      message(FATAL_ERROR "audio audit: undeclared toolchain override ${var}")
+  # Check every configuration, not only the selected one. Cache values survive
+  # reconfigure, so permit exactly our fixed defaults and reject unknown suffixes.
+  set(audit_flag_names CMAKE_C_FLAGS CMAKE_C_STANDARD_LIBRARIES)
+  # This applies during CMake probes as well as generated compile/link rules.
+  set(audit_CMAKE_C_FLAGS "--no-default-config")
+  set(audit_CMAKE_C_STANDARD_LIBRARIES "-lkernel32 -luser32 -lgdi32 -lwinspool -lshell32 -lole32 -loleaut32 -luuid -lcomdlg32 -ladvapi32")
+  foreach(config DEBUG RELEASE RELWITHDEBINFO MINSIZEREL)
+    list(APPEND audit_flag_names "CMAKE_C_FLAGS_${config}")
+  endforeach()
+  set(audit_CMAKE_C_FLAGS_DEBUG "-g")
+  set(audit_CMAKE_C_FLAGS_RELEASE "-O3 -DNDEBUG")
+  set(audit_CMAKE_C_FLAGS_RELWITHDEBINFO "-O2 -g -DNDEBUG")
+  set(audit_CMAKE_C_FLAGS_MINSIZEREL "-Os -DNDEBUG")
+  foreach(kind EXE SHARED MODULE STATIC)
+    list(APPEND audit_flag_names "CMAKE_${kind}_LINKER_FLAGS")
+    set(audit_CMAKE_${kind}_LINKER_FLAGS "")
+    foreach(config DEBUG RELEASE RELWITHDEBINFO MINSIZEREL)
+      list(APPEND audit_flag_names "CMAKE_${kind}_LINKER_FLAGS_${config}")
+      set(audit_CMAKE_${kind}_LINKER_FLAGS_${config} "")
+    endforeach()
+  endforeach()
+  get_cmake_property(audit_variables VARIABLES)
+  foreach(var IN LISTS audit_variables)
+    if(var MATCHES "^CMAKE_(C_FLAGS|C_STANDARD_LIBRARIES|EXE_LINKER_FLAGS|SHARED_LINKER_FLAGS|MODULE_LINKER_FLAGS|STATIC_LINKER_FLAGS)(_|$)" AND
+        NOT var MATCHES "-ADVANCED$")
+      if(NOT var IN_LIST audit_flag_names OR NOT "${${var}}" STREQUAL "${audit_${var}}")
+        message(FATAL_ERROR "audio audit: undeclared flags ${var}")
+      endif()
+    elseif(var MATCHES "^CMAKE_(TOOLCHAIN_FILE|SYSROOT|C_COMPILER_ARG1|C_COMPILER_EXTERNAL_TOOLCHAIN|C_COMPILER_LAUNCHER|C_LINKER_LAUNCHER|C_STANDARD_INCLUDE_DIRECTORIES|C_STANDARD_LIBRARIES|C_LINK_EXECUTABLE|C_CREATE_SHARED_LIBRARY|C_CREATE_SHARED_MODULE|C_CREATE_STATIC_LIBRARY|C_COMPILE_OBJECT|LINKER_TYPE|INTERPROCEDURAL_OPTIMIZATION|USER_MAKE_RULES_OVERRIDE)(_|$)" OR
+        var MATCHES "^CMAKE_PROJECT_.*INCLUDE")
+      if(NOT "${${var}}" STREQUAL "")
+        message(FATAL_ERROR "audio audit: undeclared toolchain override ${var}")
+      endif()
     endif()
   endforeach()
+  foreach(var IN LISTS audit_flag_names)
+    set(${var} "${audit_${var}}" CACHE STRING "Fixed strict audit flags" FORCE)
+  endforeach()
+  if(NOT DEFINED CMAKE_BUILD_TYPE OR CMAKE_BUILD_TYPE STREQUAL "")
+    set(CMAKE_BUILD_TYPE Release CACHE STRING "Strict audit configuration" FORCE)
+  endif()
+  string(TOUPPER "${CMAKE_BUILD_TYPE}" audit_config)
+  if(NOT audit_config MATCHES "^(DEBUG|RELEASE|RELWITHDEBINFO|MINSIZEREL)$")
+    message(FATAL_ERROR "audio audit: undeclared build configuration ${CMAKE_BUILD_TYPE}")
+  endif()
+  foreach(property RULE_LAUNCH_COMPILE RULE_LAUNCH_LINK)
+    get_property(value GLOBAL PROPERTY "${property}")
+    if(value)
+      message(FATAL_ERROR "audio audit: undeclared rule launcher ${property}")
+    endif()
+  endforeach()
+  if(DEFINED CMAKE_CONFIGURATION_TYPES AND NOT CMAKE_CONFIGURATION_TYPES STREQUAL "")
+    message(FATAL_ERROR "audio audit: multi-configuration overrides are not allowed")
+  endif()
   if(DEFINED CMAKE_C_COMPILER_TARGET AND NOT CMAKE_C_COMPILER_TARGET STREQUAL "x86_64-w64-windows-gnu")
     message(FATAL_ERROR "audio audit: wrong compiler target override")
   endif()
@@ -80,12 +127,20 @@ if(PURE_AUDIO_STRICT_WINDOWS_AUDIT)
   set(ENV{MSYSTEM_PREFIX} "${PURE_AUDIO_CLANG64_PREFIX}")
   set(ENV{PKG_CONFIG_PATH} "")
   set(ENV{PKG_CONFIG_LIBDIR} "${PURE_AUDIO_PURE_PREFIX}/lib/pkgconfig;${PURE_AUDIO_CLANG64_PREFIX}/lib/pkgconfig")
-  foreach(var PURELIB PURE_INCLUDE PURE_LIBRARY CC CFLAGS CPPFLAGS LDFLAGS
-      CPATH C_INCLUDE_PATH CPLUS_INCLUDE_PATH LIBRARY_PATH COMPILER_PATH GCC_EXEC_PREFIX)
+  set(audit_clear_environment PURELIB PURE_INCLUDE PURE_LIBRARY CC CFLAGS CPPFLAGS LDFLAGS
+    CPATH C_INCLUDE_PATH CPLUS_INCLUDE_PATH OBJC_INCLUDE_PATH LIBRARY_PATH COMPILER_PATH
+    GCC_EXEC_PREFIX INCLUDE LIB LIBPATH CL _CL_ LINK _LINK_ CCC_OVERRIDE_OPTIONS
+    CCC_ADD_ARGS SDKROOT DEVELOPER_DIR MACOSX_DEPLOYMENT_TARGET
+    CLANG_CONFIG_FILE_SYSTEM_DIR CLANG_CONFIG_FILE_USER_DIR)
+  foreach(var IN LISTS audit_clear_environment)
     unset(ENV{${var}})
   endforeach()
   foreach(tool CMAKE_C_COMPILER CMAKE_MAKE_PROGRAM PKG_CONFIG_EXECUTABLE LLVM_READOBJ PURE_EXECUTABLE)
-    execute_process(COMMAND "${${tool}}" --version RESULT_VARIABLE rc
+    set(version_arguments --version)
+    if(tool STREQUAL "CMAKE_C_COMPILER")
+      list(PREPEND version_arguments --no-default-config)
+    endif()
+    execute_process(COMMAND "${${tool}}" ${version_arguments} RESULT_VARIABLE rc
       OUTPUT_VARIABLE version ERROR_VARIABLE err TIMEOUT 30)
     if(NOT rc EQUAL 0 OR NOT err STREQUAL "")
       message(FATAL_ERROR "audio audit: cannot identify ${tool}: ${rc} ${err}")
@@ -101,7 +156,7 @@ if(PURE_AUDIO_STRICT_WINDOWS_AUDIT)
     string(STRIP "${version}" version)
     message(STATUS "audio audit: ${tool}: ${version}")
   endforeach()
-  execute_process(COMMAND "${CMAKE_C_COMPILER}" -dumpmachine RESULT_VARIABLE rc
+  execute_process(COMMAND "${CMAKE_C_COMPILER}" --no-default-config -dumpmachine RESULT_VARIABLE rc
     OUTPUT_VARIABLE triple ERROR_VARIABLE err OUTPUT_STRIP_TRAILING_WHITESPACE)
   if(NOT rc EQUAL 0 OR NOT err STREQUAL "" OR NOT triple STREQUAL "x86_64-w64-windows-gnu")
     message(FATAL_ERROR "audio audit: Clang target must be x86_64-w64-windows-gnu: ${triple}")
@@ -114,7 +169,25 @@ if(PURE_AUDIO_STRICT_WINDOWS_AUDIT)
   foreach(path IN LISTS runtime_paths)
     audio_inspect_pe("${path}" unused_imports)
   endforeach()
-  set(audit_pin "${runtime_manifest}")
+  # A generated Ninja rule must clear its own environment: configure-time
+  # set(ENV) cannot affect a later cmake --build process. Use the declared
+  # prefix's pinned CMake executable as both compiler and linker launcher;
+  # the actual compiler command remains the validated absolute clang.exe.
+  audio_path("${PURE_AUDIO_CLANG64_PREFIX}/bin/cmake.exe" file audit_launcher_tool)
+  audio_no_reparse("${audit_launcher_tool}")
+  file(SHA256 "${audit_launcher_tool}" audit_launcher_hash)
+  set(audit_launcher "${audit_launcher_tool};-E;env")
+  foreach(var IN LISTS audit_clear_environment)
+    list(APPEND audit_launcher "--unset=${var}")
+  endforeach()
+  string(REPLACE ";" "\\;" audit_path_argument "PATH=$ENV{PATH}")
+  list(APPEND audit_launcher "${audit_path_argument}" --)
+  set(CMAKE_C_COMPILER_LAUNCHER "${audit_launcher}")
+  set(CMAKE_C_LINKER_LAUNCHER "${audit_launcher}")
+  set(audit_pin "${runtime_manifest}${audit_launcher}\n${audit_launcher_hash}\n${audit_config}\n")
+  foreach(var IN LISTS audit_flag_names)
+    string(APPEND audit_pin "${var}|${${var}}\n")
+  endforeach()
   foreach(var IN LISTS audit_files audit_directories)
     string(APPEND audit_pin "${var}|${${var}}\n")
     if(var IN_LIST audit_files)
@@ -128,6 +201,8 @@ if(PURE_AUDIO_STRICT_WINDOWS_AUDIT)
   endif()
   set(PURE_AUDIO_CONFIGURED_INPUT_PIN "${audit_pin}" CACHE INTERNAL "Frozen audit inputs")
   set(PURE_AUDIO_RUNTIME_MANIFEST "${CMAKE_CURRENT_BINARY_DIR}/windows-runtime-sources.txt")
+  file(SHA256 "${LLVM_READOBJ}" PURE_AUDIO_LLVM_READOBJ_SHA256)
+  set(PURE_AUDIO_LLVM_READOBJ_SHA256 "${PURE_AUDIO_LLVM_READOBJ_SHA256}" CACHE INTERNAL "Configured inspection tool hash")
   file(WRITE "${PURE_AUDIO_RUNTIME_MANIFEST}" "${runtime_manifest}")
 endif()
 
@@ -230,6 +305,7 @@ if(WIN32)
     verify-windows-dependencies
     COMMAND "${CMAKE_COMMAND}"
       "-DLLVM_READOBJ=${LLVM_READOBJ}"
+      "-DPURE_AUDIO_LLVM_READOBJ_SHA256=${PURE_AUDIO_LLVM_READOBJ_SHA256}"
       "-DAUDIO_MODULE_DIR=$<TARGET_FILE_DIR:audio>"
       "-DPURE_AUDIO_CLANG64_PREFIX=${PURE_AUDIO_CLANG64_PREFIX}"
       "-DPURE_AUDIO_PURE_PREFIX=${PURE_AUDIO_PURE_PREFIX}"
@@ -292,8 +368,12 @@ if(BUILD_TESTING)
   endif()
   set(PURE_AUDIO_COMPILER_RUNTIME_PATH "")
   if(MINGW AND CMAKE_C_COMPILER_ID MATCHES "Clang")
+    set(resource_arguments --print-resource-dir)
+    if(PURE_AUDIO_STRICT_WINDOWS_AUDIT)
+      list(PREPEND resource_arguments --no-default-config)
+    endif()
     execute_process(
-      COMMAND "${CMAKE_C_COMPILER}" --print-resource-dir
+      COMMAND "${CMAKE_C_COMPILER}" ${resource_arguments}
       RESULT_VARIABLE compiler_resource_result
       OUTPUT_VARIABLE compiler_resource_dir
       OUTPUT_STRIP_TRAILING_WHITESPACE

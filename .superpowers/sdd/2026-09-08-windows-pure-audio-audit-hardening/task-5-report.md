@@ -4,6 +4,11 @@ Date: 2026-09-09 (Europe/Prague). Base: `57ee5aca`.
 Workspace: `C:/pure-lang/.worktrees/todo33-audit`.
 Branch: `codex/todo33-audit`.
 
+Revision note: the original implementation and verification evidence below is
+retained as history. The final section records review fix round 1 against
+`b82a221456c5e8709c3cecb34afa0418bce44d48`, including its revised counts and
+required standalone inspection-tool pin.
+
 ## Scope and implementation
 
 The four planned files implement an opt-in strict configuration, exact PE
@@ -271,8 +276,13 @@ Tasks 6–8 can call the standalone verifier with these complete explicit
 arguments, optionally adding `-DSTAGE_PREFIX=<installed-prefix>`:
 
 ```powershell
-C:/msys64/clang64/bin/cmake.exe -DLLVM_READOBJ=C:/msys64/clang64/bin/llvm-readobj.exe -DAUDIO_MODULE_DIR=C:/pure-lang/task5-final -DPURE_AUDIO_CLANG64_PREFIX=C:/msys64/clang64 -DPURE_AUDIO_PURE_PREFIX=C:/pure-lang/pure/build/windows-clang64-prefix -DPURE_AUDIO_WINDOWS_SYSTEM_DIRECTORY=C:/Windows/System32 -DPURE_AUDIO_RUNTIME_MANIFEST=C:/pure-lang/task5-final/windows-runtime-sources.txt -P pure-audio/cmake/VerifyWindowsDependencies.cmake
+C:/msys64/clang64/bin/cmake.exe -DLLVM_READOBJ=C:/msys64/clang64/bin/llvm-readobj.exe -DPURE_AUDIO_LLVM_READOBJ_SHA256=040c4cb0740d2a9d9f7b488bc676c0406eb12c7b349acba1797c2f58865087cb -DAUDIO_MODULE_DIR=C:/pure-lang/task5-fix1 -DPURE_AUDIO_CLANG64_PREFIX=C:/msys64/clang64 -DPURE_AUDIO_PURE_PREFIX=C:/pure-lang/pure/build/windows-clang64-prefix -DPURE_AUDIO_WINDOWS_SYSTEM_DIRECTORY=C:/Windows/System32 -DPURE_AUDIO_RUNTIME_MANIFEST=C:/pure-lang/task5-fix1/windows-runtime-sources.txt -P pure-audio/cmake/VerifyWindowsDependencies.cmake
 ```
+
+The inspection-tool hash above is the value recorded in the fresh configured
+build's `PURE_AUDIO_LLVM_READOBJ_SHA256` internal cache entry. Consumers must
+pass that configured pin unchanged, not accept a newly computed replacement
+hash at verification time.
 
 The source manifest stays attached to the configured build. Staged mode
 does not permit an omitted staged file to resolve from that manifest's host
@@ -308,3 +318,173 @@ failed leaves are retained as diagnostic evidence outside the worktree under
 the explicitly created `task5-green`/`task5-final` build roots. Existing
 untracked worktree `build/` is preserved. No subagents, merge, push, unrelated
 source changes, or TODO closure were performed.
+
+## Review fix round 1 — build environment, all configurations, tool identity
+
+All three Important findings were reproduced and addressed within the same
+four scoped implementation/test files. The fix keeps non-strict configuration
+unchanged and introduces no wrapper that substitutes for the validated Clang
+executable.
+
+### Additional RED evidence
+
+The first flag regression run accepted these seven mutations with configure
+exit zero: `CMAKE_C_FLAGS_RELEASE`, `CMAKE_C_FLAGS_RELWITHDEBINFO`,
+`CMAKE_MODULE_LINKER_FLAGS_RELEASE`, `CMAKE_SHARED_LINKER_FLAGS_DEBUG`,
+`CMAKE_EXE_LINKER_FLAGS_MINSIZEREL`, `CMAKE_SYSROOT_COMPILE`, and
+`CMAKE_C_COMPILER_LAUNCHER_RELEASE`. The C flags inject an absolute `-include`
+header; the linker flags inject an undeclared `-L` directory. Evidence remains
+at `C:/pure-lang/task5-final/pure-audio-contract-root/run-8b363fa603cc05caec83dd01c6ad09b0`.
+
+The initial poisoned build fixture used the same directory for CPATH and
+C_INCLUDE_PATH. Clang deduplicated it as a system directory, so it did not
+reproduce the reported shadow-header failure. That was a fixture defect,
+not valid RED evidence. Giving every environment variable a distinct path
+produced the required real build failure:
+
+```powershell
+C:/msys64/clang64/bin/cmake.exe '-DCASE_FILTER=pristine-explicit|build-ambient' -DSOURCE_DIR=C:/pure-lang/.worktrees/todo33-audit/pure-audio -DCLANG64_PREFIX=C:/msys64/clang64 -DPURE_PREFIX=C:/pure-lang/pure/build/windows-clang64-prefix -DRUNNER=C:/pure-lang/task5-final/run_pure_test.exe -P pure-audio/tests/configure_contract.cmake
+```
+
+The pristine configure passed; the actual `cmake --build ... --parallel 4`
+failed. Ninja's absolute Clang command included the declared Pure include
+directory, but CPATH selected the independent
+`build-poison/CPATH/pure/runtime.h`, emitting
+`error: AUDIO_UNDECLARED_BUILD_HEADER` from audio, samplerate and sndfile.
+The command exited 1 with `Configure contract failures: build-ambient`.
+The preserved leaf is
+`C:/pure-lang/task5-final/pure-audio-contract-root/run-9758a0b31b3fd7e5869d575a2f08ca20`.
+
+Before the public-verifier fix, running `runtime_verifier_contract.cmake`
+with `-DCASE_FILTER=tool-foreign-origin` accepted the sidecar-record reader
+executable as `LLVM_READOBJ`. The contract exited 1 with
+`Runtime verifier accepted mutations: tool-foreign-origin`; evidence remains
+under `C:/pure-lang/task5-final/pure-audio-contract-root/run-1350cd0f62c0344cf3ed6cbc1a942b4d`.
+The final origin test uses a copied genuine llvm-readobj executable and its
+correct hash, so rejection specifically proves the canonical origin check.
+
+### Fixes and self-review
+
+- Both `CMAKE_C_COMPILER_LAUNCHER` and `CMAKE_C_LINKER_LAUNCHER` are generated
+  as the canonical declared `<CLANG64>/bin/cmake.exe -E env ... --`, followed
+  by the original absolute validated `clang.exe` command. Every actual build
+  invocation clears compiler/header/library discovery and Clang option
+  overrides and sets PATH to the frozen Pure/CLANG64/System32 directories.
+  The launcher path, launcher arguments, and CMake executable SHA-256 are
+  included in the immutable configured-input pin. Clang's implicit default
+  config files are disabled by fixed `--no-default-config` flags during
+  probes, compilation, linking, version/target and resource-directory queries.
+- The flag gate enumerates all defined C/configuration and EXE/SHARED/MODULE/
+  STATIC link-flag variables. Generic and all four standard configurations
+  must equal fixed defaults; unknown configurations and `_INIT` variants are
+  rejected. All launcher/sysroot suffixes, compiler argument/external-toolchain
+  overrides, standard include/library overrides, rule overrides and project
+  hooks are rejected or fixed. Selected configuration and every fixed flag
+  are part of the pin. A new successful reconfigure regression initially
+  exposed CMake's generated standard-library cache value; that exact library
+  list is now fixed and pinned, and the reconfigure passes.
+- Standalone verification now validates llvm-readobj's canonical exact
+  CLANG64 origin, non-reparse path, configured SHA-256 and LLVM major 22 before
+  inspecting any PE. The parser mutation seam is a function override in an
+  explicitly included, test-owned driver. The production `-P` entry point
+  cannot enable helpers-only mode, and no CLI variable selects recorded
+  records. Real standalone pristine/stage/hash/origin cases invoke the real
+  inspection tool. Tests cover wrong origin, wrong/missing pin, altered tool
+  bytes after pinning, wrong LLVM major and attempted CLI helper bypass.
+
+Self-review read the complete fix diff, checked the actual generated Ninja
+compile and link commands, fixed-default reconfiguration, configuration
+coverage, real-vs-recorded test routing, configured pin propagation and the
+unchanged exact import policy. Source stability/TOCTOU remains the documented
+boundary above: native file locks across every compiler/verifier subprocess
+are not introduced by this CMake-only task. No production fixture, source
+mutation, broadened task scope, merge, push or subagent remains.
+
+### Final fresh GREEN evidence
+
+All commands ran from the stated worktree with the native process-access
+approval needed for Ninja/Windows child-process execution. The build root was
+fresh, `C:/pure-lang/task5-fix1`; the independent preset was regenerated by
+the contract producer in the original Task 5 run and contains only explicit
+input declarations, Release and BUILD_TESTING.
+
+```powershell
+C:/msys64/clang64/bin/cmake.exe -S pure-audio -B C:/pure-lang/task5-fix1 -G Ninja -C C:/pure-lang/task5-inputs.cmake
+
+$env:CPATH='C:/pure-lang/task5-final/pure-audio-contract-root/run-9758a0b31b3fd7e5869d575a2f08ca20/build-poison/CPATH'
+foreach ($auditPoisonVariable in @('C_INCLUDE_PATH','CPLUS_INCLUDE_PATH','OBJC_INCLUDE_PATH','LIBRARY_PATH','COMPILER_PATH','GCC_EXEC_PREFIX','INCLUDE','LIB','LIBPATH','CL','_CL_','LINK','_LINK_','CCC_ADD_ARGS','SDKROOT','DEVELOPER_DIR','CLANG_CONFIG_FILE_SYSTEM_DIR','CLANG_CONFIG_FILE_USER_DIR')) { [Environment]::SetEnvironmentVariable($auditPoisonVariable, 'C:/pure-lang/task4-poison/' + $auditPoisonVariable, 'Process') }
+$env:CCC_OVERRIDE_OPTIONS='+--audio-audit-invalid-ambient-option'
+$env:PATH='C:/pure-lang/task4-poison'
+C:/msys64/clang64/bin/cmake.exe --build C:/pure-lang/task5-fix1 --parallel 4 --verbose
+```
+
+Configure exited zero. The separate poisoned build process exited zero after
+all **18/18 steps**, with no diagnostics. The verbose transcript explicitly
+shows `ninja.exe -v -j 4`, nine compile commands and nine link commands using
+the generated CMake environment launcher and original absolute Clang path.
+This is the same real shadow-header fixture that failed before the fix;
+the invalid ambient Clang option would also fail any unprotected driver call.
+
+The following PE invocation used the ordinary shell environment (a separate
+process from the intentionally poisoned build):
+
+```powershell
+C:/msys64/clang64/bin/cmake.exe --build C:/pure-lang/task5-fix1 --target verify-windows-dependencies --parallel 4
+```
+
+It exited zero with `PE_CLOSURE_OK count=29; AMD64 PE32+; UCRT resolved by
+Windows loader`. All exact imports match the complete 29-row table above;
+the final module origin B is now `C:/pure-lang/task5-fix1/`, while P and C
+are unchanged. All 14 CRT contracts again resolved to System32/ucrtbase.dll,
+and the other nine allowed system names resolved to their authoritative
+same-name System32 DLLs.
+
+The complete suite ran in another process with deliberately poisoned runtime
+and discovery variables:
+
+```powershell
+foreach ($auditRuntimeVariable in @('PATH','PURELIB','PURE_INCLUDE','PURE_LIBRARY','MSYSTEM_PREFIX','PKG_CONFIG_PATH')) { [Environment]::SetEnvironmentVariable($auditRuntimeVariable, 'C:/pure-lang/task4-poison', 'Process') }
+C:/msys64/clang64/bin/ctest.exe --test-dir C:/pure-lang/task5-fix1 -L audio --parallel 2 --output-on-failure
+```
+
+Result: **8/8 passed, 0 failed, 149.44 seconds**. Fresh
+`C:/pure-lang/task5-fix1/Testing/Temporary/LastTest.log` records:
+
+```text
+AUDIO_FAULT_HARNESS_OK 2391 checks quarantine_allocation_delta=3
+PURE_AUDIO_BOUNDS_OK 24 checks
+CLEANUP_CONTRACT_OK negative=13 positive=2 unique_leaves=2
+MAKE_CLEAN_CONTRACT_OK negative=6 positive=2
+DIRECT_MAKE_CLEAN_CONTRACT_OK negative=64 positive=24
+EXECUTABLE_PARENT_BOUNDARIES_OK checks=3
+RUNNER_CONTRACT_OK negative=23 positive=7 descendant_checks=1
+CONFIGURE_CONTRACT_OK negative=120 positive=4
+RUNTIME_VERIFIER_CONTRACT_OK negative=42 positive=3 pe_count=29
+```
+
+The configure contract took 88.94 seconds and includes all 25 generic/config
+C/link flag positions, all ten compiler/linker launcher positions, remaining
+toolchain and unknown/init variants, the real four-worker poisoned build,
+unchanged strict reconfigure, and normal upstream configure. The runtime
+contract took 109.02 seconds and includes the six new production-entry-point
+identity/bypass negatives. Task 5 now has **162 rejected / 7 valid** cases;
+combined with Task 4, the suite has **268 rejected / 42 valid** contract cases,
+plus the three parent-boundary checks and one descendant check.
+
+Versions freshly reconfirmed: Clang/LLVM **22.1.8**, exact target
+**x86_64-w64-windows-gnu**, CMake **4.4.0**, Ninja **1.13.2**, pkgconf **3.0.4**,
+Pure **0.68** (LLVM 22.1.8), PortAudio **19**, FFTW **3.3.11**, libsamplerate
+**0.2.2**, libsndfile **1.2.2**, System32 UCRT **10.0.26100.8875**.
+
+The final configured-input pin is
+`6bde281f59d40841b7b4d7c9bbfd55a6a4032e64c4c26a56cf5808881a609494`.
+The pinned environment-launcher CMake executable SHA-256 is
+`86ece838d82e39179f456f615cbd4ff45a14b7373dbf97ebf94797c65715d0bd`.
+The configured LLVM inspection-tool SHA-256 is
+`040c4cb0740d2a9d9f7b488bc676c0406eb12c7b349acba1797c2f58865087cb`.
+
+Final `git diff --check` passed. Successful owned contract leaves were cleaned;
+the earlier RED leaves remain outside the worktree for evidence. The existing
+untracked worktree `build/` was neither modified nor removed. No additional
+concern remains beyond the already documented source-stability, toolchain
+version-sensitivity and later-task boundaries.

@@ -352,12 +352,17 @@ function(audio_parse_pe text path output)
   set(${output} "${imports}" PARENT_SCOPE)
 endfunction()
 
-function(audio_inspect_pe path output)
+function(audio_read_pe_records path output)
   execute_process(COMMAND "${LLVM_READOBJ}" --file-headers --coff-imports "${path}"
     RESULT_VARIABLE rc OUTPUT_VARIABLE records ERROR_VARIABLE err TIMEOUT 30)
   if(NOT rc EQUAL 0 OR NOT err STREQUAL "")
     message(FATAL_ERROR "audio audit: cannot inspect ${path}: ${rc}\n${err}")
   endif()
+  set(${output} "${records}" PARENT_SCOPE)
+endfunction()
+
+function(audio_inspect_pe path output)
+  audio_read_pe_records("${path}" records)
   audio_parse_pe("${records}" "${path}" imports)
   set(${output} "${imports}" PARENT_SCOPE)
 endfunction()
@@ -395,11 +400,29 @@ function(audio_import_library path)
   endif()
 endfunction()
 
-if(PURE_AUDIO_VERIFIER_HELPERS_ONLY)
-  return()
-endif()
+function(audio_verify_readobj)
+  audio_path("${LLVM_READOBJ}" file readobj)
+  audio_equal_path("${readobj}" "${PURE_AUDIO_CLANG64_PREFIX}/bin/llvm-readobj.exe")
+  audio_no_reparse("${readobj}")
+  file(SHA256 "${readobj}" actual_hash)
+  if(NOT DEFINED PURE_AUDIO_LLVM_READOBJ_SHA256 OR
+      NOT actual_hash STREQUAL PURE_AUDIO_LLVM_READOBJ_SHA256)
+    message(FATAL_ERROR "audio audit: llvm-readobj configured hash mismatch")
+  endif()
+  execute_process(COMMAND "${readobj}" --version RESULT_VARIABLE rc
+    OUTPUT_VARIABLE version ERROR_VARIABLE err TIMEOUT 30)
+  if(NOT rc EQUAL 0 OR NOT err STREQUAL "" OR
+      NOT version MATCHES "LLVM version 22\\.[0-9]+\\.[0-9]+([ \r\n]|$)")
+    message(FATAL_ERROR "audio audit: standalone llvm-readobj major 22 required: ${rc} ${version}${err}")
+  endif()
+endfunction()
+
+# Tests may include this file and override audio_read_pe_records in their own
+# driver. There is no production CLI option for selecting recorded records.
+function(audio_verify_closure)
 foreach(required LLVM_READOBJ AUDIO_MODULE_DIR PURE_AUDIO_CLANG64_PREFIX
-    PURE_AUDIO_PURE_PREFIX PURE_AUDIO_WINDOWS_SYSTEM_DIRECTORY PURE_AUDIO_RUNTIME_MANIFEST)
+    PURE_AUDIO_PURE_PREFIX PURE_AUDIO_WINDOWS_SYSTEM_DIRECTORY PURE_AUDIO_RUNTIME_MANIFEST
+    PURE_AUDIO_LLVM_READOBJ_SHA256)
   if(NOT DEFINED ${required} OR "${${required}}" STREQUAL "")
     message(FATAL_ERROR "audio audit: ${required} is required")
   endif()
@@ -411,6 +434,7 @@ endforeach()
 foreach(var AUDIO_MODULE_DIR PURE_AUDIO_CLANG64_PREFIX PURE_AUDIO_PURE_PREFIX)
   audio_path("${${var}}" directory ${var})
 endforeach()
+audio_verify_readobj()
 file(READ "${PURE_AUDIO_RUNTIME_MANIFEST}" manifest_text)
 if(manifest_text MATCHES "[;\r]" OR manifest_text MATCHES "\n\n" OR
     NOT manifest_text MATCHES "\n$")
@@ -543,3 +567,12 @@ if(NOT rc EQUAL 0 OR NOT err STREQUAL "")
 endif()
 list(LENGTH visited count)
 message(STATUS "${evidence}${system_evidence}PE_CLOSURE_OK count=${count}; AMD64 PE32+; UCRT resolved by Windows loader")
+endfunction()
+
+if(PURE_AUDIO_VERIFIER_HELPERS_ONLY)
+  if(CMAKE_SCRIPT_MODE_FILE STREQUAL CMAKE_CURRENT_LIST_FILE)
+    message(FATAL_ERROR "audio audit: helpers-only mode requires inclusion by a driver")
+  endif()
+else()
+  audio_verify_closure()
+endif()

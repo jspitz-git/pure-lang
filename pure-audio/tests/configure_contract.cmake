@@ -186,11 +186,12 @@ file(WRITE "${work}/compiler-fixture.c" [=[
 #include <string.h>
 int main(int argc, char **argv) {
   char path[4096], mode[32] = {0};
-  if (argc != 2 || snprintf(path, sizeof(path), "%s.mode", argv[0]) >= (int)sizeof(path)) return 64;
+  if (argc != 3 || strcmp(argv[1], "--no-default-config") ||
+      snprintf(path, sizeof(path), "%s.mode", argv[0]) >= (int)sizeof(path)) return 64;
   FILE *f = fopen(path, "rb"); if (!f) return 65;
   if (!fgets(mode, sizeof(mode), f)) return 66; fclose(f);
-  if (!strcmp(argv[1], "--version")) puts(!strcmp(mode,"major") ? "clang version 21.0.0" : "clang version 22.1.8");
-  else if (!strcmp(argv[1], "-dumpmachine")) puts(!strcmp(mode,"target") ? "i686-w64-windows-gnu" : "x86_64-w64-windows-gnu");
+  if (!strcmp(argv[2], "--version")) puts(!strcmp(mode,"major") ? "clang version 21.0.0" : "clang version 22.1.8");
+  else if (!strcmp(argv[2], "-dumpmachine")) puts(!strcmp(mode,"target") ? "i686-w64-windows-gnu" : "x86_64-w64-windows-gnu");
   else return 67;
   return 0;
 }
@@ -285,7 +286,20 @@ foreach(key IN LISTS keys)
   set(input_${key} "${original_${key}}")
 endforeach()
 
-foreach(override CMAKE_C_COMPILER_TARGET CMAKE_C_FLAGS CMAKE_TOOLCHAIN_FILE PURE_AUDIO_CONFIGURED_INPUT_PIN)
+set(overrides CMAKE_C_COMPILER_TARGET CMAKE_TOOLCHAIN_FILE PURE_AUDIO_CONFIGURED_INPUT_PIN
+  CMAKE_SYSROOT CMAKE_SYSROOT_COMPILE CMAKE_SYSROOT_LINK CMAKE_SYSROOT_RELEASE
+  CMAKE_C_COMPILER_ARG1 CMAKE_C_COMPILER_EXTERNAL_TOOLCHAIN CMAKE_C_STANDARD_INCLUDE_DIRECTORIES
+  CMAKE_C_STANDARD_LIBRARIES CMAKE_C_FLAGS_CUSTOM CMAKE_C_FLAGS_RELEASE_INIT
+  CMAKE_EXE_LINKER_FLAGS_CUSTOM CMAKE_MODULE_LINKER_FLAGS_RELEASE_INIT)
+foreach(base CMAKE_C_FLAGS CMAKE_EXE_LINKER_FLAGS CMAKE_SHARED_LINKER_FLAGS
+    CMAKE_MODULE_LINKER_FLAGS CMAKE_STATIC_LINKER_FLAGS
+    CMAKE_C_COMPILER_LAUNCHER CMAKE_C_LINKER_LAUNCHER)
+  list(APPEND overrides "${base}")
+  foreach(config DEBUG RELEASE RELWITHDEBINFO MINSIZEREL)
+    list(APPEND overrides "${base}_${config}")
+  endforeach()
+endforeach()
+foreach(override IN LISTS overrides)
   list(APPEND keys "${override}")
   if(override STREQUAL "CMAKE_C_COMPILER_TARGET")
     set(input_${override} "i686-w64-windows-gnu")
@@ -294,8 +308,15 @@ foreach(override CMAKE_C_COMPILER_TARGET CMAKE_C_FLAGS CMAKE_TOOLCHAIN_FILE PURE
   elseif(override STREQUAL "CMAKE_TOOLCHAIN_FILE")
     file(WRITE "${work}/override.cmake" "message(FATAL_ERROR \"override executed\")\n")
     set(input_${override} "${work}/override.cmake")
-  else()
+  elseif(override STREQUAL "PURE_AUDIO_CONFIGURED_INPUT_PIN")
     set(input_${override} "changed-pin")
+  elseif(override MATCHES "CMAKE_C_FLAGS_")
+    file(WRITE "${work}/injected.h" "#error AUDIO_UNDECLARED_FLAG_HEADER\n")
+    set(input_${override} "-include ${work}/injected.h")
+  elseif(override MATCHES "LINKER_FLAGS")
+    set(input_${override} "-L${work}/undeclared-libraries")
+  else()
+    set(input_${override} "${work}/undeclared-toolchain")
   endif()
   configure_case("override-${override}" FALSE)
   list(REMOVE_ITEM keys "${override}")
@@ -309,6 +330,48 @@ set(ENV{PURELIB} "${work}/poison")
 set(ENV{PURE_INCLUDE} "${work}/poison")
 set(ENV{PURE_LIBRARY} "${work}/poison")
 configure_case(pristine-explicit-poisoned TRUE)
+
+if(NOT DEFINED CASE_FILTER OR "build-ambient" MATCHES "${CASE_FILTER}")
+  # Keep these paths distinct: Clang deduplicates CPATH against C_INCLUDE_PATH
+  # as a system path, which can otherwise hide the intended shadow-header RED.
+  file(MAKE_DIRECTORY "${work}/build-poison/CPATH/pure")
+  file(WRITE "${work}/build-poison/CPATH/pure/runtime.h" "#error AUDIO_UNDECLARED_BUILD_HEADER\n")
+  set(poison_variables CPATH C_INCLUDE_PATH CPLUS_INCLUDE_PATH OBJC_INCLUDE_PATH
+    LIBRARY_PATH COMPILER_PATH GCC_EXEC_PREFIX INCLUDE LIB LIBPATH CL _CL_ LINK _LINK_
+    CFLAGS CPPFLAGS LDFLAGS CCC_OVERRIDE_OPTIONS CCC_ADD_ARGS SDKROOT DEVELOPER_DIR
+    CLANG_CONFIG_FILE_SYSTEM_DIR CLANG_CONFIG_FILE_USER_DIR)
+  foreach(var IN LISTS poison_variables)
+    set(saved_environment_${var} "$ENV{${var}}")
+    file(MAKE_DIRECTORY "${work}/build-poison/${var}")
+    set(ENV{${var}} "${work}/build-poison/${var}")
+  endforeach()
+  set(ENV{CCC_OVERRIDE_OPTIONS} "+--audio-audit-invalid-ambient-option")
+  execute_process(COMMAND "${CMAKE_COMMAND}" --build "${work}/pristine-explicit-poisoned"
+    --parallel 4 --verbose RESULT_VARIABLE build_rc OUTPUT_VARIABLE build_out ERROR_VARIABLE build_err TIMEOUT 90)
+  file(WRITE "${work}/build-ambient.log" "${build_out}\n${build_err}")
+  foreach(var IN LISTS poison_variables)
+    if(saved_environment_${var} STREQUAL "")
+      unset(ENV{${var}})
+    else()
+      set(ENV{${var}} "${saved_environment_${var}}")
+    endif()
+  endforeach()
+  if(NOT build_rc EQUAL 0)
+    message(STATUS "build-ambient: ${build_out}\n${build_err}")
+    list(APPEND failures build-ambient)
+  endif()
+  math(EXPR positive "${positive}+1")
+  # The compiler/linker launcher is deliberately not a user cache override.
+  # Reconfigure must accept our fixed defaults without weakening the gate.
+  execute_process(COMMAND "${CMAKE_COMMAND}" -S "${SOURCE_DIR}"
+    -B "${work}/pristine-explicit-poisoned" -G Ninja
+    RESULT_VARIABLE rc OUTPUT_VARIABLE out ERROR_VARIABLE err TIMEOUT 60)
+  file(WRITE "${work}/reconfigure-pristine.log" "${out}\n${err}")
+  if(NOT rc EQUAL 0)
+    message(FATAL_ERROR "Fixed strict reconfigure failed: ${out}\n${err}")
+  endif()
+  math(EXPR positive "${positive}+1")
+endif()
 
 # Non-strict mode must still accept ordinary upstream discovery.
 set(input_PURE_AUDIO_STRICT_WINDOWS_AUDIT OFF)
