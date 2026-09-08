@@ -166,7 +166,9 @@ if(BUILD_TESTING)
     PROPERTIES
       LABELS "audio;fault;bounds;no-hardware"
       ENVIRONMENT "PATH=${PURE_AUDIO_TEST_RUNTIME_PATH}"
-      TIMEOUT 30
+      # Real Pure sentry aliases require interpreter startup; the ASan runtime
+      # alone brings this harness close to 30 seconds on Windows.
+      TIMEOUT 90
   )
 
   add_pure_audio_module(audio_bounds_seam tests/audio_fault_harness.c)

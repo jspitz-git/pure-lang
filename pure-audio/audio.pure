@@ -174,12 +174,13 @@ audio::open_stream inparams::matrix outparams::matrix sr::double size
 
 public streamp;
 private extern void close_audio_stream(expr *stream);
-audio::close_stream as::pointer = close_audio_stream as if streamp as;
+audio::close_stream as::pointer = close_audio_stream as;
 
 /* Check for a valid open audio stream object and get its associated data. */
 
+private extern int audio_stream_valid(void *v);
 audio::streamp as::pointer = case get_sentry as of
-  audio_sentry v = pointerp v; _ = false;
+  audio_sentry v::pointer = audio_stream_valid v ~= 0; _ = false;
 end;
 audio::streamp _ = false otherwise;
 
@@ -218,7 +219,9 @@ audio::stream_latencies as::pointer =
   audio_stream_latencies (stream_data as) as if streamp as;
 audio::stream_time as::pointer =
   audio_stream_time (stream_data as) as if streamp as;
-audio::stream_cpu_load as::pointer = Pa::GetStreamCpuLoad as if streamp as;
+private extern double audio_stream_cpu_load(void *v, void *as);
+audio::stream_cpu_load as::pointer =
+  audio_stream_cpu_load (stream_data as) as if streamp as;
 
 /* Stream I/O. These block until the given number of frames have been read or
    written, and return the number of frames actually read or written (which

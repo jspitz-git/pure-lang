@@ -3,6 +3,8 @@
 #include <string.h>
 #include <stdint.h>
 #include <limits.h>
+#include <time.h>
+#include <errno.h>
 #include <unistd.h>
 #include <signal.h>
 #include <pthread.h>
@@ -11,6 +13,7 @@
 #include "audio_test_api.h"
 #ifdef PURE_AUDIO_TEST_SEAM
 #include <sndfile.h>
+#include <stdatomic.h>
 #endif
 
 bool pure_audio_checked_mul_size(size_t left, size_t right, size_t *product)
@@ -29,9 +32,9 @@ bool pure_audio_frame_bytes(unsigned bytes_per_frame, unsigned long frames,
 }
 
 #ifdef PURE_AUDIO_TEST_SEAM
-static size_t pure_audio_allocation_count;
-static size_t pure_audio_allocation_attempt_count;
-static size_t pure_audio_io_call_count;
+static _Atomic size_t pure_audio_allocation_count;
+static _Atomic size_t pure_audio_allocation_attempt_count;
+static _Atomic size_t pure_audio_io_call_count;
 
 static void *pure_audio_malloc(size_t size)
 {
@@ -118,7 +121,12 @@ static int pure_audio_portaudio_get_sample_size(unsigned long format)
 }
 
 static const pure_audio_api pure_audio_portaudio_api = {
-  pure_audio_portaudio_get_sample_size
+  pure_audio_portaudio_get_sample_size,
+  Pa_Initialize, Pa_Terminate, Pa_GetDeviceCount,
+  Pa_GetDefaultInputDevice, Pa_GetDefaultOutputDevice, Pa_GetDeviceInfo,
+  Pa_OpenStream, Pa_StartStream, Pa_StopStream, Pa_AbortStream, Pa_CloseStream,
+  Pa_GetStreamInfo, Pa_IsStreamActive, Pa_GetStreamCpuLoad,
+  Pa_SetStreamFinishedCallback
 };
 static const pure_audio_api *pure_audio_dispatch = &pure_audio_portaudio_api;
 
@@ -430,10 +438,11 @@ MyRingBuffer_Read( MyRingBuffer *rbuf, void *data, size_t frames )
    for all drivers, so we rather do our own.) */
 
 static bool init_ok;
+static PaError audio_error = paNotInitialized;
 
 typedef struct _MyStream {
   PaStream *as;
-  pthread_mutex_t data_mutex, in_mutex, out_mutex;
+  pthread_mutex_t data_mutex;
   pthread_cond_t in_cond, out_cond;
   MyRingBuffer in_buf, out_buf;
   char *in_data, *out_data;
@@ -448,68 +457,77 @@ typedef struct _MyStream {
   int out_channels, out_bps, out_bpf;
   uint64_t input_accepted_frames, input_dropped_frames;
   uint64_t output_consumed_frames;
+  enum { STREAM_ALLOCATED, STREAM_OPENED, STREAM_STARTED, STREAM_STOPPING,
+         STREAM_CLOSED, STREAM_FAILED } state;
+  uintptr_t identity;
+  unsigned operations, callbacks;
+  unsigned initialized;
+  PaError error;
   struct _MyStream *prev, *next;
 } MyStream;
 
-#ifdef PURE_AUDIO_TEST_SEAM
-pure_expr *pure_audio_test_make_stream(int in_channels, int out_channels,
-                                       int in_format, int out_format)
+/* Lifecycle serializes native start/stop/close. Registry protects identities,
+   list links and activity counts. It pins descriptors and is released before
+   acquiring data_mutex; leave releases data_mutex before reacquiring registry.
+   Identities are never reused. Queue indices and state use data_mutex only. */
+static pthread_mutex_t registry_mutex = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t registry_cond = PTHREAD_COND_INITIALIZER;
+static pthread_mutex_t lifecycle_mutex = PTHREAD_MUTEX_INITIALIZER;
+static MyStream *current;
+static uintptr_t next_identity = 1;
+
+static MyStream *enter_stream(MyStream *identity, bool callback)
 {
-  MyStream *stream = pure_audio_malloc(sizeof(*stream));
-  if (!stream)
-    return 0;
-  memset(stream, 0, sizeof(*stream));
-  stream->as = NULL;
-  stream->in = in_channels > 0 ? 0 : paNoDevice;
-  stream->out = out_channels > 0 ? 0 : paNoDevice;
-  stream->in_channels = in_channels;
-  stream->out_channels = out_channels;
-  stream->in_format = (PaSampleFormat)(uint32_t)in_format;
-  stream->out_format = (PaSampleFormat)(uint32_t)out_format;
-  stream->in_bps = pure_audio_sample_bytes((PaSampleFormat)in_format);
-  stream->out_bps = pure_audio_sample_bytes((PaSampleFormat)out_format);
-  stream->in_bpf = stream->in_bps * in_channels;
-  stream->out_bpf = stream->out_bps * out_channels;
-  if (in_channels > 0) {
-    pthread_mutex_init(&stream->in_mutex, NULL);
-    pthread_cond_init(&stream->in_cond, NULL);
+  MyStream *v;
+  if (!identity) return NULL;
+  pthread_mutex_lock(&registry_mutex);
+  for (v = current; v; v = v->next)
+    if (callback ? v == identity : v->identity == (uintptr_t)identity) break;
+  if (v) {
+    if (callback) ++v->callbacks; else ++v->operations;
   }
-  if (out_channels > 0) {
-    pthread_mutex_init(&stream->out_mutex, NULL);
-    pthread_cond_init(&stream->out_cond, NULL);
-  }
-  return pure_sentry
-    (pure_app(pure_symbol(pure_sym("audio::audio_sentry")),
-              pure_pointer(stream)),
-     pure_pointer((void *)(uintptr_t)1));
+  pthread_mutex_unlock(&registry_mutex);
+  if (v) pthread_mutex_lock(&v->data_mutex);
+  return v;
 }
 
-void pure_audio_test_destroy_stream(pure_expr *value)
+static void leave_stream(MyStream *v, bool callback)
 {
-  pure_expr *sentry, *function, *argument;
-  void *data;
-  if (!value || !(sentry = pure_get_sentry(value)) ||
-      !pure_is_app(sentry, &function, &argument) ||
-      !pure_is_pointer(argument, &data) || !data)
-    return;
-  pure_clear_sentry(value);
-  if (((MyStream *)data)->in != paNoDevice) {
-    pthread_cond_destroy(&((MyStream *)data)->in_cond);
-    pthread_mutex_destroy(&((MyStream *)data)->in_mutex);
-  }
-  if (((MyStream *)data)->out != paNoDevice) {
-    pthread_cond_destroy(&((MyStream *)data)->out_cond);
-    pthread_mutex_destroy(&((MyStream *)data)->out_mutex);
-  }
-  pure_audio_free(data);
-  value->data.p = NULL;
+  pthread_mutex_unlock(&v->data_mutex);
+  pthread_mutex_lock(&registry_mutex);
+  if (callback) --v->callbacks; else --v->operations;
+  pthread_cond_broadcast(&registry_cond);
+  pthread_mutex_unlock(&registry_mutex);
 }
-#endif
+
+static void terminal_stream(MyStream *v, PaError error)
+{
+  v->error = error;
+  v->state = STREAM_FAILED;
+  pthread_cond_broadcast(&v->in_cond);
+  pthread_cond_broadcast(&v->out_cond);
+}
+
+static void register_stream(MyStream *v)
+{
+  pthread_mutex_lock(&registry_mutex);
+  v->next = current;
+  if (current) current->prev = v;
+  current = v;
+  pthread_mutex_unlock(&registry_mutex);
+}
+
+static void unregister_stream(MyStream *v)
+{
+  if (v->prev) v->prev->next = v->next;
+  if (v->next) v->next->prev = v->prev;
+  if (current == v) current = v->next;
+}
+
 
 #define has_input(v) (v->in!=paNoDevice)
 #define has_output(v) (v->out!=paNoDevice)
 
-static MyStream *current = NULL;
 
 static bool init_buf(MyRingBuffer *buf, char **data, size_t frame_capacity,
                      unsigned channels, unsigned sample_bytes)
@@ -563,124 +581,140 @@ bool pure_audio_test_round_pow2(size_t value, size_t *rounded)
 }
 #endif
 
-static bool init_stream(MyStream *v,
-			PaStreamParameters *in, PaStreamParameters *out,
-			long size, unsigned in_bps, unsigned out_bps)
-{
-  size_t frame_capacity;
-  memset(v, 0, sizeof(MyStream));
-  if (size <= 0 || !round_pow2((size_t)size, &frame_capacity))
-    return false;
-  if (in) {
-    if (!init_buf(&v->in_buf, &v->in_data, frame_capacity,
-                  (unsigned)in->channelCount, in_bps))
-      return false;
-  }
-  if (out) {
-    if (!init_buf(&v->out_buf, &v->out_data, frame_capacity,
-                  (unsigned)out->channelCount, out_bps)) {
-      if (in) fini_buf(&v->in_data);
-      return false;
-    }
-#if 0
-    {
-      /* fake a full write buffer */
-      size_t frames = MyRingBuffer_GetWriteAvailable(&v->out_buf);
-      MyRingBuffer_AdvanceWriteIndex(&v->out_buf, frames);
-    }
-#endif
-  }
-  v->time = 0.0;
-#ifdef TIMER_KLUDGE
-  v->delta = 0.0;
-#endif
-  pthread_mutex_init(&v->data_mutex, NULL);
-  if (in) {
-    pthread_mutex_init(&v->in_mutex, NULL);
-    pthread_cond_init(&v->in_cond, NULL);
-  }
-  if (out) {
-    pthread_mutex_init(&v->out_mutex, NULL);
-    pthread_cond_init(&v->out_cond, NULL);
-  }
-  if (current) current->prev = v;
-  v->prev = NULL;
-  v->next = current;
-  current = v;
-  return true;
-}
-
-static void lock_stream(void *x)
-{
-  MyStream *v = (MyStream*)x;
-  pthread_mutex_lock(&v->data_mutex);
-  if (has_input(v)) pthread_mutex_lock(&v->in_mutex);
-  if (has_output(v)) pthread_mutex_lock(&v->out_mutex);
-}
-
-static void unlock_stream(void *x)
-{
-  MyStream *v = (MyStream*)x;
-  pthread_mutex_unlock(&v->data_mutex);
-  if (has_input(v)) pthread_mutex_unlock(&v->in_mutex);
-  if (has_output(v)) pthread_mutex_unlock(&v->out_mutex);
-}
-
-static void unlock_mutex(void *x)
-{
-  pthread_mutex_unlock((pthread_mutex_t*)x);
-}
-
-static void fini_stream(MyStream *v, bool abort)
-{
-  if (v->as) {
-    if (abort)
-      Pa_AbortStream(v->as);
-    else
-      Pa_StopStream(v->as);
-    pthread_cleanup_push(unlock_stream, (void*)v);
-    lock_stream(v);
-    Pa_CloseStream(v->as);
-    v->as = NULL;
-    /* wake up threads waiting to read or write the stream */
-    if (has_input(v)) pthread_cond_broadcast(&v->in_cond);
-    if (has_output(v)) pthread_cond_broadcast(&v->out_cond);
-    pthread_cleanup_pop(1);
-  }
-}
-
 static void destroy_stream(MyStream *v)
 {
-  pthread_mutex_destroy(&v->data_mutex);
-  if (has_input(v)) {
-    pthread_mutex_destroy(&v->in_mutex);
-    pthread_cond_destroy(&v->in_cond);
+  if (v->initialized & 4) pthread_cond_destroy(&v->out_cond);
+  if (v->initialized & 2) pthread_cond_destroy(&v->in_cond);
+  if (v->initialized & 1) pthread_mutex_destroy(&v->data_mutex);
+  v->initialized = 0;
+  fini_buf(&v->out_data);
+  fini_buf(&v->in_data);
+}
+
+static bool init_stream(MyStream *v,
+                        PaStreamParameters *in, PaStreamParameters *out,
+                        long size, unsigned in_bps, unsigned out_bps)
+{
+  size_t frame_capacity;
+  memset(v, 0, sizeof(*v));
+  v->state = STREAM_ALLOCATED;
+  if (size <= 0 || !round_pow2((size_t)size, &frame_capacity)) return false;
+  if (in && !init_buf(&v->in_buf, &v->in_data, frame_capacity,
+                      (unsigned)in->channelCount, in_bps)) goto fail;
+  if (out && !init_buf(&v->out_buf, &v->out_data, frame_capacity,
+                       (unsigned)out->channelCount, out_bps)) goto fail;
+  if (pthread_mutex_init(&v->data_mutex, NULL)) goto fail;
+  v->initialized |= 1;
+  if (pthread_cond_init(&v->in_cond, NULL)) goto fail;
+  v->initialized |= 2;
+  if (pthread_cond_init(&v->out_cond, NULL)) goto fail;
+  v->initialized |= 4;
+  return true;
+fail:
+  destroy_stream(v);
+  return false;
+}
+
+/* Called with lifecycle_mutex held. Public admission is invalidated before
+   waiting, but descriptors stay alive until all admitted activity exits.
+   Pa_CloseStream can consume its pointer even on error: never retry it.
+   Failed native close retains only callback userdata until successful
+   Pa_Terminate proves production has ended. */
+static PaError fini_stream(MyStream *v, bool abort)
+{
+  PaError error, close_error;
+  pthread_mutex_lock(&v->data_mutex);
+  if (!v->as && v->state == STREAM_FAILED) {
+    error = v->error;
+    pthread_mutex_unlock(&v->data_mutex);
+    return error;
   }
-  if (has_output(v)) {
-    pthread_mutex_destroy(&v->out_mutex);
-    pthread_cond_destroy(&v->out_cond);
+  v->state = STREAM_STOPPING;
+  pthread_cond_broadcast(&v->in_cond);
+  pthread_cond_broadcast(&v->out_cond);
+  pthread_mutex_unlock(&v->data_mutex);
+  error = v->as ? (abort ? pure_audio_dispatch->abort(v->as) :
+                           pure_audio_dispatch->stop(v->as)) : paNoError;
+  if (error == paStreamIsStopped) error = paNoError;
+  if (error != paNoError && !abort) {
+    PaError abort_error = pure_audio_dispatch->abort(v->as);
+    if (abort_error != paNoError && abort_error != paStreamIsStopped)
+      error = abort_error;
   }
-  if (has_input(v)) fini_buf(&v->in_data);
-  if (has_output(v)) fini_buf(&v->out_data);
-  if (v->prev) v->prev->next = v->next;
-  if (v->next) v->next->prev = v->prev;
-  if (v == current) current = v->next;
+  pthread_mutex_lock(&registry_mutex);
+  /* Closing admission under the registry lock ensures no operation can pin a
+     descriptor after the drain has observed zero. Callback admission remains
+     until native close returns, because even a failed stop may call back. */
+  v->identity = 0;
+  while (v->operations || v->callbacks)
+    pthread_cond_wait(&registry_cond, &registry_mutex);
+  pthread_mutex_unlock(&registry_mutex);
+  close_error = v->as ? pure_audio_dispatch->close(v->as) : paNoError;
+  pthread_mutex_lock(&v->data_mutex);
+  v->error = close_error != paNoError ? close_error : error;
+  v->state = close_error == paNoError ? STREAM_CLOSED : STREAM_FAILED;
+  v->as = NULL;
+  pthread_mutex_unlock(&v->data_mutex);
+  if (close_error == paNoError) {
+    pthread_mutex_lock(&registry_mutex);
+    unregister_stream(v);
+    while (v->operations || v->callbacks)
+      pthread_cond_wait(&registry_cond, &registry_mutex);
+    pthread_mutex_unlock(&registry_mutex);
+    destroy_stream(v);
+    pure_audio_free(v);
+  }
+  return close_error != paNoError ? close_error : error;
+}
+
+static PaError stop_audio_locked(void)
+{
+  MyStream *v, *next;
+  PaError error = paNoError;
+  for (v = current; v; v = next) {
+    next = v->next;
+    PaError e = fini_stream(v, true);
+    if (e != paNoError) error = e;
+  }
+  if (init_ok) {
+    PaError e = pure_audio_dispatch->terminate();
+    if (e == paNoError) {
+      /* Termination succeeded: even failed-close streams have no callbacks. */
+      pthread_mutex_lock(&registry_mutex);
+      for (v = current; v; v = next) {
+        next = v->next;
+        unregister_stream(v);
+        while (v->operations || v->callbacks)
+          pthread_cond_wait(&registry_cond, &registry_mutex);
+        destroy_stream(v);
+        pure_audio_free(v);
+      }
+      pthread_mutex_unlock(&registry_mutex);
+      init_ok = false;
+    } else error = e;
+  }
+  audio_error = error != paNoError ? error : paNotInitialized;
+  return error;
 }
 
 void start_audio(void)
 {
-  MyStream *v;
-  for (v = current; v; v = v->next) fini_stream(v, 1);
-  Pa_Terminate();
-  init_ok = (Pa_Initialize() == paNoError);
+  pthread_mutex_lock(&lifecycle_mutex);
+  PaError stopped = stop_audio_locked();
+  /* A successful terminate is a safe restart boundary even when an earlier
+     stream close reported an error. A failed terminate keeps init_ok set. */
+  if (stopped == paNoError || (!init_ok && !current)) {
+    audio_error = pure_audio_dispatch->initialize();
+    init_ok = audio_error == paNoError;
+  }
+  pthread_mutex_unlock(&lifecycle_mutex);
 }
 
 void stop_audio(void)
 {
-  MyStream *v;
-  for (v = current; v; v = v->next) fini_stream(v, 1);
-  Pa_Terminate();
-  init_ok = false;
+  pthread_mutex_lock(&lifecycle_mutex);
+  (void)stop_audio_locked();
+  pthread_mutex_unlock(&lifecycle_mutex);
 }
 
 static void pure_audio_add_counter(uint64_t *counter, uint64_t increment)
@@ -818,7 +852,7 @@ static bool fill_callback_silence(void *output, PaSampleFormat format,
    This isn't nice but is needed to protect shared data and to wake up a
    client waiting for data to be read or written. */
 
-static int audio_cb(const void *input, void *output,
+static int audio_cb_locked(const void *input, void *output,
 		    unsigned long nframes,
 		    const PaStreamCallbackTimeInfo *time_info,
 		    PaStreamCallbackFlags status,
@@ -845,9 +879,7 @@ static int audio_cb(const void *input, void *output,
   (void)in_count;
   (void)out_count;
   /* update the current time */
-  pthread_mutex_lock(&v->data_mutex);
   if (!v->as) {
-    pthread_mutex_unlock(&v->data_mutex);
     return 0;
   }
 #ifdef TIMER_KLUDGE
@@ -856,12 +888,10 @@ static int audio_cb(const void *input, void *output,
 #else
   v->time = time_info?time_info->currentTime:0;
 #endif
-  pthread_mutex_unlock(&v->data_mutex);
   /* process data */
   if (input) {
     size_t accepted = callback_frames, source_frame = 0, discard;
     bool transferred;
-    pthread_mutex_lock(&v->in_mutex);
     if (accepted > v->in_buf.frame_capacity) {
       source_frame = accepted - v->in_buf.frame_capacity;
       accepted = v->in_buf.frame_capacity;
@@ -888,14 +918,12 @@ static int audio_cb(const void *input, void *output,
     if (transferred)
       pure_audio_add_counter(&v->input_accepted_frames, (uint64_t)accepted);
     pthread_cond_signal(&v->in_cond);
-    pthread_mutex_unlock(&v->in_mutex);
     if (!transferred)
       return paAbort;
   }
   if (output) {
     size_t read;
     bool transferred;
-    pthread_mutex_lock(&v->out_mutex);
     read = callback_frames;
     if (read > MyRingBuffer_GetReadAvailable(&v->out_buf))
       read = MyRingBuffer_GetReadAvailable(&v->out_buf);
@@ -912,11 +940,34 @@ static int audio_cb(const void *input, void *output,
     if (transferred)
       pure_audio_add_counter(&v->output_consumed_frames, (uint64_t)read);
     pthread_cond_signal(&v->out_cond);
-    pthread_mutex_unlock(&v->out_mutex);
     if (!transferred)
       return paAbort;
   }
   return paContinue;
+}
+
+static int audio_cb(const void *input, void *output, unsigned long nframes,
+                    const PaStreamCallbackTimeInfo *time_info,
+                    PaStreamCallbackFlags status, void *data)
+{
+  MyStream *v = enter_stream(data, true);
+  int result = paAbort;
+  if (!v) return paAbort;
+  if (v->state == STREAM_STARTED || v->state == STREAM_OPENED) {
+    result = audio_cb_locked(input, output, nframes, time_info, status, v);
+    if (result == paAbort) terminal_stream(v, paInternalError);
+  }
+  leave_stream(v, true);
+  return result;
+}
+
+static void audio_finished(void *data)
+{
+  MyStream *v = enter_stream(data, true);
+  if (!v) return;
+  if (v->state == STREAM_STARTED || v->state == STREAM_OPENED)
+    terminal_stream(v, paDeviceUnavailable);
+  leave_stream(v, true);
 }
 
 #ifdef PURE_AUDIO_TEST_SEAM
@@ -936,30 +987,26 @@ uint64_t pure_audio_test_consumed_frames(void *stream)
 
 uint64_t pure_audio_test_input_accepted_frames(void *stream)
 {
-  MyStream *v = (MyStream *)stream;
+  MyStream *v = enter_stream(stream, false);
   uint64_t frames;
-  if (!v || !has_input(v))
-    return 0;
-  pthread_mutex_lock(&v->in_mutex);
+  if (!v) return 0;
   frames = v->input_accepted_frames;
-  pthread_mutex_unlock(&v->in_mutex);
+  leave_stream(v, false);
   return frames;
 }
 
 uint64_t pure_audio_test_input_dropped_frames(void *stream)
 {
-  MyStream *v = (MyStream *)stream;
+  MyStream *v = enter_stream(stream, false);
   uint64_t frames;
-  if (!v || !has_input(v))
-    return 0;
-  pthread_mutex_lock(&v->in_mutex);
+  if (!v) return 0;
   frames = v->input_dropped_frames;
-  pthread_mutex_unlock(&v->in_mutex);
+  leave_stream(v, false);
   return frames;
 }
 #endif
 
-pure_expr *open_audio_stream(int *in, int *out,
+static pure_expr *open_audio_stream_locked(int *in, int *out,
 			     double sr, long size, int flags)
 {
   PaStreamParameters inparams, outparams, *inptr = NULL, *outptr = NULL;
@@ -972,19 +1019,29 @@ pure_expr *open_audio_stream(int *in, int *out,
   sigset_t sigset, oldset;
 #endif
 
-  if (!init_ok) return 0;
+  if (!init_ok || audio_error != paNoError) return pure_int(audio_error);
+  if (!isfinite(sr) || sr <= 0) return pure_int(paInvalidSampleRate);
+  if (size > INT_MAX || next_identity == UINTPTR_MAX) return 0;
   if (size <= 0) size = 512;
 
   /* Initialize parameters. */
 
+  if (in && in[1] < 0) return pure_int(paInvalidChannelCount);
   if (in && in[1]>0) {
+    PaDeviceIndex count = pure_audio_dispatch->device_count();
+    const PaDeviceInfo *device;
+    if (count < 0) return pure_int(count);
+    if (in[0] < 0 || in[0] >= count) return pure_int(paInvalidDevice);
+    device = pure_audio_dispatch->device_info(in[0]);
+    if (!device) return pure_int(paInvalidDevice);
+    if (in[1] > device->maxInputChannels) return pure_int(paInvalidChannelCount);
     memset(&inparams, 0, sizeof(inparams));
     inparams.device = in[0];
     inparams.channelCount = in[1];
     inparams.sampleFormat = (PaSampleFormat)(uint32_t)in[2];
     inparams.suggestedLatency = in[3] ?
-      Pa_GetDeviceInfo(in[0])->defaultLowInputLatency :
-      Pa_GetDeviceInfo(in[0])->defaultHighInputLatency;
+      device->defaultLowInputLatency :
+      device->defaultHighInputLatency;
     inparams.hostApiSpecificStreamInfo = 0;
     inptr = &inparams;
     in_bps = pure_audio_sample_bytes(inparams.sampleFormat);
@@ -996,14 +1053,22 @@ pure_expr *open_audio_stream(int *in, int *out,
   } else
     in = 0;
 
+  if (out && out[1] < 0) return pure_int(paInvalidChannelCount);
   if (out && out[1]>0) {
+    PaDeviceIndex count = pure_audio_dispatch->device_count();
+    const PaDeviceInfo *device;
+    if (count < 0) return pure_int(count);
+    if (out[0] < 0 || out[0] >= count) return pure_int(paInvalidDevice);
+    device = pure_audio_dispatch->device_info(out[0]);
+    if (!device) return pure_int(paInvalidDevice);
+    if (out[1] > device->maxOutputChannels) return pure_int(paInvalidChannelCount);
     memset(&outparams, 0, sizeof(outparams));
     outparams.device = out[0];
     outparams.channelCount = out[1];
     outparams.sampleFormat = (PaSampleFormat)(uint32_t)out[2];
     outparams.suggestedLatency = out[3] ?
-      Pa_GetDeviceInfo(out[0])->defaultLowOutputLatency :
-      Pa_GetDeviceInfo(out[0])->defaultHighOutputLatency;
+      device->defaultLowOutputLatency :
+      device->defaultHighOutputLatency;
     outparams.hostApiSpecificStreamInfo = 0;
     outptr = &outparams;
     out_bps = pure_audio_sample_bytes(outparams.sampleFormat);
@@ -1014,6 +1079,8 @@ pure_expr *open_audio_stream(int *in, int *out,
       return 0;
   } else
     out = 0;
+
+  if (!in && !out) return pure_int(paInvalidChannelCount);
 
   /* Initialize the Pure stream descriptor. This is passed to the callback
      data and also to the sentry on the stream object, so that we can perform
@@ -1028,7 +1095,7 @@ pure_expr *open_audio_stream(int *in, int *out,
 
   /* Open the PortAudio stream. */
 
-  err = Pa_OpenStream(&v->as, inptr, outptr, sr, size, flags,
+  err = pure_audio_dispatch->open(&v->as, inptr, outptr, sr, size, flags,
 		      audio_cb, v);
 
   if (err != paNoError) {
@@ -1039,7 +1106,7 @@ pure_expr *open_audio_stream(int *in, int *out,
 
   /* Fill in needed information about the stream. */
 
-  info = Pa_GetStreamInfo(v->as);
+  info = pure_audio_dispatch->info(v->as);
   v->in = in?inparams.device:paNoDevice;
   v->out = out?outparams.device:paNoDevice;
   v->sample_rate = info?info->sampleRate:sr;
@@ -1056,6 +1123,19 @@ pure_expr *open_audio_stream(int *in, int *out,
   v->in_bpf = (int)in_bpf;
   v->out_bpf = (int)out_bpf;
 
+  v->identity = next_identity++;
+  v->state = STREAM_OPENED;
+  register_stream(v);
+  if (!info) {
+    (void)fini_stream(v, true);
+    return pure_int(paInternalError);
+  }
+  err = pure_audio_dispatch->finished(v->as, audio_finished);
+  if (err != paNoError) {
+    (void)fini_stream(v, true);
+    return pure_int(err);
+  }
+
   /* Start the stream. */
 #ifdef HAVE_POSIX_SIGNALS
   /* temporarily block some signals to make sure that they are blocked in the
@@ -1068,10 +1148,24 @@ pure_expr *open_audio_stream(int *in, int *out,
   sigaddset(&sigset, SIGHUP);
   sigprocmask(SIG_BLOCK, &sigset, &oldset);
 #endif
-  Pa_StartStream(v->as);
+  err = pure_audio_dispatch->start(v->as);
 #ifdef HAVE_POSIX_SIGNALS
   sigprocmask(SIG_SETMASK, &oldset, NULL);
 #endif
+
+  if (err != paNoError) {
+    (void)fini_stream(v, true);
+    return pure_int(err);
+  }
+  pthread_mutex_lock(&v->data_mutex);
+  if (v->state == STREAM_FAILED) {
+    err = v->error;
+    pthread_mutex_unlock(&v->data_mutex);
+    (void)fini_stream(v, true);
+    return pure_int(err);
+  }
+  v->state = STREAM_STARTED;
+  pthread_mutex_unlock(&v->data_mutex);
 
   /* Note that we return the real PortAudio stream here, so that it can be
      passed to other (low-level) PortAudio operations. Our own stream data is
@@ -1079,179 +1173,204 @@ pure_expr *open_audio_stream(int *in, int *out,
      necessary cleanup. */
   return pure_sentry
     (pure_app(pure_symbol(pure_sym("audio::audio_sentry")),
-	      pure_pointer(v)),
+	      pure_pointer((void *)v->identity)),
      pure_pointer(v->as));
 }
 
-void audio_sentry(MyStream *v, pure_expr *stream)
+pure_expr *open_audio_stream(int *in, int *out, double sr, long size, int flags)
 {
-  if (!v) return;
-  fini_stream(v, 0);
-  destroy_stream(v);
-  pure_audio_free(v);
+  pure_expr *result;
+  pthread_mutex_lock(&lifecycle_mutex);
+  result = open_audio_stream_locked(in, out, sr, size, flags);
+  pthread_mutex_unlock(&lifecycle_mutex);
+  return result;
+}
+
+void audio_sentry(MyStream *identity, pure_expr *stream)
+{
+  MyStream *v;
+  pthread_mutex_lock(&lifecycle_mutex);
+  pthread_mutex_lock(&registry_mutex);
+  for (v = current; v; v = v->next)
+    if (identity && v->identity == (uintptr_t)identity) break;
+  pthread_mutex_unlock(&registry_mutex);
+  if (v) (void)fini_stream(v, false);
+  pthread_mutex_unlock(&lifecycle_mutex);
   if (stream) stream->data.p = NULL;
+}
+
+int audio_stream_valid(MyStream *identity)
+{
+  MyStream *v = enter_stream(identity, false);
+  int valid;
+  if (!v) return 0;
+  valid = v->state == STREAM_STARTED && v->as != NULL;
+  leave_stream(v, false);
+  return valid;
 }
 
 void close_audio_stream(pure_expr *stream)
 {
   pure_expr *sentry, *function, *argument;
+  int32_t symbol;
   void *data;
   if (!stream || !(sentry = pure_get_sentry(stream)) ||
       !pure_is_app(sentry, &function, &argument) ||
+      !pure_is_symbol(function, &symbol) ||
+      symbol != pure_sym("audio::audio_sentry") ||
       !pure_is_pointer(argument, &data) || !data)
     return;
   pure_clear_sentry(stream);
   audio_sentry((MyStream*)data, stream);
 }
 
-pure_expr *audio_stream_info(MyStream *v, PaStream *as)
+static bool stream_running(MyStream *v)
 {
-  (void)as;
-  int in_info[] = {v->in, v->in_channels, v->in_format, v->in_bps},
-    out_info[] = {v->out, v->out_channels, v->out_format, v->out_bps};
-  return pure_tuplel
-    (4, pure_double(v->sample_rate),
-     pure_int(v->size),
-     matrix_from_int_array(1, has_input(v)?4:0, in_info),
-     matrix_from_int_array(1, has_output(v)?4:0, out_info));
+  PaError active;
+  if (v->state != STREAM_STARTED || !v->as) return false;
+  active = pure_audio_dispatch->active(v->as);
+  if (active == 1) return true;
+  terminal_stream(v, active < 0 ? active : paDeviceUnavailable);
+  return false;
 }
 
-pure_expr *audio_stream_latencies(MyStream *v, PaStream *as)
+pure_expr *audio_stream_info(MyStream *identity, PaStream *as)
 {
+  MyStream *v = enter_stream(identity, false);
+  pure_expr *result = NULL;
   (void)as;
-  return pure_tuplel
-    (2, pure_double(v->in_latency), pure_double(v->out_latency));
+  if (!v) return NULL;
+  if (stream_running(v)) {
+    int in_info[] = {v->in, v->in_channels, (int)v->in_format, v->in_bps},
+        out_info[] = {v->out, v->out_channels, (int)v->out_format, v->out_bps};
+    result = pure_tuplel(4, pure_double(v->sample_rate), pure_int(v->size),
+      matrix_from_int_array(1, has_input(v)?4:0, in_info),
+      matrix_from_int_array(1, has_output(v)?4:0, out_info));
+  }
+  leave_stream(v, false);
+  return result;
 }
 
-int audio_stream_channels(MyStream *v, int input)
+pure_expr *audio_stream_latencies(MyStream *identity, PaStream *as)
 {
-  if (!v)
-    return 0;
-  return input ? v->in_channels : v->out_channels;
+  MyStream *v = enter_stream(identity, false);
+  pure_expr *result = NULL;
+  (void)as;
+  if (!v) return NULL;
+  if (stream_running(v))
+    result = pure_tuplel(2, pure_double(v->in_latency), pure_double(v->out_latency));
+  leave_stream(v, false);
+  return result;
 }
 
-double audio_stream_time(MyStream *v, PaStream *as)
+int audio_stream_channels(MyStream *identity, int input)
 {
-  (void)as;
-  double time;
-  pthread_mutex_lock(&v->data_mutex);
-  time = v->time;
-  pthread_mutex_unlock(&v->data_mutex);
-  return time;
+  MyStream *v = enter_stream(identity, false);
+  int result = 0;
+  if (!v) return 0;
+  if (stream_running(v)) result = input ? v->in_channels : v->out_channels;
+  leave_stream(v, false);
+  return result;
 }
 
-int audio_stream_readable(MyStream *v, PaStream *as)
+double audio_stream_time(MyStream *identity, PaStream *as)
 {
-  size_t frames;
+  MyStream *v = enter_stream(identity, false);
+  double result = -1;
   (void)as;
-  if (!v || !has_input(v))
-    return 0;
-  pthread_mutex_lock(&v->in_mutex);
-  frames = v->as ? MyRingBuffer_GetReadAvailable(&v->in_buf) : 0;
-  pthread_mutex_unlock(&v->in_mutex);
+  if (!v) return -1;
+  if (stream_running(v)) result = v->time;
+  leave_stream(v, false);
+  return result;
+}
+
+double audio_stream_cpu_load(MyStream *identity, PaStream *as)
+{
+  MyStream *v = enter_stream(identity, false);
+  double result = -1;
+  (void)as;
+  if (!v) return -1;
+  if (stream_running(v)) result = pure_audio_dispatch->cpu_load(v->as);
+  leave_stream(v, false);
+  return result;
+}
+
+static int stream_available(MyStream *identity, bool input)
+{
+  MyStream *v = enter_stream(identity, false);
+  size_t frames = 0;
+  if (!v) return 0;
+  if (stream_running(v)) {
+    if (input && has_input(v)) frames = MyRingBuffer_GetReadAvailable(&v->in_buf);
+    if (!input && has_output(v)) frames = MyRingBuffer_GetWriteAvailable(&v->out_buf);
+  }
+  leave_stream(v, false);
   return frames > INT_MAX ? INT_MAX : (int)frames;
 }
 
-int audio_stream_writeable(MyStream *v, PaStream *as)
-{
-  size_t frames;
-  (void)as;
-  if (!v || !has_output(v))
-    return 0;
-  pthread_mutex_lock(&v->out_mutex);
-  frames = v->as ? MyRingBuffer_GetWriteAvailable(&v->out_buf) : 0;
-  pthread_mutex_unlock(&v->out_mutex);
-  return frames > INT_MAX ? INT_MAX : (int)frames;
-}
+int audio_stream_readable(MyStream *identity, PaStream *as)
+{ (void)as; return stream_available(identity, true); }
 
-int64_t audio_stream_consumed_frames(MyStream *v, PaStream *as)
+int audio_stream_writeable(MyStream *identity, PaStream *as)
+{ (void)as; return stream_available(identity, false); }
+
+int64_t audio_stream_consumed_frames(MyStream *identity, PaStream *as)
 {
-  uint64_t frames;
+  MyStream *v = enter_stream(identity, false);
+  uint64_t frames = 0;
   (void)as;
-  if (!v || !has_output(v))
-    return 0;
-  pthread_mutex_lock(&v->out_mutex);
-  frames = v->output_consumed_frames;
-  pthread_mutex_unlock(&v->out_mutex);
+  if (!v) return -1;
+  if (stream_running(v) && has_output(v)) frames = v->output_consumed_frames;
+  else { leave_stream(v, false); return -1; }
+  leave_stream(v, false);
   return frames > INT64_MAX ? INT64_MAX : (int64_t)frames;
 }
 
-int read_audio_stream(MyStream *v, PaStream *as, void *buf, long size)
+static int transfer_audio_stream(MyStream *v, void *buf, long size, bool input)
 {
-  (void)as;
-  if (!has_input(v)) return -1;
-  if (size > 0 && buf) {
-    size_t byte_count;
-    size_t frames = (size_t)size, total = (size_t)size, read = 0;
-    char *p = (char*)buf;
-    if (v->in_bpf <= 0 ||
-        !pure_audio_frame_bytes((unsigned)v->in_bpf, (unsigned long)size,
-                                &byte_count) ||
-        byte_count > LONG_MAX || size > INT_MAX)
-      return -1;
-    pthread_cleanup_push(unlock_mutex, (void*)&v->in_mutex);
-    pthread_mutex_lock(&v->in_mutex);
-    while (v->as && frames > 0) {
-      while (v->as &&
-	     (read = MyRingBuffer_Read(&v->in_buf, p, frames)) == 0)
-	pthread_cond_wait(&v->in_cond, &v->in_mutex);
-      frames -= read;
-      if (read) {
-        size_t read_bytes;
-        if (!pure_audio_frame_bytes((unsigned)v->in_bpf,
-                                    (unsigned long)read, &read_bytes)) {
-          frames = total;
-          break;
-        }
-        p += read_bytes;
+  size_t bytes, frames, offset = 0;
+  MyRingBuffer *ring = input ? &v->in_buf : &v->out_buf;
+  unsigned bpf = (unsigned)(input ? v->in_bpf : v->out_bpf);
+  pthread_cond_t *cond = input ? &v->in_cond : &v->out_cond;
+  if (!(input ? has_input(v) : has_output(v)) || size < 0 || size > INT_MAX ||
+      !stream_running(v)) return -1;
+  if (!size) return 0;
+  if (!buf || !pure_audio_frame_bytes(bpf, (unsigned long)size, &bytes) ||
+      bytes > LONG_MAX) return -1;
+  frames = (size_t)size;
+  while (frames) {
+    size_t transferred;
+    /* Recheck terminal state before each queue access, including after wake. */
+    if (!stream_running(v)) return -1;
+    transferred = input ? MyRingBuffer_Read(ring, (char *)buf + offset, frames) :
+                          MyRingBuffer_Write(ring, (char *)buf + offset, frames);
+    frames -= transferred;
+    offset += transferred * bpf;
+    if (!transferred) {
+      struct timespec deadline;
+      int error;
+      clock_gettime(CLOCK_REALTIME, &deadline);
+      deadline.tv_nsec += 50000000;
+      if (deadline.tv_nsec >= 1000000000) {
+        ++deadline.tv_sec; deadline.tv_nsec -= 1000000000;
+      }
+      /* Some hosts report device loss only through IsStreamActive. A bounded
+         timed wait makes that failure observable without a producer signal. */
+      error = pthread_cond_timedwait(cond, &v->data_mutex, &deadline);
+      if (error && error != ETIMEDOUT) {
+        terminal_stream(v, paInternalError);
+        return -1;
       }
     }
-    pthread_cleanup_pop(1);
-    return (int)(total - frames);
-  } else if (size == 0)
-    return 0;
-  else
-    return -1;
+  }
+  return (int)size;
 }
 
-int write_audio_stream(MyStream *v, PaStream *as, void *buf, long size)
-{
-  (void)as;
-  if (!has_output(v)) return -1;
-  if (size > 0 && buf) {
-    size_t byte_count;
-    size_t frames = (size_t)size, total = (size_t)size, written = 0;
-    char *p = buf;
-    if (v->out_bpf <= 0 ||
-        !pure_audio_frame_bytes((unsigned)v->out_bpf, (unsigned long)size,
-                                &byte_count) ||
-        byte_count > LONG_MAX || size > INT_MAX)
-      return -1;
-    pthread_cleanup_push(unlock_mutex, (void*)&v->out_mutex);
-    pthread_mutex_lock(&v->out_mutex);
-    while (v->as && frames > 0) {
-      while (v->as &&
-	     (written = MyRingBuffer_Write(&v->out_buf, p, frames)) == 0)
-	pthread_cond_wait(&v->out_cond, &v->out_mutex);
-      frames -= written;
-      if (written) {
-        size_t written_bytes;
-        if (!pure_audio_frame_bytes((unsigned)v->out_bpf,
-                                    (unsigned long)written,
-                                    &written_bytes)) {
-          frames = total;
-          break;
-        }
-        p += written_bytes;
-      }
-    }
-    pthread_cleanup_pop(1);
-    return (int)(total - frames);
-  } else if (size == 0)
-    return 0;
-  else
-    return -1;
-}
+static int read_audio_stream_locked(MyStream *v, PaStream *as, void *buf, long size)
+{ (void)as; return transfer_audio_stream(v, buf, size, true); }
+
+static int write_audio_stream_locked(MyStream *v, PaStream *as, void *buf, long size)
+{ (void)as; return transfer_audio_stream(v, buf, size, false); }
 
 static bool checked_io_counts(long frames, int channels, int bytes_per_frame,
                               size_t *byte_count, size_t *sample_count)
@@ -1266,7 +1385,7 @@ static bool checked_io_counts(long frames, int channels, int bytes_per_frame,
   return true;
 }
 
-int read_audio_stream_int(MyStream *v, PaStream *as, int *buf, long size)
+static int read_audio_stream_int_locked(MyStream *v, PaStream *as, int *buf, long size)
 {
   PaSampleFormat format = pure_audio_base_format(v->in_format);
   pure_audio_record_io_call();
@@ -1274,7 +1393,7 @@ int read_audio_stream_int(MyStream *v, PaStream *as, int *buf, long size)
   if (size < 0) return -1;
   if (size == 0) return 0;
   if (format == paInt32) /* immediate */
-    return read_audio_stream(v, as, buf, size);
+    return read_audio_stream_locked(v, as, buf, size);
   else if (format != paInt16 && format != paInt8 && format != paUInt8)
     return -1;
   else {
@@ -1284,7 +1403,7 @@ int read_audio_stream_int(MyStream *v, PaStream *as, int *buf, long size)
       return -1;
     /* Read into a temporary buffer. */
     void *p = pure_audio_malloc(byte_count);
-    int ret = read_audio_stream(v, as, p, size);
+    int ret = read_audio_stream_locked(v, as, p, size);
     if (ret <= 0) {
       pure_audio_free(p); return ret;
     }
@@ -1321,7 +1440,7 @@ int read_audio_stream_int(MyStream *v, PaStream *as, int *buf, long size)
   }
 }
 
-int read_audio_stream_double(MyStream *v, PaStream *as, double *buf, long size)
+static int read_audio_stream_double_locked(MyStream *v, PaStream *as, double *buf, long size)
 {
   pure_audio_record_io_call();
   if (!has_input(v)) return -1;
@@ -1336,7 +1455,7 @@ int read_audio_stream_double(MyStream *v, PaStream *as, double *buf, long size)
       return -1;
     /* Read into a temporary buffer. */
     float *m = pure_audio_malloc(byte_count);
-    int ret = read_audio_stream(v, as, m, size);
+    int ret = read_audio_stream_locked(v, as, m, size);
     if (ret <= 0) {
       pure_audio_free(m); return ret;
     }
@@ -1353,7 +1472,7 @@ int read_audio_stream_double(MyStream *v, PaStream *as, double *buf, long size)
   }
 }
 
-int write_audio_stream_int(MyStream *v, PaStream *as, int *buf, long size)
+static int write_audio_stream_int_locked(MyStream *v, PaStream *as, int *buf, long size)
 {
   PaSampleFormat format = pure_audio_base_format(v->out_format);
   pure_audio_record_io_call();
@@ -1361,7 +1480,7 @@ int write_audio_stream_int(MyStream *v, PaStream *as, int *buf, long size)
   if (size < 0) return -1;
   if (size == 0) return 0;
   if (format == paInt32) /* immediate */
-    return write_audio_stream(v, as, buf, size);
+    return write_audio_stream_locked(v, as, buf, size);
   else if (format != paInt16 && format != paInt8 && format != paUInt8)
     return -1;
   else {
@@ -1396,13 +1515,13 @@ int write_audio_stream_int(MyStream *v, PaStream *as, int *buf, long size)
       /* Unsupported format. */
       pure_audio_free(p); return -1;
     }
-    ret = write_audio_stream(v, as, p, size);
+    ret = write_audio_stream_locked(v, as, p, size);
     pure_audio_free(p);
     return ret;
   }
 }
 
-int write_audio_stream_double(MyStream *v, PaStream *as, double *buf, long size)
+static int write_audio_stream_double_locked(MyStream *v, PaStream *as, double *buf, long size)
 {
   pure_audio_record_io_call();
   if (!has_output(v)) return -1;
@@ -1422,8 +1541,105 @@ int write_audio_stream_double(MyStream *v, PaStream *as, double *buf, long size)
     if (!m) return -1;
     /* Convert from double. */
     for (i = 0; i < sample_count; i++) m[i] = buf[i];
-    ret = write_audio_stream(v, as, m, size);
+    ret = write_audio_stream_locked(v, as, m, size);
     pure_audio_free(m);
     return ret;
   }
+}
+
+
+int read_audio_stream(MyStream *identity, PaStream *as, void *buf, long size)
+{
+  MyStream *v;
+  int result = -1, previous_cancel;
+  /* Cancellation must not strand an activity reference or a reacquired
+     condition mutex. Pending cancellation is delivered after releasing both. */
+  pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, &previous_cancel);
+  v = enter_stream(identity, false);
+  if (v) {
+    if (stream_running(v)) result = read_audio_stream_locked(v, as, buf, size);
+    leave_stream(v, false);
+  }
+  pthread_setcancelstate(previous_cancel, NULL);
+  return result;
+}
+
+int write_audio_stream(MyStream *identity, PaStream *as, void *buf, long size)
+{
+  MyStream *v;
+  int result = -1, previous_cancel;
+  /* Cancellation must not strand an activity reference or a reacquired
+     condition mutex. Pending cancellation is delivered after releasing both. */
+  pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, &previous_cancel);
+  v = enter_stream(identity, false);
+  if (v) {
+    if (stream_running(v)) result = write_audio_stream_locked(v, as, buf, size);
+    leave_stream(v, false);
+  }
+  pthread_setcancelstate(previous_cancel, NULL);
+  return result;
+}
+
+int read_audio_stream_int(MyStream *identity, PaStream *as, int *buf, long size)
+{
+  MyStream *v;
+  int result = -1, previous_cancel;
+  /* Cancellation must not strand an activity reference or a reacquired
+     condition mutex. Pending cancellation is delivered after releasing both. */
+  pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, &previous_cancel);
+  v = enter_stream(identity, false);
+  if (v) {
+    if (stream_running(v)) result = read_audio_stream_int_locked(v, as, buf, size);
+    leave_stream(v, false);
+  }
+  pthread_setcancelstate(previous_cancel, NULL);
+  return result;
+}
+
+int read_audio_stream_double(MyStream *identity, PaStream *as, double *buf, long size)
+{
+  MyStream *v;
+  int result = -1, previous_cancel;
+  /* Cancellation must not strand an activity reference or a reacquired
+     condition mutex. Pending cancellation is delivered after releasing both. */
+  pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, &previous_cancel);
+  v = enter_stream(identity, false);
+  if (v) {
+    if (stream_running(v)) result = read_audio_stream_double_locked(v, as, buf, size);
+    leave_stream(v, false);
+  }
+  pthread_setcancelstate(previous_cancel, NULL);
+  return result;
+}
+
+int write_audio_stream_int(MyStream *identity, PaStream *as, int *buf, long size)
+{
+  MyStream *v;
+  int result = -1, previous_cancel;
+  /* Cancellation must not strand an activity reference or a reacquired
+     condition mutex. Pending cancellation is delivered after releasing both. */
+  pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, &previous_cancel);
+  v = enter_stream(identity, false);
+  if (v) {
+    if (stream_running(v)) result = write_audio_stream_int_locked(v, as, buf, size);
+    leave_stream(v, false);
+  }
+  pthread_setcancelstate(previous_cancel, NULL);
+  return result;
+}
+
+int write_audio_stream_double(MyStream *identity, PaStream *as, double *buf, long size)
+{
+  MyStream *v;
+  int result = -1, previous_cancel;
+  /* Cancellation must not strand an activity reference or a reacquired
+     condition mutex. Pending cancellation is delivered after releasing both. */
+  pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, &previous_cancel);
+  v = enter_stream(identity, false);
+  if (v) {
+    if (stream_running(v)) result = write_audio_stream_double_locked(v, as, buf, size);
+    leave_stream(v, false);
+  }
+  pthread_setcancelstate(previous_cancel, NULL);
+  return result;
 }

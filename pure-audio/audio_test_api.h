@@ -4,6 +4,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <portaudio.h>
 
 bool pure_audio_checked_mul_size(size_t left, size_t right, size_t *product);
 bool pure_audio_frame_bytes(unsigned bytes_per_frame, unsigned long frames,
@@ -11,6 +12,23 @@ bool pure_audio_frame_bytes(unsigned bytes_per_frame, unsigned long frames,
 
 typedef struct pure_audio_api {
   int (*get_sample_size)(unsigned long format);
+  PaError (*initialize)(void);
+  PaError (*terminate)(void);
+  PaDeviceIndex (*device_count)(void);
+  PaDeviceIndex (*default_input)(void);
+  PaDeviceIndex (*default_output)(void);
+  const PaDeviceInfo *(*device_info)(PaDeviceIndex);
+  PaError (*open)(PaStream **, const PaStreamParameters *,
+                  const PaStreamParameters *, double, unsigned long,
+                  PaStreamFlags, PaStreamCallback *, void *);
+  PaError (*start)(PaStream *);
+  PaError (*stop)(PaStream *);
+  PaError (*abort)(PaStream *);
+  PaError (*close)(PaStream *);
+  const PaStreamInfo *(*info)(PaStream *);
+  PaError (*active)(PaStream *);
+  double (*cpu_load)(PaStream *);
+  PaError (*finished)(PaStream *, PaStreamFinishedCallback *);
 } pure_audio_api;
 
 #ifdef PURE_AUDIO_TEST_SEAM
