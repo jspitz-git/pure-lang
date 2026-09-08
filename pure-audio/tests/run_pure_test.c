@@ -1,3 +1,17 @@
+#ifndef PURE_AUDIO_RUNNER_FIXTURE
+#define _WIN32_WINNT 0x0601
+#endif
+#include <wchar.h>
+
+/* Shared by the production PATH builder and its deterministic boundary seam.
+ * The caller supplies a validated canonical absolute executable path. */
+static void executable_parent(wchar_t *path)
+{
+  wchar_t *separator = wcsrchr(path, L'\\');
+  if (separator == path+2) separator[1] = 0;
+  else *separator = 0;
+}
+
 /* Native adversarial child, compiled separately from the runner. */
 #ifdef PURE_AUDIO_RUNNER_FIXTURE
 #define WIN32_LEAN_AND_MEAN
@@ -7,6 +21,17 @@
 #include <stdlib.h>
 int main(int argc, char **argv)
 {
+  if (argc == 2 && !strcmp(argv[1], "--parent-boundaries")) {
+    wchar_t root[] = L"C:\\pure.exe", lower_root[] = L"z:\\pure.exe";
+    wchar_t nested[] = L"C:\\bin with spaces\\pure.exe";
+    executable_parent(root); executable_parent(lower_root); executable_parent(nested);
+    int failures = 0;
+    if (wcscmp(root, L"C:\\")) { fputs("FAIL executable parent must preserve C:\\\n", stderr); ++failures; }
+    if (wcscmp(lower_root, L"z:\\")) { fputs("FAIL executable parent must preserve z:\\\n", stderr); ++failures; }
+    if (wcscmp(nested, L"C:\\bin with spaces")) { fputs("FAIL nested executable parent\n", stderr); ++failures; }
+    if (failures) { fprintf(stderr, "%d of 3 executable-parent boundary checks failed\n", failures); return 1; }
+    puts("EXECUTABLE_PARENT_BOUNDARIES_OK checks=3"); return 0;
+  }
   const char *mode = "", *token = argv[argc-1];
   for (int i = 1; i+1 < argc; ++i)
     if (!strcmp(argv[i], "-x")) mode = argv[i+1];
@@ -81,7 +106,6 @@ int main(int argc, char **argv)
 /* One native Windows owner for Pure launches and contract scratch leaves.
  * No shell, inherited environment, caller-selected recursive root, or fixed
  * completion marker participates in the success decision. */
-#define _WIN32_WINNT 0x0601
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <bcrypt.h>
@@ -431,7 +455,7 @@ int wmain(int argc, wchar_t **argv)
   checked(pure, executable, 0); checked(script, source, 0); owned_leaf(cwd, work, 1);
   argument(command, executable); argument(command, L"--norc");
   /* The executable directory is always the first runtime source. */
-  wcscpy(path, executable); *wcsrchr(path, L'\\') = 0; append(search, path);
+  wcscpy(path, executable); executable_parent(path); append(search, path);
   for (size_t i = 0; i < npath; ++i) { checked(paths[i], path, 1); append(search, L";"); append(search, path); }
   for (size_t i = 0; i < ninclude; ++i) {
     checked(includes[i], path, 1); scan_inputs(path); argument(command, L"-I"); argument(command, path);

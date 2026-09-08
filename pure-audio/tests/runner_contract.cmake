@@ -25,6 +25,14 @@ if(LEGACY)
   message(FATAL_ERROR "${failures}/6 invalid completions were accepted")
 endif()
 
+execute_process(COMMAND "${FIXTURE}" --parent-boundaries RESULT_VARIABLE parent_result
+  OUTPUT_VARIABLE parent_output ERROR_VARIABLE parent_error TIMEOUT 5)
+if(NOT parent_result EQUAL 0)
+  message(FATAL_ERROR "Executable-parent boundary contract failed: ${parent_result}\n${parent_error}")
+endif()
+string(STRIP "${parent_output}" parent_output)
+message(STATUS "${parent_output}")
+
 execute_process(COMMAND "${RUNNER}" --create-leaf RESULT_VARIABLE rc
   OUTPUT_VARIABLE work OUTPUT_STRIP_TRAILING_WHITESPACE)
 if(NOT rc EQUAL 0)

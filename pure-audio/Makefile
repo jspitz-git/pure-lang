@@ -36,11 +36,12 @@ subdirs:
 # Validate before expanding the suffix into a shell recipe. Only these exact
 # platform suffixes are supported; patterns and path fragments are never names.
 ifneq ($(filter clean realclean,$(MAKECMDGOALS)),)
-ifneq ($(words $(DLL)),1)
+ifneq ($(DLL),.dll)
+ifneq ($(DLL),.so)
+ifneq ($(DLL),.dylib)
 $(error refusing to clean: invalid Pure DLL suffix)
 endif
-ifneq ($(filter-out .dll .so .dylib,$(DLL)),)
-$(error refusing to clean: invalid Pure DLL suffix)
+endif
 endif
 endif
 

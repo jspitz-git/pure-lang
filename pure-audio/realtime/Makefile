@@ -5,13 +5,21 @@ LIBS = -lpthread
 
 all: realtime$(DLL)
 
-clean:
-	@test -n "$(DLL)" || { echo "refusing to clean: Pure DLL suffix is empty" >&2; exit 1; }
-	rm -Rf *.o *$(DLL)*
+# Direct cleanup has the same exact suffix/ownership contract as the package.
+ifneq ($(filter clean realclean,$(MAKECMDGOALS)),)
+ifneq ($(DLL),.dll)
+ifneq ($(DLL),.so)
+ifneq ($(DLL),.dylib)
+$(error refusing to clean: invalid Pure DLL suffix)
+endif
+endif
+endif
+endif
 
-realclean:
-	@test -n "$(DLL)" || { echo "refusing to clean: Pure DLL suffix is empty" >&2; exit 1; }
-	rm -Rf *.o *$(DLL)*
+clean:
+	rm -f -- realtime.o realtime$(DLL)
+
+realclean: clean
 
 realtime$(DLL): realtime.c
 	$(CC) $(shared) $(dllname) -o $@ $(MOD_CFLAGS) $< $(MOD_LDFLAGS)
