@@ -223,12 +223,32 @@ static void test_size_arithmetic(void)
         "one is an exact ring power of two");
   CHECK(pure_audio_test_round_pow2(3, &bytes) && bytes == 4,
         "ring size rounds upward");
-  CHECK(pure_audio_test_round_pow2((size_t)LONG_MAX / 2 + 1, &bytes),
-        "largest representable ring power accepted");
-  CHECK(bytes == (size_t)LONG_MAX / 2 + 1,
-        "largest representable ring power exact");
-  CHECK(!pure_audio_test_round_pow2((size_t)LONG_MAX / 2 + 2, &bytes),
-        "ring size beyond signed long rejected");
+  CHECK(!pure_audio_test_round_pow2((size_t)LONG_MAX / 2 + 1, &bytes),
+        "ring power requiring unsafe signed indices rejected");
+}
+
+static void test_ring_index_boundaries(void)
+{
+  const long safe_capacity =
+    (long)(((unsigned long)LONG_MAX + 1UL) / 4UL);
+  const long unsafe_capacity = safe_capacity * 2;
+  char storage = 0;
+  MyRingBuffer ring;
+
+  CHECK(MyRingBuffer_Init(&ring, unsafe_capacity, &storage) == -1,
+        "unsafe ring capacity rejected by actual initializer");
+  CHECK(MyRingBuffer_Init(&ring, safe_capacity, &storage) == 0,
+        "largest safe ring capacity initializes");
+  CHECK(ring.bigMask == safe_capacity * 2 - 1,
+        "largest safe ring mask is representable");
+  ring.writeIndex = ring.bigMask;
+  CHECK(MyRingBuffer_AdvanceWriteIndex(&ring, safe_capacity) ==
+          safe_capacity - 1,
+        "write index wraps without signed overflow");
+  ring.readIndex = ring.bigMask;
+  CHECK(MyRingBuffer_AdvanceReadIndex(&ring, safe_capacity) ==
+          safe_capacity - 1,
+        "read index wraps without signed overflow");
 }
 
 static void test_invalid_counts(void)
@@ -312,6 +332,7 @@ int main(void)
   test_uint8_conversion();
   test_int24_raw_boundary();
   test_size_arithmetic();
+  test_ring_index_boundaries();
   test_invalid_counts();
   test_overflow_before_allocation_or_loop();
   CHECK(pure_audio_test_allocation_delta() == allocation_start,

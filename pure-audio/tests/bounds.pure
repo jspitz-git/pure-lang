@@ -14,40 +14,75 @@ check name condition
   = fprintf stderr "pure-audio bounds failed: %s\n" name $$
     fflush stderr $$ exit 1 otherwise;
 
-  input_stream = pure_audio_test_make_stream 2 0 Pa::Int16 0;
-  output_stream = pure_audio_test_make_stream 0 2 0 Pa::Int16;
+  let input_stream = pure_audio_test_make_stream 2 0 Pa::Int16 0;
+  let output_stream = pure_audio_test_make_stream 0 2 0 Pa::Int16;
   check "fault input stream" (audio::streamp input_stream);
   check "fault output stream" (audio::streamp output_stream);
 
-  valid_result = audio::write_stream output_stream (imatrix 0) 0;
+  let valid_result = audio::write_stream output_stream (imatrix 0) 0;
   check "fault seam receives valid matrix call"
     (valid_result == 0);
   check "fault seam counts valid matrix call"
     (pure_audio_test_io_calls == 1L);
-  input_result = audio::read_stream input_stream {0,0,0} 2;
+  let input_result = audio::read_stream input_stream {0,0,0} 2;
   check "short audio input matrix rejected"
     (~intp input_result && pure_audio_test_io_calls == 1L);
-  output_result = audio::write_stream output_stream {0,0,0} 2;
+  let output_result = audio::write_stream output_stream {0,0,0} 2;
   check "short audio output matrix rejected"
     (~intp output_result && pure_audio_test_io_calls == 1L);
-  negative_result = audio::write_stream output_stream {0,0,0,0} (-1);
+  let negative_result = audio::write_stream output_stream {0,0,0,0} (-1);
   check "negative audio frame count rejected"
     (~intp negative_result && pure_audio_test_io_calls == 1L);
+  let overflow_audio = audio::write_stream output_stream (imatrix 0)
+    1073741824;
+  check "overflowed audio matrix product rejected before FFI"
+    (~intp overflow_audio && pure_audio_test_io_calls == 1L);
+  let native_range_audio = audio::write_stream output_stream (imatrix 0)
+    2147483648L;
+  check "audio frame count outside native long rejected before FFI"
+    (~intp native_range_audio && pure_audio_test_io_calls == 1L);
   check "Pure int64 FFI round trip"
     (pure_audio_test_echo_int64 4294967297L == 4294967297L);
-  short_input = src_simple ({0.0,1.0,2.0},dmatrix 0,2,0,1.0)
+  let short_input = src_simple ({0.0,1.0,2.0},dmatrix 0,2,0,1.0)
     SRC_LINEAR 2;
   check "short samplerate input matrix rejected" (~tuplep short_input);
-  short_output = src_simple (dmatrix 0,dmatrix 3,0,2,1.0)
+  let short_output = src_simple (dmatrix 0,dmatrix 3,0,2,1.0)
     SRC_LINEAR 2;
   check "short samplerate output matrix rejected" (~tuplep short_output);
-  invalid_ratio = src_simple (dmatrix 0,dmatrix 0,0,0,0.0)
+  let invalid_ratio = src_simple (dmatrix 0,dmatrix 0,0,0,0.0)
     SRC_LINEAR 1;
   check "invalid samplerate ratio rejected" (~tuplep invalid_ratio);
+  let overflow_output = src_simple
+    (dmatrix 0,dmatrix 0,0,1073741824,1.0) SRC_LINEAR 2;
+  check "overflowed samplerate output product rejected"
+    (~tuplep overflow_output);
+  let native_range_output = src_simple
+    (dmatrix 0,dmatrix 0,0,2147483648L,1.0) SRC_LINEAR 1;
+  check "samplerate frame count outside native long rejected"
+    (~tuplep native_range_output);
+  let nan_ratio = 0.0/0.0;
+  let nan_result = src_simple (dmatrix 0,dmatrix 0,0,0,nan_ratio)
+    SRC_LINEAR 1;
+  check "NaN samplerate ratio rejected" (~tuplep nan_result);
+  let infinite_ratio = 1.0/0.0;
+  let infinite_result = src_simple
+    (dmatrix 0,dmatrix 0,0,0,infinite_ratio) SRC_LINEAR 1;
+  check "infinite samplerate ratio rejected" (~tuplep infinite_result);
+  let state_error = {0};
+  let raw_state = src_new SRC_LINEAR 2 state_error;
+  check "public src_new creates a raw state" (pointerp raw_state);
+  let raw_state_short = src_process raw_state
+    ({0.0},dmatrix 0,1,0,1.0);
+  check "raw public src_new state uses queried channels for bounds"
+    (~tuplep raw_state_short);
+  let raw_state_result = src_process raw_state
+    (dmatrix 0,dmatrix 0,0,0,1.0);
+  check "raw public src_new state remains compatible" (tuplep raw_state_result);
+  check "raw public src_new state cleanup" (null (src_delete raw_state));
   check "odd FFT input rejected" (~tuplep (fft {1.0,2.0,3.0}));
 
-  wide_offset = pure_audio_test_echo_int64 4294967297L;
-  raw_seek = pure_audio_test_sf_seek_roundtrip
+  let wide_offset = pure_audio_test_echo_int64 4294967297L;
+  let raw_seek = pure_audio_test_sf_seek_roundtrip
     "pure-audio-bounds.wav" wide_offset;
   check "sf_count_t input is not truncated to 32 bits"
     (raw_seek == -1L);

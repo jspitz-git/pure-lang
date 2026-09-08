@@ -253,11 +253,16 @@ audio::check_matrix x =
   (imatrixp x || dmatrixp x) && (null x || vectorp x || packed x);
 
 private matrix_fits;
+private native_long_max;
+audio::native_long_max =
+  if SIZEOF_LONG==4 then 2147483647L else 9223372036854775807L;
+
 audio::matrix_fits as buf size input =
   check_matrix buf && integerp size && size>=0 && channels>0 &&
-  #buf>=size*channels
+  bigint size<=native_long_max && bigint (#buf)>=sample_count
 when
   channels = audio_stream_channels (stream_data as) input;
+  sample_count = bigint size*bigint channels;
 end;
 
 audio::read_stream as::pointer buf::matrix size =

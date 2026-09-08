@@ -90,6 +90,46 @@ include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/Install.cmake")
 
 include(CTest)
 if(BUILD_TESTING)
+  set(PURE_AUDIO_SNDFILE_INT64_SIGNATURES
+    "int64 sf_seek(SNDFILE*, int64, int)"
+    "int64 sf_read_raw(SNDFILE*, void*, int64)"
+    "int64 sf_write_raw(SNDFILE*, void*, int64)"
+    "int64 sf_readf_short(SNDFILE*, short*, int64)"
+    "int64 sf_writef_short(SNDFILE*, short*, int64)"
+    "int64 sf_readf_int(SNDFILE*, int*, int64)"
+    "int64 sf_writef_int(SNDFILE*, int*, int64)"
+    "int64 sf_readf_float(SNDFILE*, float*, int64)"
+    "int64 sf_writef_float(SNDFILE*, float*, int64)"
+    "int64 sf_readf_double(SNDFILE*, double*, int64)"
+    "int64 sf_writef_double(SNDFILE*, double*, int64)"
+    "int64 sf_read_short(SNDFILE*, short*, int64)"
+    "int64 sf_write_short(SNDFILE*, short*, int64)"
+    "int64 sf_read_int(SNDFILE*, int*, int64)"
+    "int64 sf_write_int(SNDFILE*, int*, int64)"
+    "int64 sf_read_float(SNDFILE*, float*, int64)"
+    "int64 sf_write_float(SNDFILE*, float*, int64)"
+    "int64 sf_read_double(SNDFILE*, double*, int64)"
+    "int64 sf_write_double(SNDFILE*, double*, int64)"
+  )
+  file(READ "${CMAKE_CURRENT_SOURCE_DIR}/sndfile/sndfile.pure"
+       sndfile_pure_source)
+  foreach(signature IN LISTS PURE_AUDIO_SNDFILE_INT64_SIGNATURES)
+    string(FIND "${sndfile_pure_source}" "extern ${signature};"
+           signature_offset)
+    if(signature_offset EQUAL -1)
+      message(FATAL_ERROR
+        "sndfile.pure ABI regression: expected 'extern ${signature};'")
+    endif()
+  endforeach()
+  string(REGEX MATCHALL
+    "extern[ \t]+(int|int64)[ \t]+sf_(seek|read_raw|write_raw|readf_short|writef_short|readf_int|writef_int|readf_float|writef_float|readf_double|writef_double|read_short|write_short|read_int|write_int|read_float|write_float|read_double|write_double)\\([^;]*\\)"
+    sndfile_count_declarations "${sndfile_pure_source}")
+  list(LENGTH sndfile_count_declarations sndfile_count_declaration_count)
+  if(NOT sndfile_count_declaration_count EQUAL 19)
+    message(FATAL_ERROR
+      "sndfile.pure ABI regression: expected exactly 19 sf_count_t declarations, found ${sndfile_count_declaration_count}")
+  endif()
+
   pkg_get_variable(PURE_PREFIX pure prefix)
   set(PURE_AUDIO_COMPILER_RUNTIME_PATH "")
   if(MINGW AND CMAKE_C_COMPILER_ID MATCHES "Clang")
@@ -151,6 +191,15 @@ if(BUILD_TESTING)
       "$<TARGET_FILE_DIR:audio_bounds_seam>"
     VERBATIM
   )
+  foreach(bounds_dependency IN ITEMS fftw srcprocess sfinfo)
+    add_custom_command(
+      TARGET "${bounds_dependency}" POST_BUILD
+      COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+        "$<TARGET_FILE:${bounds_dependency}>"
+        "$<TARGET_FILE_DIR:audio_bounds_seam>"
+      VERBATIM
+    )
+  endforeach()
 
   find_program(
     PURE_EXECUTABLE

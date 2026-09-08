@@ -100,7 +100,7 @@ int64_t pure_audio_test_sf_seek_roundtrip(const char *path, int64_t offset)
 
 int pure_audio_test_print_bounds_marker(void)
 {
-  if (fputs("PURE_AUDIO_BOUNDS_OK 14 checks\n", stdout) == EOF)
+  if (fputs("PURE_AUDIO_BOUNDS_OK 24 checks\n", stdout) == EOF)
     return -1;
   return fflush(stdout);
 }
@@ -227,6 +227,7 @@ static void MyRingBuffer_Flush( MyRingBuffer *rbuf );
 static long
 MyRingBuffer_Init( MyRingBuffer *rbuf, long numBytes, void *dataPtr )
 {
+  if (numBytes <= 0 || numBytes > LONG_MAX/2) return -1;
   if( ((numBytes-1) & numBytes) != 0) return -1; /* Not Power of two. */
   rbuf->bufferSize = numBytes;
   rbuf->buffer = (char *)dataPtr;
@@ -506,6 +507,8 @@ static bool round_pow2(size_t value, size_t *rounded)
       return false;
     result <<= 1;
   }
+  if (result > (size_t)LONG_MAX / 2)
+    return false;
   *rounded = result;
   return true;
 }
