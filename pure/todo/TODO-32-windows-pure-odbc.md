@@ -1,6 +1,6 @@
 # TODO-32 - Windows pure-odbc Package
 
-Status: Open
+Status: Closed on 2026-09-08
 Branch: todo/32-windows-pure-odbc
 
 ## Purpose
@@ -122,3 +122,28 @@ Build and validate `pure-odbc` against an explicitly selected Windows ODBC layer
 - 2026-09-08: Task 7 CI and documentation review completed. The TODO remains
   open deliberately; `Status: Closed on YYYY-MM-DD` may be set only after Task
   8 whole-branch review and final clean verification have both passed.
+- 2026-09-08: The Task 8 whole-branch review found and fixed three remaining
+  defects: the public `odbc_info` path now shares the bounded `SQLGetInfo`
+  loader and releases partially constructed Pure values; text `SQLGetData`
+  distinguishes unrelated short warnings, rejects invalid negative indicators,
+  and bounds repeated continuation; and a partial capture-thread startup
+  failure now terminates the child, closes parent write ends, and waits for the
+  child and every started reader before releasing handles or stack state. The
+  scoped re-review found no remaining Critical, Important, or Minor issue.
+- 2026-09-08: Final verification used a never-before-used strict Release build
+  and stage. Configure found Clang 22.1.8, Pure 0.68, and GMP 6.3.0; the
+  eight-edge build and exact PE target passed with `--parallel 4`, covering 14
+  AMD64 binaries and resolving `ODBC32.dll` only to
+  `C:/Windows/System32/odbc32.dll`. All 9/9 ODBC tests passed with no skip in
+  990.92 s (source distribution 593.27 s, ASan fault harness 23.18 s, install
+  contract 136.75 s). The PyYAML mutation and pristine semantic checks passed.
+  A separate fresh-stage two-component install and direct verifier confirmed
+  the exact ten-file delta, unchanged full-prefix baseline, byte-identical
+  Pure/GMP runtimes, no bundled manager or driver, installed manager/IM002
+  smoke, and exact staged PE closure. The branch diff check was clean.
+- 2026-09-08: Remaining limits are explicit: GitHub-hosted execution is pending
+  the future push; Windows LeakSanitizer is unavailable, so the ASan harness
+  also requires zero explicit tracked allocations; Access success is
+  host-dependent with exact absence skip 77; no external database/server is
+  certified; and the strict import manifests require re-audit after relevant
+  toolchain, SDK, or Windows ABI changes.
