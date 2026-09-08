@@ -832,15 +832,15 @@ static int audio_cb(const void *input, void *output,
   size_t in_count = 0, out_count = 0, callback_frames = (size_t)nframes;
   if (!v || (uintmax_t)nframes > (uintmax_t)SIZE_MAX ||
       (input &&
-       (!callback_channels_valid(input, v->in_format, v->in_channels) ||
-        !callback_format_valid(v->in_format, v->in_channels, v->in_bps,
+       (!callback_format_valid(v->in_format, v->in_channels, v->in_bps,
                                v->in_bpf, &v->in_buf) ||
-        !pure_audio_frame_bytes((unsigned)v->in_bpf, nframes, &in_count))) ||
+        !pure_audio_frame_bytes((unsigned)v->in_bpf, nframes, &in_count) ||
+        !callback_channels_valid(input, v->in_format, v->in_channels))) ||
       (output &&
-       (!callback_channels_valid(output, v->out_format, v->out_channels) ||
-        !callback_format_valid(v->out_format, v->out_channels, v->out_bps,
+       (!callback_format_valid(v->out_format, v->out_channels, v->out_bps,
                                v->out_bpf, &v->out_buf) ||
-        !pure_audio_frame_bytes((unsigned)v->out_bpf, nframes, &out_count))))
+        !pure_audio_frame_bytes((unsigned)v->out_bpf, nframes, &out_count) ||
+        !callback_channels_valid(output, v->out_format, v->out_channels))))
     return paAbort;
   (void)in_count;
   (void)out_count;

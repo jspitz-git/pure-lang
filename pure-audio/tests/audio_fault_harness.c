@@ -4,6 +4,12 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#ifdef _WIN32
+#include <process.h>
+#else
+#include <sys/types.h>
+#include <sys/wait.h>
+#endif
 
 #define PURE_AUDIO_TEST_SEAM 1
 #include "../audio_test_api.h"
@@ -11,6 +17,7 @@
 
 static int failures;
 static int checks;
+static const char *test_executable;
 
 #define CHECK(condition, message)                                                \
   do {                                                                           \
@@ -216,6 +223,272 @@ static bool callback_planar_matches(
                  (size_t)sample_bytes) != 0)
         return false;
   return true;
+}
+
+static bool guarded_interleaved_ok(const unsigned char *buffer,
+                                   size_t sample_bytes)
+{
+  size_t byte;
+  for (byte = 0; byte < CALLBACK_GUARD_BYTES; ++byte)
+    if (buffer[byte] != 0xa5)
+      return false;
+  for (byte = CALLBACK_GUARD_BYTES + sample_bytes;
+       byte < 2 * CALLBACK_GUARD_BYTES + sample_bytes; ++byte)
+    if (buffer[byte] != 0xa5)
+      return false;
+  return true;
+}
+
+static void prepare_callback_buffer(
+  const unsigned char *samples, size_t bytes, int frames, int channels,
+  int sample_bytes, bool noninterleaved,
+  unsigned char *interleaved,
+  unsigned char planar[][CALLBACK_DATA_BYTES + 2 * CALLBACK_GUARD_BYTES],
+  void **channel_pointers)
+{
+  memset(interleaved, 0xa5,
+         2 * CALLBACK_GUARD_BYTES + CALLBACK_DATA_BYTES);
+  memcpy(interleaved + CALLBACK_GUARD_BYTES, samples, bytes);
+  interleaved_to_planar(samples, planar, channel_pointers, frames, channels,
+                        sample_bytes);
+  if (!noninterleaved)
+    channel_pointers[0] = interleaved + CALLBACK_GUARD_BYTES;
+}
+
+static void test_callback_input_wrap(bool noninterleaved)
+{
+  static const unsigned char first[] = {10, 11, 20, 21, 30, 31};
+  static const unsigned char second[] = {40, 41, 50, 51, 60, 61};
+  static const unsigned char retained[] = {30, 31, 40, 41,
+                                           50, 51, 60, 61};
+  unsigned char storage[8] = {0};
+  unsigned char first_buffer[2 * CALLBACK_GUARD_BYTES + CALLBACK_DATA_BYTES];
+  unsigned char second_buffer[2 * CALLBACK_GUARD_BYTES + CALLBACK_DATA_BYTES];
+  unsigned char first_planar[CALLBACK_CHANNELS]
+                            [CALLBACK_DATA_BYTES + 2 * CALLBACK_GUARD_BYTES];
+  unsigned char second_planar[CALLBACK_CHANNELS]
+                             [CALLBACK_DATA_BYTES + 2 * CALLBACK_GUARD_BYTES];
+  void *first_channels[16] = {0};
+  void *second_channels[16] = {0};
+  unsigned char discarded[4] = {0};
+  unsigned char readback[sizeof(retained)] = {0};
+  MyStream stream;
+
+  prepare_callback_buffer(first, sizeof(first), 3, 2, 1, noninterleaved,
+                          first_buffer, first_planar, first_channels);
+  prepare_callback_buffer(second, sizeof(second), 3, 2, 1, noninterleaved,
+                          second_buffer, second_planar, second_channels);
+  init_test_stream(&stream, (char *)storage, sizeof(storage),
+                   paUInt8 | (noninterleaved ? paNonInterleaved : 0),
+                   2, 1, true);
+  CHECK(pure_audio_test_invoke_callback(
+          &stream, noninterleaved ? (void *)first_channels : first_channels[0],
+          NULL, 3) ==
+          paContinue,
+        "input wrap first callback result");
+  CHECK(read_audio_stream(&stream, NULL, discarded, 2) == 2,
+        "input wrap creates a partially occupied queue");
+  CHECK(memcmp(discarded, first, sizeof(discarded)) == 0,
+        "input wrap removes the first two distinct frames");
+  CHECK(pure_audio_test_invoke_callback(
+          &stream,
+          noninterleaved ? (void *)second_channels : second_channels[0],
+          NULL, 3) ==
+          paContinue,
+        "input wrap second callback result");
+  CHECK(read_audio_stream(&stream, NULL, readback, 4) == 4,
+        "input wrap returns four complete frames");
+  CHECK(memcmp(readback, retained, sizeof(retained)) == 0,
+        "input wrap preserves distinct frame and channel order");
+  CHECK(pure_audio_test_input_accepted_frames(&stream) == 6,
+        "input wrap accepted counter counts complete frames");
+  CHECK(pure_audio_test_input_dropped_frames(&stream) == 0,
+        "input wrap does not report overflow drops");
+  if (noninterleaved) {
+    CHECK(callback_channel_guards_ok(first_planar, 3, 2, 1),
+          "input wrap first planar guards intact");
+    CHECK(callback_channel_guards_ok(second_planar, 3, 2, 1),
+          "input wrap second planar guards intact");
+  } else {
+    CHECK(guarded_interleaved_ok(first_buffer, sizeof(first)),
+          "input wrap first interleaved guards intact");
+    CHECK(guarded_interleaved_ok(second_buffer, sizeof(second)),
+          "input wrap second interleaved guards intact");
+  }
+  destroy_test_stream(&stream, true);
+}
+
+static void prepare_output_buffer(
+  int frames, bool noninterleaved, unsigned char *interleaved,
+  unsigned char planar[][CALLBACK_DATA_BYTES + 2 * CALLBACK_GUARD_BYTES],
+  void **channel_pointers)
+{
+  static const unsigned char zeros[CALLBACK_DATA_BYTES] = {0};
+  prepare_callback_buffer(zeros, (size_t)frames * 2U, frames, 2, 1,
+                          noninterleaved, interleaved, planar,
+                          channel_pointers);
+}
+
+static void test_callback_output_wrap(bool noninterleaved)
+{
+  static const unsigned char first[] = {10, 11, 20, 21, 30, 31};
+  static const unsigned char second[] = {40, 41, 50, 51, 60, 61};
+  static const unsigned char retained[] = {30, 31, 40, 41,
+                                           50, 51, 60, 61};
+  unsigned char storage[8] = {0};
+  unsigned char first_buffer[2 * CALLBACK_GUARD_BYTES + CALLBACK_DATA_BYTES];
+  unsigned char second_buffer[2 * CALLBACK_GUARD_BYTES + CALLBACK_DATA_BYTES];
+  unsigned char first_planar[CALLBACK_CHANNELS]
+                            [CALLBACK_DATA_BYTES + 2 * CALLBACK_GUARD_BYTES];
+  unsigned char second_planar[CALLBACK_CHANNELS]
+                             [CALLBACK_DATA_BYTES + 2 * CALLBACK_GUARD_BYTES];
+  void *first_channels[16] = {0};
+  void *second_channels[16] = {0};
+  MyStream stream;
+
+  prepare_output_buffer(2, noninterleaved, first_buffer, first_planar,
+                        first_channels);
+  prepare_output_buffer(4, noninterleaved, second_buffer, second_planar,
+                        second_channels);
+  init_test_stream(&stream, (char *)storage, sizeof(storage),
+                   paUInt8 | (noninterleaved ? paNonInterleaved : 0),
+                   2, 1, false);
+  CHECK(write_audio_stream(&stream, NULL, (void *)first, 3) == 3,
+        "output wrap first queue write");
+  CHECK(pure_audio_test_invoke_callback(
+          &stream, NULL,
+          noninterleaved ? (void *)first_channels : first_channels[0], 2) ==
+          paContinue,
+        "output wrap first callback result");
+  if (noninterleaved)
+    CHECK(callback_planar_matches(first, first_planar, 2, 2, 1),
+          "output wrap first planar frames preserve order");
+  else
+    CHECK(memcmp(first_buffer + CALLBACK_GUARD_BYTES, first, 4) == 0,
+          "output wrap first interleaved frames preserve order");
+  CHECK(write_audio_stream(&stream, NULL, (void *)second, 3) == 3,
+        "output wrap split queue write");
+  CHECK(pure_audio_test_invoke_callback(
+          &stream, NULL,
+          noninterleaved ? (void *)second_channels : second_channels[0], 4) ==
+          paContinue,
+        "output wrap second callback result");
+  if (noninterleaved)
+    CHECK(callback_planar_matches(retained, second_planar, 4, 2, 1),
+          "output wrap planar scatter preserves retained order");
+  else
+    CHECK(memcmp(second_buffer + CALLBACK_GUARD_BYTES, retained,
+                 sizeof(retained)) == 0,
+          "output wrap split copy preserves retained order");
+  CHECK(pure_audio_test_consumed_frames(&stream) == 6,
+        "output wrap consumed counter counts transferred frames");
+  CHECK(MyRingBuffer_GetReadAvailable(&stream.out_buf) == 0,
+        "output wrap leaves no queued frames");
+  if (noninterleaved) {
+    CHECK(callback_channel_guards_ok(first_planar, 2, 2, 1),
+          "output wrap first planar guards intact");
+    CHECK(callback_channel_guards_ok(second_planar, 4, 2, 1),
+          "output wrap second planar guards intact");
+  } else {
+    CHECK(guarded_interleaved_ok(first_buffer, 4),
+          "output wrap first interleaved guards intact");
+    CHECK(guarded_interleaved_ok(second_buffer, sizeof(retained)),
+          "output wrap second interleaved guards intact");
+  }
+  destroy_test_stream(&stream, false);
+}
+
+static void test_partially_occupied_input_overflow(void)
+{
+  static const unsigned char first[] = {10, 11, 20, 21, 30, 31};
+  static const unsigned char second[] = {40, 41, 50, 51, 60, 61};
+  static const unsigned char retained[] = {30, 31, 40, 41,
+                                           50, 51, 60, 61};
+  unsigned char storage[8] = {0};
+  unsigned char first_buffer[2 * CALLBACK_GUARD_BYTES + CALLBACK_DATA_BYTES];
+  unsigned char second_buffer[2 * CALLBACK_GUARD_BYTES + CALLBACK_DATA_BYTES];
+  unsigned char planar[CALLBACK_CHANNELS]
+                      [CALLBACK_DATA_BYTES + 2 * CALLBACK_GUARD_BYTES];
+  void *first_channels[16] = {0};
+  void *second_channels[16] = {0};
+  unsigned char readback[sizeof(retained)] = {0};
+  MyStream stream;
+
+  prepare_callback_buffer(first, sizeof(first), 3, 2, 1, false,
+                          first_buffer, planar, first_channels);
+  prepare_callback_buffer(second, sizeof(second), 3, 2, 1, false,
+                          second_buffer, planar, second_channels);
+  init_test_stream(&stream, (char *)storage, sizeof(storage), paUInt8,
+                   2, 1, true);
+  CHECK(pure_audio_test_invoke_callback(&stream, first_channels[0], NULL, 3) ==
+          paContinue,
+        "partial overflow first callback result");
+  CHECK(pure_audio_test_invoke_callback(&stream, second_channels[0], NULL, 3) ==
+          paContinue,
+        "partial overflow second callback result");
+  CHECK(read_audio_stream(&stream, NULL, readback, 4) == 4,
+        "partial overflow returns one complete capacity");
+  CHECK(memcmp(readback, retained, sizeof(retained)) == 0,
+        "partial overflow drops only the two oldest distinct frames");
+  CHECK(pure_audio_test_input_accepted_frames(&stream) == 6,
+        "partial overflow accepted counter counts both callbacks");
+  CHECK(pure_audio_test_input_dropped_frames(&stream) == 2,
+        "partial overflow dropped counter counts complete frames");
+  CHECK(guarded_interleaved_ok(first_buffer, sizeof(first)) &&
+        guarded_interleaved_ok(second_buffer, sizeof(second)),
+        "partial overflow preserves callback guards");
+  destroy_test_stream(&stream, true);
+}
+
+static void test_oversized_callback_prefix_discard(bool noninterleaved)
+{
+  static const unsigned char samples[] = {10, 11, 20, 21, 30, 31,
+                                          40, 41, 50, 51, 60, 61};
+  static const unsigned char retained[] = {30, 31, 40, 41,
+                                           50, 51, 60, 61};
+  unsigned char storage[8] = {0};
+  unsigned char buffer[2 * CALLBACK_GUARD_BYTES + CALLBACK_DATA_BYTES];
+  unsigned char planar[CALLBACK_CHANNELS]
+                      [CALLBACK_DATA_BYTES + 2 * CALLBACK_GUARD_BYTES];
+  void *channels[16] = {0};
+  unsigned char readback[sizeof(retained)] = {0};
+  MyStream stream;
+
+  prepare_callback_buffer(samples, sizeof(samples), 6, 2, 1,
+                          noninterleaved, buffer, planar, channels);
+  init_test_stream(&stream, (char *)storage, sizeof(storage),
+                   paUInt8 | (noninterleaved ? paNonInterleaved : 0),
+                   2, 1, true);
+  CHECK(pure_audio_test_invoke_callback(
+          &stream, noninterleaved ? (void *)channels : channels[0], NULL, 6) ==
+          paContinue,
+        "oversized callback result");
+  CHECK(read_audio_stream(&stream, NULL, readback, 4) == 4,
+        "oversized callback retains one complete capacity");
+  CHECK(memcmp(readback, retained, sizeof(retained)) == 0,
+        "oversized callback discards its oldest distinct prefix");
+  CHECK(pure_audio_test_input_accepted_frames(&stream) == 4,
+        "oversized callback accepted counter is capacity-bounded");
+  CHECK(pure_audio_test_input_dropped_frames(&stream) == 2,
+        "oversized callback dropped counter counts prefix frames");
+  if (noninterleaved)
+    CHECK(callback_channel_guards_ok(planar, 6, 2, 1),
+          "oversized planar callback guards intact");
+  else
+    CHECK(guarded_interleaved_ok(buffer, sizeof(samples)),
+          "oversized interleaved callback guards intact");
+  destroy_test_stream(&stream, true);
+}
+
+static void test_callback_wrap_and_overflow_sequences(void)
+{
+  test_callback_input_wrap(false);
+  test_callback_input_wrap(true);
+  test_callback_output_wrap(false);
+  test_callback_output_wrap(true);
+  test_partially_occupied_input_overflow();
+  test_oversized_callback_prefix_discard(false);
+  test_oversized_callback_prefix_discard(true);
 }
 
 static void test_callback_layout_case(const CallbackFormat *format,
@@ -501,6 +774,81 @@ static void test_unsupported_callback_formats(void)
   CHECK(MyRingBuffer_GetReadAvailable(&stream.in_buf) == 0,
         "ambiguous callback format does not enter the queue");
   destroy_test_stream(&stream, true);
+}
+
+static int run_invalid_noninterleaved_probe(const char *probe)
+{
+  MyStream stream;
+  bool output = strncmp(probe, "output-", 7) == 0;
+  const char *kind = output ? probe + 7 : probe + 6;
+  memset(&stream, 0, sizeof(stream));
+  stream.as = (PaStream *)(uintptr_t)1;
+  stream.in = output ? paNoDevice : 0;
+  stream.out = output ? 0 : paNoDevice;
+  stream.in_format = stream.out_format = paInt16 | paNonInterleaved;
+  stream.in_channels = stream.out_channels = 1;
+  stream.in_bps = stream.out_bps = 2;
+  stream.in_bpf = stream.out_bpf = 2;
+  stream.in_buf.channels = stream.out_buf.channels = 1;
+  stream.in_buf.sample_bytes = stream.out_buf.sample_bytes = 2;
+
+  if (strcmp(kind, "format") == 0) {
+    if (output)
+      stream.out_format = paCustomFormat | paNonInterleaved;
+    else
+      stream.in_format = paCustomFormat | paNonInterleaved;
+  } else if (strcmp(kind, "channels") == 0) {
+    if (output) {
+      stream.out_channels = INT_MAX;
+      stream.out_bpf = INT_MAX;
+    } else {
+      stream.in_channels = INT_MAX;
+      stream.in_bpf = INT_MAX;
+    }
+  } else if (strcmp(kind, "queue") == 0) {
+    if (output)
+      stream.out_buf.channels = 2;
+    else
+      stream.in_buf.channels = 2;
+  } else
+    return 2;
+
+  return pure_audio_test_invoke_callback(&stream,
+           output ? NULL : (const void *)(uintptr_t)1,
+           output ? (void *)(uintptr_t)1 : NULL, 1) == paAbort ? 0 : 3;
+}
+
+static int spawn_invalid_noninterleaved_probe(const char *probe)
+{
+#ifdef _WIN32
+  const char *arguments[] = {test_executable, "--invalid-ni-probe", probe,
+                             NULL};
+  return (int)_spawnv(_P_WAIT, test_executable, arguments);
+#else
+  pid_t child = fork();
+  int status;
+  if (child == 0)
+    _exit(run_invalid_noninterleaved_probe(probe));
+  if (child < 0 || waitpid(child, &status, 0) < 0)
+    return -1;
+  return WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+#endif
+}
+
+static void test_noninterleaved_metadata_precedes_pointer_access(void)
+{
+  CHECK(spawn_invalid_noninterleaved_probe("input-format") == 0,
+        "invalid non-interleaved format rejects before pointer-array access");
+  CHECK(spawn_invalid_noninterleaved_probe("input-channels") == 0,
+        "unbounded non-interleaved channels reject before pointer-array access");
+  CHECK(spawn_invalid_noninterleaved_probe("input-queue") == 0,
+        "inconsistent non-interleaved queue rejects before pointer-array access");
+  CHECK(spawn_invalid_noninterleaved_probe("output-format") == 0,
+        "invalid non-interleaved output format rejects before pointer-array access");
+  CHECK(spawn_invalid_noninterleaved_probe("output-channels") == 0,
+        "unbounded non-interleaved output channels reject before pointer-array access");
+  CHECK(spawn_invalid_noninterleaved_probe("output-queue") == 0,
+        "inconsistent non-interleaved output queue rejects before pointer-array access");
 }
 
 static void test_int16_conversion(void)
@@ -815,16 +1163,22 @@ static void test_overflow_before_allocation_or_loop(void)
         "overflow rejected before allocation");
 }
 
-int main(void)
+int main(int argc, char **argv)
 {
   const size_t allocation_start = pure_audio_test_allocation_delta();
+
+  if (argc == 3 && strcmp(argv[1], "--invalid-ni-probe") == 0)
+    return run_invalid_noninterleaved_probe(argv[2]);
+  test_executable = argv[0];
 
   test_portaudio_dispatch();
   test_callback_layouts();
   test_callback_silence();
   test_callback_frame_alignment();
+  test_callback_wrap_and_overflow_sequences();
   test_noninterleaved_null_channels();
   test_unsupported_callback_formats();
+  test_noninterleaved_metadata_precedes_pointer_access();
   test_int16_conversion();
   test_int8_conversion();
   test_uint8_conversion();

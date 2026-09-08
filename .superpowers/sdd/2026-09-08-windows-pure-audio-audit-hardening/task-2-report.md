@@ -159,6 +159,102 @@ Findings fixed before commit:
 No unresolved Critical, Important, or Minor code finding remains within Task 2
 scope. `git diff --check 1a24c6fa` reports no whitespace error.
 
+## Fix round 1: validation ordering and behavioral wrap coverage
+
+Reviewer feedback identified that `callback_channels_valid` traversed a
+non-interleaved channel-pointer array before the callback had rejected invalid
+format/metadata or failed checked frame-byte arithmetic. Both callback
+directions now validate, in short-circuit order:
+
+1. the normalized sample format and positive channel count,
+2. sample/frame sizes, including bounded checked bytes-per-frame arithmetic,
+3. queue metadata consistency,
+4. checked callback-frame byte arithmetic,
+5. only then, for non-interleaved buffers, the channel-pointer array.
+
+The fault harness launches six malformed non-interleaved callbacks in isolated
+child processes, passing address `1` as the channel-pointer array. The probes
+cover invalid format, unbounded channel count/arithmetic, and queue/channel
+metadata mismatch in both input and output directions. Any traversal before
+rejection crashes the child and fails the parent assertion.
+
+### Ordering RED and GREEN
+
+Before the production reorder, the input probes failed because the child
+accessed the invalid pointer array:
+
+```powershell
+C:\msys64\clang64\bin\cmake.exe --build build\task1-make --parallel 4
+C:\msys64\clang64\bin\ctest.exe --test-dir build\task1-make -R pure-audio-fault-bounds --output-on-failure
+```
+
+```text
+audio fault test failed: invalid non-interleaved format rejects before pointer-array access
+audio fault test failed: unbounded non-interleaved channels reject before pointer-array access
+audio fault test failed: inconsistent non-interleaved queue rejects before pointer-array access
+3 of 1294 audio fault checks failed
+0% tests passed, 1 tests failed out of 1
+```
+
+After implementing both direction reorders, temporarily restoring the old
+output-side ordering produced the symmetric RED evidence:
+
+```text
+audio fault test failed: invalid non-interleaved output format rejects before pointer-array access
+audio fault test failed: unbounded non-interleaved output channels reject before pointer-array access
+audio fault test failed: inconsistent non-interleaved output queue rejects before pointer-array access
+3 of 1384 audio fault checks failed
+0% tests passed, 1 tests failed out of 1
+```
+
+The old ordering mutation was then removed.
+
+### Distinct-frame behavioral coverage
+
+The harness now uses distinct two-channel UInt8 frames and guard regions to
+exercise:
+
+- interleaved and planar input split-copy wrap, retaining `C,D,E,F` after
+  consuming `A,B`, with accepted/dropped counters checked;
+- interleaved and planar output split-copy wrap, emitting `A..F` in order,
+  with consumed-frame and empty-queue state checked;
+- partially occupied input overflow, retaining newest `C,D,E,F` and reporting
+  accepted `6`, dropped `2`;
+- oversized interleaved and planar input callbacks, discarding the callback
+  prefix and retaining newest `C,D,E,F`, with accepted `4`, dropped `2`.
+
+Temporary branch mutations proved that the assertions are behavioral:
+
+```text
+CopyIn second-span copy suppressed: 4 of 1381 checks failed
+CopyOut second-span copy suppressed: 4 of 1381 checks failed
+oversized source-frame offset forced to zero: 4 of 1381 checks failed
+partial-overflow discard forced to zero: 8 of 1381 checks failed
+```
+
+All mutations were reverted before final verification.
+
+### Final fix-round verification
+
+```powershell
+C:\msys64\clang64\bin\cmake.exe --build build\task1-make --parallel 4
+C:\msys64\clang64\bin\ctest.exe --test-dir build\task1-make --output-on-failure
+C:\msys64\clang64\bin\cmake.exe --build build\task2-asan --parallel 4
+C:\msys64\clang64\bin\ctest.exe --test-dir build\task2-asan -R pure-audio-fault-bounds -V
+```
+
+```text
+Normal: 4/4 tests passed, 0 failed; total 17.38 sec
+ASan: AUDIO_FAULT_HARNESS_OK 1384 checks allocation_delta=0
+ASan: 1/1 test passed, 0 failed; total 0.46 sec
+```
+
+No AddressSanitizer diagnostic was emitted. The fix-round diff remains limited
+to callback validation ordering, Task 2 fault-harness coverage, and this report.
+The final pre-commit repetition of the focused command reported 1384 checks in
+both configurations (normal 0.30 seconds, ASan 0.39 seconds), again with no
+sanitizer diagnostic.
+
 ## Concerns and boundaries
 
 - Hardware playback and capture were not run; Task 2 verification is
