@@ -439,6 +439,10 @@ MyRingBuffer_Read( MyRingBuffer *rbuf, void *data, size_t frames )
 
 static bool init_ok;
 static PaError audio_error = paNotInitialized;
+/* A failed Pa_CloseStream can orphan a callback producer outside PortAudio's
+   open list. No portable subsequent call proves it stopped. Quarantine is
+   permanent: never tear down this backend, restart it, or recycle userdata. */
+static bool backend_quarantined;
 
 typedef struct _MyStream {
   PaStream *as;
@@ -618,8 +622,8 @@ fail:
 /* Called with lifecycle_mutex held. Public admission is invalidated before
    waiting, but descriptors stay alive until all admitted activity exits.
    Pa_CloseStream can consume its pointer even on error: never retry it.
-   Failed native close retains only callback userdata until successful
-   Pa_Terminate proves production has ended. */
+   On failure the descriptor, queues and synchronization become a permanent
+   tombstone. Late callbacks may enter it but can only observe FAILED state. */
 static PaError fini_stream(MyStream *v, bool abort)
 {
   PaError error, close_error;
@@ -654,6 +658,10 @@ static PaError fini_stream(MyStream *v, bool abort)
   v->error = close_error != paNoError ? close_error : error;
   v->state = close_error == paNoError ? STREAM_CLOSED : STREAM_FAILED;
   v->as = NULL;
+  if (close_error != paNoError) {
+    backend_quarantined = true;
+    audio_error = close_error;
+  }
   pthread_mutex_unlock(&v->data_mutex);
   if (close_error == paNoError) {
     pthread_mutex_lock(&registry_mutex);
@@ -676,20 +684,12 @@ static PaError stop_audio_locked(void)
     PaError e = fini_stream(v, true);
     if (e != paNoError) error = e;
   }
+  if (backend_quarantined) return audio_error;
   if (init_ok) {
     PaError e = pure_audio_dispatch->terminate();
     if (e == paNoError) {
-      /* Termination succeeded: even failed-close streams have no callbacks. */
-      pthread_mutex_lock(&registry_mutex);
-      for (v = current; v; v = next) {
-        next = v->next;
-        unregister_stream(v);
-        while (v->operations || v->callbacks)
-          pthread_cond_wait(&registry_cond, &registry_mutex);
-        destroy_stream(v);
-        pure_audio_free(v);
-      }
-      pthread_mutex_unlock(&registry_mutex);
+      /* Every stream was successfully closed above. Quarantined backends
+         never reach this call, even if a later terminate might return zero. */
       init_ok = false;
     } else error = e;
   }
@@ -699,22 +699,26 @@ static PaError stop_audio_locked(void)
 
 void start_audio(void)
 {
+  int previous_cancel;
+  pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, &previous_cancel);
   pthread_mutex_lock(&lifecycle_mutex);
   PaError stopped = stop_audio_locked();
-  /* A successful terminate is a safe restart boundary even when an earlier
-     stream close reported an error. A failed terminate keeps init_ok set. */
-  if (stopped == paNoError || (!init_ok && !current)) {
+  if (!backend_quarantined && (stopped == paNoError || (!init_ok && !current))) {
     audio_error = pure_audio_dispatch->initialize();
     init_ok = audio_error == paNoError;
   }
   pthread_mutex_unlock(&lifecycle_mutex);
+  pthread_setcancelstate(previous_cancel, NULL);
 }
 
 void stop_audio(void)
 {
+  int previous_cancel;
+  pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, &previous_cancel);
   pthread_mutex_lock(&lifecycle_mutex);
   (void)stop_audio_locked();
   pthread_mutex_unlock(&lifecycle_mutex);
+  pthread_setcancelstate(previous_cancel, NULL);
 }
 
 static void pure_audio_add_counter(uint64_t *counter, uint64_t increment)
@@ -1180,15 +1184,22 @@ static pure_expr *open_audio_stream_locked(int *in, int *out,
 pure_expr *open_audio_stream(int *in, int *out, double sr, long size, int flags)
 {
   pure_expr *result;
+  int previous_cancel;
+  pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, &previous_cancel);
   pthread_mutex_lock(&lifecycle_mutex);
   result = open_audio_stream_locked(in, out, sr, size, flags);
   pthread_mutex_unlock(&lifecycle_mutex);
+  pthread_setcancelstate(previous_cancel, NULL);
   return result;
 }
 
 void audio_sentry(MyStream *identity, pure_expr *stream)
 {
   MyStream *v;
+  int previous_cancel;
+  /* A condition cancellation would otherwise reacquire registry_mutex and
+     strand both registry and lifecycle locks. Deliver it only after cleanup. */
+  pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, &previous_cancel);
   pthread_mutex_lock(&lifecycle_mutex);
   pthread_mutex_lock(&registry_mutex);
   for (v = current; v; v = v->next)
@@ -1197,6 +1208,7 @@ void audio_sentry(MyStream *identity, pure_expr *stream)
   if (v) (void)fini_stream(v, false);
   pthread_mutex_unlock(&lifecycle_mutex);
   if (stream) stream->data.p = NULL;
+  pthread_setcancelstate(previous_cancel, NULL);
 }
 
 int audio_stream_valid(MyStream *identity)

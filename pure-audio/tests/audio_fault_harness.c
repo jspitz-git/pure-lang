@@ -15,6 +15,11 @@ static int resource_fail_at, resource_attempt, resource_depth, resource_errors;
 static bool resource_tracking;
 static _Atomic int owned_sync;
 static void *resource_stack[32];
+/* The recycler deterministically reuses the exact descriptor address if the
+   wrapper frees it. It does not fabricate an overlap with a live allocation. */
+static void *recycle_target, *recycle_available;
+static size_t recycle_size;
+static unsigned recycle_reuses, recycle_frees;
 static void resource_acquired(void *p)
 { if (resource_tracking) resource_stack[resource_depth++] = p; }
 static void resource_released(void *p)
@@ -26,11 +31,24 @@ static bool resource_fail(void)
 { return resource_tracking && ++resource_attempt == resource_fail_at; }
 static void *tracked_malloc(size_t size)
 {
-  void *p = resource_fail() ? NULL : malloc(size);
+  void *p;
+  if (resource_fail()) return NULL;
+  if (recycle_available && size == recycle_size) {
+    p = recycle_available;
+    recycle_available = NULL;
+    ++recycle_reuses;
+  } else p = malloc(size);
   if (p) resource_acquired(p);
   return p;
 }
-static void tracked_free(void *p) { resource_released(p); free(p); }
+static void tracked_free(void *p)
+{
+  resource_released(p);
+  if (p && p == recycle_target) {
+    recycle_available = p;
+    ++recycle_frees;
+  } else free(p);
+}
 static int tracked_mutex_init(pthread_mutex_t *m, const pthread_mutexattr_t *a)
 {
   int error = resource_fail() ? EAGAIN : pthread_mutex_init(m, a);
@@ -54,6 +72,13 @@ static _Thread_local unsigned worker_bit;
 static _Atomic bool callback_paused, release_callback;
 static _Thread_local bool pause_this_callback;
 static pthread_mutex_t *callback_pause_mutex;
+static pthread_mutex_t *observed_registry_mutex;
+static _Atomic bool drain_wait_entered;
+static int tracked_cond_wait(pthread_cond_t *cond, pthread_mutex_t *mutex)
+{
+  if (mutex == observed_registry_mutex) drain_wait_entered = true;
+  return pthread_cond_wait(cond, mutex);
+}
 static int tracked_mutex_lock(pthread_mutex_t *mutex)
 {
   if (pause_this_callback && mutex == callback_pause_mutex) {
@@ -76,14 +101,22 @@ static int tracked_timedwait(pthread_cond_t *cond, pthread_mutex_t *mutex,
 
 static _Atomic int lifecycle_failure, native_streams, native_closes;
 static _Atomic int native_stops, native_aborts, native_queries;
+static int native_initializes, native_terminates, native_unlinked;
+static PaStreamCallback *late_callback;
+static PaStreamFinishedCallback *late_finished;
+static void *late_userdata;
 static PaStreamFinishedCallback *saved_finished;
 static PaStreamCallback *saved_callback;
 static void *saved_data;
-static PaError fake_initialize(void) { return lifecycle_failure == 1 ? paInternalError : paNoError; }
+static PaError fake_initialize(void)
+{ ++native_initializes; return lifecycle_failure == 1 ? paInternalError : paNoError; }
 static PaError fake_terminate(void)
 {
+  ++native_terminates;
   if (lifecycle_failure == 10 || lifecycle_failure == 15) return paInternalError;
-  native_streams = 0;
+  /* PortAudio 19.7 visits only its remaining open list. A close error already
+     unlinked this stream, so success does not kill its retained callback. */
+  native_streams = native_unlinked;
   return paNoError;
 }
 static const PaDeviceInfo *fake_device(PaDeviceIndex device)
@@ -125,7 +158,13 @@ static PaError fake_close(PaStream *stream)
 {
   (void)stream;
   ++native_closes;
-  if (lifecycle_failure == 7 || lifecycle_failure == 15) return paInternalError;
+  if (lifecycle_failure == 7 || lifecycle_failure == 15) {
+    ++native_unlinked;
+    late_callback = saved_callback;
+    late_finished = saved_finished;
+    late_userdata = saved_data;
+    return paInternalError;
+  }
   resource_released(stream);
   --native_streams;
   return paNoError;
@@ -156,6 +195,7 @@ static PaError fake_finished(PaStream *stream, PaStreamFinishedCallback *cb)
 #define pthread_cond_destroy tracked_cond_destroy
 #define pthread_mutex_lock tracked_mutex_lock
 #define pthread_cond_timedwait tracked_timedwait
+#define pthread_cond_wait tracked_cond_wait
 #include "../audio.c"
 #undef malloc
 #undef free
@@ -165,6 +205,7 @@ static PaError fake_finished(PaStream *stream, PaStreamFinishedCallback *cb)
 #undef pthread_cond_destroy
 #undef pthread_mutex_lock
 #undef pthread_cond_timedwait
+#undef pthread_cond_wait
 
 static int failures;
 static int checks;
@@ -317,7 +358,7 @@ static void test_aliases_and_teardown(void)
   double real = 0;
   size_t baseline = pure_audio_test_allocation_delta();
   for (int failure = 0; failure <= 13; ++failure) {
-    if (failure && failure != 5 && failure != 6 && failure != 7 &&
+    if (failure && failure != 5 && failure != 6 &&
         failure != 8 && failure != 10 && failure != 12) continue;
     lifecycle_failure = 0;
     pure_expr *value = pure_audio_test_make_stream(1, 1, paInt16, paInt16);
@@ -362,14 +403,8 @@ static void test_aliases_and_teardown(void)
           "repeated alias close and finalizers never touch old native stream");
     if (failure == 5) CHECK(native_aborts == aborts + 1,
                            "failed graceful stop falls back to abort");
-    if (failure == 7)
-      CHECK(current && current->identity == 0 && native_streams == 1,
-            "failed native close retains callback userdata with invalid identity");
     lifecycle_failure = 0;
     stop_audio();
-    if (failure == 7)
-      CHECK(native_closes == closes + 1,
-            "native pointer is never retried after a failed consuming close");
     CHECK(!current && !native_streams && pure_audio_test_allocation_delta() == baseline,
           "stop/retry drains failed teardown resources");
     pure_expr *replacement = pure_audio_test_make_stream(1, 0, paInt16, 0);
@@ -422,45 +457,30 @@ static void test_foreign_sentry_rejected(void)
   stop_audio();
 }
 
-static void test_failed_teardown_recovery(void)
-{
-  size_t baseline = pure_audio_test_allocation_delta();
-  pure_expr *value = pure_audio_test_make_stream(1, 1, paInt16, paInt16);
-  MyStream *identity = stream_identity(value);
-  int closes = native_closes, parameters[] = {0, 1, paInt16, 0}, error = 0;
-  lifecycle_failure = 15;
-  close_audio_stream(value);
-  stop_audio();
-  CHECK(current && !current->as && !current->identity &&
-        !audio_stream_valid(identity) && native_closes == closes + 1 && owned_sync == 3,
-        "failed stop abort close and terminate retain only invalid callback userdata");
-  pure_expr *rejected = open_audio_stream(parameters, NULL, 48000, 4, 0);
-  CHECK(rejected && pure_is_int(rejected, &error) && error == paInternalError,
-        "failed backend termination rejects new streams with its exact error");
-  lifecycle_failure = 0;
-  start_audio();
-  CHECK(init_ok && audio_error == paNoError && !current && !owned_sync &&
-        pure_audio_test_allocation_delta() == baseline && native_closes == closes + 1,
-        "one restart recovers after successful termination without retrying consumed native pointer");
-  stop_audio();
-}
 
 typedef struct {
   MyStream *identity;
   _Atomic bool done;
   int result;
-  bool writer, callback, close;
+  bool writer, callback, close, stop, start;
   int frames;
   void *userdata;
 } ConcurrentOperation;
+
+static void operation_finished(void *data)
+{ ((ConcurrentOperation *)data)->done = true; }
 
 static void *run_operation(void *data)
 {
   ConcurrentOperation *operation = data;
   int samples[8] = {0};
   int frames = operation->frames ? operation->frames : 1;
+  pthread_cleanup_push(operation_finished, operation);
   worker_bit = operation->writer ? 2 : 1;
-  if (operation->close) {
+  if (operation->stop || operation->start) {
+    if (operation->start) start_audio(); else stop_audio();
+    operation->result = 0;
+  } else if (operation->close) {
     audio_sentry(operation->identity, NULL);
     operation->result = 0;
   } else if (operation->callback) {
@@ -470,7 +490,10 @@ static void *run_operation(void *data)
     operation->result = write_audio_stream_int(operation->identity, NULL, samples, frames);
   else
     operation->result = read_audio_stream_int(operation->identity, NULL, samples, frames);
-  operation->done = true;
+  /* Re-enabling deferred cancellation need not itself be a cancellation
+     point on winpthreads. Test delivery at an explicit post-operation point. */
+  pthread_testcancel();
+  pthread_cleanup_pop(1);
   return NULL;
 }
 
@@ -492,6 +515,124 @@ static void bounded_wait(_Atomic bool *value, const char *message)
   }
   CHECK(*value, message);
   if (!*value) exit(1);
+}
+
+static void monitored_shutdown(MyStream *identity, bool stop, bool start)
+{
+  ConcurrentOperation operation = {.identity = identity, .close = !stop && !start,
+                                    .stop = stop, .start = start};
+  pthread_t worker;
+  CHECK(!pthread_create(&worker, NULL, run_operation, &operation),
+        "create monitored lifecycle worker");
+  bounded_wait(&operation.done, "lifecycle shutdown completes within two seconds");
+  pthread_join(worker, NULL);
+}
+
+static void test_lifecycle_cancellation(void)
+{
+  for (int mode = 0; mode < 3; ++mode) {
+    pure_expr *value = pure_audio_test_make_stream(0, 1, 0, paInt16);
+    MyStream *identity = stream_identity(value);
+    callback_pause_mutex = &((MyStream *)saved_data)->data_mutex;
+    observed_registry_mutex = &registry_mutex;
+    callback_paused = release_callback = drain_wait_entered = false;
+    ConcurrentOperation callback = {.callback = true, .userdata = saved_data};
+    ConcurrentOperation lifecycle = {.identity = identity, .close = mode == 0,
+                                     .stop = mode == 1, .start = mode == 2};
+    pthread_t callback_thread, lifecycle_thread;
+    CHECK(!pthread_create(&callback_thread, NULL, run_operation, &callback),
+          "create paused callback for cancellation test");
+    bounded_wait(&callback_paused, "cancellation test callback admitted");
+    CHECK(!pthread_create(&lifecycle_thread, NULL, run_operation, &lifecycle),
+          "create cancellable lifecycle worker");
+    bounded_wait(&drain_wait_entered, "lifecycle worker reaches registry condition wait");
+    CHECK(!pthread_cancel(lifecycle_thread), "cancel lifecycle thread at activity drain");
+    release_callback = true;
+    bounded_wait(&callback.done, "callback can leave after cancellation request");
+    bounded_wait(&lifecycle.done, "cancelled lifecycle worker releases all locks");
+    void *status = NULL;
+    pthread_join(callback_thread, NULL);
+    pthread_join(lifecycle_thread, &status);
+    CHECK(status == PTHREAD_CANCELED && !current && !owned_sync && !native_streams,
+          "pending cancellation is delivered only after descriptor destruction and lock release");
+    monitored_shutdown(NULL, false, true);
+    CHECK(init_ok, "independent restart still acquires lifecycle mutex after cancellation");
+    monitored_shutdown(NULL, true, false);
+    close_audio_stream(value);
+  }
+  observed_registry_mutex = NULL;
+}
+
+typedef struct {
+  _Atomic bool done;
+  int result;
+  int16_t output;
+} LateCallback;
+
+static void *run_late_callback(void *data)
+{
+  LateCallback *call = data;
+  call->result = late_callback(NULL, &call->output, 1, NULL, 0, late_userdata);
+  late_finished(late_userdata);
+  call->done = true;
+  return NULL;
+}
+
+static void scheduled_late_callback(int16_t initial)
+{
+  LateCallback call = {.output = initial};
+  pthread_t worker;
+  CHECK(!pthread_create(&worker, NULL, run_late_callback, &call),
+        "schedule the retained callback producer after shutdown");
+  bounded_wait(&call.done, "late callback and finished notification remain bounded");
+  pthread_join(worker, NULL);
+  CHECK(call.result == paAbort && call.output == initial,
+        "scheduled late callback cannot consume or alter a replacement stream");
+}
+
+static void test_permanent_quarantine(void)
+{
+  size_t baseline = pure_audio_test_allocation_delta();
+  pure_expr *value = pure_audio_test_make_stream(1, 1, paInt16, paInt16);
+  MyStream *identity = stream_identity(value);
+  recycle_target = saved_data;
+  recycle_size = sizeof(MyStream);
+  lifecycle_failure = 15;
+  monitored_shutdown(identity, false, false);
+  int terminations = native_terminates, initializations = native_initializes;
+  int closes = native_closes;
+  lifecycle_failure = 0;
+  monitored_shutdown(NULL, true, false);
+  monitored_shutdown(NULL, false, true);
+  CHECK(native_terminates == terminations && native_initializes == initializations,
+        "uncertain callback cessation permanently prevents backend termination and restart");
+  CHECK(recycle_frees == 0 && current && current == recycle_target &&
+        !current->as && !current->identity && current->state == STREAM_FAILED,
+        "failed-close callback userdata is never freed or rebound");
+  int parameters[] = {0, 1, paInt16, 0}, error = 0;
+  size_t attempts = pure_audio_test_allocation_attempts();
+  pure_expr *replacement = open_audio_stream(parameters, parameters, 48000, 4, 0);
+  CHECK(replacement && pure_is_int(replacement, &error) && error == paInternalError &&
+        pure_audio_test_allocation_attempts() == attempts && recycle_reuses == 0,
+        "quarantined backend rejects replacement before allocator can reuse descriptor address");
+  /* If the regression opens a replacement at the old address, a scheduled old
+     callback must not consume its queued sample or overwrite this output. */
+  MyStream *replacement_identity = stream_identity(replacement);
+  int sample = 123;
+  if (replacement_identity) write_audio_stream_int(replacement_identity, NULL, &sample, 1);
+  scheduled_late_callback(321);
+  CHECK(!audio_stream_valid(identity) && native_closes == closes &&
+        native_streams == 1 && native_unlinked == 1 && owned_sync == 3 &&
+        pure_audio_test_allocation_delta() == baseline + 3,
+        "quarantine accounts exactly one native orphan, three allocations, and three sync objects");
+  /* Also model an external raw Pa_Terminate: its successful return still leaves
+     the unlinked callback producer alive. The wrapper must retain storage. */
+  CHECK(fake_terminate() == paNoError && native_unlinked == 1,
+        "PortAudio-19.7 model termination success retains the unlinked stream");
+  scheduled_late_callback(456);
+  printf("QUARANTINE_OK orphaned_streams=%d retained_allocations=%zu retained_sync=%d reused_descriptors=%u\n",
+         native_unlinked, pure_audio_test_allocation_delta() - baseline,
+         owned_sync, recycle_reuses);
 }
 
 static void test_concurrent_shutdown(unsigned iterations)
@@ -528,8 +669,8 @@ static void test_concurrent_shutdown(unsigned iterations)
       CHECK(waiting_workers == 3 && wait_entries >= before_waits + 2 && !reader.done && !writer.done,
             "both operations reached a blocked queue wait");
       if (waiting_workers != 3) exit(1);
-      if (trigger == 0) stop_audio();
-      if (trigger == 1 || trigger == 5) close_audio_stream(value);
+      if (trigger == 0) monitored_shutdown(NULL, true, false);
+      if (trigger == 1 || trigger == 5) monitored_shutdown(identity, false, false);
       if (trigger == 2) {
         void *channels[] = {NULL};
         MyStream *v = enter_stream(identity, false);
@@ -547,8 +688,9 @@ static void test_concurrent_shutdown(unsigned iterations)
       CHECK(reader.result == -1 && writer.result == -1,
             "terminal wake rejects both operations instead of reporting partial success");
       lifecycle_failure = 0;
+      monitored_shutdown(identity, false, false);
+      monitored_shutdown(NULL, true, false);
       close_audio_stream(value);
-      stop_audio();
       CHECK(!current && !native_streams && !owned_sync && pure_audio_test_allocation_delta() == baseline,
             "blocked-operation drain releases every owned resource");
       completed += 2;
@@ -587,8 +729,9 @@ static void test_concurrent_shutdown(unsigned iterations)
     CHECK(callback.result == paAbort && native_closes == closes + 1 &&
           !current && !native_streams && !owned_sync && pure_audio_test_allocation_delta() == baseline,
           "callback observes terminal state and resources close exactly once after drain");
+    monitored_shutdown(identity, false, false);
+    monitored_shutdown(NULL, true, false);
     close_audio_stream(value);
-    stop_audio();
     ++callback_drains;
   }
   printf("LIFECYCLE_CONCURRENCY_OK iterations=%u waiter_completions=%u callback_drains=%u descriptors=0 native_streams=0 owned_sync=0\n",
@@ -1744,7 +1887,7 @@ int main(int argc, char **argv)
   test_aliases_and_teardown();
   test_conversion_allocation_failures();
   test_foreign_sentry_rejected();
-  test_failed_teardown_recovery();
+  test_lifecycle_cancellation();
   test_concurrent_shutdown(getenv("PURE_AUDIO_STRESS_ITERATIONS") ?
     (unsigned)strtoul(getenv("PURE_AUDIO_STRESS_ITERATIONS"), NULL, 10) : 10);
 
@@ -1767,12 +1910,13 @@ int main(int argc, char **argv)
   test_overflow_before_allocation_or_loop();
   CHECK(pure_audio_test_allocation_delta() == allocation_start,
         "zero tracked allocation delta");
+  test_permanent_quarantine();
   pure_delete_interp(interpreter);
   if (failures) {
     fprintf(stderr, "%d of %d audio fault checks failed\n", failures, checks);
     return 1;
   }
-  printf("AUDIO_FAULT_HARNESS_OK %d checks allocation_delta=%zu\n", checks,
+  printf("AUDIO_FAULT_HARNESS_OK %d checks quarantine_allocation_delta=%zu\n", checks,
          pure_audio_test_allocation_delta() - allocation_start);
   return 0;
 }
