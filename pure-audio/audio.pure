@@ -246,20 +246,29 @@ private extern int read_audio_stream_int(void*, void*, int*, long);
 private extern int read_audio_stream_double(void*, void*, double*, long);
 private extern int write_audio_stream_int(void*, void*, int*, long);
 private extern int write_audio_stream_double(void*, void*, double*, long);
+private extern int audio_stream_channels(void*, int);
 
 private check_matrix;
 audio::check_matrix x =
   (imatrixp x || dmatrixp x) && (null x || vectorp x || packed x);
 
+private matrix_fits;
+audio::matrix_fits as buf size input =
+  check_matrix buf && integerp size && size>=0 && channels>0 &&
+  #buf>=size*channels
+when
+  channels = audio_stream_channels (stream_data as) input;
+end;
+
 audio::read_stream as::pointer buf::matrix size =
   (if imatrixp buf then read_audio_stream_int else read_audio_stream_double)
   (stream_data as) as buf size
-  if streamp as && check_matrix buf && integerp size;
+  if streamp as && matrix_fits as buf size 1;
 
 audio::write_stream as::pointer buf::matrix size =
   (if imatrixp buf then write_audio_stream_int else write_audio_stream_double)
   (stream_data as) as buf size
-  if streamp as && check_matrix buf && integerp size;
+  if streamp as && matrix_fits as buf size 0;
 
 /* Check how many frames can be read from or written to a stream without
    blocking. */

@@ -1,11 +1,116 @@
 
 #include <stdlib.h>
 #include <string.h>
+#include <stdint.h>
+#include <limits.h>
 #include <unistd.h>
 #include <signal.h>
 #include <pthread.h>
 #include <portaudio.h>
 #include <pure/runtime.h>
+#include "audio_test_api.h"
+#ifdef PURE_AUDIO_TEST_SEAM
+#include <sndfile.h>
+#endif
+
+bool pure_audio_checked_mul_size(size_t left, size_t right, size_t *product)
+{
+  if (!product || (left && right > SIZE_MAX / left))
+    return false;
+  *product = left * right;
+  return true;
+}
+
+bool pure_audio_frame_bytes(unsigned bytes_per_frame, unsigned long frames,
+                            size_t *bytes)
+{
+  return bytes_per_frame > 0 &&
+    pure_audio_checked_mul_size(bytes_per_frame, frames, bytes);
+}
+
+#ifdef PURE_AUDIO_TEST_SEAM
+static size_t pure_audio_allocation_count;
+static size_t pure_audio_allocation_attempt_count;
+static size_t pure_audio_io_call_count;
+
+static void *pure_audio_malloc(size_t size)
+{
+  ++pure_audio_allocation_attempt_count;
+  void *pointer = malloc(size);
+  if (pointer)
+    ++pure_audio_allocation_count;
+  return pointer;
+}
+
+static void pure_audio_free(void *pointer)
+{
+  if (pointer)
+    --pure_audio_allocation_count;
+  free(pointer);
+}
+
+size_t pure_audio_test_allocation_delta(void)
+{
+  return pure_audio_allocation_count;
+}
+
+size_t pure_audio_test_allocation_attempts(void)
+{
+  return pure_audio_allocation_attempt_count;
+}
+
+size_t pure_audio_test_io_calls(void)
+{
+  return pure_audio_io_call_count;
+}
+
+int64_t pure_audio_test_echo_int64(int64_t value)
+{
+  return value;
+}
+
+int64_t pure_audio_test_sf_seek_roundtrip(const char *path, int64_t offset)
+{
+  SF_INFO info = {0};
+  SNDFILE *file;
+  sf_count_t result, origin;
+  double sample = 0.0;
+
+  if (!path)
+    return INT64_MIN;
+  info.samplerate = 8000;
+  info.channels = 1;
+  info.format = SF_FORMAT_WAV | SF_FORMAT_PCM_16;
+  file = sf_open(path, SFM_WRITE, &info);
+  if (!file)
+    return INT64_MIN;
+  if (sf_write_double(file, &sample, 1) != 1 || sf_close(file) != 0)
+    return INT64_MIN;
+  memset(&info, 0, sizeof(info));
+  file = sf_open(path, SFM_READ, &info);
+  if (!file)
+    return INT64_MIN;
+  result = sf_seek(file, (sf_count_t)offset, SEEK_SET);
+  origin = sf_seek(file, 0, SEEK_SET);
+  if (sf_close(file) != 0 || origin != 0)
+    result = INT64_MIN;
+  remove(path);
+  return result;
+}
+
+int pure_audio_test_print_bounds_marker(void)
+{
+  if (fputs("PURE_AUDIO_BOUNDS_OK 14 checks\n", stdout) == EOF)
+    return -1;
+  return fflush(stdout);
+}
+
+#define pure_audio_record_io_call() (++pure_audio_io_call_count)
+#else
+#define pure_audio_malloc malloc
+#define pure_audio_free free
+#define pure_audio_record_io_call() ((void)0)
+#endif
 
 /* The timing infos of some versions of PortAudio v19 seem to be broken, hence
    we do the necessary bookkeeping ourselves. This can be commented out if you
@@ -22,17 +127,19 @@
 pure_expr *audio_driver_info(int api)
 {
   const PaHostApiInfo *info = Pa_GetHostApiInfo(api);
-  if (info) {
-    size_t i, n = info->deviceCount;
+  if (info && info->deviceCount >= 0) {
+    size_t i, n = (size_t)info->deviceCount, allocation_size;
     pure_expr *devs, **xv;
     if (n == 0)
       devs = pure_listl(0);
     else {
-      if (!(xv = malloc(n*sizeof(pure_expr*))))	return 0;
+      if (!pure_audio_checked_mul_size(n, sizeof(*xv), &allocation_size) ||
+          !(xv = pure_audio_malloc(allocation_size)))
+	return 0;
       for (i = 0; i < n; i++)
 	xv[i] = pure_int(Pa_HostApiDeviceIndexToDeviceIndex(api, i));
       devs = pure_listv(n, xv);
-      free(xv);
+      pure_audio_free(xv);
     }
     return pure_tuplel(5, pure_cstring_dup(info->name),
 		       pure_int(info->type), devs,
@@ -309,18 +416,75 @@ typedef struct _MyStream {
   struct _MyStream *prev, *next;
 } MyStream;
 
+#ifdef PURE_AUDIO_TEST_SEAM
+pure_expr *pure_audio_test_make_stream(int in_channels, int out_channels,
+                                       int in_format, int out_format)
+{
+  MyStream *stream = pure_audio_malloc(sizeof(*stream));
+  if (!stream)
+    return 0;
+  memset(stream, 0, sizeof(*stream));
+  stream->as = NULL;
+  stream->in = in_channels > 0 ? 0 : paNoDevice;
+  stream->out = out_channels > 0 ? 0 : paNoDevice;
+  stream->in_channels = in_channels;
+  stream->out_channels = out_channels;
+  stream->in_format = in_format;
+  stream->out_format = out_format;
+  stream->in_bps = in_format == paInt16 ? 2 : 4;
+  stream->out_bps = out_format == paInt16 ? 2 : 4;
+  stream->in_bpf = stream->in_bps * in_channels;
+  stream->out_bpf = stream->out_bps * out_channels;
+  if (in_channels > 0) {
+    pthread_mutex_init(&stream->in_mutex, NULL);
+    pthread_cond_init(&stream->in_cond, NULL);
+  }
+  if (out_channels > 0) {
+    pthread_mutex_init(&stream->out_mutex, NULL);
+    pthread_cond_init(&stream->out_cond, NULL);
+  }
+  return pure_sentry
+    (pure_app(pure_symbol(pure_sym("audio::audio_sentry")),
+              pure_pointer(stream)),
+     pure_pointer((void *)(uintptr_t)1));
+}
+
+void pure_audio_test_destroy_stream(pure_expr *value)
+{
+  pure_expr *sentry, *function, *argument;
+  void *data;
+  if (!value || !(sentry = pure_get_sentry(value)) ||
+      !pure_is_app(sentry, &function, &argument) ||
+      !pure_is_pointer(argument, &data) || !data)
+    return;
+  pure_clear_sentry(value);
+  if (((MyStream *)data)->in != paNoDevice) {
+    pthread_cond_destroy(&((MyStream *)data)->in_cond);
+    pthread_mutex_destroy(&((MyStream *)data)->in_mutex);
+  }
+  if (((MyStream *)data)->out != paNoDevice) {
+    pthread_cond_destroy(&((MyStream *)data)->out_cond);
+    pthread_mutex_destroy(&((MyStream *)data)->out_mutex);
+  }
+  pure_audio_free(data);
+  value->data.p = NULL;
+}
+#endif
+
 #define has_input(v) (v->in!=paNoDevice)
 #define has_output(v) (v->out!=paNoDevice)
 
 static MyStream *current = NULL;
 
-static bool init_buf(MyRingBuffer *buf, char **data, long bufsize)
+static bool init_buf(MyRingBuffer *buf, char **data, size_t bufsize)
 {
-  if (!(*data = malloc(bufsize)))
+  if (bufsize == 0 || bufsize > LONG_MAX)
+    return false;
+  if (!(*data = pure_audio_malloc(bufsize)))
     return false;
   memset(*data, 0, bufsize);
-  if (MyRingBuffer_Init(buf, bufsize, *data)) {
-    free(*data);
+  if (MyRingBuffer_Init(buf, (long)bufsize, *data)) {
+    pure_audio_free(*data);
     return false;
   }
   return true;
@@ -328,36 +492,51 @@ static bool init_buf(MyRingBuffer *buf, char **data, long bufsize)
 
 static void fini_buf(char **data)
 {
-  free(*data);
+  pure_audio_free(*data);
   *data = NULL;
 }
 
-static unsigned long round_pow2(unsigned long n)
+static bool round_pow2(size_t value, size_t *rounded)
 {
-  /* round to the next power of 2 */
-  long numBits = 0;
-  if( ((n-1) & n) == 0) return n; /* Already a power of two. */
-  while( n > 0 ) {
-    n= n>>1;
-    numBits++;
+  size_t result = 1;
+  if (!rounded || value == 0)
+    return false;
+  while (result < value) {
+    if (result > (size_t)LONG_MAX / 2)
+      return false;
+    result <<= 1;
   }
-  return (1<<numBits);
+  *rounded = result;
+  return true;
 }
+
+#ifdef PURE_AUDIO_TEST_SEAM
+bool pure_audio_test_round_pow2(size_t value, size_t *rounded)
+{
+  return round_pow2(value, rounded);
+}
+#endif
 
 static bool init_stream(MyStream *v,
 			PaStreamParameters *in, PaStreamParameters *out,
-			long size)
+			long size, unsigned in_bpf, unsigned out_bpf)
 {
   memset(v, 0, sizeof(MyStream));
   if (in) {
-    long bufsize = round_pow2(Pa_GetSampleSize(in->sampleFormat)*
-			      in->channelCount*size);
+    size_t requested, bufsize;
+    if (!pure_audio_frame_bytes(in_bpf, (unsigned long)size, &requested) ||
+        !round_pow2(requested, &bufsize))
+      return false;
     if (!init_buf(&v->in_buf, &v->in_data, bufsize))
       return false;
   }
   if (out) {
-    long bufsize = round_pow2(Pa_GetSampleSize(out->sampleFormat)*
-			      out->channelCount*size);
+    size_t requested, bufsize;
+    if (!pure_audio_frame_bytes(out_bpf, (unsigned long)size, &requested) ||
+        !round_pow2(requested, &bufsize)) {
+      if (in) fini_buf(&v->in_data);
+      return false;
+    }
     if (!init_buf(&v->out_buf, &v->out_data, bufsize)) {
       if (in) fini_buf(&v->in_data);
       return false;
@@ -479,7 +658,17 @@ static int audio_cb(const void *input, void *output,
   (void)time_info;
 #endif
   (void)status;
-  long in_bytes = v->in_bpf*nframes, out_bytes = v->out_bpf*nframes;
+  size_t in_count = 0, out_count = 0;
+  long in_bytes, out_bytes;
+  if ((input &&
+       (!pure_audio_frame_bytes((unsigned)v->in_bpf, nframes, &in_count) ||
+        in_count > LONG_MAX)) ||
+      (output &&
+       (!pure_audio_frame_bytes((unsigned)v->out_bpf, nframes, &out_count) ||
+        out_count > LONG_MAX)))
+    return paAbort;
+  in_bytes = (long)in_count;
+  out_bytes = (long)out_count;
   /* update the current time */
   pthread_mutex_lock(&v->data_mutex);
   if (!v->as) {
@@ -520,6 +709,7 @@ pure_expr *open_audio_stream(int *in, int *out,
   MyStream *v;
   PaError err;
   int in_bps = 0, out_bps = 0;
+  size_t in_bpf = 0, out_bpf = 0;
   const PaStreamInfo* info;
 #ifdef HAVE_POSIX_SIGNALS
   sigset_t sigset, oldset;
@@ -541,7 +731,11 @@ pure_expr *open_audio_stream(int *in, int *out,
     inparams.hostApiSpecificStreamInfo = 0;
     inptr = &inparams;
     in_bps = Pa_GetSampleSize(inparams.sampleFormat);
-    if (in_bps <= 0) return 0;
+    if (in_bps <= 0 ||
+        !pure_audio_checked_mul_size((size_t)in_bps,
+                                     (size_t)inparams.channelCount, &in_bpf) ||
+        in_bpf > INT_MAX)
+      return 0;
   } else
     in = 0;
 
@@ -556,7 +750,11 @@ pure_expr *open_audio_stream(int *in, int *out,
     outparams.hostApiSpecificStreamInfo = 0;
     outptr = &outparams;
     out_bps = Pa_GetSampleSize(outparams.sampleFormat);
-    if (out_bps <= 0) return 0;
+    if (out_bps <= 0 ||
+        !pure_audio_checked_mul_size((size_t)out_bps,
+                                     (size_t)outparams.channelCount, &out_bpf) ||
+        out_bpf > INT_MAX)
+      return 0;
   } else
     out = 0;
 
@@ -564,9 +762,10 @@ pure_expr *open_audio_stream(int *in, int *out,
      data and also to the sentry on the stream object, so that we can perform
      proper cleanup when a stream is closed or gets garbage-collected. */
 
-  if (!(v = malloc(sizeof(MyStream)))) return 0;
-  if (!init_stream(v, inptr, outptr, size)) {
-    free(v);
+  if (!(v = pure_audio_malloc(sizeof(MyStream)))) return 0;
+  if (!init_stream(v, inptr, outptr, size, (unsigned)in_bpf,
+                   (unsigned)out_bpf)) {
+    pure_audio_free(v);
     return 0;
   }
 
@@ -577,7 +776,7 @@ pure_expr *open_audio_stream(int *in, int *out,
 
   if (err != paNoError) {
     destroy_stream(v);
-    free(v);
+    pure_audio_free(v);
     return pure_int(err);
   }
 
@@ -597,8 +796,8 @@ pure_expr *open_audio_stream(int *in, int *out,
   v->in_format = in?inparams.sampleFormat:0;
   v->out_format = out?outparams.sampleFormat:0;
   v->in_bps = in_bps; v->out_bps = out_bps;
-  v->in_bpf = in_bps*v->in_channels;
-  v->out_bpf = out_bps*v->out_channels;
+  v->in_bpf = (int)in_bpf;
+  v->out_bpf = (int)out_bpf;
 
   /* Start the stream. */
 #ifdef HAVE_POSIX_SIGNALS
@@ -632,7 +831,7 @@ void audio_sentry(MyStream *v, pure_expr *stream)
   if (!v) return;
   fini_stream(v, 0);
   destroy_stream(v);
-  free(v);
+  pure_audio_free(v);
   if (stream) stream->data.p = NULL;
 }
 
@@ -665,6 +864,13 @@ pure_expr *audio_stream_latencies(MyStream *v, PaStream *as)
   (void)as;
   return pure_tuplel
     (2, pure_double(v->in_latency), pure_double(v->out_latency));
+}
+
+int audio_stream_channels(MyStream *v, int input)
+{
+  if (!v)
+    return 0;
+  return input ? v->in_channels : v->out_channels;
 }
 
 double audio_stream_time(MyStream *v, PaStream *as)
@@ -700,9 +906,15 @@ int read_audio_stream(MyStream *v, PaStream *as, void *buf, long size)
   (void)as;
   if (!has_input(v)) return -1;
   if (size > 0 && buf) {
-    long bytes = size*v->in_bpf, read;
+    size_t byte_count;
+    long bytes, total, read = 0;
     char *p = (char*)buf;
-    if (!p) return -1;
+    if (v->in_bpf <= 0 ||
+        !pure_audio_frame_bytes((unsigned)v->in_bpf, (unsigned long)size,
+                                &byte_count) ||
+        byte_count > LONG_MAX)
+      return -1;
+    bytes = total = (long)byte_count;
     pthread_cleanup_push(unlock_mutex, (void*)&v->in_mutex);
     pthread_mutex_lock(&v->in_mutex);
     while (v->as && bytes > 0) {
@@ -713,7 +925,7 @@ int read_audio_stream(MyStream *v, PaStream *as, void *buf, long size)
       p += read;
     }
     pthread_cleanup_pop(1);
-    read = (size*v->in_bpf-bytes)/v->in_bpf;
+    read = (total-bytes)/v->in_bpf;
     return read;
   } else if (size == 0)
     return 0;
@@ -726,8 +938,15 @@ int write_audio_stream(MyStream *v, PaStream *as, void *buf, long size)
   (void)as;
   if (!has_output(v)) return -1;
   if (size > 0 && buf) {
-    long bytes = size*v->out_bpf, total = bytes, written;
+    size_t byte_count;
+    long bytes, total, written = 0;
     char *p = buf;
+    if (v->out_bpf <= 0 ||
+        !pure_audio_frame_bytes((unsigned)v->out_bpf, (unsigned long)size,
+                                &byte_count) ||
+        byte_count > LONG_MAX)
+      return -1;
+    bytes = total = (long)byte_count;
     pthread_cleanup_push(unlock_mutex, (void*)&v->out_mutex);
     pthread_mutex_lock(&v->out_mutex);
     while (v->as && bytes > 0) {
@@ -746,109 +965,158 @@ int write_audio_stream(MyStream *v, PaStream *as, void *buf, long size)
     return -1;
 }
 
+static bool checked_io_counts(long frames, int channels, int bytes_per_frame,
+                              size_t *byte_count, size_t *sample_count)
+{
+  if (frames <= 0 || channels <= 0 || bytes_per_frame <= 0 ||
+      !pure_audio_frame_bytes((unsigned)bytes_per_frame,
+                              (unsigned long)frames, byte_count) ||
+      *byte_count > LONG_MAX ||
+      !pure_audio_checked_mul_size((size_t)frames, (size_t)channels,
+                                   sample_count))
+    return false;
+  return true;
+}
+
 int read_audio_stream_int(MyStream *v, PaStream *as, int *buf, long size)
 {
+  pure_audio_record_io_call();
   if (!has_input(v)) return -1;
   if (size < 0) return -1;
   if (size == 0) return 0;
   if (v->in_format == paInt32) /* immediate */
     return read_audio_stream(v, as, buf, size);
+  else if (v->in_format != paInt16 && v->in_format != paInt8 &&
+           v->in_format != paUInt8)
+    return -1;
   else {
+    size_t byte_count, sample_count, i;
+    if (!buf || !checked_io_counts(size, v->in_channels, v->in_bpf,
+                                   &byte_count, &sample_count))
+      return -1;
     /* Read into a temporary buffer. */
-    void *p = malloc(size*v->in_bpf);
+    void *p = pure_audio_malloc(byte_count);
     int ret = read_audio_stream(v, as, p, size);
-    long i;
     if (ret <= 0) {
-      free(p); return ret;
+      pure_audio_free(p); return ret;
     }
     /* Convert to int. */
-    size = ret*v->in_channels;
+    if (!pure_audio_checked_mul_size((size_t)ret,
+                                     (size_t)v->in_channels,
+                                     &sample_count)) {
+      pure_audio_free(p);
+      return -1;
+    }
     switch (v->in_format) {
     case paInt16: {
-      short *m = (short*)p;
-      for (i = 0; i < size; i++) buf[i] = m[i];
+      int16_t *m = (int16_t*)p;
+      for (i = 0; i < sample_count; i++) buf[i] = m[i];
+      break;
     }
     case paInt8: {
-      char *m = (char*)p;
-      for (i = 0; i < size; i++) buf[i] = m[i];
+      int8_t *m = (int8_t*)p;
+      for (i = 0; i < sample_count; i++) buf[i] = m[i];
+      break;
     }
     case paUInt8: {
-      unsigned char *m = (unsigned char*)p;
-      for (i = 0; i < size; i++) buf[i] = (unsigned)m[i];
+      uint8_t *m = (uint8_t*)p;
+      for (i = 0; i < sample_count; i++) buf[i] = (unsigned)m[i];
+      break;
     }
     case paInt24: /* TODO */
     default:
       /* Unsupported format. */
       ret = -1; break;
     }
-    free(p);
+    pure_audio_free(p);
     return ret;
   }
 }
 
 int read_audio_stream_double(MyStream *v, PaStream *as, double *buf, long size)
 {
+  pure_audio_record_io_call();
   if (!has_input(v)) return -1;
   if (size < 0) return -1;
   if (size == 0) return 0;
   if (v->in_format != paFloat32)
     return -1;
   else {
+    size_t byte_count, sample_count, i;
+    if (!buf || !checked_io_counts(size, v->in_channels, v->in_bpf,
+                                   &byte_count, &sample_count))
+      return -1;
     /* Read into a temporary buffer. */
-    float *m = malloc(size*v->in_bpf);
+    float *m = pure_audio_malloc(byte_count);
     int ret = read_audio_stream(v, as, m, size);
-    long i;
     if (ret <= 0) {
-      free(m); return ret;
+      pure_audio_free(m); return ret;
     }
     /* Convert to double. */
-    size = ret*v->in_channels;
-    for (i = 0; i < size; i++) buf[i] = m[i];
-    free(m);
+    if (!pure_audio_checked_mul_size((size_t)ret,
+                                     (size_t)v->in_channels,
+                                     &sample_count)) {
+      pure_audio_free(m);
+      return -1;
+    }
+    for (i = 0; i < sample_count; i++) buf[i] = m[i];
+    pure_audio_free(m);
     return ret;
   }
 }
 
 int write_audio_stream_int(MyStream *v, PaStream *as, int *buf, long size)
 {
+  pure_audio_record_io_call();
   if (!has_output(v)) return -1;
   if (size < 0) return -1;
   if (size == 0) return 0;
   if (v->out_format == paInt32) /* immediate */
     return write_audio_stream(v, as, buf, size);
+  else if (v->out_format != paInt16 && v->out_format != paInt8 &&
+           v->out_format != paUInt8)
+    return -1;
   else {
     /* Write from a temporary buffer. */
     int ret;
-    long i, n = size*v->out_channels;
-    void *p = malloc(size*v->out_bpf);
+    size_t byte_count, sample_count, i;
+    void *p;
+    if (!buf || !checked_io_counts(size, v->out_channels, v->out_bpf,
+                                   &byte_count, &sample_count))
+      return -1;
+    p = pure_audio_malloc(byte_count);
     if (!p) return -1;
     /* Convert from int. */
     switch (v->out_format) {
     case paInt16: {
-      short *m = (short*)p;
-      for (i = 0; i < n; i++) m[i] = buf[i];
+      int16_t *m = (int16_t*)p;
+      for (i = 0; i < sample_count; i++) m[i] = buf[i];
+      break;
     }
     case paInt8: {
-      char *m = (char*)p;
-      for (i = 0; i < n; i++) m[i] = buf[i];
+      int8_t *m = (int8_t*)p;
+      for (i = 0; i < sample_count; i++) m[i] = buf[i];
+      break;
     }
     case paUInt8: {
-      unsigned char *m = (unsigned char*)p;
-      for (i = 0; i < n; i++) m[i] = (unsigned)buf[i];
+      uint8_t *m = (uint8_t*)p;
+      for (i = 0; i < sample_count; i++) m[i] = (unsigned)buf[i];
+      break;
     }
     case paInt24: /* TODO */
     default:
       /* Unsupported format. */
-      free(p); return -1;
+      pure_audio_free(p); return -1;
     }
     ret = write_audio_stream(v, as, p, size);
-    free(p);
+    pure_audio_free(p);
     return ret;
   }
 }
 
 int write_audio_stream_double(MyStream *v, PaStream *as, double *buf, long size)
 {
+  pure_audio_record_io_call();
   if (!has_output(v)) return -1;
   if (size < 0) return -1;
   if (size == 0) return 0;
@@ -857,13 +1125,17 @@ int write_audio_stream_double(MyStream *v, PaStream *as, double *buf, long size)
   else {
     /* Write from a temporary buffer. */
     int ret;
-    long i, n = size*v->out_channels;
-    float *m = malloc(size*v->out_bpf);
+    size_t byte_count, sample_count, i;
+    float *m;
+    if (!buf || !checked_io_counts(size, v->out_channels, v->out_bpf,
+                                   &byte_count, &sample_count))
+      return -1;
+    m = pure_audio_malloc(byte_count);
     if (!m) return -1;
     /* Convert from double. */
-    for (i = 0; i < n; i++) m[i] = buf[i];
+    for (i = 0; i < sample_count; i++) m[i] = buf[i];
     ret = write_audio_stream(v, as, m, size);
-    free(m);
+    pure_audio_free(m);
     return ret;
   }
 }

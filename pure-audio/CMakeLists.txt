@@ -91,6 +91,67 @@ include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/Install.cmake")
 include(CTest)
 if(BUILD_TESTING)
   pkg_get_variable(PURE_PREFIX pure prefix)
+  set(PURE_AUDIO_COMPILER_RUNTIME_PATH "")
+  if(MINGW AND CMAKE_C_COMPILER_ID MATCHES "Clang")
+    execute_process(
+      COMMAND "${CMAKE_C_COMPILER}" --print-resource-dir
+      RESULT_VARIABLE compiler_resource_result
+      OUTPUT_VARIABLE compiler_resource_dir
+      OUTPUT_STRIP_TRAILING_WHITESPACE
+    )
+    if(compiler_resource_result EQUAL 0 AND
+       EXISTS "${compiler_resource_dir}/lib/windows")
+      set(PURE_AUDIO_COMPILER_RUNTIME_PATH
+        "${compiler_resource_dir}/lib/windows\;")
+    endif()
+  endif()
+  set(
+    PURE_AUDIO_TEST_RUNTIME_PATH
+    "${PURE_PREFIX}/bin\;${PURE_AUDIO_COMPILER_RUNTIME_PATH}$ENV{MSYSTEM_PREFIX}/bin\;$ENV{SystemRoot}/System32\;$ENV{SystemRoot}"
+  )
+
+  add_executable(audio_fault_harness tests/audio_fault_harness.c)
+  target_compile_features(audio_fault_harness PRIVATE c_std_11)
+  target_link_libraries(
+    audio_fault_harness
+    PRIVATE PkgConfig::PURE PkgConfig::PORTAUDIO PkgConfig::SNDFILE
+            Threads::Threads
+  )
+  if(MINGW)
+    target_compile_options(audio_fault_harness PRIVATE -Wall -Wextra -Werror)
+  endif()
+  add_test(NAME pure-audio-fault-bounds COMMAND audio_fault_harness)
+  set_tests_properties(
+    pure-audio-fault-bounds
+    PROPERTIES
+      LABELS "audio;fault;bounds;no-hardware"
+      ENVIRONMENT "PATH=${PURE_AUDIO_TEST_RUNTIME_PATH}"
+      TIMEOUT 30
+  )
+
+  add_pure_audio_module(audio_bounds_seam tests/audio_fault_harness.c)
+  target_link_libraries(
+    audio_bounds_seam PRIVATE PkgConfig::PORTAUDIO PkgConfig::SNDFILE
+                              Threads::Threads
+  )
+  set_target_properties(
+    audio_bounds_seam
+    PROPERTIES
+      OUTPUT_NAME audio
+      LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/bounds-modules"
+      RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/bounds-modules"
+  )
+  add_dependencies(audio_bounds_seam fftw srcprocess sfinfo)
+  add_custom_command(
+    TARGET audio_bounds_seam POST_BUILD
+    COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+      "$<TARGET_FILE:fftw>"
+      "$<TARGET_FILE:srcprocess>"
+      "$<TARGET_FILE:sfinfo>"
+      "$<TARGET_FILE_DIR:audio_bounds_seam>"
+    VERBATIM
+  )
+
   find_program(
     PURE_EXECUTABLE
     NAMES pure
@@ -112,6 +173,7 @@ if(BUILD_TESTING)
     pure-audio-load
     PROPERTIES
       LABELS "audio;load;no-hardware"
+      ENVIRONMENT "PATH=${PURE_AUDIO_TEST_RUNTIME_PATH}"
       REQUIRED_FILES
         "$<TARGET_FILE:audio>;$<TARGET_FILE:fftw>;$<TARGET_FILE:srcprocess>;$<TARGET_FILE:sfinfo>;$<TARGET_FILE:realtime>"
       TIMEOUT 45
@@ -130,7 +192,27 @@ if(BUILD_TESTING)
     pure-audio-processing
     PROPERTIES
       LABELS "audio;fftw;samplerate;sndfile;realtime;no-hardware"
+      ENVIRONMENT "PATH=${PURE_AUDIO_TEST_RUNTIME_PATH}"
       REQUIRED_FILES "${CMAKE_CURRENT_SOURCE_DIR}/tests/smoke.pure"
+      TIMEOUT 60
+  )
+  add_test(
+    NAME pure-audio-public-bounds
+    COMMAND "${CMAKE_COMMAND}"
+      "-DPURE_EXECUTABLE=${PURE_EXECUTABLE}"
+      "-DPURE_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
+      "-DMODULE_DIR=$<TARGET_FILE_DIR:audio_bounds_seam>"
+      "-DTEST_SCRIPT=${CMAKE_CURRENT_SOURCE_DIR}/tests/bounds.pure"
+      "-DTEST_DIRECTORY=${CMAKE_CURRENT_BINARY_DIR}/bounds-test"
+      -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunPureTest.cmake"
+  )
+  set_tests_properties(
+    pure-audio-public-bounds
+    PROPERTIES
+      LABELS "audio;fftw;samplerate;sndfile;bounds;no-hardware"
+      ENVIRONMENT "PATH=${PURE_AUDIO_TEST_RUNTIME_PATH}"
+      REQUIRED_FILES
+        "$<TARGET_FILE:audio_bounds_seam>;${CMAKE_CURRENT_SOURCE_DIR}/tests/bounds.pure"
       TIMEOUT 60
   )
   foreach(mode IN ITEMS playback capture)

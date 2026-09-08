@@ -1,0 +1,55 @@
+using audio, fftw, samplerate, sndfile;
+
+namespace bounds;
+
+extern expr *pure_audio_test_make_stream(int, int, int, int);
+extern void pure_audio_test_destroy_stream(expr *);
+extern int64 pure_audio_test_io_calls();
+extern int64 pure_audio_test_echo_int64(int64);
+extern int64 pure_audio_test_sf_seek_roundtrip(char*, int64);
+extern int pure_audio_test_print_bounds_marker();
+
+check name condition
+  = () if condition;
+  = fprintf stderr "pure-audio bounds failed: %s\n" name $$
+    fflush stderr $$ exit 1 otherwise;
+
+  input_stream = pure_audio_test_make_stream 2 0 Pa::Int16 0;
+  output_stream = pure_audio_test_make_stream 0 2 0 Pa::Int16;
+  check "fault input stream" (audio::streamp input_stream);
+  check "fault output stream" (audio::streamp output_stream);
+
+  valid_result = audio::write_stream output_stream (imatrix 0) 0;
+  check "fault seam receives valid matrix call"
+    (valid_result == 0);
+  check "fault seam counts valid matrix call"
+    (pure_audio_test_io_calls == 1L);
+  input_result = audio::read_stream input_stream {0,0,0} 2;
+  check "short audio input matrix rejected"
+    (~intp input_result && pure_audio_test_io_calls == 1L);
+  output_result = audio::write_stream output_stream {0,0,0} 2;
+  check "short audio output matrix rejected"
+    (~intp output_result && pure_audio_test_io_calls == 1L);
+  negative_result = audio::write_stream output_stream {0,0,0,0} (-1);
+  check "negative audio frame count rejected"
+    (~intp negative_result && pure_audio_test_io_calls == 1L);
+  check "Pure int64 FFI round trip"
+    (pure_audio_test_echo_int64 4294967297L == 4294967297L);
+  short_input = src_simple ({0.0,1.0,2.0},dmatrix 0,2,0,1.0)
+    SRC_LINEAR 2;
+  check "short samplerate input matrix rejected" (~tuplep short_input);
+  short_output = src_simple (dmatrix 0,dmatrix 3,0,2,1.0)
+    SRC_LINEAR 2;
+  check "short samplerate output matrix rejected" (~tuplep short_output);
+  invalid_ratio = src_simple (dmatrix 0,dmatrix 0,0,0,0.0)
+    SRC_LINEAR 1;
+  check "invalid samplerate ratio rejected" (~tuplep invalid_ratio);
+  check "odd FFT input rejected" (~tuplep (fft {1.0,2.0,3.0}));
+
+  wide_offset = pure_audio_test_echo_int64 4294967297L;
+  raw_seek = pure_audio_test_sf_seek_roundtrip
+    "pure-audio-bounds.wav" wide_offset;
+  check "sf_count_t input is not truncated to 32 bits"
+    (raw_seek == -1L);
+
+  check "completion marker" (pure_audio_test_print_bounds_marker == 0);

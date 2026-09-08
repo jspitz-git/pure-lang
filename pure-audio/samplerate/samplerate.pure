@@ -31,9 +31,28 @@ extern expr* src_simple_data(int, int, float*, long, float*, long, double);
    code or a SRC_STATE* pointer. It also sets a sentry on the pointer so that
    it frees itself when garbage-collected. */
 
+private src_sentry;
+private src_channels;
+
+src_sentry channels state::pointer = src_delete state;
+
 src_state conv_type::int channels::int
-  = if null state then error!0 else sentry src_delete state
-    when error = {0}; state = src_new conv_type channels error end;
+  = if null state then error!0 else sentry (src_sentry channels) state
+    when error = {0}; state = src_new conv_type channels error end
+    if channels>0;
+
+src_channels state::pointer = case get_sentry state of
+  src_sentry channels = channels;
+  _ = 0;
+end;
+
+private valid_buffers;
+valid_buffers in out in_size out_size ratio channels =
+  dmatrixp in && dmatrixp out &&
+  integerp in_size && integerp out_size &&
+  in_size>=0 && out_size>=0 && channels>0 &&
+  #in>=in_size*channels && #out>=out_size*channels &&
+  src_is_valid_ratio ratio;
 
 /* Convenience wrapper around src_process which takes care of filling in the
    the SRC_DATA* pointer. The argument matrices must be of double type. The
@@ -66,8 +85,7 @@ src_process state::pointer (in::matrix, out::matrix,
 	    		    in_size, out_size,
 			    ratio::double,wrap::int)
   = src_process_data state in in_size out out_size ratio wrap
-    if dmatrixp in && dmatrixp out &&
-       integerp in_size && integerp out_size;
+    if valid_buffers in out in_size out_size ratio (src_channels state);
 
 /* Same for the src_simple API. */
 
@@ -85,5 +103,4 @@ src_simple (in::matrix, out::matrix, in_size, out_size, ratio@(p%q))
 src_simple (in::matrix, out::matrix, in_size, out_size, ratio::double)
   conv_type::int channels::int
   = src_simple_data conv_type channels in in_size out out_size ratio
-    if dmatrixp in && dmatrixp out &&
-       integerp in_size && integerp out_size;
+    if valid_buffers in out in_size out_size ratio channels;

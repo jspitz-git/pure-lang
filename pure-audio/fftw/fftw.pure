@@ -13,7 +13,8 @@ namespace;
    amplitude and phase spectrum as a pair of double matrices mag and phase. */
 
 fft wave::matrix = mag, phase
-if dmatrixp wave && __C::fft n wave mag phase
+if dmatrixp wave && n>0 && n mod 2==0 &&
+  __C::fft n wave mag phase
 when
   n = #wave; m = n div 2+1;
   mag = dmatrix m; phase = dmatrix m;
