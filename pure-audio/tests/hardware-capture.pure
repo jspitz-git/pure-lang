@@ -1,3 +1,4 @@
 using hardware;
 
 hardware::capture;
+puts (last argv);

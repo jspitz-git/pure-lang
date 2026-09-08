@@ -1,4 +1,4 @@
-using audio, fftw, samplerate, sndfile;
+using system, audio, fftw, samplerate, sndfile;
 
 namespace bounds;
 
@@ -88,3 +88,7 @@ check name condition
     (raw_seek == -1L);
 
   check "completion marker" (pure_audio_test_print_bounds_marker == 0);
+  pure_audio_test_destroy_stream input_stream;
+  pure_audio_test_destroy_stream output_stream;
+  audio::stop;
+  puts (last argv);

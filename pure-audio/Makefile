@@ -33,15 +33,28 @@ all: audio$(DLL) portaudio.pure subdirs
 subdirs:
 	for dir in $(subdirs); do $(MAKE) -C $$dir all; done
 
-clean:
-	@test -n "$(DLL)" || { echo "refusing to clean: Pure DLL suffix is empty" >&2; exit 1; }
-	rm -Rf *.o *$(DLL)*
-	for dir in $(subdirs); do $(MAKE) -C $$dir clean; done
+# Validate before expanding the suffix into a shell recipe. Only these exact
+# platform suffixes are supported; patterns and path fragments are never names.
+ifneq ($(filter clean realclean,$(MAKECMDGOALS)),)
+ifneq ($(words $(DLL)),1)
+$(error refusing to clean: invalid Pure DLL suffix)
+endif
+ifneq ($(filter-out .dll .so .dylib,$(DLL)),)
+$(error refusing to clean: invalid Pure DLL suffix)
+endif
+endif
 
-realclean:
-	@test -n "$(DLL)" || { echo "refusing to clean: Pure DLL suffix is empty" >&2; exit 1; }
-	rm -Rf *.o *$(DLL)* portaudio.pure
-	for dir in $(subdirs); do $(MAKE) -C $$dir realclean; done
+owned_outputs = audio.o audio$(DLL) \
+fftw/fftw.o fftw/fftw$(DLL) \
+samplerate/srcprocess.o samplerate/srcprocess$(DLL) \
+sndfile/sfinfo.o sndfile/sfinfo$(DLL) \
+realtime/realtime.o realtime/realtime$(DLL)
+
+clean:
+	rm -f -- $(owned_outputs)
+
+realclean: clean
+	rm -f -- portaudio.pure samplerate/samplerate.pure sndfile/sndfile.pure
 
 audio$(DLL): audio.c
 	$(CC) $(shared) $(dllname) -o $@ $(MOD_CFLAGS) $< $(MOD_LDFLAGS)

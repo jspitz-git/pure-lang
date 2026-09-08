@@ -150,6 +150,9 @@ if(BUILD_TESTING)
     "${PURE_PREFIX}/bin\;${PURE_AUDIO_COMPILER_RUNTIME_PATH}$ENV{MSYSTEM_PREFIX}/bin\;$ENV{SystemRoot}/System32\;$ENV{SystemRoot}"
   )
 
+  string(REPLACE "\\;" ";" PURE_AUDIO_RUNNER_RUNTIME_DIRS
+    "${PURE_AUDIO_TEST_RUNTIME_PATH}")
+
   add_executable(audio_fault_harness tests/audio_fault_harness.c)
   target_compile_features(audio_fault_harness PRIVATE c_std_11)
   target_link_libraries(
@@ -166,6 +169,7 @@ if(BUILD_TESTING)
     PROPERTIES
       LABELS "audio;fault;bounds;no-hardware"
       ENVIRONMENT "PATH=${PURE_AUDIO_TEST_RUNTIME_PATH}"
+      ENVIRONMENT_MODIFICATION "PURELIB=unset:;PURE_INCLUDE=unset:;PURE_LIBRARY=unset:"
       # Real Pure sentry aliases require interpreter startup; the ASan runtime
       # alone brings this harness close to 30 seconds on Windows.
       TIMEOUT 90
@@ -203,81 +207,116 @@ if(BUILD_TESTING)
     )
   endforeach()
 
-  find_program(
-    PURE_EXECUTABLE
-    NAMES pure
-    HINTS "${PURE_PREFIX}/bin"
-    NO_DEFAULT_PATH
-    REQUIRED
-  )
-  add_test(
-    NAME pure-audio-load
-    COMMAND "${CMAKE_COMMAND}"
-      "-DPURE_EXECUTABLE=${PURE_EXECUTABLE}"
-      "-DPURE_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
-      "-DMODULE_DIR=$<TARGET_FILE_DIR:audio>"
-      "-DTEST_SCRIPT=${CMAKE_CURRENT_SOURCE_DIR}/tests/load.pure"
-      "-DTEST_DIRECTORY=${CMAKE_CURRENT_BINARY_DIR}/load-test"
-      -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunPureTest.cmake"
-  )
-  set_tests_properties(
-    pure-audio-load
-    PROPERTIES
-      LABELS "audio;load;no-hardware"
-      ENVIRONMENT "PATH=${PURE_AUDIO_TEST_RUNTIME_PATH}"
-      REQUIRED_FILES
-        "$<TARGET_FILE:audio>;$<TARGET_FILE:fftw>;$<TARGET_FILE:srcprocess>;$<TARGET_FILE:sfinfo>;$<TARGET_FILE:realtime>"
-      TIMEOUT 45
-  )
-  add_test(
-    NAME pure-audio-processing
-    COMMAND "${CMAKE_COMMAND}"
-      "-DPURE_EXECUTABLE=${PURE_EXECUTABLE}"
-      "-DPURE_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
-      "-DMODULE_DIR=$<TARGET_FILE_DIR:audio>"
-      "-DTEST_SCRIPT=${CMAKE_CURRENT_SOURCE_DIR}/tests/smoke.pure"
-      "-DTEST_DIRECTORY=${CMAKE_CURRENT_BINARY_DIR}/processing-test"
-      -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunPureTest.cmake"
-  )
-  set_tests_properties(
-    pure-audio-processing
-    PROPERTIES
-      LABELS "audio;fftw;samplerate;sndfile;realtime;no-hardware"
-      ENVIRONMENT "PATH=${PURE_AUDIO_TEST_RUNTIME_PATH}"
-      REQUIRED_FILES "${CMAKE_CURRENT_SOURCE_DIR}/tests/smoke.pure"
-      TIMEOUT 60
-  )
-  add_test(
-    NAME pure-audio-public-bounds
-    COMMAND "${CMAKE_COMMAND}"
-      "-DPURE_EXECUTABLE=${PURE_EXECUTABLE}"
-      "-DPURE_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
-      "-DMODULE_DIR=$<TARGET_FILE_DIR:audio_bounds_seam>"
-      "-DTEST_SCRIPT=${CMAKE_CURRENT_SOURCE_DIR}/tests/bounds.pure"
-      "-DTEST_DIRECTORY=${CMAKE_CURRENT_BINARY_DIR}/bounds-test"
-      -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunPureTest.cmake"
-  )
-  set_tests_properties(
-    pure-audio-public-bounds
-    PROPERTIES
-      LABELS "audio;fftw;samplerate;sndfile;bounds;no-hardware"
-      ENVIRONMENT "PATH=${PURE_AUDIO_TEST_RUNTIME_PATH}"
-      REQUIRED_FILES
-        "$<TARGET_FILE:audio_bounds_seam>;${CMAKE_CURRENT_SOURCE_DIR}/tests/bounds.pure"
-      TIMEOUT 60
-  )
-  foreach(mode IN ITEMS playback capture)
-    add_custom_target(
-      "check-audio-${mode}"
+  # Native Windows launch/cleanup contracts; other platforms retain the fault harness.
+  if(WIN32)
+    add_executable(run_pure_test tests/run_pure_test.c)
+    add_executable(run_pure_fixture tests/run_pure_test.c)
+    target_compile_definitions(run_pure_fixture PRIVATE PURE_AUDIO_RUNNER_FIXTURE)
+    target_link_libraries(run_pure_test PRIVATE bcrypt)
+    target_link_options(run_pure_test PRIVATE -municode)
+    foreach(runner_target run_pure_test run_pure_fixture)
+      target_compile_features(${runner_target} PRIVATE c_std_11)
+      target_compile_options(${runner_target} PRIVATE -Wall -Wextra -Werror -fno-sanitize=all)
+      target_link_options(${runner_target} PRIVATE -fno-sanitize=all)
+    endforeach()
+    find_program(
+      PURE_EXECUTABLE
+      NAMES pure
+      HINTS "${PURE_PREFIX}/bin"
+      NO_DEFAULT_PATH
+      REQUIRED
+    )
+    add_test(
+      NAME pure-audio-load
       COMMAND "${CMAKE_COMMAND}"
+        "-DPURE_AUDIO_RUNNER=$<TARGET_FILE:run_pure_test>"
+        "-DRUNTIME_DIRS=${PURE_AUDIO_RUNNER_RUNTIME_DIRS}"
         "-DPURE_EXECUTABLE=${PURE_EXECUTABLE}"
         "-DPURE_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
         "-DMODULE_DIR=$<TARGET_FILE_DIR:audio>"
-        "-DMODE=${mode}"
-        -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunHardwareTest.cmake"
-      DEPENDS audio
-      COMMENT "Running bounded pure-audio ${mode} validation"
-      VERBATIM
+        "-DTEST_SCRIPT=${CMAKE_CURRENT_SOURCE_DIR}/tests/load.pure"
+        -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunPureTest.cmake"
     )
-  endforeach()
+    set_tests_properties(
+      pure-audio-load
+      PROPERTIES
+        LABELS "audio;load;no-hardware"
+        REQUIRED_FILES
+          "$<TARGET_FILE:audio>;$<TARGET_FILE:fftw>;$<TARGET_FILE:srcprocess>;$<TARGET_FILE:sfinfo>;$<TARGET_FILE:realtime>"
+        TIMEOUT 45
+    )
+    add_test(
+      NAME pure-audio-processing
+      COMMAND "${CMAKE_COMMAND}"
+        "-DPURE_AUDIO_RUNNER=$<TARGET_FILE:run_pure_test>"
+        "-DRUNTIME_DIRS=${PURE_AUDIO_RUNNER_RUNTIME_DIRS}"
+        "-DPURE_EXECUTABLE=${PURE_EXECUTABLE}"
+        "-DPURE_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
+        "-DMODULE_DIR=$<TARGET_FILE_DIR:audio>"
+        "-DTEST_SCRIPT=${CMAKE_CURRENT_SOURCE_DIR}/tests/smoke.pure"
+        -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunPureTest.cmake"
+    )
+    set_tests_properties(
+      pure-audio-processing
+      PROPERTIES
+        LABELS "audio;fftw;samplerate;sndfile;realtime;no-hardware"
+        REQUIRED_FILES "${CMAKE_CURRENT_SOURCE_DIR}/tests/smoke.pure"
+        TIMEOUT 60
+    )
+    add_test(
+      NAME pure-audio-public-bounds
+      COMMAND "${CMAKE_COMMAND}"
+        "-DPURE_AUDIO_RUNNER=$<TARGET_FILE:run_pure_test>"
+        "-DRUNTIME_DIRS=${PURE_AUDIO_RUNNER_RUNTIME_DIRS}"
+        "-DPURE_EXECUTABLE=${PURE_EXECUTABLE}"
+        "-DPURE_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
+        "-DMODULE_DIR=$<TARGET_FILE_DIR:audio_bounds_seam>"
+        "-DTEST_SCRIPT=${CMAKE_CURRENT_SOURCE_DIR}/tests/bounds.pure"
+        -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunPureTest.cmake"
+    )
+    set_tests_properties(
+      pure-audio-public-bounds
+      PROPERTIES
+        LABELS "audio;fftw;samplerate;sndfile;bounds;no-hardware"
+        REQUIRED_FILES
+          "$<TARGET_FILE:audio_bounds_seam>;${CMAKE_CURRENT_SOURCE_DIR}/tests/bounds.pure"
+        TIMEOUT 60
+    )
+    foreach(mode IN ITEMS playback capture)
+      add_custom_target(
+        "check-audio-${mode}"
+        COMMAND "${CMAKE_COMMAND}"
+          "-DPURE_AUDIO_RUNNER=$<TARGET_FILE:run_pure_test>"
+          "-DRUNTIME_DIRS=${PURE_AUDIO_RUNNER_RUNTIME_DIRS}"
+          "-DPURE_EXECUTABLE=${PURE_EXECUTABLE}"
+          "-DPURE_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
+          "-DMODULE_DIR=$<TARGET_FILE_DIR:audio>"
+          "-DMODE=${mode}"
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunHardwareTest.cmake"
+        DEPENDS audio run_pure_test
+        COMMENT "Running bounded pure-audio ${mode} validation"
+        VERBATIM
+      )
+    endforeach()
+    get_filename_component(pure_audio_tool_dir "${CMAKE_C_COMPILER}" DIRECTORY)
+    find_program(PURE_AUDIO_MAKE_EXECUTABLE NAMES mingw32-make
+      HINTS "${pure_audio_tool_dir}" NO_DEFAULT_PATH REQUIRED)
+    find_program(PURE_AUDIO_SH_EXECUTABLE NAMES sh
+      HINTS "$ENV{MSYSTEM_PREFIX}/../usr/bin" NO_DEFAULT_PATH REQUIRED)
+    foreach(contract runner cleanup)
+      add_test(NAME pure-audio-${contract}-contract
+        COMMAND "${CMAKE_COMMAND}"
+          "-DRUNNER=$<TARGET_FILE:run_pure_test>"
+          "-DFIXTURE=$<TARGET_FILE:run_pure_fixture>"
+          "-DPURE_EXECUTABLE=${PURE_EXECUTABLE}"
+          "-DPURE_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
+          "-DMODULE_DIR=${CMAKE_CURRENT_BINARY_DIR}"
+          "-DRUNTIME_DIRS=${PURE_AUDIO_RUNNER_RUNTIME_DIRS}"
+          "-DMAKE_EXECUTABLE=${PURE_AUDIO_MAKE_EXECUTABLE}"
+          "-DSH_EXECUTABLE=${PURE_AUDIO_SH_EXECUTABLE}"
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/${contract}_contract.cmake")
+      set_tests_properties(pure-audio-${contract}-contract PROPERTIES
+        LABELS "audio;contract;no-hardware" TIMEOUT 90)
+    endforeach()
+  endif()
 endif()
