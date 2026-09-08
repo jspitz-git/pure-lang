@@ -1,14 +1,163 @@
 cmake_minimum_required(VERSION 3.25)
 
+option(PURE_AUDIO_STRICT_WINDOWS_AUDIT "Require the explicit audited Windows toolchain and PE closure" OFF)
+if(PURE_AUDIO_STRICT_WINDOWS_AUDIT)
+  if(NOT CMAKE_HOST_WIN32 OR NOT CMAKE_GENERATOR STREQUAL "Ninja")
+    message(FATAL_ERROR "audio audit: strict Windows audit requires native Windows and Ninja")
+  endif()
+  set(PURE_AUDIO_VERIFIER_HELPERS_ONLY ON)
+  include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/VerifyWindowsDependencies.cmake")
+  unset(PURE_AUDIO_VERIFIER_HELPERS_ONLY)
+  set(audit_directories PURE_AUDIO_CLANG64_PREFIX PURE_AUDIO_PURE_PREFIX
+    PURE_AUDIO_WINDOWS_SYSTEM_DIRECTORY PURE_INCLUDE_DIR)
+  set(audit_files CMAKE_C_COMPILER CMAKE_MAKE_PROGRAM PKG_CONFIG_EXECUTABLE
+    LLVM_READOBJ PURE_EXECUTABLE PURE_HEADER PURE_IMPORT_LIBRARY PURE_RUNTIME_DLL
+    PORTAUDIO_HEADER PORTAUDIO_IMPORT_LIBRARY FFTW_HEADER FFTW_IMPORT_LIBRARY
+    SAMPLERATE_HEADER SAMPLERATE_IMPORT_LIBRARY SNDFILE_HEADER SNDFILE_IMPORT_LIBRARY
+    PTHREAD_HEADER PTHREAD_IMPORT_LIBRARY GMP_HEADER MPFR_HEADER
+    PURE_AUDIO_WINDOWS_HEADER PURE_AUDIO_MAKE_EXECUTABLE PURE_AUDIO_SH_EXECUTABLE)
+  foreach(var IN LISTS audit_directories audit_files)
+    if(NOT DEFINED ${var} OR "${${var}}" STREQUAL "")
+      message(FATAL_ERROR "audio audit: explicit ${var} is required (no environment fallback)")
+    endif()
+    if(var IN_LIST audit_directories)
+      audio_path("${${var}}" directory canonical)
+    else()
+      audio_path("${${var}}" file canonical)
+    endif()
+    set(${var} "${canonical}" CACHE STRING "Explicit immutable audit input" FORCE)
+    list(APPEND audit_paths "${canonical}")
+  endforeach()
+  if(NOT DEFINED PURE_AUDIO_RUNTIME_SOURCES OR "${PURE_AUDIO_RUNTIME_SOURCES}" STREQUAL "")
+    message(FATAL_ERROR "audio audit: explicit PURE_AUDIO_RUNTIME_SOURCES is required")
+  endif()
+  audio_windows_authority()
+  set(expected_CMAKE_C_COMPILER "${PURE_AUDIO_CLANG64_PREFIX}/bin/clang.exe")
+  set(expected_CMAKE_MAKE_PROGRAM "${PURE_AUDIO_CLANG64_PREFIX}/bin/ninja.exe")
+  set(expected_PKG_CONFIG_EXECUTABLE "${PURE_AUDIO_CLANG64_PREFIX}/bin/pkgconf.exe")
+  set(expected_LLVM_READOBJ "${PURE_AUDIO_CLANG64_PREFIX}/bin/llvm-readobj.exe")
+  set(expected_PURE_EXECUTABLE "${PURE_AUDIO_PURE_PREFIX}/bin/pure.exe")
+  set(expected_PURE_HEADER "${PURE_AUDIO_PURE_PREFIX}/include/pure/runtime.h")
+  set(expected_PURE_INCLUDE_DIR "${PURE_AUDIO_PURE_PREFIX}/include")
+  set(expected_PURE_IMPORT_LIBRARY "${PURE_AUDIO_PURE_PREFIX}/lib/libpure.dll.a")
+  set(expected_PURE_RUNTIME_DLL "${PURE_AUDIO_PURE_PREFIX}/bin/libpure.dll")
+  set(expected_PORTAUDIO_HEADER "${PURE_AUDIO_CLANG64_PREFIX}/include/portaudio.h")
+  set(expected_PORTAUDIO_IMPORT_LIBRARY "${PURE_AUDIO_CLANG64_PREFIX}/lib/libportaudio.dll.a")
+  set(expected_FFTW_HEADER "${PURE_AUDIO_CLANG64_PREFIX}/include/fftw3.h")
+  set(expected_FFTW_IMPORT_LIBRARY "${PURE_AUDIO_CLANG64_PREFIX}/lib/libfftw3.dll.a")
+  set(expected_SAMPLERATE_HEADER "${PURE_AUDIO_CLANG64_PREFIX}/include/samplerate.h")
+  set(expected_SAMPLERATE_IMPORT_LIBRARY "${PURE_AUDIO_CLANG64_PREFIX}/lib/libsamplerate.dll.a")
+  set(expected_SNDFILE_HEADER "${PURE_AUDIO_CLANG64_PREFIX}/include/sndfile.h")
+  set(expected_SNDFILE_IMPORT_LIBRARY "${PURE_AUDIO_CLANG64_PREFIX}/lib/libsndfile.dll.a")
+  set(expected_PTHREAD_HEADER "${PURE_AUDIO_CLANG64_PREFIX}/include/pthread.h")
+  set(expected_PTHREAD_IMPORT_LIBRARY "${PURE_AUDIO_CLANG64_PREFIX}/lib/libpthread.dll.a")
+  set(expected_GMP_HEADER "${PURE_AUDIO_CLANG64_PREFIX}/include/gmp.h")
+  set(expected_MPFR_HEADER "${PURE_AUDIO_CLANG64_PREFIX}/include/mpfr.h")
+  set(expected_PURE_AUDIO_WINDOWS_HEADER "${PURE_AUDIO_CLANG64_PREFIX}/include/windows.h")
+  set(expected_PURE_AUDIO_MAKE_EXECUTABLE "${PURE_AUDIO_CLANG64_PREFIX}/bin/mingw32-make.exe")
+  set(expected_PURE_AUDIO_SH_EXECUTABLE "${PURE_AUDIO_CLANG64_PREFIX}/../usr/bin/sh.exe")
+  cmake_path(NORMAL_PATH expected_PURE_AUDIO_SH_EXECUTABLE)
+  foreach(var IN LISTS audit_files)
+    audio_equal_path("${${var}}" "${expected_${var}}")
+  endforeach()
+  audio_equal_path("${PURE_INCLUDE_DIR}" "${expected_PURE_INCLUDE_DIR}")
+  audio_runtime_rows("${PURE_AUDIO_RUNTIME_SOURCES}" FALSE runtime_paths runtime_manifest)
+  audio_no_reparse(${audit_paths} ${runtime_paths})
+  foreach(var CMAKE_TOOLCHAIN_FILE CMAKE_C_COMPILER_ARG1 CMAKE_C_COMPILER_LAUNCHER
+      CMAKE_C_LINKER_LAUNCHER CMAKE_SYSROOT CMAKE_C_FLAGS CMAKE_SHARED_LINKER_FLAGS
+      CMAKE_MODULE_LINKER_FLAGS)
+    if(DEFINED ${var} AND NOT "${${var}}" STREQUAL "")
+      message(FATAL_ERROR "audio audit: undeclared toolchain override ${var}")
+    endif()
+  endforeach()
+  if(DEFINED CMAKE_C_COMPILER_TARGET AND NOT CMAKE_C_COMPILER_TARGET STREQUAL "x86_64-w64-windows-gnu")
+    message(FATAL_ERROR "audio audit: wrong compiler target override")
+  endif()
+  set(CMAKE_C_COMPILER_TARGET "x86_64-w64-windows-gnu" CACHE STRING "Audited target" FORCE)
+  # Freeze all ambient discovery used by compiler probes and legacy install
+  # metadata. Strict library targets below use only explicit headers/libraries.
+  set(ENV{PATH} "${PURE_AUDIO_PURE_PREFIX}/bin;${PURE_AUDIO_CLANG64_PREFIX}/bin;${AUDIO_SYSTEM_DIR}")
+  set(ENV{MSYSTEM_PREFIX} "${PURE_AUDIO_CLANG64_PREFIX}")
+  set(ENV{PKG_CONFIG_PATH} "")
+  set(ENV{PKG_CONFIG_LIBDIR} "${PURE_AUDIO_PURE_PREFIX}/lib/pkgconfig;${PURE_AUDIO_CLANG64_PREFIX}/lib/pkgconfig")
+  foreach(var PURELIB PURE_INCLUDE PURE_LIBRARY CC CFLAGS CPPFLAGS LDFLAGS
+      CPATH C_INCLUDE_PATH CPLUS_INCLUDE_PATH LIBRARY_PATH COMPILER_PATH GCC_EXEC_PREFIX)
+    unset(ENV{${var}})
+  endforeach()
+  foreach(tool CMAKE_C_COMPILER CMAKE_MAKE_PROGRAM PKG_CONFIG_EXECUTABLE LLVM_READOBJ PURE_EXECUTABLE)
+    execute_process(COMMAND "${${tool}}" --version RESULT_VARIABLE rc
+      OUTPUT_VARIABLE version ERROR_VARIABLE err TIMEOUT 30)
+    if(NOT rc EQUAL 0 OR NOT err STREQUAL "")
+      message(FATAL_ERROR "audio audit: cannot identify ${tool}: ${rc} ${err}")
+    endif()
+    if(tool STREQUAL "CMAKE_C_COMPILER" AND
+        NOT version MATCHES "^clang version 22\\.[0-9]+\\.[0-9]+")
+      message(FATAL_ERROR "audio audit: Clang major 22 required: ${version}")
+    elseif(tool STREQUAL "LLVM_READOBJ" AND NOT version MATCHES "LLVM version 22\\.")
+      message(FATAL_ERROR "audio audit: llvm-readobj major 22 required")
+    elseif(tool STREQUAL "PURE_EXECUTABLE" AND NOT version MATCHES "[Pp]ure 0\\.68([^0-9]|$)")
+      message(FATAL_ERROR "audio audit: Pure 0.68 required: ${version}")
+    endif()
+    string(STRIP "${version}" version)
+    message(STATUS "audio audit: ${tool}: ${version}")
+  endforeach()
+  execute_process(COMMAND "${CMAKE_C_COMPILER}" -dumpmachine RESULT_VARIABLE rc
+    OUTPUT_VARIABLE triple ERROR_VARIABLE err OUTPUT_STRIP_TRAILING_WHITESPACE)
+  if(NOT rc EQUAL 0 OR NOT err STREQUAL "" OR NOT triple STREQUAL "x86_64-w64-windows-gnu")
+    message(FATAL_ERROR "audio audit: Clang target must be x86_64-w64-windows-gnu: ${triple}")
+  endif()
+  foreach(var IN LISTS audit_files)
+    if(var MATCHES "_IMPORT_LIBRARY$")
+      audio_import_library("${${var}}")
+    endif()
+  endforeach()
+  foreach(path IN LISTS runtime_paths)
+    audio_inspect_pe("${path}" unused_imports)
+  endforeach()
+  set(audit_pin "${runtime_manifest}")
+  foreach(var IN LISTS audit_files audit_directories)
+    string(APPEND audit_pin "${var}|${${var}}\n")
+    if(var IN_LIST audit_files)
+      file(SHA256 "${${var}}" hash)
+      string(APPEND audit_pin "${hash}\n")
+    endif()
+  endforeach()
+  string(SHA256 audit_pin "${audit_pin}")
+  if(DEFINED PURE_AUDIO_CONFIGURED_INPUT_PIN AND NOT PURE_AUDIO_CONFIGURED_INPUT_PIN STREQUAL audit_pin)
+    message(FATAL_ERROR "audio audit: configured inputs changed; use a fresh audit build directory")
+  endif()
+  set(PURE_AUDIO_CONFIGURED_INPUT_PIN "${audit_pin}" CACHE INTERNAL "Frozen audit inputs")
+  set(PURE_AUDIO_RUNTIME_MANIFEST "${CMAKE_CURRENT_BINARY_DIR}/windows-runtime-sources.txt")
+  file(WRITE "${PURE_AUDIO_RUNTIME_MANIFEST}" "${runtime_manifest}")
+endif()
+
 project(pure-audio VERSION 0.6 LANGUAGES C)
 
-find_package(PkgConfig REQUIRED)
-find_package(Threads REQUIRED)
-pkg_check_modules(PURE REQUIRED IMPORTED_TARGET "pure>=0.68")
-pkg_check_modules(PORTAUDIO REQUIRED IMPORTED_TARGET portaudio-2.0)
-pkg_check_modules(FFTW REQUIRED IMPORTED_TARGET fftw3)
-pkg_check_modules(SAMPLERATE REQUIRED IMPORTED_TARGET samplerate)
-pkg_check_modules(SNDFILE REQUIRED IMPORTED_TARGET sndfile)
+if(PURE_AUDIO_STRICT_WINDOWS_AUDIT)
+  set(PURE_PREFIX "${PURE_AUDIO_PURE_PREFIX}")
+  foreach(package PURE PORTAUDIO FFTW SAMPLERATE SNDFILE)
+    add_library(PkgConfig::${package} INTERFACE IMPORTED)
+    if(package STREQUAL "PURE")
+      set(include_dir "${PURE_INCLUDE_DIR}")
+    else()
+      get_filename_component(include_dir "${${package}_HEADER}" DIRECTORY)
+    endif()
+    set_target_properties(PkgConfig::${package} PROPERTIES
+      INTERFACE_INCLUDE_DIRECTORIES "${include_dir}"
+      INTERFACE_LINK_LIBRARIES "${${package}_IMPORT_LIBRARY}")
+  endforeach()
+  add_library(Threads::Threads INTERFACE IMPORTED)
+  set_target_properties(Threads::Threads PROPERTIES
+    INTERFACE_LINK_LIBRARIES "${PTHREAD_IMPORT_LIBRARY}")
+else()
+  find_package(PkgConfig REQUIRED)
+  find_package(Threads REQUIRED)
+  pkg_check_modules(PURE REQUIRED IMPORTED_TARGET "pure>=0.68")
+  pkg_check_modules(PORTAUDIO REQUIRED IMPORTED_TARGET portaudio-2.0)
+  pkg_check_modules(FFTW REQUIRED IMPORTED_TARGET fftw3)
+  pkg_check_modules(SAMPLERATE REQUIRED IMPORTED_TARGET samplerate)
+  pkg_check_modules(SNDFILE REQUIRED IMPORTED_TARGET sndfile)
+endif()
 
 function(add_pure_audio_module target source)
   add_library(${target} MODULE "${source}")
@@ -60,30 +209,38 @@ if(WIN32)
   foreach(runtime_file IN LISTS AUDIO_RUNTIME_FILENAMES)
     string(MAKE_C_IDENTIFIER "${runtime_file}" runtime_id)
     string(TOUPPER "${runtime_id}" runtime_id)
-    find_file(
+    if(PURE_AUDIO_STRICT_WINDOWS_AUDIT)
+      if(runtime_file MATCHES "^(libc\\+\\+|libwinpthread-1)\\.dll$")
+        set("AUDIO_RUNTIME_${runtime_id}" "${PURE_AUDIO_PURE_PREFIX}/bin/${runtime_file}")
+      else()
+        set("AUDIO_RUNTIME_${runtime_id}" "${PURE_AUDIO_CLANG64_PREFIX}/bin/${runtime_file}")
+      endif()
+    else()
+      find_file(
       "AUDIO_RUNTIME_${runtime_id}"
       NAMES "${runtime_file}"
       HINTS "$ENV{MSYSTEM_PREFIX}/bin"
       NO_DEFAULT_PATH
       REQUIRED
     )
+    endif()
   endforeach()
-  find_program(LLVM_READOBJ NAMES llvm-readobj REQUIRED)
+  if(PURE_AUDIO_STRICT_WINDOWS_AUDIT)
   add_custom_target(
     verify-windows-dependencies
     COMMAND "${CMAKE_COMMAND}"
       "-DLLVM_READOBJ=${LLVM_READOBJ}"
-      "-DRUNTIME_DIR=$ENV{MSYSTEM_PREFIX}/bin"
-      "-DAUDIO_MODULE=$<TARGET_FILE:audio>"
-      "-DFFTW_MODULE=$<TARGET_FILE:fftw>"
-      "-DSRCPROCESS_MODULE=$<TARGET_FILE:srcprocess>"
-      "-DSFINFO_MODULE=$<TARGET_FILE:sfinfo>"
-      "-DREALTIME_MODULE=$<TARGET_FILE:realtime>"
+      "-DAUDIO_MODULE_DIR=$<TARGET_FILE_DIR:audio>"
+      "-DPURE_AUDIO_CLANG64_PREFIX=${PURE_AUDIO_CLANG64_PREFIX}"
+      "-DPURE_AUDIO_PURE_PREFIX=${PURE_AUDIO_PURE_PREFIX}"
+      "-DPURE_AUDIO_WINDOWS_SYSTEM_DIRECTORY=${PURE_AUDIO_WINDOWS_SYSTEM_DIRECTORY}"
+      "-DPURE_AUDIO_RUNTIME_MANIFEST=${PURE_AUDIO_RUNTIME_MANIFEST}"
       -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/VerifyWindowsDependencies.cmake"
     DEPENDS audio fftw srcprocess sfinfo realtime
     COMMENT "Verifying the pure-audio Windows dependency closure"
     VERBATIM
   )
+  endif()
 endif()
 
 include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/Install.cmake")
@@ -130,7 +287,9 @@ if(BUILD_TESTING)
       "sndfile.pure ABI regression: expected exactly 19 sf_count_t declarations, found ${sndfile_count_declaration_count}")
   endif()
 
-  pkg_get_variable(PURE_PREFIX pure prefix)
+  if(NOT PURE_AUDIO_STRICT_WINDOWS_AUDIT)
+    pkg_get_variable(PURE_PREFIX pure prefix)
+  endif()
   set(PURE_AUDIO_COMPILER_RUNTIME_PATH "")
   if(MINGW AND CMAKE_C_COMPILER_ID MATCHES "Clang")
     execute_process(
@@ -149,6 +308,11 @@ if(BUILD_TESTING)
     PURE_AUDIO_TEST_RUNTIME_PATH
     "${PURE_PREFIX}/bin\;${PURE_AUDIO_COMPILER_RUNTIME_PATH}$ENV{MSYSTEM_PREFIX}/bin\;$ENV{SystemRoot}/System32\;$ENV{SystemRoot}"
   )
+  if(PURE_AUDIO_STRICT_WINDOWS_AUDIT)
+    get_filename_component(audio_windows_root "${AUDIO_SYSTEM_DIR}" DIRECTORY)
+    set(PURE_AUDIO_TEST_RUNTIME_PATH
+      "${PURE_PREFIX}/bin\\;${PURE_AUDIO_COMPILER_RUNTIME_PATH}${PURE_AUDIO_CLANG64_PREFIX}/bin\\;${AUDIO_SYSTEM_DIR}\\;${audio_windows_root}")
+  endif()
 
   string(REPLACE "\\;" ";" PURE_AUDIO_RUNNER_RUNTIME_DIRS
     "${PURE_AUDIO_TEST_RUNTIME_PATH}")
@@ -318,5 +482,19 @@ if(BUILD_TESTING)
       set_tests_properties(pure-audio-${contract}-contract PROPERTIES
         LABELS "audio;contract;no-hardware" TIMEOUT 90)
     endforeach()
+    if(PURE_AUDIO_STRICT_WINDOWS_AUDIT)
+      foreach(contract configure runtime_verifier)
+        add_test(NAME pure-audio-${contract}-contract
+          COMMAND "${CMAKE_COMMAND}"
+            "-DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
+            "-DMODULE_DIR=${CMAKE_CURRENT_BINARY_DIR}"
+            "-DCLANG64_PREFIX=${PURE_AUDIO_CLANG64_PREFIX}"
+            "-DPURE_PREFIX=${PURE_AUDIO_PURE_PREFIX}"
+            "-DRUNNER=$<TARGET_FILE:run_pure_test>"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/${contract}_contract.cmake")
+        set_tests_properties(pure-audio-${contract}-contract PROPERTIES
+          LABELS "audio;contract;no-hardware" TIMEOUT 600)
+      endforeach()
+    endif()
   endif()
 endif()
