@@ -20,13 +20,31 @@
 #define TEXT_CAP 16384
 #define MAX_HELD 16384
 typedef struct { wchar_t path[PATH_CAP]; HANDLE handle; } Held;
-typedef struct { DWORD op; wchar_t a[PATH_CAP], b[PATH_CAP], text[TEXT_CAP]; } Request;
+typedef struct {
+  DWORD op;
+  wchar_t a[PATH_CAP], b[PATH_CAP], text[TEXT_CAP];
+  wchar_t stage_path[PATH_CAP], build_path[PATH_CAP], capability[65];
+} Request;
+typedef struct {
+  DWORD magic, owner, child, volume, high, low;
+  wchar_t capability[65];
+} Answer;
 static Held *held;
 static size_t held_count;
 static wchar_t stage[PATH_CAP], build[PATH_CAP], pipe_name[128];
+static wchar_t capability[65];
 static DWORD child_pid;
 static volatile LONG stopping;
 static HANDLE server_ready;
+#define MAX_BATCH 256
+typedef struct {
+  wchar_t path[PATH_CAP], hash[65]; HANDLE source, output;
+  int kind, replace, existed, modified; /* 0 reservation, 1 payload, 2 manifest */
+  char *text, *previous; DWORD length, previous_length;
+} BatchFile;
+static BatchFile batch[MAX_BATCH];
+static size_t batch_count;
+static int batch_started, batch_committed;
 typedef NTSTATUS (NTAPI *NativeSetInfo)(HANDLE,PIO_STATUS_BLOCK,PVOID,ULONG,FILE_INFORMATION_CLASS);
 
 static int error(const char *message) {
@@ -205,9 +223,11 @@ static int atomic_file(const wchar_t *destination, HANDLE source, const char *te
   return ok && hold(destination,0);
 }
 #ifdef PURE_AUDIO_INSTALL_GUARD_FIXTURE
-static void fixture_gate(void) {
+static void fixture_gate(const wchar_t *phase) {
   static int reached;
-  wchar_t ready[128], release[128];
+  wchar_t ready[128], release[128], selected[32]=L"queued";
+  GetEnvironmentVariableW(L"AUDIO_GUARD_TEST_PHASE",selected,32);
+  if (wcscmp(selected,phase)) return;
   if (reached++ || !GetEnvironmentVariableW(L"AUDIO_GUARD_TEST_READY",ready,128) ||
       !GetEnvironmentVariableW(L"AUDIO_GUARD_TEST_RELEASE",release,128)) return;
   HANDLE a=OpenEventW(EVENT_MODIFY_STATE,FALSE,ready), b=OpenEventW(SYNCHRONIZE,FALSE,release);
@@ -215,30 +235,169 @@ static void fixture_gate(void) {
   CloseHandle(a); CloseHandle(b);
 }
 #endif
+static int queue_file(const wchar_t *destination,HANDLE source,const wchar_t *hash) {
+  if (batch_started || batch_count==MAX_BATCH) return error("batch state/limit exceeded");
+  for (size_t i=0;i<batch_count;++i)
+    if (!_wcsicmp(batch[i].path,destination)) return error("duplicate batch destination");
+  BatchFile *item=&batch[batch_count++];
+  if (!path_copy(item->path,destination)) return 0;
+  item->source=source; item->output=INVALID_HANDLE_VALUE;
+  item->kind=source==INVALID_HANDLE_VALUE?0:1;
+  if (hash) wcscpy(item->hash,hash);
+  return 1;
+}
+static int write_bytes(HANDLE out,const char *bytes,DWORD length) {
+  LARGE_INTEGER zero; zero.QuadPart=0; DWORD written;
+  return SetFilePointerEx(out,zero,NULL,FILE_BEGIN) &&
+    WriteFile(out,bytes,length,&written,NULL) && written==length &&
+    SetEndOfFile(out) && FlushFileBuffers(out);
+}
+/* Delete only reservations created by this batch, using the original handles.
+ * Restore an existing conventional manifest through its still-exclusive handle.
+ * Pre-existing prefix files and collision entries are never modified.
+ */
+static int rollback_batch(void) {
+  int ok=1;
+  size_t removed=0;
+  if (batch_committed) return 1;
+  for (size_t i=batch_count;i>0;--i) {
+    BatchFile *item=&batch[i-1];
+    if (item->output!=INVALID_HANDLE_VALUE) {
+      if (item->existed) {
+        if (item->modified && !write_bytes(item->output,item->previous,item->previous_length)) ok=0;
+      } else {
+        FILE_DISPOSITION_INFO remove={TRUE};
+        if (!SetFileInformationByHandle(item->output,FileDispositionInfo,&remove,sizeof(remove))) ok=0;
+        else ++removed;
+      }
+      CloseHandle(item->output); item->output=INVALID_HANDLE_VALUE;
+    }
+  }
+  if (!ok) return error("pre-commit rollback could not restore owned files");
+  if (removed) fprintf(stdout,"INSTALL_BATCH_ROLLBACK_OK removed=%zu\n",removed);
+  return 1;
+}
+static int publish_batch(void) {
+  if (batch_started) return error("batch already published/failed");
+  batch_started=1;
+  /* Reserve the full absent destination set before writing a single payload.
+   * Every parent remains pinned, and CREATE_NEW cannot follow or replace a
+   * collision. These handles deny concurrent writes, renames and reparse edits.
+   */
+  int ok=1;
+  for (size_t i=0;ok && i<batch_count;++i) {
+    BatchFile *item=&batch[i];
+    ok=parent_dirs(item->path,1);
+    if (ok) {
+      item->output=CreateFileW(item->path,GENERIC_READ|GENERIC_WRITE|DELETE,
+        FILE_SHARE_READ,NULL,item->replace?OPEN_ALWAYS:CREATE_NEW,
+        FILE_ATTRIBUTE_NORMAL|FILE_FLAG_OPEN_REPARSE_POINT,NULL);
+      item->existed=item->output!=INVALID_HANDLE_VALUE && item->replace && GetLastError()==ERROR_ALREADY_EXISTS;
+      ok=item->output!=INVALID_HANDLE_VALUE;
+      BY_HANDLE_FILE_INFORMATION info;
+      if (ok) ok=GetFileInformationByHandle(item->output,&info) &&
+        !(info.dwFileAttributes&(FILE_ATTRIBUTE_DIRECTORY|FILE_ATTRIBUTE_REPARSE_POINT));
+      if (ok && item->existed) {
+        LARGE_INTEGER size;
+        ok=GetFileSizeEx(item->output,&size) && size.QuadPart<=TEXT_CAP*4;
+        if (ok) {
+          DWORD n;
+          item->previous_length=(DWORD)size.QuadPart;
+          item->previous=malloc((size_t)item->previous_length+1);
+          ok=item->previous && ReadFile(item->output,item->previous,item->previous_length,&n,NULL) && n==item->previous_length;
+        }
+      }
+    }
+    if (!ok) error("batch reservation collision (atomic publication failed)");
+  }
+#ifdef PURE_AUDIO_INSTALL_GUARD_FIXTURE
+  if (ok) fixture_gate(L"reserved");
+#endif
+  size_t written_count=0, payload_count=0;
+  for (size_t i=0;ok && i<batch_count;++i) {
+    BatchFile *item=&batch[i];
+    if (!item->kind) continue;
+    LARGE_INTEGER zero; zero.QuadPart=0;
+    BYTE buffer[65536]; DWORD n,written; wchar_t hash[65];
+    item->modified=1;
+    if (item->kind==2) {
+      ok=write_bytes(item->output,item->text,item->length) &&
+        SetFilePointerEx(item->output,zero,NULL,FILE_BEGIN) &&
+        ReadFile(item->output,buffer,item->length,&n,NULL) && n==item->length &&
+        !memcmp(buffer,item->text,n);
+    } else {
+      ok=SetFilePointerEx(item->source,zero,NULL,FILE_BEGIN)!=0;
+      while (ok) {
+        if (!ReadFile(item->source,buffer,sizeof(buffer),&n,NULL)) { ok=0; break; }
+        if (!n) break;
+        ok=WriteFile(item->output,buffer,n,&written,NULL) && written==n;
+      }
+      ok=ok && FlushFileBuffers(item->output) && sha_handle(item->output,hash) && !wcscmp(hash,item->hash);
+      ++payload_count;
+    }
+    ++written_count;
+#ifdef PURE_AUDIO_INSTALL_GUARD_FIXTURE
+    wchar_t failure[16];
+    if (GetEnvironmentVariableW(L"AUDIO_GUARD_TEST_FAIL_AFTER_WRITE",failure,16) &&
+        wcstoul(failure,NULL,10)==written_count) {
+      SetLastError(ERROR_WRITE_FAULT); ok=error("injected pre-commit write failure");
+    }
+#endif
+  }
+  /* Other-component slots were reserved too. They are not this component's
+   * delta, so remove them by handle before the commit point.
+   */
+  for (size_t i=0;ok && i<batch_count;++i) if (!batch[i].kind) {
+    FILE_DISPOSITION_INFO remove={TRUE};
+    ok=SetFileInformationByHandle(batch[i].output,FileDispositionInfo,&remove,sizeof(remove))!=0;
+    if (ok) { CloseHandle(batch[i].output); batch[i].output=INVALID_HANDLE_VALUE; }
+  }
+  if (!ok) { rollback_batch(); return error("batch failed before commit"); }
+  /* COMMIT POINT: selected payloads AND final manifests are verified/flushed;
+   * every unused reservation has been removed. No later payload can collide.
+   * Abrupt process/power failure is not a durable whole-tree transaction.
+   */
+  batch_committed=1;
+  for (size_t i=0;i<batch_count;++i) if (batch[i].output!=INVALID_HANDLE_VALUE) {
+    CloseHandle(batch[i].output); batch[i].output=INVALID_HANDLE_VALUE;
+    if (!hold(batch[i].path,0)) ok=0;
+  }
+  if (!ok) return error("post-commit endpoint identity changed");
+  fprintf(stdout,"INSTALL_BATCH_COMMIT_OK artifacts=%zu manifests=%zu reserved=%zu\n",payload_count,written_count-payload_count,batch_count);
+  return 1;
+}
 static int handle_request(Request *r) {
   r->a[PATH_CAP-1]=r->b[PATH_CAP-1]=r->text[TEXT_CAP-1]=0;
   if (r->op==1) return 1;
+  if (r->op==5) return publish_batch();
   wchar_t dest[PATH_CAP];
-  if (!canonical(r->op==3?r->b:r->a,dest) || !allowed(dest,r->op!=3))
+  if (!canonical(r->op==3?r->b:r->a,dest) || !allowed(dest,r->op!=3 && r->op!=6))
     return error("request outside owned stage/session");
   if (r->op==2) return directories(dest,1);
+  if (r->op==6) return queue_file(dest,INVALID_HANDLE_VALUE,NULL);
   if (r->op==3) {
 #ifdef PURE_AUDIO_INSTALL_GUARD_FIXTURE
-    fixture_gate();
+    fixture_gate(L"queued");
 #endif
     wchar_t src[PATH_CAP], hash[65];
     if (!canonical(r->a,src) || !parent_dirs(src,0) || !hold(src,0)) return 0;
     HANDLE input=held[held_index(src)].handle;
     if (!sha_handle(input,hash) || wcscmp(hash,r->text)) return error("held source SHA256 mismatch");
-    return atomic_file(dest,input,NULL,0,0);
+    return queue_file(dest,input,hash);
   }
-  if (r->op==4) {
+  if (r->op==4 || r->op==7) {
     int n=WideCharToMultiByte(CP_UTF8,WC_ERR_INVALID_CHARS,r->text,-1,NULL,0,NULL,NULL);
     if (!n) return error("manifest UTF-8 conversion failed");
     char *bytes=malloc((size_t)n);
     if (!bytes) return error("manifest allocation failed");
     WideCharToMultiByte(CP_UTF8,WC_ERR_INVALID_CHARS,r->text,-1,bytes,n,NULL,NULL);
     int replace=!_wcsnicmp(dest+wcslen(build),L"\\install_manifest_",18);
+    if (r->op==7) {
+      if (!queue_file(dest,INVALID_HANDLE_VALUE,NULL)) { free(bytes); return 0; }
+      BatchFile *item=&batch[batch_count-1];
+      item->kind=2; item->replace=replace; item->text=bytes; item->length=(DWORD)n-1;
+      return 1;
+    }
     int ok=atomic_file(dest,INVALID_HANDLE_VALUE,bytes,(DWORD)n-1,replace);
     free(bytes); return ok;
   }
@@ -253,6 +412,42 @@ static DWORD parent_pid(DWORD pid) {
   } while(Process32NextW(snap,&entry));
   CloseHandle(snap); return parent;
 }
+/* The OS-reported pipe server must be this client's live grandparent: the
+ * exact pinned guard executable launched the CMake parent. Public environment
+ * fields cannot establish this process relationship or image identity.
+ */
+static int server_identity(HANDLE pipe, HANDLE *owner, HANDLE *parent) {
+  DWORD pid=0, caller=parent_pid(GetCurrentProcessId()), count=PATH_CAP;
+  wchar_t own_path[PATH_CAP], server_path[PATH_CAP], own_canonical[PATH_CAP], server_canonical[PATH_CAP];
+  if (!GetNamedPipeServerProcessId(pipe,&pid) || !caller || parent_pid(caller)!=pid)
+    return error("server identity/guard ancestry mismatch");
+  *parent=OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION|SYNCHRONIZE,FALSE,caller);
+  *owner=OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION|SYNCHRONIZE,FALSE,pid);
+  if (!*parent || !*owner || WaitForSingleObject(*parent,0)!=WAIT_TIMEOUT ||
+      WaitForSingleObject(*owner,0)!=WAIT_TIMEOUT ||
+      !GetModuleFileNameW(NULL,own_path,PATH_CAP) ||
+      !QueryFullProcessImageNameW(*owner,0,server_path,&count) ||
+      !canonical(own_path,own_canonical) || !canonical(server_path,server_canonical) ||
+      _wcsicmp(own_canonical,server_canonical))
+    return error("server identity/pinned image mismatch");
+  return 1;
+}
+static int request_scope(Request *r, Answer *answer) {
+  wchar_t requested_stage[PATH_CAP], requested_build[PATH_CAP];
+  r->stage_path[PATH_CAP-1]=r->build_path[PATH_CAP-1]=r->capability[64]=0;
+  if (!canonical(r->stage_path,requested_stage) || !canonical(r->build_path,requested_build) ||
+      _wcsicmp(requested_stage,stage) || _wcsicmp(requested_build,build) ||
+      wcscmp(r->capability,capability)) return error("stage identity/capability mismatch");
+  BY_HANDLE_FILE_INFORMATION info;
+  int index=held_index(stage);
+  if (index<0 || !GetFileInformationByHandle(held[index].handle,&info))
+    return error("stage identity is not retained");
+  answer->owner=GetCurrentProcessId(); answer->child=child_pid;
+  answer->volume=info.dwVolumeSerialNumber;
+  answer->high=info.nFileIndexHigh; answer->low=info.nFileIndexLow;
+  wcscpy(answer->capability,capability);
+  return 1;
+}
 static DWORD WINAPI serve(void *unused) {
   (void)unused;
   HANDLE pipe=CreateNamedPipeW(pipe_name,PIPE_ACCESS_DUPLEX|FILE_FLAG_FIRST_PIPE_INSTANCE,
@@ -264,11 +459,11 @@ static DWORD WINAPI serve(void *unused) {
   SetEvent(server_ready);
   while (!InterlockedCompareExchange(&stopping,0,0)) {
     if (!ConnectNamedPipe(pipe,NULL) && GetLastError()!=ERROR_PIPE_CONNECTED) break;
-    DWORD n,pid=0,answer=0;
+    DWORD n,pid=0; Answer answer={0};
     if (!InterlockedCompareExchange(&stopping,0,0) &&
         GetNamedPipeClientProcessId(pipe,&pid) && parent_pid(pid)==child_pid &&
-        ReadFile(pipe,r,sizeof(*r),&n,NULL) && n==sizeof(*r))
-      answer=handle_request(r)?0x41554449:0;
+        ReadFile(pipe,r,sizeof(*r),&n,NULL) && n==sizeof(*r) && request_scope(r,&answer))
+      answer.magic=handle_request(r)?0x41554449:0;
     WriteFile(pipe,&answer,sizeof(answer),&n,NULL);
     FlushFileBuffers(pipe); DisconnectNamedPipe(pipe);
   }
@@ -277,12 +472,19 @@ static DWORD WINAPI serve(void *unused) {
 static int client(int argc,wchar_t **argv) {
   Request *r=calloc(1,sizeof(*r));
   if (!r) return 1;
+  if (argc<5 || wcscmp(argv[argc-3],L"--scope") ||
+      !canonical(argv[argc-2],r->stage_path) || !canonical(argv[argc-1],r->build_path)) {
+    free(r); return !error("explicit stage/build scope required");
+  }
+  argc-=3;
   if (argc==2 && !wcscmp(argv[1],L"--probe")) r->op=1;
+  else if (argc==2 && !wcscmp(argv[1],L"--publish")) r->op=5;
+  else if (argc==3 && !wcscmp(argv[1],L"--reserve")) { r->op=6; path_copy(r->a,argv[2]); }
   else if (argc==3 && !wcscmp(argv[1],L"--mkdir")) { r->op=2; path_copy(r->a,argv[2]); }
   else if (argc==5 && !wcscmp(argv[1],L"--copy") && wcslen(argv[4])==64) {
     r->op=3; path_copy(r->a,argv[2]); path_copy(r->b,argv[3]); wcscpy(r->text,argv[4]);
-  } else if (argc==4 && !wcscmp(argv[1],L"--write") && wcslen(argv[3])<TEXT_CAP) {
-    r->op=4; path_copy(r->a,argv[2]); wcscpy(r->text,argv[3]);
+  } else if (argc==4 && (!wcscmp(argv[1],L"--write") || !wcscmp(argv[1],L"--queue-write")) && wcslen(argv[3])<TEXT_CAP) {
+    r->op=!wcscmp(argv[1],L"--write")?4:7; path_copy(r->a,argv[2]); wcscpy(r->text,argv[3]);
   }
   if (!r->op || !GetEnvironmentVariableW(L"PURE_AUDIO_INSTALL_CHANNEL",pipe_name,128) ||
       wcsncmp(pipe_name,L"\\\\.\\pipe\\pure-audio-install-",wcslen(L"\\\\.\\pipe\\pure-audio-install-"))) {
@@ -290,9 +492,27 @@ static int client(int argc,wchar_t **argv) {
   }
   if (!WaitNamedPipeW(pipe_name,10000)) { free(r); return !error("owner channel unavailable"); }
   HANDLE pipe=CreateFileW(pipe_name,GENERIC_READ|GENERIC_WRITE,0,NULL,OPEN_EXISTING,0,NULL);
-  DWORD n=0,answer=0;
-  int ok=pipe!=INVALID_HANDLE_VALUE && WriteFile(pipe,r,sizeof(*r),&n,NULL) && n==sizeof(*r) &&
-    ReadFile(pipe,&answer,sizeof(answer),&n,NULL) && n==sizeof(answer) && answer==0x41554449;
+  HANDLE owner=NULL, parent=NULL, directory=INVALID_HANDLE_VALUE;
+  DWORD n=0; Answer answer={0}; BY_HANDLE_FILE_INFORMATION identity;
+  int ok=pipe!=INVALID_HANDLE_VALUE && server_identity(pipe,&owner,&parent);
+  if (ok) {
+    directory=CreateFileW(r->stage_path,GENERIC_READ,FILE_SHARE_READ,NULL,OPEN_EXISTING,
+      FILE_FLAG_BACKUP_SEMANTICS|FILE_FLAG_OPEN_REPARSE_POINT,NULL);
+    ok=directory!=INVALID_HANDLE_VALUE && GetFileInformationByHandle(directory,&identity) &&
+      !(identity.dwFileAttributes&FILE_ATTRIBUTE_REPARSE_POINT) &&
+      (identity.dwFileAttributes&FILE_ATTRIBUTE_DIRECTORY) &&
+      GetEnvironmentVariableW(L"PURE_AUDIO_INSTALL_CAPABILITY",r->capability,65)==64 &&
+      WriteFile(pipe,r,sizeof(*r),&n,NULL) && n==sizeof(*r) &&
+      ReadFile(pipe,&answer,sizeof(answer),&n,NULL) && n==sizeof(answer) &&
+      answer.magic==0x41554449 && answer.owner==GetProcessId(owner) &&
+      answer.child==GetProcessId(parent) && !wcscmp(answer.capability,r->capability) &&
+      answer.volume==identity.dwVolumeSerialNumber && answer.high==identity.nFileIndexHigh &&
+      answer.low==identity.nFileIndexLow && WaitForSingleObject(owner,0)==WAIT_TIMEOUT &&
+      WaitForSingleObject(parent,0)==WAIT_TIMEOUT;
+  }
+  if (directory!=INVALID_HANDLE_VALUE) CloseHandle(directory);
+  if (owner) CloseHandle(owner);
+  if (parent) CloseHandle(parent);
   if (pipe!=INVALID_HANDLE_VALUE) CloseHandle(pipe);
   free(r); return ok?0:!error("owner authentication or guarded operation failed");
 }
@@ -356,6 +576,10 @@ int wmain(int argc,wchar_t **argv) {
   wcscpy(pipe_name,L"\\\\.\\pipe\\pure-audio-install-"); size_t offset=wcslen(pipe_name);
   for (int i=0;i<16;++i) swprintf(pipe_name+offset+i*2,3,L"%02x",nonce[i]);
   if (!SetEnvironmentVariableW(L"PURE_AUDIO_INSTALL_CHANNEL",pipe_name)) return 1;
+  BYTE secret[32];
+  if (BCryptGenRandom(NULL,secret,sizeof(secret),BCRYPT_USE_SYSTEM_PREFERRED_RNG)) return 1;
+  for (int i=0;i<32;++i) swprintf(capability+i*2,3,L"%02x",secret[i]);
+  if (!SetEnvironmentVariableW(L"PURE_AUDIO_INSTALL_CAPABILITY",capability)) return 1;
   wchar_t *command=calloc(32768,sizeof(wchar_t)), option[PATH_CAP+64];
   if (!command || !argument(command,argv[4])) return 1;
   const wchar_t *names[]={L"STAGE_PREFIX",L"AUDIO_INSTALL_CONTEXT",L"AUDIO_INSTALL_MODE",L"AUDIO_INSTALL_COMPONENT"};
@@ -399,8 +623,10 @@ int wmain(int argc,wchar_t **argv) {
   if (WaitForSingleObject(server,10000)!=WAIT_OBJECT_0) return !error("owner server teardown failed");
   CloseHandle(server_ready);
   CloseHandle(server); CloseHandle(process.hThread); CloseHandle(process.hProcess); CloseHandle(job);
+  if (!batch_committed && !rollback_batch()) rc=1;
+  for (size_t i=0;i<batch_count;++i) { free(batch[i].text); free(batch[i].previous); }
   for (size_t i=held_count;i>0;--i) CloseHandle(held[i-1].handle);
   free(held); ReleaseMutex(mutex); CloseHandle(mutex); CloseHandle(lock);
-  if (!rc) fprintf(stdout,"INSTALL_GUARD_OK retained_identity=1 atomic_publish=1 teardown=1\n");
+  if (!rc) fprintf(stdout,"INSTALL_GUARD_OK retained_identity=1 batch_commit=%d teardown=1\n",batch_committed);
   return (int)rc;
 }

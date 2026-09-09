@@ -576,7 +576,7 @@ if(BUILD_TESTING)
           -SourceDir "${CMAKE_CURRENT_SOURCE_DIR}" -BuildDir "${CMAKE_CURRENT_BINARY_DIR}"
           -PurePrefix "${PURE_AUDIO_PURE_PREFIX}")
       set_tests_properties(pure-audio-install-guard-contract PROPERTIES
-        LABELS "audio;contract;no-hardware" TIMEOUT 240 RUN_SERIAL TRUE)
+        LABELS "audio;contract;no-hardware" TIMEOUT 600 RUN_SERIAL TRUE)
       foreach(contract configure runtime_verifier install)
         add_test(NAME pure-audio-${contract}-contract
           COMMAND "${CMAKE_COMMAND}"

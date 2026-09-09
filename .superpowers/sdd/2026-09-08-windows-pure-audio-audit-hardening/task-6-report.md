@@ -4,13 +4,21 @@ Date: 2026-09-09 (Europe/Prague).
 Workspace: `C:/pure-lang/.worktrees/todo33-audit`.
 Branch: `codex/todo33-audit`. Implementation base: `ec67ed023ec3799313f56eb783e6cb7f9bb0a382`.
 
-Current fix-round status: all four reviewer findings addressed and self-reviewed.
+Current fix-round 2 status: both remaining findings addressed and self-reviewed.
+Fresh full suite **10/10 PASS in 1143.99 seconds**. Task 6 contains **125 negative
+cases, 28 positive controls and 6 complete pristine cases**, plus the separate
+retained production package described below. The full suite totals **393
+negative cases / 76 positive-or-pristine cases**, excluding extra process-boundary
+checks. Publication guarantees are precisely limited in the fix-round 2 section.
+
+Historical fix-round 1 status: all four initial reviewer findings addressed and self-reviewed.
 Final combined suite **10/10 PASS in 961.42 seconds**. Task 6 contracts contain
 **106 negative mutations, 18 positive controls and 6 complete pristine runs**;
 one additional retained production-helper pristine install passed afterward.
-Current package: **61 owned artifacts (22 runtime / 39 documentation), delta 61,
+Package inventory (unchanged by fix round 2): **61 owned artifacts (22 runtime / 39 documentation), delta 61,
 29 staged PEs, 27 bundled license/notice payloads**. Detailed current evidence
-and limitations are in the Fix round 1 section below.
+and limitations for that checkpoint are in the Fix round 1 section below.
+Fix round 2 evidence and the superseding publication boundary are appended below.
 
 Checkpoint 93e1a5bf status: implemented, self-reviewed and verified after the user-authorized
 official license retrieval. Final suite: **9/9 passed**, including **82 negative
@@ -720,3 +728,251 @@ license-text omission is resolved, but corresponding-source/offers and a
 source/static-component legal compliance audit remain outside this PE/DLL
 artifact-completeness task. These are explicit boundaries, not a claim of
 complete legal certification or hardware support.
+
+## Fix round 2 — authenticated ownership and full-set pre-commit rollback
+
+Base: `025940c70583e680140ab1636f8f75699d9d2545`. The parent approved the bounded
+design before implementation: authenticate the actual native server process,
+bind requests to retained stage identities, queue all destinations, reserve
+the entire absent destination set before writing payload bytes, and roll back
+through those exact handles on pre-commit failure. The native helper remains
+the previously approved build-only scope expansion; no new packaged artifact,
+PE, license payload, launcher or PE parser was added.
+
+### Behavioral RED evidence
+
+The real standalone installed verifier accepted a live unrelated PowerShell
+named-pipe server replying with the former public magic DWORD. The new
+independent counterfeit test failed with `RED: live counterfeit magic server
+bypassed real guard ownership` against fix-round 1, in
+`task6-fix1-green/pure-audio-contract-root/run-75c20b9a8d9aba7f35e4a8885ecad08a`.
+This was a live server against a real pristine package, not a missing-channel
+or source-text assertion.
+
+The late-destination mutation placed an owned junction at a later runtime
+destination after genuine preflight. The former per-file publisher rejected
+that entry only after earlier payloads had appeared. Its RED run is retained at
+`task6-fix2-auth/pure-audio-contract-root/run-aae8e19c751132116c6524f9c8002aba`.
+The fixed test selects the
+first, middle and last runtime destinations (`bin/libFLAC.dll`,
+`lib/pure/audio.dll`, `lib/pure/srcprocess.dll`) independently of the producer's
+inventory, requires zero outside writes, removes only its injected junction,
+then compares the sorted regular-file/SHA tree with the original baseline.
+
+Final self-review reproduced a further late failure: holding the conventional
+runtime manifest exclusively caused install failure after all 22 runtime
+payloads were already written. RED evidence:
+`task6-fix2-batch/pure-audio-contract-root/run-e04cbf7721e4c8600c1312e25e6825e2`.
+A second test injected failures after write records 23/24; the old batch had
+only 22 payload records and therefore incorrectly succeeded, producing RED:
+`task6-fix2-batch/pure-audio-contract-root/run-07ce09841fd67adda9fe2ed4c6ad96a9`.
+Both final manifests now participate in the same reservation/write/rollback
+batch, including restoration of an existing conventional manifest's exact bytes.
+
+### Authentication and retained identities
+
+Before sending any request, the native client obtains the kernel-reported
+named-pipe server PID. It must be the client's actual live grandparent: that
+guard directly launched the CMake parent. Open live-process handles retain
+the identified server and parent while their relationship, liveness and
+canonical server image path are checked. The image must be the same exact
+configured guard executable as the client, whose SHA is checked by CMake.
+The existing frozen guard pin is not replaced by an environment assertion.
+
+The server still validates the actual pipe client's parent against its own
+launched CMake child. A fresh BCrypt-generated per-session capability and
+explicit canonical stage/build scope must match the server's private state.
+The response includes the volume/file ID obtained from the server's retained
+stage handle; the client independently opens that stage NOFOLLOW and compares
+its actual identity and live process handles before accepting success.
+Inherited channel variables and earlier CMake includes therefore cannot claim
+ownership of an unrelated stage/session or counterfeit server.
+
+Primary API references: [GetNamedPipeServerProcessId](https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-getnamedpipeserverprocessid)
+and [QueryFullProcessImageNameW](https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-queryfullprocessimagenamew).
+The test fixture has its own private configured profile pinned to its exact
+fixture image. Production clients never accept a differently named fixture
+server or expose a test bypass.
+
+### Publication algorithm and precise commit boundary
+
+Each selected source is opened, retained and SHA-checked while queued. Before
+any payload bytes are written, all absent destinations of **both** components
+are reserved with CREATE_NEW/NOFOLLOW under the retained directory ancestors.
+Reservation handles deny concurrent writes, deletion, renaming and reparse
+conversion. An existing non-identical entry is never followed or overwritten.
+Selected new preserved component manifests are reserved likewise. Conventional
+build-owned manifests are exclusively opened and their old bytes retained for
+rollback before any payload is written; a locked or redirected manifest fails
+at this reservation stage too.
+
+Payloads are written through those exact reservation handles, flushed, and
+SHA-checked by rereading the output handle. Manifest bytes are likewise flushed
+and reread exactly. On a pre-commit failure, every newly reserved file is
+deleted through its original handle and any modified pre-existing conventional
+manifest is restored through its still-exclusive handle. Other-component
+empty reservations are removed before success. Sources, ancestors, stage/session
+ownership, the child job and operation lock stay retained throughout.
+
+The **commit point** is after every selected payload and final component
+manifest is fully written, verified and flushed, and all unused reservations
+are removed. No planned installer write follows this point. Output handles then
+transition to retained read-only verification handles; CMake checks the complete
+post-tree. A successful public verification still invokes Task 5 PE closure
+and the explicit Task 4 token fixture under the same guard.
+
+This is a tested **pre-commit regular-file/byte rollback**, not a durable
+whole-directory transaction. Empty directory scaffolding and initial
+build-owned baseline/session bookkeeping can remain after a rejected attempt;
+no new prefix regular file or changed baseline byte remains. Concurrent actors'
+own collision entries are preserved, not deleted by rollback. Abrupt process
+termination or power loss during writes is outside the rollback guarantee and
+may leave reservations/partial files; there is no recovery journal. A failure
+after the stated commit point does not undo a complete published component.
+Such interrupted or externally changed trees must pass exact verification
+before use. Uncooperative readers can observe in-progress reservations or
+content; this commit point is not an atomic visibility switch. A storage/OS
+failure that also prevents rollback is explicitly reported, not certified as
+restored. The report does not claim stronger transactional semantics.
+
+### Focused verification and retained production package
+
+Fresh strict configure and four-worker build in `C:/pure-lang/task6-fix2-final`
+completed **23/23** steps with all **74** frozen inventory records unchanged.
+The production native guard SHA-256 is
+`37cdf06022c17e17b0ce66d951468c244e1a81dd98c0193b278c96fdc8a8428e`.
+Focused locked-manifest and two metadata-write failure controls passed, including
+all three baseline-preserving retries and exact previous-manifest restoration.
+The complete focused guard matrix passed **1/1 in 306.72 seconds**, with:
+
+```
+COUNTERFEIT_GUARD_OK negatives=1 live_magic_server=1
+GUARD_SCOPE_OK negatives=2 stage_and_capability=1
+LATE_COLLISION_ROLLBACK_OK negatives=3 retries=3 positions=early,middle,last outside_writes=0
+WRITE_FAILURE_ROLLBACK_OK negatives=3 retries=3 after_payloads=1,12,22
+RESERVED_RACE_ROLLBACK_OK negatives=7 retries=1 creation=3 reparse_write=3 rollback=1 outside_writes=0
+MANIFEST_COLLISION_ROLLBACK_OK negatives=1 retries=1 prefix_unchanged=1
+METADATA_FAILURE_ROLLBACK_OK negatives=2 retries=2 after_records=23,24 previous_manifest_restored=1
+INSTALL_GUARD_CONTRACT_OK negatives=26 controls=18 pristine=2 concurrent_installers=3 outside_writes=0 teardown=2 precommit_rollback_cases=10 retries=10
+```
+
+These are 19 new negatives and ten successful retries beyond round 1's
+seven negatives/eight controls/two pristine cases. The failure-position gate
+and write-failure injection are compiled only in the fixture image; the
+production binary has neither switch. A harness-only nested-profile path
+exceeded legacy Win32 path limits (error 206 before any payload write) in an
+intermediate run. Giving each subcase a sibling native-owned leaf fixed that
+fixture issue; it is not counted as a product mutation or weakened protection.
+
+An additional retained package was created by the actual production helper,
+with separate runtime/documentation component calls. Runtime committed
+`artifacts=22 manifests=2 reserved=63`; documentation committed
+`artifacts=39 manifests=2 reserved=41`. The public standalone verifier ran
+with `-DPURE_AUDIO_RUNNER_HELPERS_ONLY=ON` and produced:
+
+```
+FINAL_PRISTINE_OK files=101 baseline=40 delta=61 pe=29 licenses=27
+PE_CLOSURE_OK count=29; AMD64 PE32+; UCRT resolved by Windows loader
+PURE_AUDIO_DONE_eee1eee5142c481459549a38fd829cc0
+INSTALL_PACKAGE_OK artifacts=61 runtime=22 documentation=39 delta=61 pe=29 license_payloads=27 third_party_dlls=22 project_owned_pe=7
+INSTALL_GUARD_OK retained_identity=1 batch_commit=0 teardown=1
+```
+
+Here `batch_commit=0` accurately denotes read-only verification, not a skipped
+install or skipped smoke. The actual install calls emitted `batch_commit=1`.
+The independent regular-file hash check compared all 40 baseline files.
+Retained stage:
+`C:/pure-lang/task6-fix2-final/pure-audio-contract-root/run-e5994619278de419f28f3264da74f418/package`;
+its sibling `final-verification.log` contains the complete PE/token output.
+The four-worker `verify-windows-dependencies` target independently passed too.
+
+All report, THIRD_PARTY and origins hash references were rechecked against
+actual retained files: **31 / 4 / 38** references respectively, all exactly
+64 hex characters and matching SHA-256. All **27** origins rows match their
+full payload bytes; all **27** Git index blobs equal `git hash-object
+--no-filters`. No license or baseline binary bytes changed in this round.
+
+### Final combined verification
+
+The fresh final command returned exit 0: **10/10 PASS in 1143.99 seconds wall
+time**. Complete commands, markers and per-test results are retained in
+`C:/pure-lang/task6-fix2-final/Testing/Temporary/LastTest.log`.
+
+| Contract | Negative cases | Positive controls | Complete pristine cases | Seconds |
+| --- | ---: | ---: | ---: | ---: |
+| Install matrix | 99 | 10 | 4 | 820.31 |
+| Native guard matrix | 26 | 18 | 2 | 304.43 |
+| Task 6 subtotal | 125 | 28 | 6 | |
+
+The exact install marker is `INSTALL_CONTRACT_OK negatives=99 pristine=4
+controls=10 artifacts=61 runtime=22 documentation=39 standard_delta=61
+identical_delta=60 pe=29 license_payloads=27 third_party_dlls=22
+project_owned_pe=7`. The fully preseeded pristine scenario also checks delta 0
+and two empty manifests. Whole-package ownership, 74 inventory records, 40
+byte-identical baseline files, 27 payloads, 37 mappings, 22 third-party DLLs and
+seven project-owned PEs are unchanged from round 1.
+
+Other final markers: cleanup 13/2; Make cleanup 6/2; direct Make cleanup 64/24;
+runner 23/7 plus three executable-parent boundaries and one descendant check;
+configure 120/4 (96.50 s); runtime verifier 42/3 (116.71 s). The full suite has
+**393 negative cases and 76 positive/pristine cases**, excluding the separately
+counted process-boundary checks. Fault harness: **2,391 checks**, intentional
+quarantine allocation delta 3. Public Pure bounds: **24 checks**. Real load,
+processing and bounds tests returned fresh exact completion tokens. No hardware
+test is claimed. The complete focused-only matrix passed separately before
+this combined run; its cases are not counted twice in these totals.
+
+After the combined suite, the four-worker build rechecked all 74 sealed
+records without refreshing them. The retained production stage was then
+verified again through the public helper-only command: exit 0, **29-PE closure**,
+the same **61 / 22 / 39 / delta 61 / 27-license** package marker, successful
+guard teardown, and fresh token `PURE_AUDIO_DONE_72fe1156e7480149ba89e8f2b104ae58`.
+This recheck is the same additional retained package, not a new pristine
+installation added to the matrix counts. Native guard SHA still matches its
+configured pin exactly.
+
+Exact final commands (native `cmake`/`ctest` from the declared CLANG64 bin):
+
+```powershell
+cmake -S pure-audio -B C:/pure-lang/task6-fix2-final -G Ninja -C C:/pure-lang/task6-fix1-preset.cmake
+cmake --build C:/pure-lang/task6-fix2-final --parallel 4
+ctest --test-dir C:/pure-lang/task6-fix2-final -R '^pure-audio-install-guard-contract$' --output-on-failure
+cmake --build C:/pure-lang/task6-fix2-final --target verify-windows-dependencies --parallel 4
+ctest --test-dir C:/pure-lang/task6-fix2-final -L audio --output-on-failure --parallel 4
+```
+
+The separate production pristine script invokes `cmake --install` once for
+runtime and once for documentation, then this real public command against the
+retained stage named above:
+
+```powershell
+cmake -DAUDIO_INSTALL_CONTEXT=C:/pure-lang/task6-fix2-final/windows-install-context.cmake -DSTAGE_PREFIX=C:/pure-lang/task6-fix2-final/pure-audio-contract-root/run-e5994619278de419f28f3264da74f418/package -DPURE_AUDIO_RUNNER_HELPERS_ONLY=ON -P pure-audio/cmake/VerifyInstalledPackage.cmake
+```
+
+### Fix-round 2 self-review and scope
+
+Receiving-code-review and systematic-debugging were used to reproduce the
+live false-ownership acceptance and late partial-install failures. TDD drove
+the counterfeit/collision controls first, then the final-manifest regression
+found during self-review. Verification-before-completion requires the fresh
+combined run below, not reuse of round 1's green evidence. The explicit
+no-subagents instruction leaves independent review to the parent after this
+commit; no independent approval is claimed by this self-review.
+
+Self-review checked the actual server/client ancestry and process-image
+comparison, private capability scope, held stage identity response, all
+queued source hashes, absent destinations of both components, exact output
+handle hashing, empty manifests, old-manifest restoration, reservation-only
+cleanup, failure and success teardown, and the stated commit boundary. The
+locked final manifest was added to the tests and fixed before completion.
+
+Changed files are exactly **five**: `pure-audio/CMakeLists.txt`,
+`pure-audio/cmake/VerifyInstalledPackage.cmake`,
+`pure-audio/cmake/install_guard.c`,
+`pure-audio/tests/install_guard_contract.ps1`, and this report.
+The guard contract timeout is now 600 seconds for the additional real installs;
+individual guarded operations retain their existing 240-second child limit.
+No Task 7/8 work, TODO/progress file, license text, baseline binary or existing
+untracked `build/` was modified. No subagent, merge or push was used.
+The previously documented source-offer/legal/static-component and upstream
+signature-verification boundaries remain unchanged.
