@@ -430,6 +430,201 @@ if(NOT poison_hash STREQUAL first_hash)
   message(FATAL_ERROR "Ambient archive options changed the exact archive hash")
 endif()
 message(STATUS "SOURCE_DIST_ENVIRONMENT_OK negatives=1 source_hashes_unchanged=${count} exact_archive_hash=1")
+# A GNU-identifying tool without the required capability must be rejected
+# before reservation/creation. This executable test double models that boundary
+# only; actual archive payload checks below always use the real GNU tools.
+set(capability_tools "${work}/unsupported archive tool")
+set(capability_output "${work}/unsupported-capability-output")
+file(MAKE_DIRECTORY "${capability_tools}" "${capability_output}")
+file(COPY_FILE "${CLANG64_PREFIX}/../usr/bin/gzip.exe" "${capability_tools}/gzip.exe")
+file(WRITE "${capability_tools}/tar.cmd" [==[@echo off
+if "%~1"=="--version" goto version
+if "%~1"=="--help" goto help
+> "%~dp0unexpected-archive-invocation" echo archive-command
+exit /b 23
+:version
+echo tar ^(GNU tar^) 1.35
+exit /b 0
+:help
+echo No declared hardlink capability
+exit /b 0
+]==])
+execute_process(COMMAND "${CLANG64_PREFIX}/bin/mingw32-make.exe"
+  "SHELL=${CLANG64_PREFIX}/../usr/bin/sh.exe" "DIST_CMAKE=${CMAKE_COMMAND}"
+  "DIST_TAR=${capability_tools}/tar.cmd" "DIST_OUTPUT_DIRECTORY=${capability_output}"
+  dist WORKING_DIRECTORY "${checkout}" RESULT_VARIABLE rc OUTPUT_VARIABLE out ERROR_VARIABLE err)
+file(WRITE "${work}/unsupported-capability.log" "${out}${err}")
+file(GLOB capability_entries "${capability_output}/*" "${capability_output}/.*")
+if(rc EQUAL 0 OR NOT "${out}${err}" MATCHES "requires GNU tar --hard-dereference capability" OR
+   EXISTS "${capability_tools}/unexpected-archive-invocation" OR capability_entries)
+  message(FATAL_ERROR "Missing GNU capability did not fail before archive writes: ${out}${err} (${work})")
+endif()
+message(STATUS "SOURCE_DIST_TAR_CAPABILITY_OK negatives=1 preflight_only=1")
+# Compare identical declared bytes under two real filesystem topologies. The
+# independent control uses separate files; the mutation uses a proven native
+# hardlink pair, which must still become regular archive members.
+set(link_source "${work}/hardlinked source")
+foreach(path IN LISTS expected_files)
+  get_filename_component(parent "${link_source}/${path}" DIRECTORY)
+  file(MAKE_DIRECTORY "${parent}")
+  file(COPY_FILE "${checkout}/${path}" "${link_source}/${path}")
+endforeach()
+file(COPY_FILE "${link_source}/README" "${link_source}/WINDOWS.md")
+set(link_rows)
+foreach(path IN LISTS expected_files)
+  file(SHA256 "${link_source}/${path}" hash)
+  list(APPEND link_rows "${path}|${hash}")
+endforeach()
+list(JOIN link_rows "\n" link_snapshot)
+file(WRITE "${work}/hardlink-source-sha256.tsv" "${link_snapshot}\n")
+foreach(topology independent linked)
+  if(topology STREQUAL "linked")
+    execute_process(COMMAND "${ps}" -NoProfile -NonInteractive -ExecutionPolicy Bypass
+      -File "${test_tools}" -Mode SourceHardlink -Directory "${link_source}"
+      -SourceTools "${source_tools}" -CreateLink RESULT_VARIABLE setup OUTPUT_VARIABLE out ERROR_VARIABLE err)
+    if(NOT setup EQUAL 0 OR NOT out MATCHES "links=2 same_file_identity=1")
+      message(FATAL_ERROR "Invalid native hardlink fixture: ${out}${err}")
+    endif()
+  endif()
+  set(link_output "${work}/topology-${topology}")
+  file(MAKE_DIRECTORY "${link_output}")
+  execute_process(COMMAND "${CLANG64_PREFIX}/bin/mingw32-make.exe"
+    "SHELL=${CLANG64_PREFIX}/../usr/bin/sh.exe" "DIST_CMAKE=${CMAKE_COMMAND}"
+    "DIST_OUTPUT_DIRECTORY=${link_output}" dist WORKING_DIRECTORY "${link_source}"
+    RESULT_VARIABLE rc OUTPUT_VARIABLE out ERROR_VARIABLE err)
+  file(WRITE "${work}/topology-${topology}.log" "${out}${err}")
+  if(NOT rc EQUAL 0)
+    message(FATAL_ERROR "Public ${topology} source archive failed: ${out}${err}")
+  endif()
+  execute_process(COMMAND "${ps}" -NoProfile -NonInteractive -ExecutionPolicy Bypass
+    -File "${test_tools}" -Mode VerifyArchive -Directory "${extracted}"
+    -Archive "${link_output}/pure-audio-0.6.tar.gz" -Snapshot "${work}/hardlink-source-sha256.tsv"
+    -SourceTools "${source_tools}" RESULT_VARIABLE rc OUTPUT_VARIABLE out ERROR_VARIABLE err)
+  if(NOT rc EQUAL 0)
+    message(FATAL_ERROR "Public ${topology} archive violates regular-member/hash contract: ${out}${err} (${work})")
+  endif()
+  foreach(row IN LISTS link_rows)
+    string(REPLACE "|" ";" fields "${row}")
+    list(GET fields 0 path)
+    list(GET fields 1 expected)
+    file(SHA256 "${link_source}/${path}" actual)
+    if(NOT actual STREQUAL expected)
+      message(FATAL_ERROR "Archive changed ${topology} source bytes: ${path}")
+    endif()
+  endforeach()
+  file(SHA256 "${link_output}/pure-audio-0.6.tar.gz" ${topology}_hash)
+endforeach()
+if(NOT independent_hash STREQUAL linked_hash)
+  message(FATAL_ERROR "Archive SHA depends on source inode topology")
+endif()
+execute_process(COMMAND "${ps}" -NoProfile -NonInteractive -ExecutionPolicy Bypass
+  -File "${test_tools}" -Mode SourceHardlink -Directory "${link_source}"
+  -SourceTools "${source_tools}" RESULT_VARIABLE rc OUTPUT_VARIABLE out ERROR_VARIABLE err)
+if(NOT rc EQUAL 0)
+  message(FATAL_ERROR "Archive changed native source hardlink identity: ${out}${err}")
+endif()
+message(STATUS "SOURCE_DIST_HARDLINK_OK negatives=1 controls=1 regular_members=${count} source_hashes_unchanged=${count} topology_independent_sha=1")
+# Integration regression against the actual driver. Only the disposable test
+# copy narrows CTest to four real core tests; configure/build/PE, both component
+# installs and the public installed verifier remain real. There is no flag in
+# the production driver that can skip its ten mandatory tests.
+set(postflight_failures)
+foreach(mutation leak junction)
+  set(post_work "${work}/postflight-${mutation}")
+  set(post_source "${post_work}/source with spaces")
+  file(MAKE_DIRECTORY "${post_work}/outside")
+  file(WRITE "${post_work}/outside/sentinel" "POSTFLIGHT-OUTSIDE\n")
+  foreach(path IN LISTS expected_files)
+    get_filename_component(parent "${post_source}/${path}" DIRECTORY)
+    file(MAKE_DIRECTORY "${parent}")
+    file(COPY_FILE "${source}/${path}" "${post_source}/${path}")
+  endforeach()
+  file(READ "${post_source}/tests/source_dist_extracted.cmake" fixture_driver)
+  set(full_filter [==[-E "^pure-audio-source-dist-contract$"]==])
+  string(FIND "${fixture_driver}" "${full_filter}" filter_at)
+  if(filter_at LESS 0)
+    message(FATAL_ERROR "Cannot establish core-test-only integration fixture")
+  endif()
+  string(REPLACE "${full_filter}" [==[-R "^pure-audio-(fault-bounds|load|processing|public-bounds)$"]==]
+    fixture_driver "${fixture_driver}")
+  string(REPLACE "mandatory_tests=10" "core_fixture_tests=4" fixture_driver "${fixture_driver}")
+  file(WRITE "${post_source}/tests/source_dist_extracted.cmake" "${fixture_driver}")
+  file(APPEND "${post_source}/CMakeLists.txt" [====[
+
+# Mutation-fixture-only configure side effect, after the driver's initial scan.
+execute_process(COMMAND C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe
+  -NoProfile -NonInteractive -ExecutionPolicy Bypass
+  -File "${CMAKE_CURRENT_SOURCE_DIR}/tests/source_dist_tools.ps1"
+  -Mode GenerateSourceMutation -Directory "${CMAKE_CURRENT_SOURCE_DIR}"
+  -SourceTools "${CMAKE_CURRENT_SOURCE_DIR}/cmake/SourceArchiveTools.ps1"
+  -Mutation "$ENV{PURE_AUDIO_POST_SOURCE_KIND}"
+  -Forbidden "$ENV{PURE_AUDIO_POST_SOURCE_FORBIDDEN}"
+  -Work "$ENV{PURE_AUDIO_POST_SOURCE_OUTSIDE}"
+  RESULT_VARIABLE mutation_rc OUTPUT_VARIABLE mutation_out ERROR_VARIABLE mutation_err)
+if(NOT mutation_rc EQUAL 0)
+  message(FATAL_ERROR "Cannot establish post-configure source fixture: ${mutation_err}")
+endif()
+message(STATUS "${mutation_out}")
+]====])
+  execute_process(COMMAND "${ps}" -NoProfile -NonInteractive -ExecutionPolicy Bypass
+    -File "${test_tools}" -Mode ReserveBuild -Directory "${MODULE_DIR}"
+    -Ticket "${post_work}/build.ticket" -SourceTools "${source_tools}"
+    RESULT_VARIABLE rc OUTPUT_VARIABLE post_build ERROR_VARIABLE err OUTPUT_STRIP_TRAILING_WHITESPACE)
+  if(NOT rc EQUAL 0)
+    message(FATAL_ERROR "Cannot reserve integration build: ${err}")
+  endif()
+  execute_process(COMMAND "${CMAKE_COMMAND}" -E env
+    "PURE_AUDIO_POST_SOURCE_KIND=${mutation}" "PURE_AUDIO_POST_SOURCE_FORBIDDEN=${SOURCE_DIR}"
+    "PURE_AUDIO_POST_SOURCE_OUTSIDE=${post_work}/outside"
+    "${ps}" -NoProfile -NonInteractive -ExecutionPolicy Bypass
+    -File "${post_source}/tests/source_dist_tools.ps1" -Mode Isolate -Directory "${post_source}"
+    -Work "${post_work}" -BuildDirectory "${post_build}" -Snapshot "${work}/expected-source-sha256.tsv"
+    -Forbidden "${SOURCE_DIR}|${checkout}" -ClangPrefix "${CLANG64_PREFIX}" -PurePrefix "${PURE_PREFIX}"
+    -CMake "${CMAKE_COMMAND}" RESULT_VARIABLE rc OUTPUT_VARIABLE out ERROR_VARIABLE err)
+  file(WRITE "${post_work}/isolation.log" "${out}${err}")
+  file(READ "${post_work}/isolated.stdout" child_out)
+  file(READ "${post_work}/isolated.stderr" child_err)
+  foreach(phase configure build pe tests install-runtime install-documentation installed-verifier)
+    if(NOT child_out MATCHES "SOURCE_DIST_STEP_OK step=${phase} ")
+      message(FATAL_ERROR "Postflight ${mutation} fixture failed before real ${phase}: ${child_out}${child_err}")
+    endif()
+  endforeach()
+  file(READ "${post_work}/logs/tests.stdout" core_tests)
+  file(READ "${post_work}/logs/installed-verifier.stdout" installed)
+  if(NOT core_tests MATCHES "100% tests passed out of 4" OR
+     NOT installed MATCHES "INSTALL_PACKAGE_OK" OR NOT installed MATCHES "PURE_AUDIO_DONE_[a-f0-9]+")
+    message(FATAL_ERROR "Integration fixture did not execute real core tests/public verifier")
+  endif()
+  if(mutation STREQUAL "leak")
+    set(expected_error "Checkout leak detected")
+    file(SIZE "${post_source}/post-configure-leak.bin" leak_bytes)
+    if(leak_bytes LESS 10485760)
+      message(FATAL_ERROR "Post-initial-scan binary fixture does not cross the late chunk boundary")
+    endif()
+  else()
+    set(expected_error "Leak scan refuses reparse entry")
+    execute_process(COMMAND "${ps}" -NoProfile -NonInteractive -Command
+      "if(-not ((Get-Item -LiteralPath '${post_source}/post-configure-junction' -Force).Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'Invalid post-configure junction' }; [IO.Directory]::Delete('${post_source}/post-configure-junction',$false)"
+      RESULT_VARIABLE cleanup)
+    if(NOT cleanup EQUAL 0)
+      message(FATAL_ERROR "Cannot unlink the exact owned post-configure junction")
+    endif()
+  endif()
+  file(READ "${post_work}/outside/sentinel" outside)
+  if(NOT outside STREQUAL "POSTFLIGHT-OUTSIDE\n")
+    message(FATAL_ERROR "Postflight fixture changed outside bytes")
+  endif()
+  # Prove failure teardown released both original/producer read exclusions.
+  file(SHA256 "${SOURCE_DIR}/Makefile" released_source)
+  file(SHA256 "${checkout}/Makefile" released_producer)
+  if(rc EQUAL 0 OR NOT child_err MATCHES "${expected_error}" OR EXISTS "${post_work}/extracted-result.txt")
+    list(APPEND postflight_failures "${mutation}")
+  endif()
+endforeach()
+if(postflight_failures)
+  message(FATAL_ERROR "Final extracted-source gate accepted post-configure mutations: ${postflight_failures} (${work})")
+endif()
+message(STATUS "SOURCE_DIST_POSTFLIGHT_OK negatives=2 real_core_tests=4 real_phases=7 late_binary=1 junction=1 released_roots=2")
 if(FOCUSED_ONLY)
   return()
 endif()

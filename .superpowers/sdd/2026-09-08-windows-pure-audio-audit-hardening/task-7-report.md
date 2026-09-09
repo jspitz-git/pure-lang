@@ -2,16 +2,133 @@
 
 Date: 2026-09-09. Workspace: `C:/pure-lang/.worktrees/todo33-audit`.
 Branch: `codex/todo33-audit`. Base: `547f47be9429c2c06df80698df18be6a25819949`.
-Status: implemented, fresh GREEN verified and self-reviewed; independent review
-pending. No merge/push or TODO closure is part of this task.
+Status: both Important review findings fixed with actual RED/GREEN evidence;
+fresh full verification and self-review complete; independent re-review pending.
+No merge/push or TODO closure is part of this task.
 
-Final result: **92 regular source files / 92 SHA values**, archive **234,815
+Current result: **92 regular source files / 92 SHA values / 238,112 bytes**,
+archive SHA256 `ead0d8c9eebd18c2b3916d752bdc96df0ed8165c0011f615bf72d562d5151d42`.
+Task7: **34 rejected/neutralized scenarios, 1 pristine archive, 7 controls**.
+Fresh public distcheck **1/1 PASS, 1420.30 s**; pristine extracted mandatory
+suite **10/10 PASS, 1162.55 s**. Four-worker build/PE, both installs, public
+Task4 token and initial/final full source-tree scans passed.
+
+Initial implementation checkpoint `fddb0c2b35b55cef7b2c36ee7b540813bb016fd7`
+(superseded by the fix-round evidence below): **92 regular source files / 92 SHA values**, archive **234,815
 bytes**, SHA256 `c3171dd88a4bc0aab3c4e995ad9226d6ca63cece3769bbdd1ff2d1cab930bf92`.
 Task7: **30 rejected/neutralized mutations, 1 pristine archive, 6 controls**.
 Fresh public distcheck **1/1 PASS, 1256.87 s**; extracted mandatory suite
 **10/10 PASS, 1161.94 s**; both installs, public Task4-token/PE verification and
-all complete leak scans PASS. This is a nested 1/1 + 10/10 result, not a claim
+then-implemented leak scans PASS. Review correctly found that the source tree
+was scanned only before configure, not again after all release phases. This is
+a nested 1/1 + 10/10 result, not a claim
 that one outer CTest invocation ran 11/11 tests.
+
+## Review fix round 1 — hardlinks and final source-tree scan
+
+The parent approved normalization with GNU tar's advertised
+`--hard-dereference` capability, rather than a fixed version pin. The producer
+now verifies GNU version identity and the exact help-option boundary before
+reserving temporary outputs, then uses this option for both create and append.
+This follows hardlinks only, not symlinks; all existing reparse checks remain.
+
+The actual public `make dist` hardlink RED used two declared names, README and
+WINDOWS.md, with equal bytes in an independently copied source control. Native
+GetFileInformationByHandle proved the mutation had the same volume/file index
+and exactly two links. The ordinary-file control was accepted; the hardlinked
+archive failed the independent verifier with `Archive contains nonregular
+entry`. All 92 source SHA values remained unchanged. Control archive SHA256:
+`74fc95146da50294d057232abbe3b863eaef17a0d4da57d61ada9b0aac767f17`;
+hardlinked archive SHA256:
+`5b6be74356e7e99cb18eaa9203dd4219e889039a4bb6381ea16fa7fc9f958faf`.
+Evidence under `C:/pure-lang/task7-final-4/pure-audio-contract-root/`:
+`run-6e1bd65d1f9ba97c52f3a59cf35e8f06`.
+
+A separate tool-boundary double advertised GNU tar 1.35 but omitted the required
+option from help. Before the fix it reached archive creation and wrote its
+unexpected-invocation marker; the capability regression failed specifically
+because preflight had not rejected it. Evidence: `run-de0a76afccfdc7e979ac94bd91608d1b`.
+The double is not used to produce or certify archive payloads. Focused GREEN
+`run-ff3baa4a536fc52b041d65d6e30bc70c` proved capability rejection before writes,
+both topology archives accepted as 92 regular members/92 exact SHA values,
+identical archive SHA, all 92 source bytes unchanged and native link identity
+retained. This checkpoint had 32 negatives and 8 valid checks.
+
+The final-scan RED creates a new file or junction during real CMake configure,
+after the initial scan. The binary fixture has a mixed-case/backslash checkout
+path at offset 10,485,750 (ten bytes before the 10 MiB/chunk boundary), beyond
+9 MiB and preceded by NUL bytes. The second fixture is a verified real junction
+to an owned outside sentinel. Test-only extracted-driver copies select four
+actual core CTests, but retain real configure, four-worker build and PE target,
+both component installs and public installed verifier/token execution. This
+approved optimization has no production switch or bypass; pristine still runs
+all ten mandatory tests.
+
+Both RED integrations completed all seven real phases and 4/4 core tests,
+then incorrectly wrote EXTRACTED_SOURCE_OK. The contract failed with
+`Final extracted-source gate accepted post-configure mutations: leak;junction`.
+Evidence: `run-ea323821f39444d83b45c88a298e9102/postflight-leak` and
+`postflight-junction`. Step seconds were respectively 7/4/4/10/11/9/22 and
+7/3/3/11/10/10/23. Both source-root locks released, the junction was unlinked
+non-recursively, and outside sentinel bytes stayed unchanged. The production
+driver now re-enumerates and scans the entire source tree immediately after the
+public installed verifier, before final build/stage scans and success output.
+Focused GREEN completed with rc=0 in
+`run-d94c6f01203f4d6d07e642f49df69c46`, reporting
+`SOURCE_DIST_POSTFLIGHT_OK negatives=2 real_core_tests=4 real_phases=7 late_binary=1 junction=1 released_roots=2`.
+The intended final failures were respectively `Checkout leak detected` and
+`Leak scan refuses reparse entry`, both at the new source scan after the
+installed-verifier phase. Neither case wrote a success artifact. All prior
+archive/mutation controls also passed: **34 negative scenarios / 8 valid
+checks**, archive SHA256
+`ead0d8c9eebd18c2b3916d752bdc96df0ed8165c0011f615bf72d562d5151d42`.
+Fresh strict parent `C:/pure-lang/task7-fix1-final` configured successfully
+(tool wall 6.72 s, CMake configure 6.2 s), then all 23 four-worker build steps
+passed in 3.90 s. Completed fresh full public distcheck results follow.
+
+Its retained archive evidence root is
+`C:/pure-lang/task7-fix1-final/pure-audio-contract-root/run-64455f9ebb87bc9beccaa4f7b3914c6f`.
+Pristine/repeat/poisoned archives are each 238,112 bytes with the focused SHA256
+above. The distinct topology fixture intentionally makes WINDOWS.md equal to
+README; its ordinary-file and hardlinked archives are both 237,345 bytes,
+SHA256 `9655f4c95382a28ceb7afea9a3955bd3f9d9d1068d0292a93a5580fee2c4f1fa`.
+Those fixture bytes are not represented as the pristine release payload.
+
+Fresh full public `make distcheck` then passed **1/1 in 1420.30 s** (CTest wall
+1420.31 s, measured public-command wall 1420.5254267 s). It independently
+repeated all **34 negatives / 8 valid checks**, including both real postflight
+pipelines, before running the untouched pristine ten-test gate. The pristine
+extracted build is `C:/pure-lang/task7-fix1-final/d-2CKv0BG6Dm9koxaGiL9joA`.
+Its **10/10** mandatory tests passed in **1162.55 s**: install 801.22 s, guard
+342.01 s, configure contract 96.30 s and runtime verifier 113.64 s. Step seconds
+were configure 7 / four-worker build 4 / four-worker PE 4 / tests 1162 /
+runtime install 11 / documentation install 9 / public verifier 23. Both native
+builds completed all 23 steps; a separate final outer four-worker PE target
+also passed (29 PEs, tool wall 4.29 s).
+
+Public verification proved `PURE_AUDIO_DONE_5a6609c408b1d91b7461c7ac2a8e21e4`
+and **61 artifacts = 22 runtime + 39 documentation**, delta 61, PE29,
+27 full license payloads, 22 third-party DLLs and 7 project-owned PEs. Stage
+101 files and inventory74 records preserve the same baseline-owned boundary;
+the inherited install controls still prove deltas61/60/0. System DLLs are
+loader-resolved, not staged files. Inherited contracts freshly confirmed
+393 negatives / 72 controls / 6 pristine, with two explicit unavailable actual
+file-symlink skips excluded. Native harness2391 checks (quarantine allocation
+delta3), public Pure bounds24 checks, guard3 concurrent installers,
+zero outside writes and12 precommit rollback/retry cases all passed.
+
+The pristine driver output now proves **two complete 92-file source scans**,
+before configure and after the installed verifier, followed by all73 generated
+build/cache files and101 stage files. The isolator scans all17 final raw
+log/preset files, proves184 held handles over2 roots with denied-read probes,
+then reports successful release. All8 stderr captures are byte-empty. After
+release, all92 original source hashes were independently rechecked against the
+archive snapshot, and the final working-tree diff check passed. Current tool
+versions were queried again and match those listed below. Only the scoped
+report was edited during the full run; no archived source bytes changed.
+Post-run checks also confirmed exact tracked/snapshot membership92, both
+PowerShell helpers' full-file parser success, three unchanged identical
+pristine/repeat/poisoned archives and two unchanged identical topology archives.
 
 ## Approved scope and rulings
 
@@ -291,7 +408,7 @@ extracted build `C:/pure-lang/task7-final-3/d-cE3Hz726NIbyOIV74Cprew`.
 This checkpoint predates the ambient archive-options fix and is not substituted
 for the final current run.
 
-Fresh current strict parent `C:/pure-lang/task7-final-4` configured in 6.39 s.
+Initial implementation strict parent `C:/pure-lang/task7-final-4` configured in 6.39 s.
 The 23-step four-worker parent build passed. Its current archive/source evidence
 is retained at
 `C:/pure-lang/task7-final-4/pure-audio-contract-root/run-2ba66f5fd23bc35aa7d3f18b441e7ccb`,
@@ -324,7 +441,8 @@ rollback cases and 12 successful retries. Install and guard timings were
 **801.62 s** and **340.85 s**, respectively; configure/verifier contracts were
 96.50 s and 113.96 s.
 
-Final scans covered all 92 extracted source files, 73 build/cache/generated
+Initial-checkpoint scans covered all 92 extracted source files before configure,
+73 build/cache/generated
 files, 101 stage files and the complete final set of 17 raw log/preset files.
 There is no size limit or NUL truncation. Isolation reported 184 retained
 read-exclusive handles over two checkout roots, denied-read probes before the
@@ -333,13 +451,13 @@ files were empty. The original 92 source hashes were rechecked against the
 snapshot after release, and pristine/repeat/poisoned archives all retained the
 same exact SHA256 above.
 
-Current reproduction commands, executed from the worktree root in native
+Fix-round reproduction commands, executed from the worktree root in native
 PowerShell (the already-declared outer preset is not consumed by the extracted
 child, which writes its own explicit-input preset):
 
 ```powershell
 $cmake = 'C:/msys64/clang64/bin/cmake.exe'
-$outer = 'C:/pure-lang/task7-final-4'
+$outer = 'C:/pure-lang/task7-fix1-final'
 & $cmake -S pure-audio -B $outer -G Ninja -C C:/pure-lang/task6-fix1-preset.cmake
 & $cmake --build $outer --parallel 4
 & C:/msys64/clang64/bin/mingw32-make.exe -C pure-audio SHELL=C:/msys64/usr/bin/sh.exe DIST_CMAKE=C:/msys64/clang64/bin/cmake.exe "DIST_AUDIT_BUILD=$outer" distcheck
@@ -351,7 +469,8 @@ verifier result are retained with its evidence. Native commands ran with the
 existing task execution permission required for MSYS signal pipes, not elevated
 Windows privileges or a changed Developer Mode policy.
 
-Final focused and full Task7 counts (setup failures and historical probes excluded):
+Fix-round focused and fresh full Task7 counts (setup failures and historical
+probes excluded):
 
 | Contract | Rejected/neutralized mutations | Valid/pristine controls |
 | --- | ---: | ---: |
@@ -365,17 +484,39 @@ Final focused and full Task7 counts (setup failures and historical probes exclud
 | Short-build MAX_PATH/ownership/reparse cleanup | 3 | 1 |
 | Literal canonical parent / quoted DEBUILD_FLAGS compatibility | 2 | 2 |
 | Inherited TAR_OPTIONS/GZIP public archive/source-byte safety | 1 | 0 |
+| GNU tar missing hard-dereference capability, before writes | 1 | 0 |
+| Real public hardlink topology / ordinary-file control | 1 | 1 |
+| Post-configure late binary and junction, seven real phases each | 2 | 0 |
 | Exact 92-file/92-SHA pristine archive and deterministic repeat | 0 | 2 |
-| **Total** | **30** | **7** |
+| **Total** | **34** | **8** |
 
-The seven valid checks comprise one pristine archive and six controls
+The eight valid checks comprise one pristine archive and seven controls
 (repeat determinism, scanner clean binary, attribute pristine file and owned
-build cleanup, literal parent and quoted DEBUILD_FLAGS). The end-to-end run
+build cleanup, literal parent, quoted DEBUILD_FLAGS and independent-file
+hardlink-topology control). The end-to-end run
 consumes that pristine archive rather than
 counting it again as a second independent package. Outside-byte checks total
-14 cases: seven producer paths, six direct targets and one build cleanup.
+16 cases: seven producer paths, six direct targets, one build cleanup and two
+post-configure integrations.
 
 ## Self-review and handoff boundary
+
+The following 11-file scope describes the initial implementation commit; the
+review fix round touches only four existing module files and this report.
+Before launching its fresh full run, the fix-round diff was reviewed for both
+tar create/append coverage, fail-before-reservation capability behavior,
+independent native hardlink identity/member/hash oracles, source-byte retention,
+final-scan ordering and absence of a production test-selection bypass. Both
+actual integration failures retain seven real successful release phases, then
+require the intended scanner error and absence of a success artifact; they
+also verify outside bytes and source-handle teardown. No Task 1–6 interface or
+public production test selection was changed. `git diff --check` passed before
+and after the fresh full run. Fix-round scope is exactly
+`cmake/CreateSourceArchive.cmake`, `tests/source_dist_contract.cmake`,
+`tests/source_dist_extracted.cmake`, `tests/source_dist_tools.ps1` and this report.
+The final staged-scope check passed with exactly these five files, and the full
+staged diff check passed; no `build/` or ignored progress file is included.
+Self-review is not independent re-review approval.
 
 The independent snapshot was also compared with `git ls-files pure-audio`:
 all 86 previously tracked files are present, with exactly the six new Task7

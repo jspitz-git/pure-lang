@@ -90,9 +90,16 @@ endif()
 # tool paths and command arguments explicitly declared above.
 set(archive_environment "${CMAKE_COMMAND}" -E env --unset=TAR_OPTIONS --unset=GZIP)
 execute_process(COMMAND ${archive_environment} "${tar}" --version RESULT_VARIABLE rc OUTPUT_VARIABLE version ERROR_VARIABLE err TIMEOUT 10)
-if(NOT rc EQUAL 0 OR NOT version MATCHES "GNU tar")
+if(NOT rc EQUAL 0 OR NOT version MATCHES "^[^ \r\n]+ \\(GNU tar\\) ([0-9]+\\.[0-9]+(\\.[0-9]+)?)[\r\n]")
   message(FATAL_ERROR "The source archive requires GNU tar: ${version}${err}")
 endif()
+set(tar_version "${CMAKE_MATCH_1}")
+execute_process(COMMAND ${archive_environment} "${tar}" --help
+  RESULT_VARIABLE rc OUTPUT_VARIABLE help ERROR_VARIABLE err TIMEOUT 10)
+if(NOT rc EQUAL 0 OR NOT help MATCHES "(^|[\r\n])[ \t]+--hard-dereference([ \t\r\n]|$)")
+  message(FATAL_ERROR "The source archive requires GNU tar --hard-dereference capability: ${version}${err}")
+endif()
+message(STATUS "SOURCE_ARCHIVE_CAPABILITY_OK gnu_tar=${tar_version} hard_dereference=1")
 function(reserve_archive_file result)
 if(CMAKE_HOST_WIN32)
   execute_process(COMMAND "${powershell}" -NoProfile -NonInteractive -ExecutionPolicy Bypass
@@ -113,12 +120,12 @@ reserve_archive_file(raw)
 # gzip receives a pipe and -n, so its header records no source name/timestamp.
 set(data_names ${names})
 list(REMOVE_ITEM data_names debian/rules)
-execute_process(COMMAND ${archive_environment} "${tar}" --force-local --create --format=ustar "--file=${raw}" --no-recursion
+execute_process(COMMAND ${archive_environment} "${tar}" --force-local --create --format=ustar "--file=${raw}" --no-recursion --hard-dereference
   --mtime=@0 --owner=0 --group=0 --numeric-owner --mode=0644
   "--transform=s,^,${DIST_ARCHIVE_BASENAME}/," -- ${data_names}
   WORKING_DIRECTORY "${root}" RESULT_VARIABLE rc ERROR_VARIABLE err TIMEOUT 90)
 if(rc EQUAL 0 AND "debian/rules" IN_LIST names)
-  execute_process(COMMAND ${archive_environment} "${tar}" --force-local --append --format=ustar "--file=${raw}" --no-recursion
+  execute_process(COMMAND ${archive_environment} "${tar}" --force-local --append --format=ustar "--file=${raw}" --no-recursion --hard-dereference
     --mtime=@0 --owner=0 --group=0 --numeric-owner --mode=0755
     "--transform=s,^,${DIST_ARCHIVE_BASENAME}/," -- debian/rules
     WORKING_DIRECTORY "${root}" RESULT_VARIABLE rc ERROR_VARIABLE err TIMEOUT 30)

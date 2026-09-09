@@ -107,6 +107,9 @@ step(install-runtime "${CMAKE_COMMAND}" --install "${build}" --prefix "${stage}"
 step(install-documentation "${CMAKE_COMMAND}" --install "${build}" --prefix "${stage}" --component documentation)
 step(installed-verifier "${CMAKE_COMMAND}" "-DAUDIO_INSTALL_CONTEXT=${build}/windows-install-context.cmake"
   "-DSTAGE_PREFIX=${stage}" -P "${source}/cmake/VerifyInstalledPackage.cmake")
+# Build tools and custom commands may generate in-source files after the first
+# scan. Re-enumerate the complete tree only after all release phases finish.
+scan("${source}")
 scan("${build}")
 scan("${stage}")
 file(READ "${logs}/installed-verifier.stdout" verified)

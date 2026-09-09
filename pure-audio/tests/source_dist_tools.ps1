@@ -1,8 +1,8 @@
-param([Parameter(Mandatory=$true)][ValidateSet('Attributes','Scan','ScannerSelfTest','VerifyArchive','Isolate','ReserveBuild','CleanupBuild','BuildSelfTest')][string]$Mode,
+param([Parameter(Mandatory=$true)][ValidateSet('Attributes','Scan','ScannerSelfTest','VerifyArchive','Isolate','ReserveBuild','CleanupBuild','BuildSelfTest','SourceHardlink','GenerateSourceMutation')][string]$Mode,
       [Parameter(Mandatory=$true)][string]$Directory,[string]$SourceTools,
       [string]$Forbidden,[string]$Archive,[string]$Snapshot,[string]$CMake,
       [string]$ClangPrefix,[string]$PurePrefix,[string]$Original,[string]$Work,
-      [string]$Ticket,[string]$BuildDirectory)
+      [string]$Ticket,[string]$BuildDirectory,[switch]$CreateLink,[string]$Mutation)
 $ErrorActionPreference='Stop'
 
 function Import-PathValidator {
@@ -15,6 +15,71 @@ function Import-PathValidator {
     # The functions must live in this script's scope, not this import function.
     . ([scriptblock]::Create(($definition.Extent.Text -replace '^function ', 'function script:')))
   }
+}
+if($Mode -eq 'SourceHardlink') {
+  Import-PathValidator
+  $root=Assert-ArchivePath $Directory 'directory'
+  $first=Assert-ArchivePath (Join-Path $root 'README') 'file'
+  $second=Assert-ArchivePath (Join-Path $root 'WINDOWS.md') 'file'
+  if($CreateLink) {
+    if([IO.File]::ReadAllText($first) -cne [IO.File]::ReadAllText($second)) { throw 'Hardlink fixture bytes must already match' }
+    [IO.File]::Delete($second)
+    $null=New-Item -ItemType HardLink -Path $second -Target $first
+  }
+  Add-Type -TypeDefinition @'
+using System;
+using System.IO;
+using System.Runtime.InteropServices;
+using Microsoft.Win32.SafeHandles;
+public static class SourceLinkIdentity {
+  [StructLayout(LayoutKind.Sequential)]
+  public struct Info {
+    public uint Attributes, CreationLow, CreationHigh, AccessLow, AccessHigh,
+      WriteLow, WriteHigh, Volume, SizeHigh, SizeLow, Links, IndexHigh, IndexLow;
+  }
+  [DllImport("kernel32.dll",SetLastError=true)]
+  [return: MarshalAs(UnmanagedType.Bool)]
+  static extern bool GetFileInformationByHandle(SafeFileHandle file,out Info info);
+  static Info Read(string path) {
+    using(var file=File.OpenRead(path)) {
+      Info info;
+      if(!GetFileInformationByHandle(file.SafeFileHandle,out info))
+        throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());
+      return info;
+    }
+  }
+  public static void Verify(string first,string second) {
+    var a=Read(first); var b=Read(second);
+    if(a.Links!=2 || b.Links!=2 || a.Volume!=b.Volume ||
+       a.IndexHigh!=b.IndexHigh || a.IndexLow!=b.IndexLow)
+      throw new Exception("Declared source fixture is not the exact native hardlink pair");
+  }
+}
+'@
+  [SourceLinkIdentity]::Verify($first,$second)
+  'SOURCE_DIST_NATIVE_HARDLINK_OK links=2 same_file_identity=1'
+}
+if($Mode -eq 'GenerateSourceMutation') {
+  Import-PathValidator
+  $root=Assert-ArchivePath $Directory 'directory'
+  if($Mutation -eq 'leak') {
+    if($Forbidden.Length -lt 4) { throw 'Missing source mutation root' }
+    $bytes=[Text.Encoding]::UTF8.GetBytes($Forbidden.ToUpperInvariant().Replace('/','\'))
+    $file=[IO.File]::Open((Join-Path $root 'post-configure-leak.bin'),'CreateNew','Write','None')
+    try {
+      # Ten bytes before the 10MiB/64KiB boundary, preceded by real NUL bytes.
+      $offset=10*1024*1024-10; $file.SetLength($offset); $file.Position=$offset
+      $file.Write($bytes,0,$bytes.Length)
+    } finally { $file.Dispose() }
+  } elseif($Mutation -eq 'junction') {
+    $target=Assert-ArchivePath $Work 'directory'
+    $path=Join-Path $root 'post-configure-junction'
+    $null=New-Item -ItemType Junction -Path $path -Target $target
+    if(-not ((Get-Item -LiteralPath $path -Force).Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+      throw 'Invalid generated source junction fixture'
+    }
+  } else { throw 'Unknown post-configure source mutation' }
+  "SOURCE_DIST_GENERATED_SOURCE_OK kind=$Mutation"
 }
 if($Mode -in @('ReserveBuild','CleanupBuild','BuildSelfTest')) {
   Import-PathValidator
