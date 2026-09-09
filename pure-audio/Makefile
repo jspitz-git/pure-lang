@@ -93,7 +93,7 @@ clean:
 realclean: clean
 	rm -f -- portaudio.pure samplerate/samplerate.pure sndfile/sndfile.pure
 
-audio$(DLL): audio.c
+audio$(DLL): audio.c audio_test_api.h
 	$(CC) $(shared) $(dllname) -o $@ $(MOD_CFLAGS) $< $(MOD_LDFLAGS)
 
 # Type 'make generate' to force a rebuild of the wrappers. This requires

@@ -45,6 +45,12 @@ function(pure_audio_run_fixture)
   foreach(line IN LISTS PURE_AUDIO_STDERR_ALLOWLIST)
     list(APPEND args --allow-stderr "${line}")
   endforeach()
+  # Optional explicit device transport; no environment lookup in normal runs.
+  foreach(name PURE_AUDIO_IN PURE_AUDIO_OUT)
+    if(DEFINED PURE_AUDIO_DEVICE_${name})
+      list(APPEND args --hardware-device "${name}=${PURE_AUDIO_DEVICE_${name}}")
+    endif()
+  endforeach()
   math(EXPR outer_timeout "${TEST_TIMEOUT}/1000+15")
   execute_process(COMMAND "${PURE_AUDIO_RUNNER}" ${args}
     RESULT_VARIABLE result OUTPUT_VARIABLE output ERROR_VARIABLE error

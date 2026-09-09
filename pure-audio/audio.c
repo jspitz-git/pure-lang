@@ -35,6 +35,8 @@ bool pure_audio_frame_bytes(unsigned bytes_per_frame, unsigned long frames,
 static _Atomic size_t pure_audio_allocation_count;
 static _Atomic size_t pure_audio_allocation_attempt_count;
 static _Atomic size_t pure_audio_io_call_count;
+static _Atomic size_t pure_audio_open_call_count;
+static _Atomic size_t pure_audio_raw_io_call_count;
 
 static void *pure_audio_malloc(size_t size)
 {
@@ -66,6 +68,9 @@ size_t pure_audio_test_io_calls(void)
 {
   return pure_audio_io_call_count;
 }
+
+int64_t pure_audio_test_open_calls(void) { return pure_audio_open_call_count; }
+int64_t pure_audio_test_raw_io_calls(void) { return pure_audio_raw_io_call_count; }
 
 int64_t pure_audio_test_echo_int64(int64_t value)
 {
@@ -103,16 +108,20 @@ int64_t pure_audio_test_sf_seek_roundtrip(const char *path, int64_t offset)
 
 int pure_audio_test_print_bounds_marker(void)
 {
-  if (fputs("PURE_AUDIO_BOUNDS_OK 24 checks\n", stdout) == EOF)
+  if (fputs("PURE_AUDIO_BOUNDS_OK 28 checks\n", stdout) == EOF)
     return -1;
   return fflush(stdout);
 }
 
 #define pure_audio_record_io_call() (++pure_audio_io_call_count)
+#define pure_audio_record_open_call() (++pure_audio_open_call_count)
+#define pure_audio_record_raw_io_call() (++pure_audio_raw_io_call_count)
 #else
 #define pure_audio_malloc malloc
 #define pure_audio_free free
 #define pure_audio_record_io_call() ((void)0)
+#define pure_audio_record_open_call() ((void)0)
+#define pure_audio_record_raw_io_call() ((void)0)
 #endif
 
 static int pure_audio_portaudio_get_sample_size(unsigned long format)
@@ -1183,6 +1192,7 @@ static pure_expr *open_audio_stream_locked(int *in, int *out,
 
 pure_expr *open_audio_stream(int *in, int *out, double sr, long size, int flags)
 {
+  pure_audio_record_open_call();
   pure_expr *result;
   int previous_cancel;
   pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, &previous_cancel);
@@ -1562,6 +1572,7 @@ static int write_audio_stream_double_locked(MyStream *v, PaStream *as, double *b
 
 int read_audio_stream(MyStream *identity, PaStream *as, void *buf, long size)
 {
+  pure_audio_record_raw_io_call();
   MyStream *v;
   int result = -1, previous_cancel;
   /* Cancellation must not strand an activity reference or a reacquired
@@ -1578,6 +1589,7 @@ int read_audio_stream(MyStream *identity, PaStream *as, void *buf, long size)
 
 int write_audio_stream(MyStream *identity, PaStream *as, void *buf, long size)
 {
+  pure_audio_record_raw_io_call();
   MyStream *v;
   int result = -1, previous_cancel;
   /* Cancellation must not strand an activity reference or a reacquired

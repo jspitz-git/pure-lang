@@ -182,6 +182,32 @@ components for Windows.
   logs, self-review and unchanged limitations are in the Task 8 report. TODO
   remains Open pending independent re-review and Task 9; no merge/push.
 
+- 2026-09-09: Task 9 consolidated fix wave (base `2c168ce1`) addresses the
+  three whole-branch findings: public bigint open/raw-count guards before FFI,
+  explicit numeric-only hardware selector transport in the sanitized runner,
+  and the legacy Make audio-test-header dependency. Behavioral RED recorded
+  native open/raw entries2/6, five missing selector transports and missing Make
+  rebuild scheduling. Fresh strict final2 configure6.5255044 s, normal23/23
+  and PE29 four-worker targets7.9471052 s passed. Focused normal6/6 PASS26.91 s:
+  native2391/public28 checks, open/raw delta0/0; runner45 negatives/13 controls,
+  cleanup13/2, Make6/2, direct Make64/24, header1 mutation/1 control. Final runner
+  rerun1/1 PASS18.67 s. Isolated ASan showed legitimate cumulative import/JIT
+  work beyond45 s; approved ASan-only public deadline90/105 s, normal45/60 and
+  hardware15 unchanged. Generated CTest inventory and five mutation/one pristine
+  checks prove this scope. Actual ASan2/2 PASS79.52 s (native28.58/public50.94),
+  2391/28 checks and no sanitizer diagnostic. Runtime22+documentation39 and
+  public installed verifier PASS42.841542 s: delta61, licenses27, PE29,
+  stage101 with all40 baseline SHA-256 values unchanged. Workflow11/11
+  PASS53.410 s,386 distinct negatives/two pristine/five controls; pristine CLI
+  and six workflow+five guide PowerShell parses pass. Public make dist PASS
+  2.0295903 s:92 regular files/92 hashes/247484 bytes, SHA-256
+  `c1c1eb3a82c25a5ac638ff9ea2bb6ebe200d078368a2b0cbc468edb981b9dc33`.
+  Exact commands, logs, tokens, sibling-API audit, versions, ASan diagnosis and
+  self-review are in task-9-report.md. Per the explicit sequencing ruling the
+  slow ten-test gate and public distcheck/extracted-source verification were
+  not rerun in this wave: one scoped re-review and fresh Task 9 full verification
+  remain required. TODO remains Open; no merge/push/hardware test/build deletion.
+
 No hardware playback/capture was rerun during September audit hardening.
 Current optional fixtures use one channel at the device's default sample
 rate, not the older July two-channel fixture. ASIO, elevated FIFO/RR and all

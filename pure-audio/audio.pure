@@ -134,6 +134,12 @@ audio::errmsg errno::int = Pa::GetErrorText errno;
 private extern expr *open_audio_stream
   (int *in, int *out, double sr, long size, int flags);
 private extern void audio_sentry(void *v, expr *stream);
+private native_long_max native_long_min native_long_count;
+audio::native_long_max =
+  if SIZEOF_LONG==4 then 2147483647L else 9223372036854775807L;
+audio::native_long_min = -native_long_max-1L;
+audio::native_long_count size =
+  integerp size && bigint size>=native_long_min && bigint size<=native_long_max;
 
 /* Open and audio stream for reading, writing or both.
 
@@ -152,7 +158,8 @@ private extern void audio_sentry(void *v, expr *stream);
 
    - size denotes the block size (maximum number of samples per channel which
      can be read or written without blocking). If this is zero or negative, a
-     reasonable default is chosen (512 in the current implementation).
+     reasonable default is chosen (512 in the current implementation). Values
+     outside the signed native long range are rejected before FFI conversion.
 
    - flags can be used to specify special processing options for the stream,
      by or'ing together the corresponding flag values (Pa::ClipOff,
@@ -166,7 +173,7 @@ audio::open_stream inparams::matrix outparams::matrix sr::double size
     when
       inparams = {inparams,{0|i=1..4-#inparams}};
       outparams = {outparams,{0|i=1..4-#outparams}};
-    end if integerp size && sr>0.0 &&
+    end if native_long_count size && sr>0.0 &&
       (null inparams || rowvectorp inparams) && #inparams<=4 &&
       (null outparams || rowvectorp outparams) && #outparams<=4;
 
@@ -229,18 +236,20 @@ audio::stream_cpu_load as::pointer =
    return value of -1 indicates a generic error (such as, e.g., trying to read
    from a stream which has only be opened for output). */
 
-/* These take a (suitably malloc'ed) buffer pointer for the sample data. */
+/* These take a (suitably malloc'ed) buffer pointer for the sample data. Counts
+   must be nonnegative and fit signed native long before FFI conversion. The
+   caller remains responsible for raw pointer capacity and lifetime. */
 
 private extern int read_audio_stream(void *v, void *as, void *buf, long size);
 private extern int write_audio_stream(void *v, void *as, void *buf, long size);
 
 audio::read_stream as::pointer buf::pointer size =
   read_audio_stream (stream_data as) as buf size
-  if streamp as && integerp size;
+  if streamp as && native_long_count size && size>=0;
 
 audio::write_stream as::pointer buf::pointer size =
   write_audio_stream (stream_data as) as buf size
-  if streamp as && integerp size;
+  if streamp as && native_long_count size && size>=0;
 
 /* For convenience, we also allow the buffer to be specified as an int or
    double matrix. In this case, the sample format of the stream must match the
@@ -260,9 +269,6 @@ audio::check_matrix x =
   (imatrixp x || dmatrixp x) && (null x || vectorp x || packed x);
 
 private matrix_fits;
-private native_long_max;
-audio::native_long_max =
-  if SIZEOF_LONG==4 then 2147483647L else 9223372036854775807L;
 
 audio::matrix_fits as buf size input =
   check_matrix buf && integerp size && size>=0 && channels>0 &&

@@ -3,4 +3,18 @@ if(NOT MODE STREQUAL "playback" AND NOT MODE STREQUAL "capture")
 endif()
 set(TEST_SCRIPT "${PURE_SOURCE_DIR}/tests/hardware-${MODE}.pure")
 set(TEST_TIMEOUT 15000)
+foreach(name PURE_AUDIO_IN PURE_AUDIO_OUT)
+  unset(PURE_AUDIO_DEVICE_${name})
+  if(DEFINED ENV{${name}})
+    # Reject list separators/control characters before constructing argv. The
+    # native runner independently enforces exact names, range and uniqueness.
+    set(selected "$ENV{${name}}")
+    string(LENGTH "${selected}" selected_length)
+    if(selected_length GREATER 10 OR NOT selected MATCHES "^(0|[1-9][0-9]*)$" OR
+       selected GREATER 2147483647)
+      message(FATAL_ERROR "${name} must be a canonical device index 0..2147483647")
+    endif()
+    set(PURE_AUDIO_DEVICE_${name} "${selected}")
+  endif()
+endforeach()
 include("${CMAKE_CURRENT_LIST_DIR}/RunPureTest.cmake")

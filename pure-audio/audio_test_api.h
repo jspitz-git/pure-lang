@@ -38,6 +38,8 @@ size_t pure_audio_test_allocation_delta(void);
 size_t pure_audio_test_allocation_attempts(void);
 bool pure_audio_test_round_pow2(size_t value, size_t *rounded);
 size_t pure_audio_test_io_calls(void);
+int64_t pure_audio_test_open_calls(void);
+int64_t pure_audio_test_raw_io_calls(void);
 int64_t pure_audio_test_echo_int64(int64_t value);
 int64_t pure_audio_test_sf_seek_roundtrip(const char *path, int64_t offset);
 int pure_audio_test_print_bounds_marker(void);

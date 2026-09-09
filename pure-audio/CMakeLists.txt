@@ -507,6 +507,26 @@ if(BUILD_TESTING)
         REQUIRED_FILES "${CMAKE_CURRENT_SOURCE_DIR}/tests/smoke.pure"
         TIMEOUT 60
     )
+    # Instrumented Pure import/JIT plus all public checks takes ~48 s on this
+    # Windows host. Detect the effective compiler mode (including config flags),
+    # not a global test-budget override; normal and hardware limits stay fixed.
+    include(CheckCSourceCompiles)
+    unset(PURE_AUDIO_BOUNDS_ASAN CACHE)
+    check_c_source_compiles("
+      #ifndef __has_feature
+      #define __has_feature(x) 0
+      #endif
+      #if !defined(__SANITIZE_ADDRESS__) && !__has_feature(address_sanitizer)
+      #error AddressSanitizer is not enabled
+      #endif
+      int main(void) { return 0; }
+      " PURE_AUDIO_BOUNDS_ASAN)
+    set(audio_public_bounds_inner_timeout 45000)
+    set(audio_public_bounds_outer_timeout 60)
+    if(PURE_AUDIO_BOUNDS_ASAN)
+      set(audio_public_bounds_inner_timeout 90000)
+      set(audio_public_bounds_outer_timeout 105)
+    endif()
     add_test(
       NAME pure-audio-public-bounds
       COMMAND "${CMAKE_COMMAND}"
@@ -516,6 +536,7 @@ if(BUILD_TESTING)
         "-DPURE_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
         "-DMODULE_DIR=$<TARGET_FILE_DIR:audio_bounds_seam>"
         "-DTEST_SCRIPT=${CMAKE_CURRENT_SOURCE_DIR}/tests/bounds.pure"
+        "-DTEST_TIMEOUT=${audio_public_bounds_inner_timeout}"
         -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunPureTest.cmake"
     )
     set_tests_properties(
@@ -524,7 +545,7 @@ if(BUILD_TESTING)
         LABELS "audio;fftw;samplerate;sndfile;bounds;no-hardware"
         REQUIRED_FILES
           "$<TARGET_FILE:audio_bounds_seam>;${CMAKE_CURRENT_SOURCE_DIR}/tests/bounds.pure"
-        TIMEOUT 60
+        TIMEOUT ${audio_public_bounds_outer_timeout}
     )
     foreach(mode IN ITEMS playback capture)
       add_custom_target(

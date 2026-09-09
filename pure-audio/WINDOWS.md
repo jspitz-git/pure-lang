@@ -248,8 +248,16 @@ Int24 is an opaque three-byte raw sample at the callback/queue/buffer boundary,
 **not** a newly advertised Pure numeric matrix conversion. CustomFormat is
 rejected.
 
-Public wrappers reject malformed channel shapes, negative/overflowing sizes
-and unsupported odd FFT lengths. `sf_count_t` uses its 64-bit ABI. Playback
+High-level wrappers reject malformed channel shapes, out-of-range sizes and
+unsupported odd FFT lengths. `audio::open_stream` accepts representable zero
+or negative block sizes for the historical 512-frame default; values outside
+signed native `long` are rejected before conversion. Raw-pointer read/write
+counts must be nonnegative and fit native `long` (32-bit on Windows); pointer
+capacity/lifetime still belong to the caller. Matrix audio and samplerate
+wrappers additionally check capacity using bigint arithmetic. Generated raw
+PortAudio/libsndfile FFI declarations remain ABI-level interfaces, not general
+arbitrary-bigint validators; callers must supply representable counts and valid
+buffers. `sf_count_t` uses its 64-bit ABI. Playback
 accounting distinguishes frames enqueued from callback-consumed frames;
 consumption does not prove physical DAC rendering or audibility.
 
@@ -277,7 +285,18 @@ rate. Playback queues 256 Float32 silence frames and waits at most 500 ten-ms
 polls for consumption; the whole process has a 15-second limit. Capture reads
 128 frames into memory, without saving or printing samples. Report the exact
 device, rate, frame count and host when running this tier. `PURE_AUDIO_IN` and
-`PURE_AUDIO_OUT` can select devices. Historical two-channel 44100-Hz results
+`PURE_AUDIO_OUT` can select devices: set the desired variable explicitly to a
+canonical decimal index in `0..2147483647` before the corresponding optional
+target (for example, `$env:PURE_AUDIO_OUT='7'`). Leave it unset to use the
+default device; remove it afterward with `Remove-Item Env:PURE_AUDIO_OUT`.
+The hardware CMake driver validates these values and explicitly passes only
+`PURE_AUDIO_IN`/`PURE_AUDIO_OUT` through the runner's `--hardware-device
+NAME=INDEX` argument. No other ambient environment or Pure discovery paths are
+inherited. Normal no-hardware launches do not inherit either selector, even
+if the parent environment contains them. Signs, leading zeros, glob patterns,
+whitespace and out-of-range indices are rejected by this optional runner tier;
+the public `audio::find_device` glob API outside the runner is unchanged.
+Historical two-channel 44100-Hz results
 belong to the older fixture, not a fresh audit of this one.
 
 No hardware tier was run during audit hardening. Normal `SCHED_OTHER` is

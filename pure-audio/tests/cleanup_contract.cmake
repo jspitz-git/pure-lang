@@ -110,6 +110,21 @@ if(DEFINED MAKE_EXECUTABLE AND DEFINED SH_EXECUTABLE)
   endforeach()
   get_filename_component(shell_dir "${SH_EXECUTABLE}" DIRECTORY)
   set(ENV{PATH} "${shell_dir};$ENV{SystemRoot}/System32;$ENV{SystemRoot}")
+  # GNU Make's -W is a deterministic simulated-newer prerequisite, with no
+  # timestamp sleeps or compilation: header changes must schedule audio rebuild.
+  file(WRITE "${makework}/audio.c" "/* source */\n")
+  file(WRITE "${makework}/audio_test_api.h" "/* header */\n")
+  file(WRITE "${makework}/audio.dll" "existing output\n")
+  set(header_probe "${MAKE_EXECUTABLE}" "SHELL=${SH_EXECUTABLE}" DLL=.dll
+    CC=unused MOD_CFLAGS= MOD_LDFLAGS= shared= dllname=)
+  execute_process(COMMAND ${header_probe}
+    -q audio.dll WORKING_DIRECTORY "${makework}" RESULT_VARIABLE pristine)
+  execute_process(COMMAND ${header_probe}
+    -q -W audio_test_api.h audio.dll WORKING_DIRECTORY "${makework}" RESULT_VARIABLE changed)
+  if(NOT pristine EQUAL 0 OR NOT changed EQUAL 1)
+    message(FATAL_ERROR "Make header dependency: pristine=${pristine}, header-newer=${changed}, expected 0/1")
+  endif()
+  message(STATUS "MAKE_HEADER_DEPENDENCY_OK mutation=1 control=1")
   foreach(target clean realclean)
     foreach(path audio.dll audio.o fftw/fftw.dll samplerate/srcprocess.dll sndfile/sfinfo.dll realtime/realtime.dll)
       file(WRITE "${makework}/${path}" "owned output\n")

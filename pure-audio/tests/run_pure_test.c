@@ -35,6 +35,7 @@ int main(int argc, char **argv)
   const char *mode = "", *token = argv[argc-1];
   for (int i = 1; i+1 < argc; ++i)
     if (!strcmp(argv[i], "-x")) mode = argv[i+1];
+  if (strstr(mode, "selector-")) puts("HARDWARE_SELECTOR_CHILD_ENTERED");
   if (strstr(mode, "parser")) fputs("fixture.pure:1: syntax error\n", stderr);
   else if (strstr(mode, "exception")) fputs("unhandled exception 'failed'\n", stderr);
   else if (strstr(mode, "wrong")) { puts("WRONG_TOKEN"); return 0; }
@@ -89,8 +90,18 @@ int main(int argc, char **argv)
     CloseHandle(pi.hThread); CloseHandle(pi.hProcess);
     return GetFileAttributesA(argv[3]) == INVALID_FILE_ATTRIBUTES ? 68 : 0;
   }
-  else if (strstr(mode, "environment")) {
+  else if (strstr(mode, "selector-both")) {
+    if (!getenv("PURE_AUDIO_IN") || strcmp(getenv("PURE_AUDIO_IN"), "7") ||
+        !getenv("PURE_AUDIO_OUT") || strcmp(getenv("PURE_AUDIO_OUT"), "11")) return 70;
+  } else if (strstr(mode, "selector-in")) {
+    if (!getenv("PURE_AUDIO_IN") || strcmp(getenv("PURE_AUDIO_IN"), "0") ||
+        getenv("PURE_AUDIO_OUT")) return 71;
+  } else if (strstr(mode, "selector-out")) {
+    if (getenv("PURE_AUDIO_IN") || !getenv("PURE_AUDIO_OUT") ||
+        strcmp(getenv("PURE_AUDIO_OUT"), "2147483647")) return 72;
+  } else if (strstr(mode, "environment")) {
     if (getenv("PURELIB") || getenv("PURE_INCLUDE") || getenv("PURE_LIBRARY") ||
+        getenv("PURE_AUDIO_IN") || getenv("PURE_AUDIO_OUT") ||
         strstr(getenv("PATH") ? getenv("PATH") : "", "poison")) return 63;
   } else if (strstr(mode, "directory-lock")) {
     char cwd[MAX_PATH]; GetCurrentDirectoryA(MAX_PATH, cwd);
@@ -423,6 +434,8 @@ int wmain(int argc, wchar_t **argv)
 {
   _setmode(_fileno(stdout), _O_BINARY); _setmode(_fileno(stderr), _O_BINARY);
   const wchar_t *pure = NULL, *script = NULL, *cwd = NULL;
+  const wchar_t *devices[2] = {NULL, NULL};
+  const wchar_t *device_names[] = {L"PURE_AUDIO_IN=", L"PURE_AUDIO_OUT="};
   const wchar_t *paths[128], *includes[128], *modules[128], *allow[128];
   size_t npath = 0, ninclude = 0, nmodule = 0, nallow = 0;
   DWORD timeout = 30000; int create = 0, cleanup = 0;
@@ -440,6 +453,20 @@ int wmain(int argc, wchar_t **argv)
       wchar_t *end; unsigned long n = wcstoul(value, &end, 10);
       if (!*value || *end || n < 100 || n > 120000) fail("timeout must be 100..120000 milliseconds");
       timeout = n;
+    } else if (!wcscmp(key, L"--hardware-device")) {
+      size_t slot;
+      for (slot = 0; slot < 2; ++slot)
+        if (!wcsncmp(value, device_names[slot], wcslen(device_names[slot]))) break;
+      if (slot == 2 || devices[slot]) fail("unknown or duplicate hardware device name");
+      const wchar_t *number = value+wcslen(device_names[slot]);
+      if (!*number || (*number == L'0' && number[1])) fail("hardware device must be a canonical nonnegative integer");
+      unsigned long index = 0;
+      for (const wchar_t *p = number; *p; ++p) {
+        if (*p < L'0' || *p > L'9' || index > (2147483647UL-(unsigned)(*p-L'0'))/10)
+          fail("hardware device must be 0..2147483647");
+        index = index*10+(unsigned)(*p-L'0');
+      }
+      devices[slot] = number;
     } else if (!wcscmp(key, L"--path-entry") && npath < 128) paths[npath++] = value;
     else if (!wcscmp(key, L"--include") && ninclude < 128) includes[ninclude++] = value;
     else if (!wcscmp(key, L"--module-dir") && nmodule < 128) modules[nmodule++] = value;
@@ -471,9 +498,11 @@ int wmain(int argc, wchar_t **argv)
   swprintf(token, 80, L"PURE_AUDIO_DONE_%ls", nonce);
   argument(command, L"-x"); argument(command, source); argument(command, token);
   wchar_t environment[TEXT_CAP] = L""; size_t used = 0;
-  const wchar_t *names[] = {L"PATH", L"SystemRoot", L"TEMP", L"TMP", L"WINDIR"};
-  const wchar_t *values[] = {search, windows, work, work, windows};
-  for (size_t i = 0; i < 5; ++i) {
+  /* Case-insensitively sorted, complete environment: never merge ambient data. */
+  const wchar_t *names[] = {L"PATH", L"PURE_AUDIO_IN", L"PURE_AUDIO_OUT", L"SystemRoot", L"TEMP", L"TMP", L"WINDIR"};
+  const wchar_t *values[] = {search, devices[0], devices[1], windows, work, work, windows};
+  for (size_t i = 0; i < 7; ++i) {
+    if (!values[i]) continue;
     size_t n = wcslen(names[i])+wcslen(values[i])+2;
     if (used+n+1 > TEXT_CAP) fail("environment too long");
     swprintf(environment+used, TEXT_CAP-used, L"%ls=%ls", names[i], values[i]); used += n;

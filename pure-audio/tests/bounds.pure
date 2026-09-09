@@ -5,6 +5,8 @@ namespace bounds;
 extern expr *pure_audio_test_make_stream(int, int, int, int);
 extern void pure_audio_test_destroy_stream(expr *);
 extern int64 pure_audio_test_io_calls();
+extern int64 pure_audio_test_open_calls();
+extern int64 pure_audio_test_raw_io_calls();
 extern int64 pure_audio_test_echo_int64(int64);
 extern int64 pure_audio_test_sf_seek_roundtrip(char*, int64);
 extern int pure_audio_test_print_bounds_marker();
@@ -18,6 +20,36 @@ check name condition
   let output_stream = pure_audio_test_make_stream 0 2 0 Pa::Int16;
   check "fault input stream" (audio::streamp input_stream);
   check "fault output stream" (audio::streamp output_stream);
+
+  // Windows long is signed 32-bit. These bigints previously narrowed to 0/1.
+  // NULL buffers make a missed raw guard observable without blocking or access.
+  let before_open = pure_audio_test_open_calls;
+  let before_raw = pure_audio_test_raw_io_calls;
+  let open_bad = [audio::open_stream {} {0,1,Pa::Int16,0} 48000 n 0 |
+                 n = [4294967296L,-4294967295L]];
+  let raw_bad = [f s NULL n |
+                f,s = [(audio::read_stream,input_stream),
+                       (audio::write_stream,output_stream)];
+                n = [-1,4294967296L,-4294967295L]];
+  printf "PUBLIC_NARROWING_ENTRY_DELTA open=%d raw=%d\n"
+    (pure_audio_test_open_calls-before_open,
+     pure_audio_test_raw_io_calls-before_raw);
+  // Close accidentally accepted opens before reporting a RED, using only fake devices.
+  do (\s -> if pointerp s then audio::close_stream s else ()) open_bad;
+  check "bigint open sizes rejected before FFI"
+    (all (\s -> ~pointerp s) open_bad && pure_audio_test_open_calls==before_open);
+  check "negative/wrapped raw counts rejected before FFI"
+    (all (\x -> ~intp x) raw_bad && pure_audio_test_raw_io_calls==before_raw);
+  let zero_raw = (audio::read_stream input_stream NULL 0,
+                  audio::write_stream output_stream NULL 0);
+  check "zero raw transfers still reach FFI"
+    (zero_raw==(0,0) && pure_audio_test_raw_io_calls==before_raw+2);
+  let default_streams = [audio::open_stream {} {0,1,Pa::Int16,0} 48000 n 0 |
+                        n = [0,-1,-2147483648L]];
+  check "representable nonpositive open sizes keep default"
+    (all (\s -> audio::streamp s && (audio::stream_info s)!1==512) default_streams &&
+     pure_audio_test_open_calls==before_open+3);
+  do audio::close_stream default_streams;
 
   let valid_result = audio::write_stream output_stream (imatrix 0) 0;
   check "fault seam receives valid matrix call"
