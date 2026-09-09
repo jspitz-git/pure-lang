@@ -165,6 +165,19 @@ requires their exact disjoint ownership, and compares the full post-install
 tree to the baseline plus one declared delta. Existing files must remain
 byte-identical; collisions and extra files fail before or after installation.
 
+Task 6 final-review ruling: this is a cooperating-installer safety contract,
+not isolation from an actively malicious process running as the same principal.
+An authenticated exclusive lock serializes cooperating installers. Retained
+handles protect declared destinations and ancestors against rename/reparse
+replacement. Every writable batch endpoint must have exactly one hardlink,
+checked through its retained handle before any batch write; controlled
+pre-commit failures roll back owned bytes through those same handles. A live
+same-principal attacker can add a hardlink after this check even with
+FileShare.None, or directly modify the package outside the operation. Such
+hostile mutation is outside the supported boundary. The commit point follows
+verified/flushed payloads and final manifests and removal of unused reservations;
+abrupt process failure or power loss is not a durable whole-tree transaction.
+
 Every installed module, interface, document, example, test fixture, runtime
 DLL, and license is hash-matched to its configured source. Reused runtime files
 must be byte-identical rather than silently overwritten. The installed smoke

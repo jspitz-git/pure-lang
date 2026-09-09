@@ -5,7 +5,10 @@ param([Parameter(Mandatory=$true)][string]$SourceDir,
       [switch]$CounterfeitOnly, [string]$PristineStage,
       [switch]$LateCollisionOnly, [switch]$WriteFailureOnly,
       [switch]$ReservedRaceOnly, [switch]$ScopeOnly, [switch]$ManifestCollisionOnly,
-      [switch]$MetadataFailureOnly)
+      [switch]$MetadataFailureOnly, [switch]$ManifestHardlinkOnly,
+      # Optional platform characterization: expected RED on the audited NTFS
+      # host. Not part of the required contract or its GREEN case counts.
+      [switch]$ReservedHardlinkOnly)
 $ErrorActionPreference = 'Stop'
 $auditCmake = 'C:/msys64/clang64/bin/cmake.exe'
 $auditRunner = "$BuildDir/run_pure_test.exe"
@@ -157,6 +160,43 @@ finally { $auditHasher.Dispose(); $auditInput.Dispose() }
 [IO.File]::WriteAllText("$auditFixtureBuild/install-guard.sha256",$auditFixtureHash+"`n")
 $BuildDir=$auditFixtureBuild
 
+if($ManifestHardlinkOnly) {
+  $auditFailures=@()
+  foreach($auditComponent in @('runtime','documentation')) {
+    $auditStage="$auditWork/hardlink-$auditComponent"
+    New-Item -ItemType Directory -Path $auditStage | Out-Null
+    Copy-Item -Path "$PurePrefix/*" -Destination $auditStage -Recurse
+    $auditBefore=Get-AudioTree $auditStage
+    $auditSentinel="$auditWork/outside-$auditComponent.bin"
+    $auditBytes=[byte[]]@(0,1,2,127,128,255,13,10,65,66,67)
+    [IO.File]::WriteAllBytes($auditSentinel,$auditBytes)
+    $auditExpected=[Convert]::ToBase64String($auditBytes)
+    $auditLink="$BuildDir/install_manifest_$auditComponent.txt"
+    New-Item -ItemType HardLink -Path $auditLink -Target $auditSentinel | Out-Null
+    $ErrorActionPreference='Continue'
+    $auditOutput=& $auditCmake --install $BuildDir --prefix $auditStage --component $auditComponent 2>&1
+    $auditRc=$LASTEXITCODE
+    $ErrorActionPreference='Stop'
+    [IO.File]::WriteAllText("$auditWork/hardlink-$auditComponent.log",($auditOutput -join "`n"))
+    if($auditRc -eq 0 -or [Convert]::ToBase64String([IO.File]::ReadAllBytes($auditSentinel)) -cne $auditExpected -or
+       (Compare-Object $auditBefore (Get-AudioTree $auditStage))) {
+      $auditFailures+=$auditComponent
+      continue
+    }
+    if("$auditOutput" -notmatch 'hardlinked writable batch endpoint') { throw "Wrong hardlink rejection: $auditOutput" }
+    # Delete only the injected alias in this private owned profile, not its target.
+    [IO.File]::Delete($auditLink)
+    $auditOutput=& $auditCmake --install $BuildDir --prefix $auditStage --component $auditComponent 2>&1
+    if($LASTEXITCODE -ne 0 -or [Convert]::ToBase64String([IO.File]::ReadAllBytes($auditSentinel)) -cne $auditExpected) {
+      throw "Hardlink retry failed or altered outside sentinel: $auditOutput"
+    }
+  }
+  if($auditFailures.Count) { throw "RED: hardlinked manifests wrote outside or partially installed: $($auditFailures -join ',') ($auditWork)" }
+  'MANIFEST_HARDLINK_OK negatives=2 retries=2 outside_sentinels_unchanged=2 baseline_unchanged=2'
+  & $auditRunner --cleanup --cwd $auditWork
+  if($LASTEXITCODE -ne 0) { throw 'Manifest hardlink cleanup failed' }
+  exit 0
+}
 if($MetadataFailureOnly) {
   foreach($auditFailureIndex in @(23,24)) {
     $auditStage="$auditWork/metadata-$auditFailureIndex"
@@ -225,11 +265,11 @@ if($ScopeOnly) {
   if($LASTEXITCODE -ne 0) { throw 'Scope cleanup failed' }
   exit 0
 }
-if($LateCollisionOnly -or $WriteFailureOnly -or $ReservedRaceOnly) {
+if($LateCollisionOnly -or $WriteFailureOnly -or $ReservedRaceOnly -or $ReservedHardlinkOnly) {
   $auditCase=0
   $auditDestinations=@('bin/libFLAC.dll','lib/pure/audio.dll','lib/pure/srcprocess.dll')
   $auditCases=$auditDestinations
-  if($ReservedRaceOnly) { $auditCases=@('all-reserved') }
+  if($ReservedRaceOnly -or $ReservedHardlinkOnly) { $auditCases=@('all-reserved') }
   foreach($auditDestination in $auditCases) {
     $auditCase++
     $auditStage="$auditWork/collision-$auditCase"
@@ -238,22 +278,31 @@ if($LateCollisionOnly -or $WriteFailureOnly -or $ReservedRaceOnly) {
     $auditBefore=Get-AudioTree $auditStage
     $auditOutside="$auditWork/outside-$auditCase"
     New-Item -ItemType Directory -Path $auditOutside | Out-Null
+    $auditInstallComponent='runtime'
+    if($ReservedHardlinkOnly) {
+      $auditInstallComponent='all'
+      foreach($auditComponent in @('runtime','documentation')) {
+        [IO.File]::WriteAllText("$BuildDir/install_manifest_$auditComponent.txt","PREVIOUS $auditComponent`n")
+      }
+      $auditAliasTargets=@("$auditStage/bin/libFLAC.dll","$auditStage/lib/pure/audio.dll","$auditStage/lib/pure/srcprocess.dll",
+        "$BuildDir/install_manifest_runtime.txt","$BuildDir/install_manifest_documentation.txt")
+    }
     $auditReadyName='Local\audio-late-ready-'+[Guid]::NewGuid().ToString('N')
     $auditReleaseName='Local\audio-late-release-'+[Guid]::NewGuid().ToString('N')
     $auditReady=New-Object Threading.EventWaitHandle($false,[Threading.EventResetMode]::ManualReset,$auditReadyName)
     $auditRelease=New-Object Threading.EventWaitHandle($false,[Threading.EventResetMode]::ManualReset,$auditReleaseName)
     $auditStart=New-Object Diagnostics.ProcessStartInfo
     $auditStart.FileName="$BuildDir/install_guard.exe"
-    $auditArguments=@('--run',$auditStage,$BuildDir,$auditCmake,"$BuildDir/windows-install-context.cmake","$SourceDir/cmake/VerifyInstalledPackage.cmake",'install','runtime')
+    $auditArguments=@('--run',$auditStage,$BuildDir,$auditCmake,"$BuildDir/windows-install-context.cmake","$SourceDir/cmake/VerifyInstalledPackage.cmake",'install',$auditInstallComponent)
     $auditStart.Arguments=($auditArguments | ForEach-Object { '"'+$_+'"' }) -join ' '
     $auditStart.UseShellExecute=$false; $auditStart.CreateNoWindow=$true
     $auditStart.RedirectStandardOutput=$true; $auditStart.RedirectStandardError=$true
     $auditStart.EnvironmentVariables['AUDIO_GUARD_TEST_READY']=$auditReadyName
     $auditStart.EnvironmentVariables['AUDIO_GUARD_TEST_RELEASE']=$auditReleaseName
-    if($WriteFailureOnly -or $ReservedRaceOnly) {
+    if($WriteFailureOnly -or $ReservedRaceOnly -or $ReservedHardlinkOnly) {
       $auditStart.EnvironmentVariables['AUDIO_GUARD_TEST_PHASE']='reserved'
       $auditFailureIndex=@(1,12,22)[$auditCase-1]
-      if($ReservedRaceOnly) { $auditFailureIndex=12 }
+      if($ReservedRaceOnly -or $ReservedHardlinkOnly) { $auditFailureIndex=12 }
       $auditStart.EnvironmentVariables['AUDIO_GUARD_TEST_FAIL_AFTER_WRITE']=[string]$auditFailureIndex
     }
     $auditProcess=[Diagnostics.Process]::Start($auditStart)
@@ -274,11 +323,22 @@ if($LateCollisionOnly -or $WriteFailureOnly -or $ReservedRaceOnly) {
           if($LASTEXITCODE -ne 0) { throw 'Reserved endpoint admitted reparse/write access' }
         }
       }
+      if($ReservedHardlinkOnly) {
+        $auditAliasIndex=0
+        foreach($auditTarget in $auditAliasTargets) {
+          $auditAliasIndex++
+          $auditAlias="$auditOutside/alias-$auditAliasIndex"
+          $auditBlocked=$false
+          try { New-Item -ItemType HardLink -Path $auditAlias -Target $auditTarget -ErrorAction Stop | Out-Null }
+          catch { $auditBlocked=$true }
+          if(-not $auditBlocked -or (Test-Path -LiteralPath $auditAlias)) { throw 'Retained writable endpoint admitted a new hardlink' }
+        }
+      }
       $auditRelease.Set() | Out-Null
       if(-not $auditProcess.WaitForExit(90000)) { throw 'Late collision install did not finish' }
       [IO.File]::WriteAllText("$auditWork/collision-$auditCase.log",$auditStdout.Result+$auditStderr.Result)
       if($auditProcess.ExitCode -eq 0) { throw 'Expected pre-commit failure was accepted' }
-      if(($WriteFailureOnly -or $ReservedRaceOnly) -and $auditStderr.Result -notmatch 'injected pre-commit write failure') { throw "Wrong failure cause: $($auditStderr.Result)" }
+      if(($WriteFailureOnly -or $ReservedRaceOnly -or $ReservedHardlinkOnly) -and $auditStderr.Result -notmatch 'injected pre-commit write failure') { throw "Wrong failure cause: $($auditStderr.Result)" }
       if(@(Get-ChildItem -LiteralPath $auditOutside -Force).Count) { throw 'Late collision wrote outside stage' }
       if($LateCollisionOnly) {
         if(((Get-Item -LiteralPath $auditLink -Force).Attributes -band [IO.FileAttributes]::ReparsePoint) -eq 0) { throw 'Concurrent collision entry was overwritten' }
@@ -286,8 +346,24 @@ if($LateCollisionOnly -or $WriteFailureOnly -or $ReservedRaceOnly) {
         [IO.Directory]::Delete($auditLink)
       }
       if(Compare-Object $auditBefore (Get-AudioTree $auditStage)) { throw "RED: collision at $auditDestination left a partial installation ($auditWork)" }
-      $auditOutput=& $auditCmake --install $BuildDir --prefix $auditStage --component runtime 2>&1
+      if($ReservedHardlinkOnly) {
+        foreach($auditComponent in @('runtime','documentation')) {
+          if([IO.File]::ReadAllText("$BuildDir/install_manifest_$auditComponent.txt") -cne "PREVIOUS $auditComponent`n") { throw 'Alias-attempt rollback changed previous manifest' }
+        }
+      }
+      $auditRetryArguments=@('--install',$BuildDir,'--prefix',$auditStage)
+      if($auditInstallComponent -ne 'all') { $auditRetryArguments+=@('--component',$auditInstallComponent) }
+      $auditOutput=& $auditCmake @auditRetryArguments 2>&1
       if($LASTEXITCODE -ne 0) { throw "Post-rollback retry failed: $auditOutput" }
+      if($ReservedHardlinkOnly) {
+        $auditAliasIndex=0
+        foreach($auditTarget in $auditAliasTargets) {
+          $auditAliasIndex++
+          $auditAlias="$auditOutside/alias-$auditAliasIndex"
+          New-Item -ItemType HardLink -Path $auditAlias -Target $auditTarget | Out-Null
+          [IO.File]::Delete($auditAlias)
+        }
+      }
     } finally {
       $auditRelease.Set() | Out-Null
       if(-not $auditProcess.HasExited) { $auditProcess.Kill(); $auditProcess.WaitForExit() }
@@ -296,7 +372,8 @@ if($LateCollisionOnly -or $WriteFailureOnly -or $ReservedRaceOnly) {
   }
   if($LateCollisionOnly) { 'LATE_COLLISION_ROLLBACK_OK negatives=3 retries=3 positions=early,middle,last outside_writes=0' }
   elseif($WriteFailureOnly) { 'WRITE_FAILURE_ROLLBACK_OK negatives=3 retries=3 after_payloads=1,12,22' }
-  else { 'RESERVED_RACE_ROLLBACK_OK negatives=7 retries=1 creation=3 reparse_write=3 rollback=1 outside_writes=0' }
+  elseif($ReservedRaceOnly) { 'RESERVED_RACE_ROLLBACK_OK negatives=7 retries=1 creation=3 reparse_write=3 rollback=1 outside_writes=0' }
+  else { 'RESERVED_HARDLINK_OK negatives=6 retries=1 alias_denials=5 post_teardown_alias_controls=5 baseline_unchanged=1 outside_writes=0' }
   & $auditRunner --cleanup --cwd $auditWork
   if($LASTEXITCODE -ne 0) { throw 'Late collision cleanup failed' }
   exit 0
@@ -455,7 +532,7 @@ try {
   $auditRc = $LASTEXITCODE
 } finally { $ErrorActionPreference = 'Stop'; $auditLock.Dispose() }
 if ($auditRc -eq 0 -or (Compare-Object $auditBefore (Get-AudioTree $auditStage))) { throw 'Actual installer ignored held operation lock' }
-foreach($auditControl in @('CounterfeitOnly','ScopeOnly','LateCollisionOnly','WriteFailureOnly','ReservedRaceOnly','ManifestCollisionOnly','MetadataFailureOnly')) {
+foreach($auditControl in @('CounterfeitOnly','ScopeOnly','LateCollisionOnly','WriteFailureOnly','ReservedRaceOnly','ManifestCollisionOnly','MetadataFailureOnly','ManifestHardlinkOnly')) {
   # Each recursive control gets a fresh sibling leaf from the original runner,
   # rather than nesting test roots until Win32's legacy path limit is exceeded.
   $auditControlBuild=$auditConfiguredBuild
@@ -465,6 +542,6 @@ foreach($auditControl in @('CounterfeitOnly','ScopeOnly','LateCollisionOnly','Wr
   [IO.File]::WriteAllText("$auditWork/$auditControl.log",($auditOutput -join "`n"))
   $auditOutput
 }
-'INSTALL_GUARD_CONTRACT_OK negatives=26 controls=18 pristine=2 concurrent_installers=3 outside_writes=0 teardown=2 precommit_rollback_cases=10 retries=10'
+'INSTALL_GUARD_CONTRACT_OK negatives=28 controls=20 pristine=2 concurrent_installers=3 outside_writes=0 teardown=2 precommit_rollback_cases=12 retries=12'
 & $auditRunner --cleanup --cwd $auditWork
 if ($LASTEXITCODE -ne 0) { throw 'Owned cleanup failed after guard teardown' }

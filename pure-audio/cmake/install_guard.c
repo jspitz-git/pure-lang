@@ -297,6 +297,14 @@ static int publish_batch(void) {
       BY_HANDLE_FILE_INFORMATION info;
       if (ok) ok=GetFileInformationByHandle(item->output,&info) &&
         !(info.dwFileAttributes&(FILE_ATTRIBUTE_DIRECTORY|FILE_ATTRIBUTE_REPARSE_POINT));
+      /* NOFOLLOW does not reject hardlinks. Validate the actual retained
+       * writable object before ANY batch write, not just its directory entry.
+       * This same no-share-write/delete handle is used for copy and rollback.
+       */
+      if (ok && info.nNumberOfLinks!=1) {
+        SetLastError(ERROR_TOO_MANY_LINKS);
+        ok=error("hardlinked writable batch endpoint");
+      }
       if (ok && item->existed) {
         LARGE_INTEGER size;
         ok=GetFileSizeEx(item->output,&size) && size.QuadPart<=TEXT_CAP*4;

@@ -4,7 +4,16 @@ Date: 2026-09-09 (Europe/Prague).
 Workspace: `C:/pure-lang/.worktrees/todo33-audit`.
 Branch: `codex/todo33-audit`. Implementation base: `ec67ed023ec3799313f56eb783e6cb7f9bb0a382`.
 
-Current fix-round 2 status: both remaining findings addressed and self-reviewed.
+Current final-fix status: implemented and self-reviewed; independent review
+pending. Fresh full suite **10/10 PASS in 1188.80 seconds**. Task 6 contains
+**127 negative cases, 30 positive controls and 6 complete pristine cases**,
+plus one separately retained production pristine package. Full-suite totals
+are **395 negative / 78 positive-or-pristine cases**, excluding extra native
+and process-boundary checks. The explicit cooperating-installer threat boundary
+and expected-RED live hardlink platform characterization are recorded in the
+final-fix section; hostile same-principal isolation is not claimed.
+
+Historical fix-round 2 status: both then-reported findings addressed and self-reviewed.
 Fresh full suite **10/10 PASS in 1143.99 seconds**. Task 6 contains **125 negative
 cases, 28 positive controls and 6 complete pristine cases**, plus the separate
 retained production package described below. The full suite totals **393
@@ -976,3 +985,238 @@ No Task 7/8 work, TODO/progress file, license text, baseline binary or existing
 untracked `build/` was modified. No subagent, merge or push was used.
 The previously documented source-offer/legal/static-component and upstream
 signature-verification boundaries remain unchanged.
+
+## Final fix round — hardlinked conventional manifests
+
+Base: `bb9e8baaa17ec8d74d9156c6b89d737668868253`. The final reviewer identified
+that OPEN_ALWAYS retained conventional manifests in place, so an existing
+hardlink could redirect their content writes outside the stage/build. NOFOLLOW
+alone does not reject hardlinks. The parent explicitly approved the bounded
+design: require one link on every retained writable batch object before any
+batch write, keep that exact handle for writing/rollback, and add independent
+sentinel and retry tests. A requested post-reservation alias experiment exposed
+a Windows limitation; the parent's subsequent explicit threat-boundary ruling
+below supersedes the initial expectation of live alias denial. No publication
+redesign or additional production interface was made.
+
+### RED evidence and minimal correction
+
+The new `-ManifestHardlinkOnly` control created real hardlinks from each private
+configured build's conventional runtime/documentation manifest to a separate
+binary sentinel outside that build and stage. It invoked the actual component
+installer and compared literal sentinel bytes plus an independent sorted
+regular-file/SHA baseline. Against the round-2 helper both components failed
+the behavioral contract:
+
+| Component | Sentinel before/after bytes | Stage before/after regular files |
+| --- | --- | --- |
+| runtime | 11 / 2854 | 40 / 62 |
+| documentation | 11 / 6235 | 40 / 79 |
+
+RED evidence is retained at
+`C:/pure-lang/task6-fix2-final/pure-audio-contract-root/run-f9f69ca6c34e5822066a74950db534b3`.
+Both actual installers had accepted the aliased manifest and committed their
+payloads, not merely emitted an unrelated parser or setup error.
+
+The production correction is eight lines in the existing full reservation
+loop. After obtaining the actual output handle's file information and rejecting
+directories/reparse points, it rejects `nNumberOfLinks != 1` with
+`hardlinked writable batch endpoint`. This applies to **all** writable batch
+objects, including newly created payloads/reservations and preserved manifests,
+not only the two conventional names. All reservations are checked before the
+first batch write. The same handle remains open for write and rollback; no
+path-based identity check/reopen is substituted. Microsoft documents the link
+count and per-file sharing behavior in [BY_HANDLE_FILE_INFORMATION](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/ns-fileapi-by_handle_file_information)
+and [CreateHardLinkW](https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-createhardlinkw).
+
+### Audit of every other writable endpoint
+
+- The two conventional manifests are the **only existing batch files** opened
+  for content writes. They now require exactly one link before backup or write.
+  Rollback restores old bytes through that same retained, validated handle.
+- Payloads, other-component reservations and new preserved component manifests
+  use CREATE_NEW and cannot open a pre-existing hardlink; they also receive the
+  same one-link handle check. An existing preserved manifest is read-only and
+  omitted from the write batch after its exact byte validation.
+- Initial baseline.tsv/baseline.sha256 bookkeeping uses a fresh CREATE_NEW
+  temporary and same-directory entry publication. It never opens the old
+  endpoint for content writing; a hardlink collision cannot become a write
+  target. The generic immediate-write replacement path likewise replaces an
+  entry rather than writing through it.
+- The existing install-operation.lock is opened with read/write access only
+  for exclusive ownership; no WriteFile, truncation or content update targets
+  that handle. Sources, existing baseline/session files and directories are
+  retained read-only. Named-pipe diagnostic/protocol writes are not filesystem
+  manifest writes. No other existing filesystem content-write endpoint was found.
+
+### Explicit threat-boundary ruling and platform characterization
+
+The optional `-ReservedHardlinkOnly` experiment paused an actual all-components
+install after reservation, with both old conventional manifests present. Its
+first attempted outside hardlink to a retained payload succeeded, so the
+experiment failed with `Retained writable endpoint admitted a new hardlink`.
+It is retained as a reproducible **RED platform characterization**, excluded
+from the required contract and all GREEN counts. It did not reach its later
+manifest-alias, rollback, retry or teardown-positive assertions, and no success
+is claimed for them. Evidence is retained under
+`C:/pure-lang/task6-fix3-final/pure-audio-contract-root/run-c20462064d70ee3ce20566da6e6aeb37`.
+
+Two bounded, throwaway probes outside the repository isolated the semantics:
+
+- `C:/pure-lang/task6-hardlink-sharing-probe.ps1` opened a file ReadWrite with
+  FileShare.Read and then FileShare.None. In **both** cases a new alias was
+  accepted while the handle remained open. Writing byte 97 through that handle
+  yielded alias bytes `YQ==` after close. Thus FileShare.None does not prevent
+  this same-principal metadata operation on the audited NTFS host.
+- `C:/pure-lang/task6-entry-replace-probe.c` prepared complete new contents and
+  tried same-directory native FileRenameInformationEx with REPLACE_IF_EXISTS |
+  POSIX_SEMANTICS while retaining the old endpoint without delete sharing. It
+  failed with `0xc0000043` (sharing violation). The probe's retained evidence is
+  `C:/pure-lang/task6-fix3-final/pure-audio-contract-root/run-4e10ba91031e294f26438797b4887aa8`.
+  This direct replacement conflicts with the current retained-endpoint
+  protection; it is not a claim that all possible staging architectures are
+  impossible. No speculative replacement implementation was introduced.
+
+Microsoft's [FILE_LINK_INFORMATION](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/ns-ntifs-_file_link_information)
+documents that setting link information requires no specific access rights.
+The observed behavior, rather than an inferred share-mode guarantee, determines
+the limitation recorded here.
+
+The parent then explicitly approved this supported boundary: **cooperating
+installers are serialized by the authenticated exclusive lock; every writable
+batch endpoint rejects pre-existing hardlinks through its retained handle
+before any batch write; those handles protect declared destinations/ancestors
+against rename/reparse replacement; controlled pre-commit failure rolls back
+owned bytes**. An actively malicious same-principal process that creates an
+alias after validation or directly modifies the package is outside that
+boundary. This also applies to fresh named temporary files/reservations: a
+CREATE_NEW open rejects a pre-existing entry, but is not live hardlink
+isolation. Any earlier wording implying stronger hostile same-principal
+isolation is superseded. The design and progress ledger now record this ruling.
+The existing commit point and process-crash/power-loss limitation remain as
+documented in fix round 2; controlled rollback is not a durable transaction.
+
+### Fresh final verification
+
+Fresh strict configure/build in `C:/pure-lang/task6-fix3-final` passed **23/23**
+steps with the same **74 records / 61 artifacts / 22 runtime / 39 documentation**.
+Native guard SHA-256:
+`e84d46160fc23dad0d58089b77f3c63140d40f49388464df0f9b5b6d9cb61b5c`.
+No license payload, artifact inventory or baseline byte changed.
+
+The focused actual-install regression ran twice against the fresh helper and
+both times emitted:
+
+```text
+MANIFEST_HARDLINK_OK negatives=2 retries=2 outside_sentinels_unchanged=2 baseline_unchanged=2
+```
+
+Exact focused command (the RED command changes only BuildDir to
+`C:/pure-lang/task6-fix2-final`):
+
+```powershell
+C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File pure-audio/tests/install_guard_contract.ps1 -SourceDir C:/pure-lang/.worktrees/todo33-audit/pure-audio -BuildDir C:/pure-lang/task6-fix3-final -PurePrefix C:/pure-lang/pure/build/windows-clang64-prefix -ManifestHardlinkOnly
+```
+
+The fresh hash-reference audit already passed **32 report / 4 THIRD_PARTY /
+38 origins references**, all exactly 64 hex characters and matching a retained
+file's SHA-256. All **27 origins payload hashes / 27 Git index blobs** still
+match the complete bytes. The four-worker `verify-windows-dependencies` target
+also passed with **29 AMD64 PE32+ files**.
+
+The separate final production-helper pristine run passed after the install
+matrix completed (concurrent only with the guard test's private profiles):
+
+```text
+INSTALL_BATCH_COMMIT_OK artifacts=22 manifests=2 reserved=63
+INSTALL_BATCH_COMMIT_OK artifacts=39 manifests=2 reserved=41
+FINAL_PRISTINE_OK files=101 baseline=40 delta=61 pe=29 licenses=27
+PE_CLOSURE_OK count=29; AMD64 PE32+; UCRT resolved by Windows loader
+PURE_AUDIO_DONE_314416a16c5a2bc3b1798bf0e979bbe4
+INSTALL_PACKAGE_OK artifacts=61 runtime=22 documentation=39 delta=61 pe=29 license_payloads=27 third_party_dlls=22 project_owned_pe=7
+INSTALL_GUARD_OK retained_identity=1 batch_commit=0 teardown=1
+```
+
+The last `batch_commit=0` denotes read-only verification; both actual component
+installs emitted `batch_commit=1`. All 40 baseline files were independently
+SHA-compared with the original portable prefix. The retained stage is
+`C:/pure-lang/task6-fix3-final/pure-audio-contract-root/run-b4a2706faf5ae88448cc0b6f73cbe01f/package`;
+its sibling `final-verification.log` holds the complete output. This is one
+additional pristine package beyond the matrix counts, not an extra mutation.
+The exact real public verifier command was:
+
+```powershell
+cmake -DAUDIO_INSTALL_CONTEXT=C:/pure-lang/task6-fix3-final/windows-install-context.cmake -DSTAGE_PREFIX=C:/pure-lang/task6-fix3-final/pure-audio-contract-root/run-b4a2706faf5ae88448cc0b6f73cbe01f/package -DPURE_AUDIO_RUNNER_HELPERS_ONLY=ON -P pure-audio/cmake/VerifyInstalledPackage.cmake
+```
+
+The final combined run passed **10/10 in 1188.80 seconds**. Its durable CTest
+log is `C:/pure-lang/task6-fix3-final/Testing/Temporary/LastTest.log`.
+
+| Contract | Negative | Positive controls | Pristine | Seconds |
+| --- | ---: | ---: | ---: | ---: |
+| Install matrix | 99 | 10 | 4 | 821.57 |
+| Native install guard | 28 | 20 | 2 | 347.46 |
+| Task 6 total | 127 | 30 | 6 | |
+
+Final guard markers include the two sentinel rejections/retries and:
+
+```text
+INSTALL_GUARD_CONTRACT_OK negatives=28 controls=20 pristine=2 concurrent_installers=3 outside_writes=0 teardown=2 precommit_rollback_cases=12 retries=12
+```
+
+Other full-suite markers: cleanup **13/2**, Make cleanup **6/2**, direct Make
+cleanup **64/24**, runner **23/7** plus three executable-parent boundaries and
+one descendant check, configure **120/4**, and runtime verifier **42/3**.
+The full suite therefore contains **395 negative / 78 positive-or-pristine**
+contract cases, excluding those additional boundaries and the native/Pure
+bounds checks. Native fault harness: **2391 checks**, with the intentionally
+quarantined allocation delta **3**; public Pure bounds: **24 checks**. No
+hardware audio was used. Deltas remain **61 standard / 60 one-interface preseed /
+0 fully preseeded**, with the same **74 inventory records / 61 owned artifacts /
+22 runtime / 39 documentation / 29 PEs / 27 license payloads**. The complete PE
+split remains **22 third-party DLLs + 7 project-owned PEs**; system imports are
+resolved from Windows and are not redistributed or counted among those 29.
+
+Exact final commands, from the worktree (cmake/ctest are the declared
+`C:/msys64/clang64/bin/` tools):
+
+```powershell
+cmake -S pure-audio -B C:/pure-lang/task6-fix3-final -G Ninja -C C:/pure-lang/task6-fix1-preset.cmake
+cmake --build C:/pure-lang/task6-fix3-final --parallel 4
+ctest --test-dir C:/pure-lang/task6-fix3-final -L audio --output-on-failure --parallel 4
+cmake --build C:/pure-lang/task6-fix3-final --target verify-windows-dependencies --parallel 4
+C:/pure-lang/task6-final-pristine.ps1 -auditBuild C:/pure-lang/task6-fix3-final
+cmake --build C:/pure-lang/task6-fix3-final --parallel 4
+C:/pure-lang/task6-final-hash-audit.ps1
+```
+
+The last build rechecked the existing **74-record seal**; it did not refresh
+the frozen input policy. Tools remain Clang/LLVM **22.1.8**, Pure **0.68**,
+CMake **4.4.0**, Ninja **1.13.2**, pkgconf **3.0.4**. All commands completed
+successfully. The optional live alias RED is deliberately not in that command
+sequence or its success totals.
+
+### Final-round self-review and scoped handoff
+
+Receiving-code-review, systematic-debugging and TDD drove the actual old-helper
+sentinel failures, the retained-handle correction and the narrowed platform
+experiment. The audit covered every content-write call, existing endpoint,
+reservation, backup, same-handle rollback, link-count failure path and retry.
+In particular, a rejected existing manifest is never marked modified, and
+earlier fresh reservations are removed through their original handles before
+returning failure. The optional live alias experiment is not invoked by the
+required suite and its unexecuted assertions are not counted as successes.
+Verification-before-completion was applied to the fresh combined run, separate
+production install/token/PE check, seal recheck and exact file/index hash audit;
+earlier fix-round GREEN runs were not substituted for this final evidence.
+
+The commit scope is **four tracked files**: `pure-audio/cmake/install_guard.c`,
+`pure-audio/tests/install_guard_contract.ps1`, the approved design's explicit
+threat-boundary amendment, and this report. The parent approved leaving the
+matching progress-ledger ruling local/ignored, without force-adding that
+coordination artifact. No TODO, license, baseline binary, artifact inventory or
+untracked `build/` was changed. No subagent, merge or push was used. Independent
+review belongs to the parent after this commit; self-review is not independent
+approval. Existing source-offer/legal/static-component and upstream signature
+boundaries remain unchanged. No hostile same-principal isolation or durable
+process-crash/power-loss transaction is claimed.
