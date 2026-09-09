@@ -1,4 +1,8 @@
-# Task 9 — consolidated whole-branch review fix wave
+# Task 9 — whole-branch review, consolidated fixes and final verification
+
+Final status: **GREEN; closed on 2026-09-09**. The final section records the
+separate full verification after clean scoped re-review. The initial fix-wave
+section below is preserved as historical evidence of the earlier open state.
 
 Date: 2026-09-09. Base: `2c168ce108ca9d4f8cec20ea015e23f18fed56b7`.
 This report covers the one authorized implementation wave for the three
@@ -210,3 +214,251 @@ interpreter ran the semantic checks, while CI explicitly declares python-yaml.
 No hosted workflow, physical hardware, ASIO, elevated scheduling, TSan or native
 POSIX result is claimed. The approved same-principal, crash/power-loss and
 license-obligation limitations from Tasks 6–8 remain unchanged.
+
+## Final verification and closure — 2026-09-09
+
+After the parent's clean scoped re-review of `8aff6642664d9237dc2ae67103c89d88f7b4340f`,
+the complete Task 9 gate was run without any product-code changes. The root
+`C:/pure-lang/task9-final` was absent and its ancestors non-reparse before
+creation. Both `pa9` (strict Release) and `asan` (instrumented Debug) were
+never-before-used build directories; fixtures used the existing owned helpers.
+Verification finished GREEN at **2026-09-09 17:42:52 UTC / 19:42:52 Europe/Prague**.
+The earlier fix-wave section above is historical; its deferred gates have now
+been completed, not assumed from old results. Only this report and TODO-33
+are changed by the separate closure commit.
+
+### Complete invocation record
+
+All eight complete executed command scripts are preserved under
+`C:/pure-lang/task9-final/commands/`; their SHA-256 values are in
+`logs/command-hashes.sha256`. Scripts 1–5 contain the five actual workflow
+bodies verbatim, with only concrete local environment values and timing
+capture around them. They ran from the worktree's `pure/` directory.
+The ASan, structural and parser scripts ran from the worktree root.
+The exact native command arguments, full stdout/stderr and timing files are
+retained under `C:/pure-lang/task9-final/logs/`.
+
+The shared strict environment was:
+
+```powershell
+$env:AUDIO_SOURCE='C:/pure-lang/.worktrees/todo33-audit/pure-audio'
+$env:AUDIO_BUILD='C:/pure-lang/task9-final/pa9'
+$env:AUDIO_STAGE='C:/pure-lang/task9-final/pa9/package'
+$env:AUDIO_PREFIX='C:/pure-lang/pure/build/windows-clang64-prefix'
+$env:CMAKE_EXE='C:/msys64/clang64/bin/cmake.exe'
+$env:CTEST_EXE='C:/msys64/clang64/bin/ctest.exe'
+$env:LOG_DIR='C:/pure-lang/task9-final/logs'
+$env:PATH='C:/pure-lang/pure/build/windows-clang64-prefix/bin;C:/msys64/clang64/bin;C:/msys64/usr/bin;C:/Windows/System32;C:/Windows'
+$env:PURELIB=''
+$env:PURE_INCLUDE=''
+$env:PURE_LIBRARY=''
+```
+
+Exact strict configure body (all 32 explicit inputs and 24 runtime mappings):
+
+```powershell
+$ErrorActionPreference = 'Stop'
+if ($env:AUDIO_BUILD.Length -gt 32) { throw 'Use an audio build root at most 32 characters long' }
+if (Test-Path -LiteralPath $env:AUDIO_BUILD) { throw 'Fresh audio build already exists' }
+& $env:CMAKE_EXE -S "$env:AUDIO_SOURCE" -B "$env:AUDIO_BUILD" -G Ninja `
+  -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON `
+  -DPURE_AUDIO_STRICT_WINDOWS_AUDIT=ON `
+  -DCMAKE_C_COMPILER=C:/msys64/clang64/bin/clang.exe `
+  -DCMAKE_C_COMPILER_TARGET=x86_64-w64-windows-gnu `
+  -DCMAKE_MAKE_PROGRAM=C:/msys64/clang64/bin/ninja.exe `
+  -DPKG_CONFIG_EXECUTABLE=C:/msys64/clang64/bin/pkgconf.exe `
+  -DLLVM_READOBJ=C:/msys64/clang64/bin/llvm-readobj.exe `
+  -DPURE_AUDIO_MAKE_EXECUTABLE=C:/msys64/clang64/bin/mingw32-make.exe `
+  -DPURE_AUDIO_SH_EXECUTABLE=C:/msys64/usr/bin/sh.exe `
+  -DPURE_AUDIO_CLANG64_PREFIX=C:/msys64/clang64 `
+  "-DPURE_AUDIO_PURE_PREFIX=$env:AUDIO_PREFIX" `
+  "-DPURE_INCLUDE_DIR=$env:AUDIO_PREFIX/include" `
+  "-DPURE_EXECUTABLE=$env:AUDIO_PREFIX/bin/pure.exe" `
+  "-DPURE_HEADER=$env:AUDIO_PREFIX/include/pure/runtime.h" `
+  "-DPURE_IMPORT_LIBRARY=$env:AUDIO_PREFIX/lib/libpure.dll.a" `
+  "-DPURE_RUNTIME_DLL=$env:AUDIO_PREFIX/bin/libpure.dll" `
+  -DPORTAUDIO_HEADER=C:/msys64/clang64/include/portaudio.h `
+  -DPORTAUDIO_IMPORT_LIBRARY=C:/msys64/clang64/lib/libportaudio.dll.a `
+  -DFFTW_HEADER=C:/msys64/clang64/include/fftw3.h `
+  -DFFTW_IMPORT_LIBRARY=C:/msys64/clang64/lib/libfftw3.dll.a `
+  -DSAMPLERATE_HEADER=C:/msys64/clang64/include/samplerate.h `
+  -DSAMPLERATE_IMPORT_LIBRARY=C:/msys64/clang64/lib/libsamplerate.dll.a `
+  -DSNDFILE_HEADER=C:/msys64/clang64/include/sndfile.h `
+  -DSNDFILE_IMPORT_LIBRARY=C:/msys64/clang64/lib/libsndfile.dll.a `
+  -DPTHREAD_HEADER=C:/msys64/clang64/include/pthread.h `
+  -DPTHREAD_IMPORT_LIBRARY=C:/msys64/clang64/lib/libpthread.dll.a `
+  -DGMP_HEADER=C:/msys64/clang64/include/gmp.h `
+  -DMPFR_HEADER=C:/msys64/clang64/include/mpfr.h `
+  -DPURE_AUDIO_WINDOWS_HEADER=C:/msys64/clang64/include/windows.h `
+  -DPURE_AUDIO_WINDOWS_SYSTEM_DIRECTORY=C:/Windows/System32 `
+  "-DPURE_AUDIO_RUNTIME_SOURCES=pure.exe|$env:AUDIO_PREFIX/bin/pure.exe;libpure.dll|$env:AUDIO_PREFIX/bin/libpure.dll;libc++.dll|$env:AUDIO_PREFIX/bin/libc++.dll;libgmp-10.dll|$env:AUDIO_PREFIX/bin/libgmp-10.dll;libiconv-2.dll|$env:AUDIO_PREFIX/bin/libiconv-2.dll;libmpfr-6.dll|$env:AUDIO_PREFIX/bin/libmpfr-6.dll;libpcre-1.dll|$env:AUDIO_PREFIX/bin/libpcre-1.dll;libpcreposix-0.dll|$env:AUDIO_PREFIX/bin/libpcreposix-0.dll;libreadline8.dll|$env:AUDIO_PREFIX/bin/libreadline8.dll;libtermcap-0.dll|$env:AUDIO_PREFIX/bin/libtermcap-0.dll;libwinpthread-1.dll|$env:AUDIO_PREFIX/bin/libwinpthread-1.dll;libzstd.dll|$env:AUDIO_PREFIX/bin/libzstd.dll;zlib1.dll|$env:AUDIO_PREFIX/bin/zlib1.dll;libportaudio.dll|C:/msys64/clang64/bin/libportaudio.dll;libfftw3-3.dll|C:/msys64/clang64/bin/libfftw3-3.dll;libsamplerate-0.dll|C:/msys64/clang64/bin/libsamplerate-0.dll;libsndfile-1.dll|C:/msys64/clang64/bin/libsndfile-1.dll;libogg-0.dll|C:/msys64/clang64/bin/libogg-0.dll;libvorbisenc-2.dll|C:/msys64/clang64/bin/libvorbisenc-2.dll;libFLAC.dll|C:/msys64/clang64/bin/libFLAC.dll;libopus-0.dll|C:/msys64/clang64/bin/libopus-0.dll;libmpg123-0.dll|C:/msys64/clang64/bin/libmpg123-0.dll;libmp3lame-0.dll|C:/msys64/clang64/bin/libmp3lame-0.dll;libvorbis-0.dll|C:/msys64/clang64/bin/libvorbis-0.dll" `
+  2>&1 | Tee-Object -FilePath "$env:LOG_DIR/configure-pure-audio.log"
+if ($LASTEXITCODE -ne 0) { throw 'Strict pure-audio configure failed' }
+```
+
+The remaining strict/public native invocations, in order, were:
+
+```powershell
+& $env:CMAKE_EXE --build "$env:AUDIO_BUILD" --parallel 4
+& $env:CMAKE_EXE --build "$env:AUDIO_BUILD" --target verify-windows-dependencies --parallel 4
+# Fresh ASan configure/build/tests ran here, as specified below.
+& $env:CTEST_EXE --test-dir "$env:AUDIO_BUILD" -L "^audio$" -LE "^hardware$" -E "^pure-audio-source-dist-contract$" --output-on-failure --no-tests=error --parallel 4
+# The complete LastTest.log was copied to logs/ctest-outer-detailed.log here.
+& $env:CMAKE_EXE -E copy_directory "$env:AUDIO_PREFIX" "$env:AUDIO_STAGE"
+& $env:CMAKE_EXE --install "$env:AUDIO_BUILD" --prefix "$env:AUDIO_STAGE" --component runtime
+& $env:CMAKE_EXE --install "$env:AUDIO_BUILD" --prefix "$env:AUDIO_STAGE" --component documentation
+& $env:CMAKE_EXE "-DAUDIO_INSTALL_CONTEXT=$env:AUDIO_BUILD/windows-install-context.cmake" "-DSTAGE_PREFIX=$env:AUDIO_STAGE" -P "$env:AUDIO_SOURCE/cmake/VerifyInstalledPackage.cmake"
+& C:/msys64/clang64/bin/mingw32-make.exe -C "$env:AUDIO_SOURCE" SHELL=C:/msys64/usr/bin/sh.exe DIST_CMAKE=C:/msys64/clang64/bin/cmake.exe "DIST_AUDIT_BUILD=$env:AUDIO_BUILD" distcheck
+```
+
+The saved scripts retain every corresponding Tee-Object, fresh-directory
+precondition and immediate nonzero-LASTEXITCODE throw. There was no retry,
+`--rerun-failed`, extra exclusion, focused-only source flag or fixture bypass.
+The initial JSON inventory independently confirmed exactly ten selected tests;
+the public distcheck executed exactly the deferred eleventh CTest contract.
+
+Fresh ASan used the same explicit PATH plus
+`C:/msys64/clang64/lib/clang/22/lib/windows`, empty Pure discovery variables,
+`MSYSTEM_PREFIX=C:/msys64/clang64`, and
+`PKG_CONFIG_PATH=C:/pure-lang/pure/build/windows-clang64-prefix/lib/pkgconfig;C:/msys64/clang64/lib/pkgconfig`.
+Exact native arguments from `commands/asan.ps1`:
+
+```powershell
+C:/msys64/clang64/bin/cmake.exe -S C:/pure-lang/.worktrees/todo33-audit/pure-audio -B C:/pure-lang/task9-final/asan -G Ninja -DCMAKE_MAKE_PROGRAM=C:/msys64/clang64/bin/ninja.exe -DCMAKE_C_COMPILER=C:/msys64/clang64/bin/clang.exe -DCMAKE_BUILD_TYPE=Debug -DBUILD_TESTING=ON '-DCMAKE_C_FLAGS=-fsanitize=address -fno-omit-frame-pointer' -DCMAKE_EXE_LINKER_FLAGS=-fsanitize=address -DCMAKE_SHARED_LINKER_FLAGS=-fsanitize=address -DCMAKE_MODULE_LINKER_FLAGS=-fsanitize=address -DPURE_AUDIO_MAKE_EXECUTABLE=C:/msys64/clang64/bin/mingw32-make.exe -DPURE_AUDIO_SH_EXECUTABLE=C:/msys64/usr/bin/sh.exe
+C:/msys64/clang64/bin/cmake.exe --build C:/pure-lang/task9-final/asan --parallel 4
+C:/msys64/clang64/bin/cmake.exe -DMODULE_DIR=C:/pure-lang/task9-final/asan -DPURE_SOURCE_DIR=C:/pure-lang/.worktrees/todo33-audit/pure-audio -DEXPECT_PUBLIC_BOUNDS_TIMEOUT=90000 -DTIMEOUT_CONTRACT_ONLY=ON -P C:/pure-lang/.worktrees/todo33-audit/pure-audio/tests/runner_contract.cmake
+C:/msys64/clang64/bin/ctest.exe --test-dir C:/pure-lang/task9-final/asan -R '^pure-audio-(fault-bounds|public-bounds)$' -V --no-tests=error --parallel 1
+```
+
+Final structural commands used `PYTHONDONTWRITEBYTECODE=1`:
+
+```powershell
+C:/Python314/python.exe C:/pure-lang/.worktrees/todo33-audit/.github/scripts/test_validate_non_linux_release_workflow.py -v
+C:/Python314/python.exe C:/pure-lang/.worktrees/todo33-audit/.github/scripts/validate_non_linux_release_workflow.py C:/pure-lang/.worktrees/todo33-audit/.github/workflows/non-linux-release-validation.yml
+& C:/pure-lang/task9-final/commands/parse.ps1
+git diff --check 7c88827e..HEAD
+git status --short
+```
+
+The parser independently loads the current YAML using BaseLoader, selects the
+six exact actual step names and parses their run bodies plus all five guide
+PowerShell fences with `Management.Automation.Language.Parser.ParseInput`.
+It does not substitute the saved execution-script wrappers for actual workflow
+content.
+
+### Fresh results, counts and timing
+
+| Phase | Fresh result |
+| --- | --- |
+| Strict Release configure | PASS, 6.5574256 s |
+| Normal build / separate PE target, each four workers | 23/23 actions / 29 AMD64 PE32+; 7.6075985 s combined |
+| Fresh ASan configure / build | PASS, 4.6887257 s / 18 actions, 1.2184614 s |
+| Actual ASan native / public fixtures | 2/2 PASS, 79.31 s CTest / 79.3693747 s wall; 28.91 / 50.40 s |
+| Outer mandatory no-hardware tests | 10/10 PASS, 1165.81 s CTest / 1165.8888829 s wall |
+| Outer install / guard individual tests | 806.72 / 340.46 s |
+| Outer runtime + documentation + public package verification | PASS, 43.3765545 s |
+| Public make distcheck | 1/1 PASS, 1472.07 s CTest / 1472.277236 s wall |
+| Pristine extracted mandatory tests | 10/10 PASS, 1212.26 s |
+| Extracted install / guard individual tests | 825.47 / 367.65 s |
+| Final YAML mutations / actual pristine CLI | 11/11 PASS, 51.807 s unittest / 52.4532545 s combined wall |
+| Final PowerShell AST parsing | 6 workflow +5 guide blocks, zero errors |
+
+Each complete ten-test run independently reports **416 rejected scenarios,
+79 positive controls and six pristine packages**. The breakdown is runner/
+cleanup/Make **129 negatives /42 controls** (including the new header probe),
+strict configure **119/4**, runtime verifier **41/3**, install **99 negatives /
+10 controls /four pristine**, and guard **28 negatives /20 controls /two
+pristine**. Each run has **two explicit file-symlink privilege1314 skips**, not
+counted as negatives; real junction and injected file-reparse contracts run.
+Both generated timeout inventories confirm normal public45000/60 and
+hardware15000; the separate fresh ASan inventory confirms90000/105 only there.
+
+Native harnesses report **2391 checks**; actual public fixtures **28 checks**
+and native open/raw delta **0/0**. Each native lifecycle run includes ten
+iterations,120 waiter completions,10 callback drains and the unchanged
+intentional quarantine (one orphan/three allocations/three sync objects).
+Fresh ASan has no sanitizer diagnostic. Its token is
+`PURE_AUDIO_DONE_163d4c6889365e5adf2fc3f07ea095e7`.
+
+Both outer and pristine extracted packages have runtime **22**, documentation
+**39**, exact added delta **61**, license payloads **27**, **29 PEs**
+(22 third-party DLLs +seven project-owned PEs), and **101 files** including
+the unchanged **40-file baseline**. Independent end-of-run checks compare all
+40 original baseline hashes against both stages, not merely module presence.
+Install mutations also confirm identical-existing-file delta60 and empty/no-op
+delta0. Each guard run proves three concurrent installers, zero outside writes,
+12 controlled pre-commit rollback cases and12 successful retries.
+
+Outer public token:
+`PURE_AUDIO_DONE_470f745514abbe6afb909c9c508aa8c0`.
+Outer preserved component manifests:
+`pa9/install-audits/ff2650ffdedbd0d916ec13d181846416538b917c606dcdf4b6d5c8f1e24c9f24`.
+Extracted public token:
+`PURE_AUDIO_DONE_24ff44bf11f8f63c9a89b17b1b8f80d3`.
+
+Source evidence:
+`C:/pure-lang/task9-final/pa9/pure-audio-contract-root/run-768d813e70aa16826074f89c5cfbe5d1`.
+The pristine extracted short build is
+`C:/pure-lang/task9-final/pa9/d-EPJcUVYadyjIU2_hCfrajg`.
+The source matrix reports **34 negatives /one pristine /seven controls**,
+including real hardlink topology and both real post-configure rejection cases.
+Each postflight negative completes all seven phases and four real core tests;
+the unmodified pristine fixture runs all ten. Pristine extracted phase timers
+(integer seconds) are configure7/build4/PE4/tests1212/runtime11/docs9/verifier24.
+Initial and final extracted-source scans cover92 files; final build73, stage101
+and raw-log17 scans pass, with no size cutoff. All184 original/producer read
+exclusion handles (two roots) are released. The eight pristine raw stderr
+captures in `logs/` are empty. The owned short-build/MAX_PATH mutation reports
+a202-character test budget and successful exact cleanup/outside preservation.
+
+Archive has **92 unique regular files /92 source hashes /247484 bytes**:
+`producer checkout with spaces/pure-audio-0.6.tar.gz` under the source evidence
+root. SHA-256:
+`c1c1eb3a82c25a5ac638ff9ea2bb6ebe200d078368a2b0cbc468edb981b9dc33`.
+Its repeat and ambient-poisoned counterparts are byte-identical. The two
+topology fixtures (241759 bytes each) both hash to
+`539e2412b61b45653a4a515133e1a25ba85585b91ab6476e5f057c7a7a804aaf`.
+All five archive hashes/sizes were checked again after the complete gate.
+Independent tarfile inspection confirms regularity, uniqueness, exact original
+source bytes and uid/gid/mtime zero. All92 tracked source hashes still match
+the pre-run snapshot.
+
+Final structural suite has **386 distinct negatives** (324 audio +17 execution
+context +42 expansion +3 ODBC), **two pristine variants /five controls**.
+The actual pristine CLI and6+5 PowerShell AST parses pass. These are fresh
+results: **51.807 s** belongs to this final closure; the earlier fix-wave
+structural run took53.410 s.
+
+### Final integrity diagnostic and limitations
+
+A supplemental ad-hoc checker initially compared the physical CRLF TSV hash
+to the inventory's **canonical LF-text** pin and correctly halted that checker.
+Closure was paused for diagnosis. `VerifyInstalledPackage.cmake:165–179`
+explicitly sorts/joins rows with LF and uses `string(SHA256)`, then compares
+canonical file-read text; it does not define the TSV pin as raw file SHA.
+The corrected independent checker normalizes CRLF to LF, verifies both74-row
+pins, then independently verifies every row's source **raw-byte SHA-256**
+(**148 rows total**) and both native guard executable pins. All pass
+(`logs/final-seal-checks.log`). No product file, stored pin, test deadline or
+gate was changed, and no failed product test was retried or concealed.
+
+The final whole-branch diff check from `7c88827e` passes. Before closure edits,
+Git reports only the preserved pre-existing untracked `build/`. All fresh
+evidence/builds are under the explicitly created `task9-final` root; no old
+workspace/build artifact was removed. The ignored progress ledger remains local.
+Executing-plans and verification-before-completion governed sequencing and
+evidence; systematic debugging resolved the supplemental checker's serialization
+mistake before closure. Per the explicit instruction, the finishing workflow
+keeps branch `codex/todo33-audit` and its worktree unchanged: no merge or push.
+
+Fresh versions remain Clang/LLVM22.1.8, CMake4.4.0, Ninja1.13.2, pkgconf3.0.4,
+Make4.4.1, GNU tar1.35, gzip1.14, Pure0.68, PowerShell7.6.5,
+Python3.14.5/PyYAML6.0.3; PortAudio19.7.0 (pkgconfig19), FFTW3.3.11,
+samplerate0.2.2, sndfile1.2.2. Native MSYS helpers used the tool sandbox
+override, not OS elevation. No fresh physical hardware/ASIO/elevated scheduling,
+TSan, native POSIX or remote hosted-workflow claim is made; local CLANG64 Python
+still lacks PyYAML and Python314 supplied the required parser. Only tested WAV
+processing is advertised, not every transitive codec. The documented close-failure
+quarantine, hostile same-principal exclusion, crash/power-loss boundary and
+source/static/full-distribution license-obligation limitations remain explicit.
+All approved mandatory Task9 gates are now GREEN.

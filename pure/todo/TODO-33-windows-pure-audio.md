@@ -1,6 +1,6 @@
 # TODO-33 - Windows pure-audio Package
 
-Status: Open
+Status: Closed on 2026-09-09
 Branch: todo/33-windows-pure-audio
 
 ## Purpose
@@ -22,7 +22,7 @@ components for Windows.
 4. [x] Run documented playback/capture checks on a Windows host.
 5. [x] Stage and validate the advertised package contents.
 6. [x] Complete the audit hardening, Windows CI and reproducible documentation.
-7. [ ] Complete Task 9 whole-branch review and fresh final verification.
+7. [x] Complete Task 9 whole-branch review and fresh final verification.
 
 ## Guardrails
 
@@ -68,7 +68,7 @@ components for Windows.
   are documented as transitive libsndfile dependencies; only deterministic
   WAV file I/O is advertised as tested.
 
-## September audit hardening (still Open)
+## September audit hardening (completed 2026-09-09)
 
 - 2026-09-09: Tasks 1–3 corrected size/shape arithmetic, 64-bit FFI counts,
   frame/sample units, all supported callback layouts, blocking operations,
@@ -208,10 +208,56 @@ components for Windows.
   not rerun in this wave: one scoped re-review and fresh Task 9 full verification
   remain required. TODO remains Open; no merge/push/hardware test/build deletion.
 
+- 2026-09-09: Closed after clean Task 9 scoped re-review of `8aff6642` and the
+  complete fresh mandatory gate, without product-code changes. New root
+  `C:/pure-lang/task9-final`, strict Release `pa9` and independent Debug `asan`.
+  Exact five actual workflow bodies, full configure arguments, ASan commands,
+  raw logs and parser commands are recorded in task-9-report.md and the retained
+  commands/logs directories. Strict configure6.5574256 s, normal23/23 and PE29
+  in two four-worker commands7.6075985 s. Fresh ASan configure4.6887257 s,
+  build18/18 1.2184614 s; actual native/public2/2 PASS79.31 s (28.91/50.40),
+  native2391/public28 checks, native open/raw delta0/0, no sanitizer diagnostic.
+  Full no-hardware10/10 PASS1165.81 s (wall1165.8888829; install806.72,
+  guard340.46). Every ten-test run reports416 negatives/79 controls/6 pristine;
+  two real file-symlink privilege1314 skips are explicitly excluded from counts.
+  Runtime22+documentation39/public verifier PASS43.3765545 s; delta61,
+  licenses27, PE29 (22 third-party DLLs/seven project PEs), stage101, all40
+  baseline hashes unchanged. Public token:
+  `PURE_AUDIO_DONE_470f745514abbe6afb909c9c508aa8c0`.
+  Actual public make distcheck1/1 PASS1472.07 s (wall1472.277236); pristine
+  extracted10/10 PASS1212.26 s (install825.47/guard367.65), same416/79/6,
+  native2391/public28 and two skips. Both extracted four-worker targets,
+  runtime/docs/public verifier and full final scans pass. Extracted token:
+  `PURE_AUDIO_DONE_24ff44bf11f8f63c9a89b17b1b8f80d3`.
+  Source34 negatives/one pristine/seven controls;92 unique regular files,
+  92 hashes,247484 bytes, SHA-256
+  `c1c1eb3a82c25a5ac638ff9ea2bb6ebe200d078368a2b0cbc468edb981b9dc33`.
+  Repeat/poisoned archive hashes match; both hardlink-topology counterparts
+  match `539e2412b61b45653a4a515133e1a25ba85585b91ab6476e5f057c7a7a804aaf`.
+  Both source scans92/final build73/stage101/rawlogs17,184 source handles
+  released, eight empty pristine stderr files and all five archive hashes pass.
+  Final source92 and baseline40 in both stages remain byte-identical; both
+  74-row canonical-text inventory seals, all148 raw source hashes and both
+  native guard pins independently pass. A supplemental checker initially
+  confused CRLF file bytes with the canonical LF-text inventory pin; diagnosis
+  established the intended serialization, corrected the checker only, and is
+  documented. No product test was retried, weakened or bypassed.
+  Fresh YAML11/11 PASS51.807 s,386 distinct negatives/two pristine/five controls;
+  actual pristine CLI and six workflow+five guide PowerShell parses pass.
+  `git diff --check 7c88827e..HEAD` passes; only preserved `build/` was untracked
+  before these closure edits. Final verification finished19:42:52 Europe/Prague.
+  Versions remain Clang/LLVM22.1.8,CMake4.4.0,Ninja1.13.2,pkgconf3.0.4,
+  Make4.4.1,tar1.35,gzip1.14,Pure0.68,PowerShell7.6.5,Python3.14.5/PyYAML6.0.3.
+  Quarantine, no fresh hardware/ASIO/elevated scheduling, unavailable TSan/native
+  POSIX/hosted execution, limited tested codec claims, same-principal/crash
+  threat boundary and source/static/full-license-obligation caveats remain.
+  Closure is a separate documentation-only commit; no merge/push/worktree cleanup.
+
 No hardware playback/capture was rerun during September audit hardening.
 Current optional fixtures use one channel at the device's default sample
 rate, not the older July two-channel fixture. ASIO, elevated FIFO/RR and all
 transitive codecs remain unclaimed. Native POSIX execution is unverified.
 Bundled license texts cover the staged DLL inventory, not all source/static
-components or every distribution obligation. TODO stays Open until Task 9
-whole-branch review and fresh final verification complete.
+components or every distribution obligation. Task 9 whole-branch review and
+fresh final verification completed on 2026-09-09; integration still requires
+the user's explicit choice. The branch and worktree are preserved.
