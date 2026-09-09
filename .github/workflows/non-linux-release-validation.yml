@@ -6,6 +6,7 @@ on:
     branches:
       - master
       - "todo/**"
+      - "codex/**"
     paths:
       - "pure/**"
       - "pure-faust/**"
@@ -24,6 +25,8 @@ on:
       - "pure-gsl/**"
       - "pure-glpk/**"
       - "pure-odbc/**"
+      - "pure-audio/**"
+      - "pure/todo/TODO-33-windows-pure-audio.md"
       - "purepad/**"
       - "pure/todo/TODO-45-windows-pure-bonjour.md"
       - "pure/todo/TODO-20-modernize-purepad.md"
@@ -67,6 +70,8 @@ on:
       - "pure-gsl/**"
       - "pure-glpk/**"
       - "pure-odbc/**"
+      - "pure-audio/**"
+      - "pure/todo/TODO-33-windows-pure-audio.md"
       - "purepad/**"
       - "pure/todo/TODO-45-windows-pure-bonjour.md"
       - "pure/todo/TODO-20-modernize-purepad.md"
@@ -114,6 +119,11 @@ jobs:
       DEBUG_BUILD: build/windows-clang64-debug
       INSTALL_PREFIX: build/windows-clang64-prefix
       LOG_DIR: build/native-logs/windows-11-x86_64
+      AUDIO_SOURCE: ${{ github.workspace }}/pure-audio
+      AUDIO_BUILD: ${{ runner.temp }}/pa8
+      AUDIO_STAGE: ${{ runner.temp }}/pa8/package
+      AUDIO_PREFIX: ${{ github.workspace }}/pure/build/windows-clang64-prefix
+      AUDIO_RUNTIME_PATH: ${{ github.workspace }}/pure/build/windows-clang64-prefix/bin;C:/msys64/clang64/bin;C:/msys64/usr/bin;C:/Windows/System32;C:/Windows
       FAUST_URL: https://github.com/grame-cncm/faust/releases/download/2.85.9/Faust-2.85.9-win64.exe
       FAUST_SHA256: d0994eb444ab4b1e75e3ed7c31897da24013db0672e2c6be8f2ab09b73d16977
 
@@ -131,23 +141,41 @@ jobs:
             bison
             diffutils
             flex
+            gzip
             make
+            tar
             mingw-w64-clang-x86_64-clang
             mingw-w64-clang-x86_64-cmake
             mingw-w64-clang-x86_64-flang
+            mingw-w64-clang-x86_64-fftw
+            mingw-w64-clang-x86_64-flac
             mingw-w64-clang-x86_64-gmp
             mingw-w64-clang-x86_64-glpk
             mingw-w64-clang-x86_64-gsl
             mingw-w64-clang-x86_64-libiconv
+            mingw-w64-clang-x86_64-libc++
+            mingw-w64-clang-x86_64-libogg
+            mingw-w64-clang-x86_64-libsamplerate
+            mingw-w64-clang-x86_64-libsndfile
+            mingw-w64-clang-x86_64-libvorbis
             mingw-w64-clang-x86_64-libxml2
             mingw-w64-clang-x86_64-libxslt
             mingw-w64-clang-x86_64-llvm
+            mingw-w64-clang-x86_64-lame
+            mingw-w64-clang-x86_64-make
+            mingw-w64-clang-x86_64-mpg123
             mingw-w64-clang-x86_64-mpfr
             mingw-w64-clang-x86_64-ninja
+            mingw-w64-clang-x86_64-opus
             mingw-w64-clang-x86_64-pcre
             mingw-w64-clang-x86_64-pkgconf
+            mingw-w64-clang-x86_64-portaudio
             mingw-w64-clang-x86_64-python-yaml
             mingw-w64-clang-x86_64-readline
+            mingw-w64-clang-x86_64-termcap
+            mingw-w64-clang-x86_64-winpthreads
+            mingw-w64-clang-x86_64-zlib
+            mingw-w64-clang-x86_64-zstd
 
       - name: Initialize validation logs
         run: New-Item -ItemType Directory -Path $env:LOG_DIR -Force | Out-Null
@@ -261,6 +289,108 @@ jobs:
             & C:/msys64/clang64/bin/pkgconf.exe --modversion pure
             if ($LASTEXITCODE -ne 0) { throw 'Installed pkg-config probe failed' }
           } 2>&1 | Tee-Object -FilePath "$env:LOG_DIR/installed-runtime.log"
+
+      # The ten native/no-hardware tests precede package verification. The
+      # eleventh test (source distribution) runs once through public distcheck
+      # afterward, and itself runs all ten tests from its extracted archive.
+      - name: Configure strict pure-audio audit
+        shell: pwsh
+        env: &pure-audio-environment
+          PATH: ${{ env.AUDIO_RUNTIME_PATH }}
+          PURELIB: ""
+          PURE_INCLUDE: ""
+          PURE_LIBRARY: ""
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($env:AUDIO_BUILD.Length -gt 32) { throw 'Use an audio build root at most 32 characters long' }
+          if (Test-Path -LiteralPath $env:AUDIO_BUILD) { throw 'Fresh audio build already exists' }
+          & $env:CMAKE_EXE -S "$env:AUDIO_SOURCE" -B "$env:AUDIO_BUILD" -G Ninja `
+            -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON `
+            -DPURE_AUDIO_STRICT_WINDOWS_AUDIT=ON `
+            -DCMAKE_C_COMPILER=C:/msys64/clang64/bin/clang.exe `
+            -DCMAKE_C_COMPILER_TARGET=x86_64-w64-windows-gnu `
+            -DCMAKE_MAKE_PROGRAM=C:/msys64/clang64/bin/ninja.exe `
+            -DPKG_CONFIG_EXECUTABLE=C:/msys64/clang64/bin/pkgconf.exe `
+            -DLLVM_READOBJ=C:/msys64/clang64/bin/llvm-readobj.exe `
+            -DPURE_AUDIO_MAKE_EXECUTABLE=C:/msys64/clang64/bin/mingw32-make.exe `
+            -DPURE_AUDIO_SH_EXECUTABLE=C:/msys64/usr/bin/sh.exe `
+            -DPURE_AUDIO_CLANG64_PREFIX=C:/msys64/clang64 `
+            "-DPURE_AUDIO_PURE_PREFIX=$env:AUDIO_PREFIX" `
+            "-DPURE_INCLUDE_DIR=$env:AUDIO_PREFIX/include" `
+            "-DPURE_EXECUTABLE=$env:AUDIO_PREFIX/bin/pure.exe" `
+            "-DPURE_HEADER=$env:AUDIO_PREFIX/include/pure/runtime.h" `
+            "-DPURE_IMPORT_LIBRARY=$env:AUDIO_PREFIX/lib/libpure.dll.a" `
+            "-DPURE_RUNTIME_DLL=$env:AUDIO_PREFIX/bin/libpure.dll" `
+            -DPORTAUDIO_HEADER=C:/msys64/clang64/include/portaudio.h `
+            -DPORTAUDIO_IMPORT_LIBRARY=C:/msys64/clang64/lib/libportaudio.dll.a `
+            -DFFTW_HEADER=C:/msys64/clang64/include/fftw3.h `
+            -DFFTW_IMPORT_LIBRARY=C:/msys64/clang64/lib/libfftw3.dll.a `
+            -DSAMPLERATE_HEADER=C:/msys64/clang64/include/samplerate.h `
+            -DSAMPLERATE_IMPORT_LIBRARY=C:/msys64/clang64/lib/libsamplerate.dll.a `
+            -DSNDFILE_HEADER=C:/msys64/clang64/include/sndfile.h `
+            -DSNDFILE_IMPORT_LIBRARY=C:/msys64/clang64/lib/libsndfile.dll.a `
+            -DPTHREAD_HEADER=C:/msys64/clang64/include/pthread.h `
+            -DPTHREAD_IMPORT_LIBRARY=C:/msys64/clang64/lib/libpthread.dll.a `
+            -DGMP_HEADER=C:/msys64/clang64/include/gmp.h `
+            -DMPFR_HEADER=C:/msys64/clang64/include/mpfr.h `
+            -DPURE_AUDIO_WINDOWS_HEADER=C:/msys64/clang64/include/windows.h `
+            -DPURE_AUDIO_WINDOWS_SYSTEM_DIRECTORY=C:/Windows/System32 `
+            "-DPURE_AUDIO_RUNTIME_SOURCES=pure.exe|$env:AUDIO_PREFIX/bin/pure.exe;libpure.dll|$env:AUDIO_PREFIX/bin/libpure.dll;libc++.dll|$env:AUDIO_PREFIX/bin/libc++.dll;libgmp-10.dll|$env:AUDIO_PREFIX/bin/libgmp-10.dll;libiconv-2.dll|$env:AUDIO_PREFIX/bin/libiconv-2.dll;libmpfr-6.dll|$env:AUDIO_PREFIX/bin/libmpfr-6.dll;libpcre-1.dll|$env:AUDIO_PREFIX/bin/libpcre-1.dll;libpcreposix-0.dll|$env:AUDIO_PREFIX/bin/libpcreposix-0.dll;libreadline8.dll|$env:AUDIO_PREFIX/bin/libreadline8.dll;libtermcap-0.dll|$env:AUDIO_PREFIX/bin/libtermcap-0.dll;libwinpthread-1.dll|$env:AUDIO_PREFIX/bin/libwinpthread-1.dll;libzstd.dll|$env:AUDIO_PREFIX/bin/libzstd.dll;zlib1.dll|$env:AUDIO_PREFIX/bin/zlib1.dll;libportaudio.dll|C:/msys64/clang64/bin/libportaudio.dll;libfftw3-3.dll|C:/msys64/clang64/bin/libfftw3-3.dll;libsamplerate-0.dll|C:/msys64/clang64/bin/libsamplerate-0.dll;libsndfile-1.dll|C:/msys64/clang64/bin/libsndfile-1.dll;libogg-0.dll|C:/msys64/clang64/bin/libogg-0.dll;libvorbisenc-2.dll|C:/msys64/clang64/bin/libvorbisenc-2.dll;libFLAC.dll|C:/msys64/clang64/bin/libFLAC.dll;libopus-0.dll|C:/msys64/clang64/bin/libopus-0.dll;libmpg123-0.dll|C:/msys64/clang64/bin/libmpg123-0.dll;libmp3lame-0.dll|C:/msys64/clang64/bin/libmp3lame-0.dll;libvorbis-0.dll|C:/msys64/clang64/bin/libvorbis-0.dll" `
+            2>&1 | Tee-Object -FilePath "$env:LOG_DIR/configure-pure-audio.log"
+          if ($LASTEXITCODE -ne 0) { throw 'Strict pure-audio configure failed' }
+
+      - name: Build and verify pure-audio PE closure
+        shell: pwsh
+        env: *pure-audio-environment
+        run: |
+          $ErrorActionPreference = 'Stop'
+          & $env:CMAKE_EXE --build "$env:AUDIO_BUILD" --parallel 4 `
+            2>&1 | Tee-Object -FilePath "$env:LOG_DIR/build-pure-audio.log"
+          if ($LASTEXITCODE -ne 0) { throw 'pure-audio build failed' }
+          & $env:CMAKE_EXE --build "$env:AUDIO_BUILD" --target verify-windows-dependencies --parallel 4 `
+            2>&1 | Tee-Object -FilePath "$env:LOG_DIR/pe-pure-audio.log"
+          if ($LASTEXITCODE -ne 0) { throw 'pure-audio PE closure failed' }
+
+      - name: Run mandatory no-hardware pure-audio tests
+        shell: pwsh
+        env: *pure-audio-environment
+        run: |
+          $ErrorActionPreference = 'Stop'
+          & $env:CTEST_EXE --test-dir "$env:AUDIO_BUILD" -L "^audio$" -LE "^hardware$" `
+            -E "^pure-audio-source-dist-contract$" --output-on-failure --no-tests=error --parallel 4 `
+            2>&1 | Tee-Object -FilePath "$env:LOG_DIR/ctest-pure-audio.log"
+          if ($LASTEXITCODE -ne 0) { throw 'Mandatory no-hardware pure-audio tests failed' }
+
+      - name: Install and verify the pure-audio package
+        shell: pwsh
+        env: *pure-audio-environment
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if (Test-Path -LiteralPath $env:AUDIO_STAGE) { throw 'Fresh audio stage already exists' }
+          & $env:CMAKE_EXE -E copy_directory "$env:AUDIO_PREFIX" "$env:AUDIO_STAGE" `
+            2>&1 | Tee-Object -FilePath "$env:LOG_DIR/stage-pure-audio.log"
+          if ($LASTEXITCODE -ne 0) { throw 'Portable audio baseline copy failed' }
+          & $env:CMAKE_EXE --install "$env:AUDIO_BUILD" --prefix "$env:AUDIO_STAGE" --component runtime `
+            2>&1 | Tee-Object -FilePath "$env:LOG_DIR/install-pure-audio-runtime.log"
+          if ($LASTEXITCODE -ne 0) { throw 'pure-audio runtime install failed' }
+          & $env:CMAKE_EXE --install "$env:AUDIO_BUILD" --prefix "$env:AUDIO_STAGE" --component documentation `
+            2>&1 | Tee-Object -FilePath "$env:LOG_DIR/install-pure-audio-documentation.log"
+          if ($LASTEXITCODE -ne 0) { throw 'pure-audio documentation install failed' }
+          & $env:CMAKE_EXE "-DAUDIO_INSTALL_CONTEXT=$env:AUDIO_BUILD/windows-install-context.cmake" `
+            "-DSTAGE_PREFIX=$env:AUDIO_STAGE" -P "$env:AUDIO_SOURCE/cmake/VerifyInstalledPackage.cmake" `
+            2>&1 | Tee-Object -FilePath "$env:LOG_DIR/installed-pure-audio.log"
+          if ($LASTEXITCODE -ne 0) { throw 'Public pure-audio installed verification failed' }
+
+      - name: Verify pure-audio source distribution
+        shell: pwsh
+        env: *pure-audio-environment
+        run: |
+          $ErrorActionPreference = 'Stop'
+          & C:/msys64/clang64/bin/mingw32-make.exe -C "$env:AUDIO_SOURCE" `
+            SHELL=C:/msys64/usr/bin/sh.exe DIST_CMAKE=C:/msys64/clang64/bin/cmake.exe `
+            "DIST_AUDIT_BUILD=$env:AUDIO_BUILD" distcheck `
+            2>&1 | Tee-Object -FilePath "$env:LOG_DIR/distcheck-pure-audio.log"
+          if ($LASTEXITCODE -ne 0) { throw 'Public pure-audio source distribution gate failed' }
 
       - name: Configure strict pure-odbc audit
         run: |
