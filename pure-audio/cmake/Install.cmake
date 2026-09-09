@@ -1,97 +1,166 @@
-set(PURE_LIBRARY_INSTALL_DIR "lib/pure" CACHE STRING
-  "Relative install directory for Pure modules")
-set(PURE_DOCUMENTATION_INSTALL_DIR "share/doc/${PROJECT_NAME}" CACHE STRING
-  "Relative install directory for package documentation")
-set(PURE_EXAMPLES_INSTALL_DIR "${PURE_DOCUMENTATION_INSTALL_DIR}/examples"
-  CACHE STRING "Relative install directory for package examples")
-
-foreach(destination_var IN ITEMS
-    PURE_LIBRARY_INSTALL_DIR
-    PURE_DOCUMENTATION_INSTALL_DIR
-    PURE_EXAMPLES_INSTALL_DIR)
-  set(destination "${${destination_var}}")
-  if(IS_ABSOLUTE "${destination}" OR
-      destination MATCHES "(^|[/\\])\.\.([/\\]|$)")
-    message(FATAL_ERROR
-      "${destination_var} must remain within the installation prefix: ${destination}")
+set(PURE_LIBRARY_INSTALL_DIR "lib/pure" CACHE STRING "Relative Pure module destination")
+set(PURE_DOCUMENTATION_INSTALL_DIR "share/doc/${PROJECT_NAME}" CACHE STRING "Relative documentation destination")
+set(PURE_EXAMPLES_INSTALL_DIR "${PURE_DOCUMENTATION_INSTALL_DIR}/examples" CACHE STRING "Relative examples destination")
+foreach(var PURE_LIBRARY_INSTALL_DIR PURE_DOCUMENTATION_INSTALL_DIR PURE_EXAMPLES_INSTALL_DIR)
+  if(IS_ABSOLUTE "${${var}}" OR "${${var}}" MATCHES "(^|[/\\\\])\\.\\.([/\\\\]|$)")
+    message(FATAL_ERROR "Invalid relative install destination: ${var}")
   endif()
 endforeach()
-
+if(PURE_AUDIO_STRICT_WINDOWS_AUDIT AND
+    (NOT PURE_LIBRARY_INSTALL_DIR STREQUAL "lib/pure" OR
+     NOT PURE_DOCUMENTATION_INSTALL_DIR STREQUAL "share/doc/pure-audio" OR
+     NOT PURE_EXAMPLES_INSTALL_DIR STREQUAL "share/doc/pure-audio/examples"))
+  message(FATAL_ERROR "Strict audit requires the fixed package layout")
+endif()
 set(version "${PROJECT_VERSION}")
 string(TIMESTAMP today "%B %d, %Y")
-configure_file("${CMAKE_CURRENT_SOURCE_DIR}/README"
-  "${CMAKE_CURRENT_BINARY_DIR}/README" @ONLY NEWLINE_STYLE UNIX)
+configure_file("${CMAKE_CURRENT_SOURCE_DIR}/README" "${CMAKE_CURRENT_BINARY_DIR}/README" @ONLY NEWLINE_STYLE UNIX)
 file(READ "${CMAKE_CURRENT_BINARY_DIR}/README" readme)
 string(REPLACE "|today|" "${today}" readme "${readme}")
 file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/README" "${readme}")
 
-install(TARGETS audio fftw srcprocess sfinfo realtime
-  RUNTIME DESTINATION "${PURE_LIBRARY_INSTALL_DIR}"
-  LIBRARY DESTINATION "${PURE_LIBRARY_INSTALL_DIR}"
-  COMPONENT runtime)
-install(FILES
-    "${CMAKE_CURRENT_SOURCE_DIR}/audio.pure"
-    "${CMAKE_CURRENT_SOURCE_DIR}/portaudio.pure"
-    "${CMAKE_CURRENT_SOURCE_DIR}/fftw/fftw.pure"
-    "${CMAKE_CURRENT_SOURCE_DIR}/samplerate/samplerate.pure"
-    "${CMAKE_CURRENT_SOURCE_DIR}/sndfile/sndfile.pure"
-    "${CMAKE_CURRENT_SOURCE_DIR}/realtime/realtime.pure"
-  DESTINATION "${PURE_LIBRARY_INSTALL_DIR}"
-  COMPONENT runtime)
+# Nine fields: component, destination, configured source, SHA256 (BUILD only
+# until the first successful build), project, version, URL, license, mappings.
+function(audio_install_artifact component destination source project version url license mappings)
+  if(source MATCHES "^\\$<TARGET_FILE:")
+    set(hash BUILD)
+  else()
+    if(NOT EXISTS "${source}" OR IS_DIRECTORY "${source}" OR IS_SYMLINK "${source}")
+      message(FATAL_ERROR "Missing regular install source: ${source}")
+    endif()
+    file(SHA256 "${source}" hash)
+  endif()
+  set(row "${component}|${destination}|${source}|${hash}|${project}|${version}|${url}|${license}|${mappings}")
+  set(AUDIO_INSTALL_POLICY "${AUDIO_INSTALL_POLICY}${row}\n" PARENT_SCOPE)
+  if(NOT PURE_AUDIO_STRICT_WINDOWS_AUDIT AND NOT component STREQUAL "baseline" AND NOT hash STREQUAL "BUILD")
+    get_filename_component(dir "${destination}" DIRECTORY)
+    get_filename_component(name "${destination}" NAME)
+    install(FILES "${source}" DESTINATION "${dir}" RENAME "${name}" COMPONENT "${component}")
+  endif()
+endfunction()
+function(audio_install_own component destination source)
+  audio_install_artifact("${component}" "${destination}" "${source}" pure-audio
+    "${PROJECT_VERSION}" "https://github.com/agraef/pure-lang/tree/master/pure-audio"
+    BSD-3-Clause "${PURE_DOCUMENTATION_INSTALL_DIR}/COPYING")
+  set(AUDIO_INSTALL_POLICY "${AUDIO_INSTALL_POLICY}" PARENT_SCOPE)
+endfunction()
+
+foreach(target audio fftw srcprocess sfinfo realtime)
+  audio_install_own(runtime "${PURE_LIBRARY_INSTALL_DIR}/$<TARGET_FILE_NAME:${target}>" "$<TARGET_FILE:${target}>")
+endforeach()
+if(NOT PURE_AUDIO_STRICT_WINDOWS_AUDIT)
+  install(TARGETS audio fftw srcprocess sfinfo realtime
+    RUNTIME DESTINATION "${PURE_LIBRARY_INSTALL_DIR}" COMPONENT runtime
+    LIBRARY DESTINATION "${PURE_LIBRARY_INSTALL_DIR}" COMPONENT runtime)
+endif()
+foreach(path audio.pure portaudio.pure fftw/fftw.pure samplerate/samplerate.pure sndfile/sndfile.pure realtime/realtime.pure)
+  get_filename_component(name "${path}" NAME)
+  audio_install_own(runtime "${PURE_LIBRARY_INSTALL_DIR}/${name}" "${CMAKE_CURRENT_SOURCE_DIR}/${path}")
+endforeach()
+foreach(path README COPYING WINDOWS.md THIRD_PARTY.md)
+  if(path STREQUAL "README")
+    set(source "${CMAKE_CURRENT_BINARY_DIR}/${path}")
+  else()
+    set(source "${CMAKE_CURRENT_SOURCE_DIR}/${path}")
+  endif()
+  audio_install_own(documentation "${PURE_DOCUMENTATION_INSTALL_DIR}/${path}" "${source}")
+endforeach()
+foreach(name audio_examp.pure audio_test.pd)
+  audio_install_own(documentation "${PURE_EXAMPLES_INSTALL_DIR}/${name}" "${CMAKE_CURRENT_SOURCE_DIR}/examples/${name}")
+endforeach()
+foreach(name load.pure smoke.pure hardware.pure hardware-playback.pure hardware-capture.pure)
+  audio_install_own(documentation "${PURE_DOCUMENTATION_INSTALL_DIR}/tests/${name}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/${name}")
+endforeach()
 
 if(WIN32)
-  set(AUDIO_NEW_RUNTIME_FILENAMES
-    libportaudio.dll libfftw3-3.dll libsamplerate-0.dll libsndfile-1.dll
-    libogg-0.dll libvorbisenc-2.dll libFLAC.dll libopus-0.dll
-    libmpg123-0.dll libmp3lame-0.dll libvorbis-0.dll)
-  set(audio_runtime_files)
-  foreach(runtime_file IN LISTS AUDIO_NEW_RUNTIME_FILENAMES)
-    string(MAKE_C_IDENTIFIER "${runtime_file}" runtime_id)
-    string(TOUPPER "${runtime_id}" runtime_id)
-    list(APPEND audio_runtime_files "${AUDIO_RUNTIME_${runtime_id}}")
-  endforeach()
-  install(FILES ${audio_runtime_files} DESTINATION bin COMPONENT runtime)
-
-  set(license_root "$ENV{MSYSTEM_PREFIX}/share/licenses")
-  set(doc_root "$ENV{MSYSTEM_PREFIX}/share/doc")
-  set(license_specs
-    "${doc_root}/portaudio/LICENSE.txt|PortAudio.txt"
-    "${license_root}/libsamplerate/COPYING|libsamplerate.txt"
-    "${license_root}/libsndfile/COPYING|libsndfile.txt"
-    "${license_root}/libogg/COPYING|libogg.txt"
-    "${license_root}/flac/COPYING.Xiph|FLAC-Xiph.txt"
-    "${license_root}/opus/COPYING|Opus.txt"
-    "${license_root}/mpg123/COPYING|mpg123.txt")
-  foreach(license_spec IN LISTS license_specs)
-    string(REPLACE "|" ";" license_fields "${license_spec}")
-    list(GET license_fields 0 license_source)
-    list(GET license_fields 1 license_name)
-    if(NOT EXISTS "${license_source}")
-      message(FATAL_ERROR "Missing third-party license: ${license_source}")
+  set(origin_file "${CMAKE_CURRENT_SOURCE_DIR}/licenses/origins.tsv")
+  file(STRINGS "${origin_file}" origins REGEX "^[^#]")
+  set(seen_licenses)
+  foreach(row IN LISTS origins)
+    string(REPLACE "|" ";" fields "${row}")
+    list(LENGTH fields count)
+    if(NOT count EQUAL 9)
+      message(FATAL_ERROR "Malformed license origin: ${row}")
     endif()
-    install(FILES "${license_source}"
-      DESTINATION "${PURE_DOCUMENTATION_INSTALL_DIR}/licenses"
-      RENAME "${license_name}" COMPONENT documentation)
+    list(GET fields 0 name)
+    list(GET fields 1 project)
+    list(GET fields 2 version)
+    list(GET fields 3 url)
+    list(GET fields 4 license)
+    list(GET fields 5 dlls)
+    list(GET fields 8 expected)
+    if(NOT name MATCHES "^[A-Za-z0-9_-]+\\.txt$" OR name IN_LIST seen_licenses)
+      message(FATAL_ERROR "Duplicate or malformed license payload: ${name}")
+    endif()
+    list(APPEND seen_licenses "${name}")
+    set(source "${CMAKE_CURRENT_SOURCE_DIR}/licenses/${name}")
+    file(SHA256 "${source}" actual)
+    if(NOT actual STREQUAL expected)
+      message(FATAL_ERROR "License payload differs from recorded origin: ${name}")
+    endif()
+    set(destination "${PURE_DOCUMENTATION_INSTALL_DIR}/licenses/${name}")
+    audio_install_artifact(documentation "${destination}" "${source}" "${project}" "${version}" "${url}" "${license}" "${destination}")
+    string(REPLACE "," ";" dlls "${dlls}")
+    foreach(dll IN LISTS dlls)
+      if(NOT dll IN_LIST AUDIO_RUNTIME_FILENAMES)
+        message(FATAL_ERROR "License maps unknown runtime: ${dll}")
+      endif()
+      string(MAKE_C_IDENTIFIER "${dll}" id)
+      set(meta_${id} "${project}|${version}|${url}|${license}")
+      list(APPEND licenses_${id} "${destination}")
+    endforeach()
+  endforeach()
+  list(LENGTH seen_licenses license_count)
+  if(NOT license_count EQUAL 13)
+    message(FATAL_ERROR "Expected thirteen full license payloads")
+  endif()
+  audio_install_own(documentation "${PURE_DOCUMENTATION_INSTALL_DIR}/licenses/origins.tsv" "${origin_file}")
+  foreach(dll IN LISTS AUDIO_RUNTIME_FILENAMES)
+    string(MAKE_C_IDENTIFIER "${dll}" id)
+    string(TOUPPER "${id}" runtime_id)
+    if(NOT DEFINED meta_${id})
+      message(FATAL_ERROR "Runtime lacks a license mapping: ${dll}")
+    endif()
+    string(REPLACE "|" ";" meta "${meta_${id}}")
+    list(JOIN licenses_${id} "," mappings)
+    if(dll MATCHES "^(libc\\+\\+|libwinpthread-1)\\.dll$")
+      set(component baseline)
+    else()
+      set(component runtime)
+    endif()
+    audio_install_artifact("${component}" "bin/${dll}" "${AUDIO_RUNTIME_${runtime_id}}" ${meta} "${mappings}")
   endforeach()
 endif()
 
-install(FILES
-    "${CMAKE_CURRENT_BINARY_DIR}/README"
-    "${CMAKE_CURRENT_SOURCE_DIR}/COPYING"
-    "${CMAKE_CURRENT_SOURCE_DIR}/WINDOWS.md"
-    "${CMAKE_CURRENT_SOURCE_DIR}/THIRD_PARTY.md"
-  DESTINATION "${PURE_DOCUMENTATION_INSTALL_DIR}"
-  COMPONENT documentation)
-install(FILES
-    "${CMAKE_CURRENT_SOURCE_DIR}/examples/audio_examp.pure"
-    "${CMAKE_CURRENT_SOURCE_DIR}/examples/audio_test.pd"
-  DESTINATION "${PURE_EXAMPLES_INSTALL_DIR}"
-  COMPONENT documentation)
-install(FILES
-    "${CMAKE_CURRENT_SOURCE_DIR}/tests/load.pure"
-    "${CMAKE_CURRENT_SOURCE_DIR}/tests/smoke.pure"
-    "${CMAKE_CURRENT_SOURCE_DIR}/tests/hardware.pure"
-    "${CMAKE_CURRENT_SOURCE_DIR}/tests/hardware-playback.pure"
-    "${CMAKE_CURRENT_SOURCE_DIR}/tests/hardware-capture.pure"
-  DESTINATION "${PURE_DOCUMENTATION_INSTALL_DIR}/tests"
-  COMPONENT documentation)
+if(PURE_AUDIO_STRICT_WINDOWS_AUDIT)
+  set(AUDIO_INSTALL_CONTEXT "${CMAKE_CURRENT_BINARY_DIR}/windows-install-context.cmake")
+  set(AUDIO_INSTALL_INVENTORY "${CMAKE_CURRENT_BINARY_DIR}/windows-install-inventory.tsv")
+  set(AUDIO_INSTALL_BUILD_DIR "${CMAKE_CURRENT_BINARY_DIR}")
+  set(AUDIO_INSTALL_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
+  set(AUDIO_INSTALL_SCRIPT "${CMAKE_CURRENT_SOURCE_DIR}/cmake/VerifyInstalledPackage.cmake")
+  set(context "# Trusted configured build context; inventories and manifests are data.\nset(AUDIO_INSTALL_POLICY [==[${AUDIO_INSTALL_POLICY}]==])\n")
+  file(GLOB_RECURSE baseline_files LIST_DIRECTORIES FALSE RELATIVE "${PURE_AUDIO_PURE_PREFIX}" "${PURE_AUDIO_PURE_PREFIX}/*")
+  list(SORT baseline_files)
+  set(baseline_policy "")
+  foreach(path IN LISTS baseline_files)
+    file(SHA256 "${PURE_AUDIO_PURE_PREFIX}/${path}" hash)
+    string(APPEND baseline_policy "${path}|${hash}\n")
+  endforeach()
+  string(APPEND context "set(AUDIO_INSTALL_BASELINE_POLICY [==[${baseline_policy}]==])\n")
+  foreach(var AUDIO_INSTALL_INVENTORY AUDIO_INSTALL_BUILD_DIR AUDIO_INSTALL_SOURCE_DIR AUDIO_INSTALL_SCRIPT
+      PURE_AUDIO_CLANG64_PREFIX PURE_AUDIO_PURE_PREFIX PURE_AUDIO_WINDOWS_SYSTEM_DIRECTORY
+      PURE_AUDIO_RUNTIME_MANIFEST PURE_AUDIO_LLVM_READOBJ_SHA256 LLVM_READOBJ)
+    string(APPEND context "set(${var} [==[${${var}}]==])\n")
+  endforeach()
+  # Freeze non-module inputs at configure, then freeze the actual five module
+  # hashes on first build. Neither install nor verify may refresh that seal.
+  file(GENERATE OUTPUT "${AUDIO_INSTALL_CONTEXT}" CONTENT "${context}")
+  add_custom_target(pure-audio-install-inventory ALL
+    COMMAND "${CMAKE_COMMAND}" "-DAUDIO_INSTALL_CONTEXT=${AUDIO_INSTALL_CONTEXT}"
+      -DAUDIO_INSTALL_MODE=seal -P "${AUDIO_INSTALL_SCRIPT}"
+    DEPENDS audio fftw srcprocess sfinfo realtime VERBATIM)
+  foreach(component runtime documentation)
+    install(CODE "set(AUDIO_INSTALL_CONTEXT [==[${AUDIO_INSTALL_CONTEXT}]==])\nset(AUDIO_INSTALL_MODE install)\nset(AUDIO_INSTALL_COMPONENT ${component})\nset(STAGE_PREFIX \"\${CMAKE_INSTALL_PREFIX}\")\ninclude([==[${AUDIO_INSTALL_SCRIPT}]==])"
+      COMPONENT "${component}")
+  endforeach()
+endif()

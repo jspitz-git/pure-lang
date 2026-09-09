@@ -563,7 +563,7 @@ if(BUILD_TESTING)
         LABELS "audio;contract;no-hardware" TIMEOUT 90)
     endforeach()
     if(PURE_AUDIO_STRICT_WINDOWS_AUDIT)
-      foreach(contract configure runtime_verifier)
+      foreach(contract configure runtime_verifier install)
         add_test(NAME pure-audio-${contract}-contract
           COMMAND "${CMAKE_COMMAND}"
             "-DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
@@ -574,6 +574,9 @@ if(BUILD_TESTING)
             -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/${contract}_contract.cmake")
         set_tests_properties(pure-audio-${contract}-contract PROPERTIES
           LABELS "audio;contract;no-hardware" TIMEOUT 600)
+        if(contract STREQUAL "install")
+          set_tests_properties(pure-audio-install-contract PROPERTIES TIMEOUT 900)
+        endif()
       endforeach()
     endif()
   endif()
