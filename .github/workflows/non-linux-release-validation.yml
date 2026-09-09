@@ -508,6 +508,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Installed pure-odbc verification failed' }
 
       - name: Validate non-Linux workflow semantics
+        shell: pwsh
+        working-directory: pure
         run: |
           $ErrorActionPreference = 'Stop'
           & C:/msys64/clang64/bin/python.exe `

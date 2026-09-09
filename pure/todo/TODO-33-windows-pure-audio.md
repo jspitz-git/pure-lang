@@ -154,6 +154,34 @@ components for Windows.
   checks. The hosted complete workflow and its aggregate 120-minute budget
   were not exercised remotely. Task 8 independent review and Task 9 remain open.
 
+- 2026-09-09: Task 8 review fix round 1 (base `a442d5fe`) pins the semantic
+  step to explicit pwsh/pure and structurally resolves workflow/job/step run
+  defaults and overrides. Custom shells, unsafe directories and conditional or
+  ignored validation fail closed. The quote-aware PowerShell lexer distinguishes
+  literal single quotes from expanding arguments and rejects unsupported
+  interpolation/concatenation/operators and invalid trailing-space continuations.
+  Initial focused RED:35 failures/7.109 s (34 wrongly accepted negative cases
+  plus one rejected safe-inheritance control); continuation RED:2 failures/5.639 s.
+  Final `C:/Python314/python.exe .github/scripts/test_validate_non_linux_release_workflow.py -v`:
+  11/11 PASS50.790 s, 386 distinct negatives (324 existing audio +17 context
+  +42 expansion +3 ODBC), two pristine/five positive controls. Actual pristine
+  validator CLI also passed. Fresh exact first two workflow scripts in
+  `C:/pure-lang/task8-fix1/pa8`: strict configure6.2621647 s, normal23/23 and
+  PE29 both four-worker PASS7.4748183 s combined. Four real no-hardware core
+  tests passed4/4 in10.47 s; inventory still selects exactly ten mandatory tests.
+  All six audited workflow blocks (five audio +semantic) and five guide blocks
+  parse with zero errors; native quote characterization confirms the literal
+  `$env:AUDIO_PREFIX` does not equal the expanded path.
+  Five audio step objects and all92 source hashes remain unchanged; retained
+  archive SHA256 remains `41254b9a93328917b58928ed8727a7778dd9a7f8f01afdafdcd19c05321248f5`.
+  Per approved proportional verification, the original full10/10, component/
+  public verifier and distcheck/extracted10 results above are historical
+  unchanged regression evidence, not fix-round reruns. No new install/dist
+  counts are claimed. Fresh tools: Clang/LLVM22.1.8, CMake4.4.0, Ninja1.13.2,
+  pkgconf3.0.4, Pure0.68, PowerShell7.6.5, Python3.14.5/PyYAML6.0.3. Details,
+  logs, self-review and unchanged limitations are in the Task 8 report. TODO
+  remains Open pending independent re-review and Task 9; no merge/push.
+
 No hardware playback/capture was rerun during September audit hardening.
 Current optional fixtures use one channel at the device's default sample
 rate, not the older July two-channel fixture. ASIO, elevated FIFO/RR and all

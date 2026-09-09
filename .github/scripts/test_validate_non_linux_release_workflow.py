@@ -9,6 +9,7 @@ from functools import lru_cache
 from pathlib import Path
 import tempfile
 import unittest
+import re
 
 import yaml
 
@@ -114,10 +115,16 @@ def audio_step(document, index):
                 if step.get('name') == AUDIO_NAMES[index])
 
 
+def semantic_step(document):
+    return next(step for step in document['jobs']['windows-pure-core']['steps']
+                if step.get('name') == 'Validate non-Linux workflow semantics')
+
+
 def candidate():
     document = copy.deepcopy(data_workflow())
     core = document['jobs']['windows-pure-core']
     core['env'].update(AUDIO_JOB_ENV)
+    semantic_step(document).update(shell='pwsh', **{'working-directory': 'pure'})
     if 'codex/**' not in document['on']['push']['branches']:
         document['on']['push']['branches'].append('codex/**')
     for event in ('push', 'pull_request'):
@@ -315,6 +322,80 @@ def audio_mutations():
     return cases
 
 
+def execution_context_mutations():
+    cases = []
+    for layer in ('step', 'job', 'workflow'):
+        for field, value in [('shell', 'bash'), ('shell', 'pwsh -Command "exit 0" # {0}'),
+                             ('working-directory', 'elsewhere')]:
+            document = candidate()
+            if layer == 'step':
+                target = semantic_step(document)
+            else:
+                # Remove step overrides: the bad value really is inherited.
+                semantic_step(document).pop(field)
+                scope = document if layer == 'workflow' else document['jobs']['windows-pure-core']
+                target = scope.setdefault('defaults', {}).setdefault('run', {})
+            target[field] = value
+            cases.append((f'{layer}:{field}:{value}', document))
+    for field, value in [('if', 'false'), ('if', '${{ always() }}'),
+                         ('continue-on-error', 'true'), ('continue-on-error', '${{ failure() }}')]:
+        for layer in ('step', 'job'):
+            if layer == 'job' and (field, value) in [('if', 'false'), ('continue-on-error', 'true')]:
+                continue  # Already independent cases in audio_mutations().
+            document = candidate()
+            target = semantic_step(document) if layer == 'step' else document['jobs']['windows-pure-core']
+            target[field] = value
+            cases.append((f'{layer}:{field}:{value}', document))
+    # Unsafe defaults stay disallowed even when the semantic step overrides them:
+    # other prerequisite steps share these defaults.
+    for layer in ('job', 'workflow'):
+        document = candidate()
+        scope = document if layer == 'workflow' else document['jobs']['windows-pure-core']
+        scope.setdefault('defaults', {}).setdefault('run', {})['shell'] = 'pwsh -Command "exit 0" # {0}'
+        cases.append((f'{layer}:masked-custom-shell', document))
+    return cases
+
+
+def expansion_mutations():
+    cases = []
+    document = candidate()
+    selected = [audio_step(document, i) for i in range(5)] + [semantic_step(document)]
+    for index, step in enumerate(selected):
+        script = step['run']
+        # Test each lexical occurrence independently, including logging paths.
+        for occurrence, match in enumerate(re.finditer(r'"[^"\n]*\$env:[^"\n]*"', script)):
+            changed = candidate()
+            target = audio_step(changed, index) if index < 5 else semantic_step(changed)
+            target['run'] = script[:match.start()] + "'"+match[0][1:-1]+"'" + script[match.end():]
+            cases.append((f'literal-expansion:{index}:{occurrence}', changed))
+    for old, new in [('& $env:CMAKE_EXE', "'&' $env:CMAKE_EXE"),
+                     ('$env:CMAKE_EXE', "'$env:CMAKE_EXE'"),
+                     ('"$env:AUDIO_BUILD"', '"`$env:AUDIO_BUILD"'),
+                     ('"$env:AUDIO_BUILD"', '"$($env:AUDIO_BUILD)"'),
+                     ('"$env:AUDIO_BUILD"', '"$env:AUDIO_"BUILD'),
+                     ('"$env:AUDIO_BUILD"', '"$env:AUDIO_BUILD"; exit 0')]:
+        changed = candidate()
+        target = audio_step(changed, 1)
+        target['run'] = target['run'].replace(old, new, 1)
+        cases.append((f'unsupported-PS:{new}', changed))
+    for index in range(5):
+        lines = audio_step(candidate(), index)['run'].splitlines()
+        for occurrence, line in enumerate(lines):
+            if not line.startswith('& '):
+                continue
+            changed = candidate()
+            altered = lines.copy()
+            altered[occurrence] += " 2>&1 | Tee-Object -FilePath '$env:LOG_DIR/audio-contract.log'"
+            audio_step(changed, index)['run'] = '\n'.join(altered)
+            cases.append((f'literal-audio-log:{index}:{occurrence}', changed))
+    for whitespace in (' ', '\t'):
+        changed = candidate()
+        target = audio_step(changed, 1)
+        target['run'] = target['run'].replace(' --parallel', ' `'+whitespace+'\n --parallel', 1)
+        cases.append((f'invalid-continuation:{whitespace!r}', changed))
+    return cases
+
+
 class AudioWorkflowMutationTests(unittest.TestCase):
     def test_independently_authored_pristine(self):
         validate_data(candidate())
@@ -339,6 +420,39 @@ class AudioWorkflowMutationTests(unittest.TestCase):
             with self.subTest(mutation=label), self.assertRaises(AssertionError):
                 validate_data(document)
         print(f'AUDIO_WORKFLOW_CASES negatives={len(cases)}')
+
+    def test_rejects_execution_context_mutations(self):
+        cases = execution_context_mutations()
+        for label, document in cases:
+            with self.subTest(mutation=label), self.assertRaises(AssertionError):
+                validate_data(document)
+        print(f'EXECUTION_CONTEXT_CASES negatives={len(cases)}')
+
+    def test_rejects_literal_or_unsupported_expansions(self):
+        cases = expansion_mutations()
+        for label, document in cases:
+            with self.subTest(mutation=label), self.assertRaises(AssertionError):
+                validate_data(document)
+        print(f'EXPANSION_CASES negatives={len(cases)}')
+
+    def test_accepts_safe_execution_context_inheritance(self):
+        for layer in ('job', 'workflow'):
+            document = candidate()
+            semantic_step(document).pop('shell')
+            semantic_step(document).pop('working-directory')
+            scope = document if layer == 'workflow' else document['jobs']['windows-pure-core']
+            scope['defaults'] = {'run': {'shell': 'pwsh', 'working-directory': 'pure'}}
+            validate_data(document)
+
+    def test_accepts_literal_regex_and_expanding_quotes(self):
+        document = candidate()
+        target = audio_step(document, 2)
+        for regex in ('^audio$', '^hardware$', '^pure-audio-source-dist-contract$'):
+            target['run'] = target['run'].replace('"'+regex+'"', "'"+regex+"'")
+        target['run'] = target['run'].replace('$env:CTEST_EXE', '"$env:CTEST_EXE"')
+        target['run'] = target['run'].replace('--parallel 4',
+            '--parallel 4 2>&1 | Tee-Object -FilePath "$env:LOG_DIR/audio-contract.log"')
+        validate_data(document)
 
 
 class BuildInvocationMutationTests(unittest.TestCase):

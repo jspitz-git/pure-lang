@@ -6,7 +6,6 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 import re
-import shlex
 from typing import Any
 
 import yaml
@@ -194,15 +193,56 @@ def cmake_build_invocations(script: str) -> list[list[str]]:
     return invocations
 
 
+def audio_command_tokens(line: str) -> list[str]:
+    """Lex audited PS arguments without erasing whether variables expand.
+
+    Each word is wholly bare, single quoted or double quoted. Concatenation,
+    escapes, subexpressions and other variable forms require a separate audit.
+    Only double/bare environment references and literal regex end anchors are
+    allowed; a single-quoted environment reference is never an expansion.
+    """
+    words: list[tuple[str, str]] = []
+    remaining = line.strip()
+    while remaining:
+        if remaining.startswith('#'):
+            break
+        match = re.match(r'''(?:"([^"\n]*)"|'([^'\n]*)'|([^\s"']+))(?=\s|$)''', remaining)
+        require(match is not None, 'unsupported PowerShell quoting/concatenation')
+        double, single, bare = match.groups()
+        quote, value = ('double', double) if double is not None else (
+            ('single', single) if single is not None else ('bare', bare))
+        require('`' not in value and not any(char in value for char in '“”‘’'),
+                'unsupported PowerShell escape/smart quote')
+        references = re.findall(r'\$env:[A-Z_][A-Z0-9_]*', value)
+        require(quote != 'single' or not references,
+                'single-quoted environment reference does not expand')
+        remainder = re.sub(r'\$env:[A-Z_][A-Z0-9_]*', '', value)
+        require('$' not in remainder or re.fullmatch(r'\^[a-z-]+\$', value) is not None,
+                'unsupported PowerShell variable/interpolation')
+        if quote == 'bare' and value not in ('&', '|', '2>&1'):
+            require(not any(char in value for char in ';|&<>(){}[],@#'),
+                    'unsupported unquoted PowerShell metacharacter')
+        words.append((value, quote))
+        remaining = remaining[match.end():].lstrip()
+    require(words and words[0] == ('&', 'bare'), 'native call requires the call operator')
+    # These tokens are syntax, not strings/arguments that merely spell syntax.
+    for value, quote in words:
+        if value in ('&', '|', '2>&1', 'Tee-Object', '-FilePath'):
+            require(quote == 'bare', 'quoted PowerShell operator/logging syntax')
+    return [value for value, quote in words]
+
+
 def audio_native_calls(script: str) -> tuple[list[list[str]], set[str]]:
     """Parse the deliberately small audited PowerShell command language.
 
-    Quotes/continuations and logging pipelines are normalized before comparing
-    argument vectors. Arbitrary script blocks, assignments, early exits,
+    Expansion-aware quotes/continuations and logging pipelines are normalized
+    before comparing argument vectors. Arbitrary script blocks, assignments, early exits,
     conditional invocations and secondary command separators fail closed. This
     is not a general PowerShell interpreter; new syntax needs an explicit audit.
     """
-    logical = re.sub(r'`[ \t]*\r?\n[ \t]*', ' ', script)
+    # Backtick must immediately precede newline: a trailing space/tab escapes
+    # that character instead and must not be silently turned into continuation.
+    logical = re.sub(r'`\r?\n[ \t]*', ' ', script)
     lines = [line.strip() for line in logical.splitlines()
              if line.strip() and not line.lstrip().startswith('#')]
     calls: list[list[str]] = []
@@ -210,18 +250,11 @@ def audio_native_calls(script: str) -> tuple[list[list[str]], set[str]]:
     index = 0
     while index < len(lines):
         line = lines[index]
-        lexer = shlex.shlex(line, posix=True, punctuation_chars='|;')
-        lexer.whitespace_split = True
-        lexer.escape = ''  # PowerShell uses backticks, not backslash escapes.
-        lexer.commenters = '#'
-        try:
-            tokens = list(lexer)
-        except ValueError as error:
-            raise AssertionError(f'malformed audio command: {error}') from error
-        if tokens == ['$ErrorActionPreference', '=', 'Stop']:
+        if re.fullmatch(r'''\$ErrorActionPreference\s*=\s*(?:'Stop'|"Stop")''', line):
             require('errors' not in guards and not calls, 'audio error policy must be set once before commands')
             guards.add('errors')
-        elif tokens and tokens[0] == '&':
+        elif line.startswith('&'):
+            tokens = audio_command_tokens(line)
             if '|' in tokens:
                 at = tokens.index('|')
                 require(at > 0 and tokens[at-1] == '2>&1' and
@@ -251,13 +284,30 @@ def audio_native_calls(script: str) -> tuple[list[list[str]], set[str]]:
     return calls, guards
 
 
+def audio_run_defaults(scope: dict[str, Any], label: str) -> dict[str, str]:
+    defaults = mapping(scope.get('defaults', {}), f'{label}.defaults')
+    run = mapping(defaults.get('run', {}), f'{label}.defaults.run')
+    require(set(run) <= {'shell', 'working-directory'}, 'unsupported run default')
+    for key, expected in [('shell', 'pwsh'), ('working-directory', 'pure')]:
+        require(key not in run or run[key] == expected,
+                f'{label} unsafe run default: {key}')
+    return run
+
+
+def require_audio_run_context(defaults: dict[str, str], step: dict[str, Any]) -> None:
+    effective = defaults | {key: step[key] for key in ('shell', 'working-directory') if key in step}
+    require(effective == {'shell': 'pwsh', 'working-directory': 'pure'},
+            f'audited step needs effective pwsh/pure context: {step["name"]}')
+
+
 def validate_audio(root: dict[str, Any], core: dict[str, Any], steps: list[Any]) -> None:
     require('if' not in core and 'continue-on-error' not in core,
             'audio job cannot be conditional or ignore failures')
-    require(core.get('runs-on') == 'windows-2025' and 'defaults' not in core,
-            'audio requires the declared Windows runner without job-local directory overrides')
-    defaults = mapping(mapping(root.get('defaults'), 'defaults').get('run'), 'defaults.run')
-    require(defaults.get('working-directory') == 'pure', 'audio portable-prefix working directory changed')
+    require(core.get('runs-on') == 'windows-2025', 'audio requires the declared Windows runner')
+    # GitHub precedence is workflow -> job -> step. Validate the defaults too:
+    # an overridden unsafe default still affects the shared prerequisite steps.
+    defaults = ({'shell': 'pwsh'} | audio_run_defaults(root, 'workflow') |
+                audio_run_defaults(core, 'job'))
     for event, branches in [('push', {'master', 'todo/**', 'codex/**'}), ('pull_request', {'master'})]:
         trigger = mapping(mapping(root.get('on'), 'on').get(event), event)
         paths = sequence(trigger.get('paths'), f'{event}.paths')
@@ -273,6 +323,7 @@ def validate_audio(root: dict[str, Any], core: dict[str, Any], steps: list[Any])
     prerequisite = step_by_name(steps, 'Install the CLANG64 build prerequisites')
     portable = step_by_name(steps, 'Install and validate the portable runtime')
     semantic = step_by_name(steps, 'Validate non-Linux workflow semantics')
+    require_audio_run_context(defaults, semantic)
     for step in (prerequisite, portable, semantic):
         require('if' not in step and 'continue-on-error' not in step, 'audio prerequisite is conditional')
     options = mapping(prerequisite.get('with'), 'audio prerequisites.with')
@@ -287,8 +338,9 @@ def validate_audio(root: dict[str, Any], core: dict[str, Any], steps: list[Any])
     parsed = []
     for step in selected:
         require('if' not in step and 'continue-on-error' not in step and
-                step.get('shell') == 'pwsh' and 'working-directory' not in step,
+                step.get('shell') == 'pwsh',
                 f'audio step must be unconditional native PowerShell: {step["name"]}')
+        require_audio_run_context(defaults, step)
         require(mapping(step.get('env'), 'audio step env') == AUDIO_STEP_ENVIRONMENT,
                 f'audio step must replace PATH and clear every Pure discovery variable: {step["name"]}')
         parsed.append(audio_native_calls(command(step, step['name'])))

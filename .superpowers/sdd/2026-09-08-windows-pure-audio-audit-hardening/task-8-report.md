@@ -1,8 +1,8 @@
 # TODO-33 Task 8 — Windows CI and audited documentation
 
 Date: 2026-09-09, Europe/Prague. Base: `e82bc32ca4d7be726e4d1c175d2c3634cc291895`.
-Status: fresh Task 8 closure GREEN. TODO stays **Open**, pending independent
-Task 8 review and Task 9 whole-branch verification.
+Status: Task 8 fix round 1 fresh verification GREEN (see final section).
+TODO stays **Open**, pending independent re-review and Task 9 whole-branch verification.
 No merge, push, subagents, hardware exercise or changes under existing `build/`.
 
 ## Scope and approved sequencing
@@ -271,8 +271,9 @@ trigger/environment/failure propagation and real semantic invocations covered
 by independent mutations; guide commands executed/parsed and 32 cache values
 compared; archive hashes/closure/isolation and ownership/licensing claims
 checked against fresh output; July history preserved and TODO still Open.
-The final structural suite is 7/7 PASS 45.503 s. No confirmed unresolved Task 8
-implementation finding remains; the limitations above are not silently certified.
+The implementation-handoff structural suite was 7/7 PASS 45.503 s. Subsequent
+independent review found two gaps; the fix-round evidence below supersedes that
+handoff assessment. The limitations above are not silently certified.
 
 Using TDD/systematic debugging produced the documented REDs before fixes;
 verification-before-completion required the fresh native/archive/YAML evidence.
@@ -282,3 +283,95 @@ as already completed. The branch/worktree and pre-existing `build/` are kept.
 The static guide typo `DIST_ARCHIVE` was caught against the real Make interface
 before execution and corrected to `DIST_OUTPUT_DIRECTORY`; it is not counted
 as a behavioral RED test. No Task 9 completion or TODO closure is claimed.
+
+## Task 8 fix round 1 — execution context and quote semantics
+
+Base: `a442d5fed78465bd0bbed9ee8658f199a45f68be`, 2026-09-09.
+Independent review found that the semantic-validation step's shell and working
+directory were not checked, and that POSIX shlex erased PowerShell's distinction
+between expanding double quotes and literal single quotes. Both findings were
+reproduced before production changes. The parent approved a bounded context
+resolver and strict quote-aware lexer, without changing the five audio run bodies.
+
+The actual semantic step now explicitly declares `shell: pwsh` and
+`working-directory: pure`. The validator computes effective values in
+workflow -> job -> step order, including Windows' default pwsh shell, and
+requires the audited pwsh/pure pair. Declared defaults themselves must also
+be safe: a masked custom shell still affects shared prerequisite steps.
+Custom templates, alternate shells/directories and conditional/failure-ignoring
+job or semantic steps are rejected. Safe workflow/job inheritance controls pass.
+This follows GitHub's documented [run-default precedence](https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax#defaultsrun).
+
+The new lexer retains each token's bare/single/double-quoted form before
+normalization. Single-quoted environment references never satisfy expanding
+arguments. Unsupported escapes, concatenation, subexpressions, variable forms,
+smart quotes and quoted operators/logging syntax fail closed. Native argument
+vectors still enforce exact tools/inputs/ordering, not textual grep. Literal
+single-quoted CTest regex anchors remain valid. Microsoft documents the
+[literal versus expanding quote behavior](https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_quoting_rules?view=powershell-7.5).
+A real native Python invocation under PowerShell independently observed
+`["C:/task8-quote-control", "$env:AUDIO_PREFIX"]` for double/single quoting.
+Backticks must immediately precede newline; spaces/tabs after the backtick are
+not normalized into fictitious continuations. This parser deliberately does not
+claim to interpret arbitrary PowerShell.
+
+TDD evidence (all logs retained under `C:/pure-lang/`):
+
+- `task8-fix1-red.log`: four focused methods, exit 1, 35 failures in 7.109 s:
+  six accepted unsafe execution contexts, 28 accepted quote mutations and one
+  wrongly rejected safe job-default inheritance control. Of the initial 50
+  negative cases, 34 exposed missing checks and 16 were already rejected.
+- `task8-fix1-focused-green.log`: 4/4 PASS, 19 context +31 expansion negative
+  cases, three positive controls, 7.039 s.
+- Self-review added nine literal audio-log argument cases and two invalid
+  backtick-space/tab cases. `task8-fix1-continuation-red.log`: exit 1, exactly
+  two failures in 5.639 s; the other 40 expansion cases were rejected.
+- `task8-fix1-focused-final.log`: 4/4 PASS, 19+42 negatives and three controls,
+  8.446 s. A uniqueness audit then identified two already-covered job conditions;
+  these redundant rows were removed from the new context group, not counted twice.
+- Final `task8-fix1-final-green-2.log`: **11/11 PASS, 50.790 s**, exit 0;
+  **324 original audio +17 new context +42 expansion +3 ODBC =386 distinct
+  negative scenarios**, two pristine variants and five positive controls.
+  All 383 audio documents and labels were separately checked unique.
+  Actual pristine validator CLI also passed. Exact commands:
+  `C:/Python314/python.exe .github/scripts/test_validate_non_linux_release_workflow.py -v`
+  and `C:/Python314/python.exe .github/scripts/validate_non_linux_release_workflow.py .github/workflows/non-linux-release-validation.yml`.
+
+Fresh proportionate native verification used `C:/pure-lang/task8-fix1/pa8`,
+with the exact first two actual workflow run strings, unchanged, from `pure/`.
+Only the local concrete env paths replace hosted expressions, as in the original
+Task 8 run; the declared baseline remains
+`C:/pure-lang/pure/build/windows-clang64-prefix`. The absent short evidence root
+and non-reparse ancestors were checked before creation. Strict configure passed
+**6.2621647 s**; normal build **23/23** and PE target **29 AMD64 PE32+** both
+passed with `--parallel 4` (**7.4748183 s combined**). Build seal: 74 records,
+runtime 22/documentation 39/baseline 13. Logs are in
+`C:/pure-lang/task8-fix1/logs/{configure,build,pe}-pure-audio.log`.
+The exact no-hardware CTest inventory is still ten nonempty tests with only
+source-dist deferred. `command-parser.log` confirms all five audio scripts,
+the semantic script and five guide PowerShell blocks parse: **6+5, zero errors**.
+The four real core tests also freshly passed **4/4, 10.47 s** (`core-tests.log`):
+`C:/msys64/clang64/bin/ctest.exe --test-dir C:/pure-lang/task8-fix1/pa8 -L '^audio$' -LE '^hardware$' -R '^pure-audio-(fault-bounds|load|processing|public-bounds)$' --output-on-failure --no-tests=error --parallel 4`.
+This focused diagnostic selection does not replace or alter CI's ten-test gate.
+
+All five actual audio step objects were compared structurally against the base
+commit and are unchanged. All 92 source hashes still match the original Task 8
+snapshot, and its retained 242909-byte archive still hashes to
+`41254b9a93328917b58928ed8727a7778dd9a7f8f01afdafdcd19c05321248f5`.
+Consequently, per the parent's explicit proportional-verification ruling, the
+slow outer 10/10, component/public verifier, public distcheck 1/1 and extracted
+10/10 results above are **unchanged historical regression evidence, not reruns
+of this fix round**. No new install or dist mutation/pristine counts are claimed.
+The 61-artifact/27-license/29-PE package and source 34-negative/1-pristine/7-control
+counts remain those of that identified original closure.
+
+Versions freshly observed: PowerShell 7.6.5, Python 3.14.5/PyYAML 6.0.3,
+CMake 4.4.0, Clang/LLVM 22.1.8, Ninja 1.13.2, pkgconf 3.0.4 and Pure 0.68.
+The CLANG64-Python/PyYAML and hosted-workflow limitations above remain unchanged.
+Self-review checked inheritance and overrides, operator and expansion semantics,
+failure propagation, mutation uniqueness, unchanged audio source/interfaces and
+historical/fresh evidence separation. Both reported findings are addressed;
+independent parent re-review remains required. Five scoped tracked files are
+changed: validator, tests, workflow metadata, TODO-33 and this report. The local
+ignored progress ledger is not staged. `build/`, branch and worktree are retained;
+no merge, push, Task 9 completion or TODO closure is performed.
