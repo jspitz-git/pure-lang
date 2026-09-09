@@ -283,12 +283,17 @@ set(system_directory "C:/Windows/System32")
 file(RENAME "${work}/stage/bin/libogg-0.dll" "${work}/stage/bin/libogg-0.saved")
 execute_process(COMMAND "C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe"
   -NoProfile -NonInteractive -Command
-  "Add-Type -TypeDefinition 'using System; using System.Runtime.InteropServices; public static class AudioLink { [DllImport(\"kernel32\", CharSet=CharSet.Unicode, SetLastError=true)] public static extern bool CreateSymbolicLink(string l, string t, int f); }'; if(-not [AudioLink]::CreateSymbolicLink('${work}/stage/bin/libogg-0.dll','${work}/stage/bin/libogg-0.saved',2)) { throw 'cannot create unprivileged symbolic link' }"
-  RESULT_VARIABLE rc)
-if(NOT rc EQUAL 0)
+  "Add-Type -TypeDefinition 'using System; using System.Runtime.InteropServices; public static class AudioLink { [DllImport(\"kernel32\", CharSet=CharSet.Unicode, SetLastError=true)] [return: MarshalAs(UnmanagedType.I1)] public static extern bool CreateSymbolicLink(string l, string t, int f); }'; if(-not [AudioLink]::CreateSymbolicLink('${work}/stage/bin/libogg-0.dll','${work}/stage/bin/libogg-0.saved',2)) { $code=[Runtime.InteropServices.Marshal]::GetLastWin32Error(); if($code -eq 1314) { 'SYMLINK_UNAVAILABLE Win32=1314'; exit 77 }; throw ('symbolic link creation failed: '+$code) }; if(-not ((Get-Item -LiteralPath '${work}/stage/bin/libogg-0.dll' -Force -ErrorAction Stop).Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'symbolic link fixture is not an actual reparse point' }"
+  RESULT_VARIABLE rc OUTPUT_VARIABLE link_output ERROR_VARIABLE link_error)
+set(skipped_symlink 0)
+if(rc EQUAL 77 AND link_output MATCHES "SYMLINK_UNAVAILABLE Win32=1314")
+  set(skipped_symlink 1)
+  message(STATUS "RUNTIME_SYMLINK_SKIP privilege-unavailable Win32=1314; not counted as a negative case")
+elseif(NOT rc EQUAL 0)
   message(FATAL_ERROR "Cannot establish runtime symbolic-link mutation")
+else()
+  verify_case(staged-runtime-symlink FALSE)
 endif()
-verify_case(staged-runtime-symlink FALSE)
 file(REMOVE "${work}/stage/bin/libogg-0.dll")
 file(RENAME "${work}/stage/bin/libogg-0.saved" "${work}/stage/bin/libogg-0.dll")
 execute_process(COMMAND "C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe"
@@ -313,4 +318,4 @@ if(failures)
   message(FATAL_ERROR "Runtime verifier accepted mutations (${work}): ${failures}")
 endif()
 pure_audio_cleanup_leaf("${work}")
-message(STATUS "RUNTIME_VERIFIER_CONTRACT_OK negative=${negative} positive=${positive} pe_count=29")
+message(STATUS "RUNTIME_VERIFIER_CONTRACT_OK negative=${negative} positive=${positive} pe_count=29 skipped_symlink=${skipped_symlink}")

@@ -592,6 +592,16 @@ if(BUILD_TESTING)
           set_tests_properties(pure-audio-install-contract PROPERTIES TIMEOUT 1800)
         endif()
       endforeach()
+      add_test(NAME pure-audio-source-dist-contract
+        COMMAND "${CMAKE_COMMAND}"
+          "-DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
+          "-DMODULE_DIR=${CMAKE_CURRENT_BINARY_DIR}"
+          "-DCLANG64_PREFIX=${PURE_AUDIO_CLANG64_PREFIX}"
+          "-DPURE_PREFIX=${PURE_AUDIO_PURE_PREFIX}"
+          "-DRUNNER=$<TARGET_FILE:run_pure_test>"
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/source_dist_contract.cmake")
+      set_tests_properties(pure-audio-source-dist-contract PROPERTIES
+        LABELS "audio;contract;no-hardware" TIMEOUT 3600 RUN_SERIAL TRUE)
     endif()
   endif()
 endif()
