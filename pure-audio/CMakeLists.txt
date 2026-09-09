@@ -563,6 +563,20 @@ if(BUILD_TESTING)
         LABELS "audio;contract;no-hardware" TIMEOUT 90)
     endforeach()
     if(PURE_AUDIO_STRICT_WINDOWS_AUDIT)
+      add_executable(install_guard_fixture cmake/install_guard.c)
+      target_compile_definitions(install_guard_fixture PRIVATE PURE_AUDIO_INSTALL_GUARD_FIXTURE)
+      target_compile_features(install_guard_fixture PRIVATE c_std_11)
+      target_compile_options(install_guard_fixture PRIVATE -Wall -Wextra -Werror -fno-sanitize=all)
+      target_link_options(install_guard_fixture PRIVATE -municode -fno-sanitize=all)
+      target_link_libraries(install_guard_fixture PRIVATE bcrypt)
+      add_test(NAME pure-audio-install-guard-contract
+        COMMAND "${PURE_AUDIO_WINDOWS_SYSTEM_DIRECTORY}/WindowsPowerShell/v1.0/powershell.exe"
+          -NoProfile -NonInteractive -ExecutionPolicy Bypass
+          -File "${CMAKE_CURRENT_SOURCE_DIR}/tests/install_guard_contract.ps1"
+          -SourceDir "${CMAKE_CURRENT_SOURCE_DIR}" -BuildDir "${CMAKE_CURRENT_BINARY_DIR}"
+          -PurePrefix "${PURE_AUDIO_PURE_PREFIX}")
+      set_tests_properties(pure-audio-install-guard-contract PROPERTIES
+        LABELS "audio;contract;no-hardware" TIMEOUT 240 RUN_SERIAL TRUE)
       foreach(contract configure runtime_verifier install)
         add_test(NAME pure-audio-${contract}-contract
           COMMAND "${CMAKE_COMMAND}"
@@ -575,7 +589,7 @@ if(BUILD_TESTING)
         set_tests_properties(pure-audio-${contract}-contract PROPERTIES
           LABELS "audio;contract;no-hardware" TIMEOUT 600)
         if(contract STREQUAL "install")
-          set_tests_properties(pure-audio-install-contract PROPERTIES TIMEOUT 900)
+          set_tests_properties(pure-audio-install-contract PROPERTIES TIMEOUT 1800)
         endif()
       endforeach()
     endif()

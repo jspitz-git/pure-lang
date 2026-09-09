@@ -11,6 +11,108 @@ set(PURE_AUDIO_RUNNER "${RUNNER}")
 set(PURE_AUDIO_RUNNER_HELPERS_ONLY ON)
 include("${SOURCE_DIR}/cmake/RunPureTest.cmake")
 pure_audio_create_leaf(work)
+if(FULL_PRESEED_ONLY)
+  if(NOT IS_DIRECTORY "${STAGE_PREFIX}/share/doc/pure-audio/licenses")
+    message(FATAL_ERROR "Complete already-installed stage required for zero-delta control")
+  endif()
+  set(stage "${work}/all-identical")
+  file(COPY "${STAGE_PREFIX}/" DESTINATION "${stage}")
+  foreach(component runtime documentation)
+    execute_process(COMMAND "${CMAKE_COMMAND}" --install "${MODULE_DIR}"
+      --prefix "${stage}" --component "${component}" RESULT_VARIABLE rc
+      OUTPUT_VARIABLE out ERROR_VARIABLE err TIMEOUT 90)
+    if(NOT rc EQUAL 0)
+      message(FATAL_ERROR "RED: fully identical ${component} cannot preserve an empty delta (${work})\n${out}${err}")
+    endif()
+    file(READ "${MODULE_DIR}/install_manifest_${component}.txt" manifest)
+    if(NOT manifest STREQUAL "")
+      message(FATAL_ERROR "Fully preseeded component claimed a nonempty delta")
+    endif()
+  endforeach()
+  execute_process(COMMAND "${CMAKE_COMMAND}"
+    "-DAUDIO_INSTALL_CONTEXT=${MODULE_DIR}/windows-install-context.cmake"
+    "-DSTAGE_PREFIX=${stage}" -P "${SOURCE_DIR}/cmake/VerifyInstalledPackage.cmake"
+    RESULT_VARIABLE rc OUTPUT_VARIABLE out ERROR_VARIABLE err TIMEOUT 150)
+  if(NOT rc EQUAL 0 OR NOT out MATCHES "INSTALL_PACKAGE_OK.*delta=0" OR
+      NOT out MATCHES "PURE_AUDIO_DONE_[a-f0-9]+")
+    message(FATAL_ERROR "Fully preseeded pristine verification failed (${work})\n${out}${err}")
+  endif()
+  message(STATUS "FULL_PRESEED_OK pristine=1 delta=0 manifests=2")
+  pure_audio_cleanup_leaf("${work}")
+  return()
+endif()
+if(WHOLE_LICENSE_ONLY)
+  set(expected_baseline_licenses
+    "libgmp-10.dll|GMP-COPYINGv2.txt,GMP-COPYINGv3.txt,GMP-COPYING-LESSERv3.txt"
+    "libiconv-2.dll|libiconv-COPYING-LIB.txt"
+    "libmpfr-6.dll|MPFR-COPYING.txt,MPFR-COPYING-LESSER.txt"
+    "libpcre-1.dll|PCRE-LICENCE.txt" "libpcreposix-0.dll|PCRE-LICENCE.txt"
+    "libreadline8.dll|Readline-COPYING.txt" "libtermcap-0.dll|Termcap-COPYING.txt"
+    "libzstd.dll|Zstd-LICENSE.txt" "zlib1.dll|Zlib-LICENSE.txt"
+    "pure.exe|Pure-COPYING.txt,Pure-COPYING-LESSER.txt,Pure-README.txt"
+    "libpure.dll|Pure-COPYING.txt,Pure-COPYING-LESSER.txt,Pure-README.txt")
+  file(STRINGS "${MODULE_DIR}/windows-install-inventory.tsv" license_inventory)
+  foreach(row IN LISTS expected_baseline_licenses)
+    string(REPLACE "|" ";" fields "${row}")
+    list(GET fields 0 binary)
+    list(GET fields 1 names)
+    if(NOT EXISTS "${STAGE_PREFIX}/bin/${binary}")
+      message(FATAL_ERROR "Invalid fixture: missing baseline PE ${binary}")
+    endif()
+    string(REPLACE "," ";" names "${names}")
+    foreach(name IN LISTS names)
+      if(NOT EXISTS "${STAGE_PREFIX}/share/doc/pure-audio/licenses/${name}")
+        message(FATAL_ERROR "RED: installed PE ${binary} has no required full license ${name} (${work})")
+      endif()
+      set(mapped FALSE)
+      foreach(record IN LISTS license_inventory)
+        string(REPLACE "|" ";" fields "${record}")
+        list(GET fields 1 destination)
+        list(GET fields 8 mapping)
+        string(REPLACE "," ";" mapping "${mapping}")
+        if(destination STREQUAL "bin/${binary}" AND
+            "share/doc/pure-audio/licenses/${name}" IN_LIST mapping)
+          set(mapped TRUE)
+        endif()
+      endforeach()
+      if(NOT mapped)
+        message(FATAL_ERROR "RED: missing independent whole-package PE/license edge ${binary}/${name}")
+      endif()
+    endforeach()
+  endforeach()
+  message(STATUS "WHOLE_PACKAGE_LICENSE_OK additional_baseline_pe=11")
+  pure_audio_cleanup_leaf("${work}")
+  return()
+endif()
+if(SMOKE_STATE_ONLY)
+  foreach(required STAGE_PREFIX)
+    if(NOT DEFINED ${required})
+      message(FATAL_ERROR "${required} is required for the focused state regression")
+    endif()
+  endforeach()
+  set(context "${MODULE_DIR}/windows-install-context.cmake")
+  set(verifier "${SOURCE_DIR}/cmake/VerifyInstalledPackage.cmake")
+  foreach(state public-define prior-include)
+    if(state STREQUAL "public-define")
+      set(command "${CMAKE_COMMAND}" "-DAUDIO_INSTALL_CONTEXT=${context}"
+        "-DSTAGE_PREFIX=${STAGE_PREFIX}" -DPURE_AUDIO_RUNNER_HELPERS_ONLY=ON
+        -P "${verifier}")
+    else()
+      file(WRITE "${work}/prior-include.cmake"
+        "set(PURE_AUDIO_RUNNER_HELPERS_ONLY ON)\ninclude([==[${SOURCE_DIR}/cmake/RunPureTest.cmake]==])\nset(AUDIO_INSTALL_CONTEXT [==[${context}]==])\nset(STAGE_PREFIX [==[${STAGE_PREFIX}]==])\ninclude([==[${verifier}]==])\n")
+      set(command "${CMAKE_COMMAND}" -P "${work}/prior-include.cmake")
+    endif()
+    execute_process(COMMAND ${command} RESULT_VARIABLE rc
+      OUTPUT_VARIABLE out ERROR_VARIABLE err TIMEOUT 150)
+    file(WRITE "${work}/${state}.log" "${out}${err}")
+    if(NOT rc EQUAL 0 OR NOT out MATCHES "PURE_AUDIO_DONE_[a-f0-9]+")
+      message(FATAL_ERROR "RED: ${state} bypassed installed token execution (${work})\n${out}${err}")
+    endif()
+  endforeach()
+  message(STATUS "INSTALLED_SMOKE_STATE_OK controls=2")
+  pure_audio_cleanup_leaf("${work}")
+  return()
+endif()
 function(fixture_tree root output)
   file(GLOB_RECURSE files LIST_DIRECTORIES FALSE RELATIVE "${root}" "${root}/*")
   list(SORT files)
@@ -104,7 +206,12 @@ set(doc_names README COPYING WINDOWS.md THIRD_PARTY.md
   licenses/libsamplerate.txt licenses/libsndfile.txt licenses/libogg.txt
   licenses/Vorbis-COPYING.txt licenses/FLAC-Xiph.txt licenses/Opus.txt
   licenses/mpg123.txt licenses/LAME-COPYING.txt licenses/winpthreads.txt
-  licenses/libcxx.txt licenses/origins.tsv)
+  licenses/libcxx.txt licenses/origins.tsv
+  licenses/GMP-COPYINGv2.txt licenses/GMP-COPYINGv3.txt licenses/GMP-COPYING-LESSERv3.txt
+  licenses/libiconv-COPYING-LIB.txt licenses/MPFR-COPYING.txt licenses/MPFR-COPYING-LESSER.txt
+  licenses/PCRE-LICENCE.txt licenses/Readline-COPYING.txt licenses/Termcap-COPYING.txt
+  licenses/Zstd-LICENSE.txt licenses/Zlib-LICENSE.txt licenses/Pure-COPYING.txt
+  licenses/Pure-COPYING-LESSER.txt licenses/Pure-README.txt)
 list(TRANSFORM doc_names PREPEND "share/doc/pure-audio/")
 list(SORT runtime_names)
 list(SORT doc_names)
@@ -244,7 +351,21 @@ endforeach()
 if(NOT actual_names STREQUAL all_names)
   message(FATAL_ERROR "Independent complete delta inventory mismatch")
 endif()
-run_verifier(pristine pass "INSTALL_PACKAGE_OK artifacts=47 runtime=22 documentation=25 delta=47 pe=29 license_payloads=13 mapped_dlls=13")
+run_verifier(pristine pass "INSTALL_PACKAGE_OK artifacts=61 runtime=22 documentation=39 delta=61 pe=29 license_payloads=27 third_party_dlls=22 project_owned_pe=7")
+foreach(control SMOKE_STATE_ONLY WHOLE_LICENSE_ONLY FULL_PRESEED_ONLY)
+  execute_process(COMMAND "${CMAKE_COMMAND}" "-D${control}=ON"
+    "-DSTAGE_PREFIX=${stage}" "-DSOURCE_DIR=${SOURCE_DIR}" "-DMODULE_DIR=${MODULE_DIR}"
+    "-DCLANG64_PREFIX=${CLANG64_PREFIX}" "-DPURE_PREFIX=${PURE_PREFIX}" "-DRUNNER=${RUNNER}"
+    -P "${CMAKE_CURRENT_LIST_FILE}" RESULT_VARIABLE rc
+    OUTPUT_VARIABLE out ERROR_VARIABLE err TIMEOUT 240)
+  file(WRITE "${work}/${control}.log" "${out}${err}")
+  if(NOT rc EQUAL 0)
+    message(FATAL_ERROR "${control} failed: ${out}${err}")
+  endif()
+  if(control STREQUAL "FULL_PRESEED_ONLY")
+    math(EXPR positive "${positive}+1")
+  endif()
+endforeach()
 string(TOLOWER "${stage}" key)
 string(SHA256 key "${key}")
 set(session "${MODULE_DIR}/install-audits/${key}")
@@ -312,7 +433,10 @@ endforeach()
 # Exercise changed source and built bytes on private copies, never modify the
 # user's checkout or CLANG64 payload. The trusted context is fixture-owned.
 file(READ "${context}" original_context)
-foreach(spec "source|${SOURCE_DIR}/audio.pure" "build|${MODULE_DIR}/audio.dll" "license|${SOURCE_DIR}/licenses/PortAudio.txt")
+foreach(spec "source|${SOURCE_DIR}/audio.pure" "build|${MODULE_DIR}/audio.dll"
+    "license|${SOURCE_DIR}/licenses/PortAudio.txt" "guard|${MODULE_DIR}/install_guard.exe"
+    "baseline-license|${SOURCE_DIR}/licenses/GMP-COPYINGv2.txt"
+    "provenance|${SOURCE_DIR}/licenses/origins.tsv")
   string(REPLACE "|" ";" fields "${spec}")
   list(GET fields 0 name)
   list(GET fields 1 original)
@@ -332,7 +456,7 @@ foreach(spec "source|${SOURCE_DIR}/audio.pure" "build|${MODULE_DIR}/audio.dll" "
     message(FATAL_ERROR "Private ${name} unchanged-byte control failed: ${out}${err}")
   endif()
   file(WRITE "${work}/private-${name}" "ALTERED SOURCE\n")
-  run_verifier("changed-${name}" fail "configured source hash mismatch|frozen artifact inventory/source mismatch")
+  run_verifier("changed-${name}" fail "configured source hash mismatch|frozen artifact inventory/source mismatch|frozen native guard identity mismatch")
 endforeach()
 set(context "${MODULE_DIR}/windows-install-context.cmake")
 
@@ -360,7 +484,7 @@ foreach(path lib/pure/audio.pure bin/libportaudio.dll)
   math(EXPR negative "${negative}+1")
   file(RENAME "${work}/saved-file" "${stage}/${path}")
 endforeach()
-run_verifier(restored-pristine pass "INSTALL_PACKAGE_OK.*delta=47")
+run_verifier(restored-pristine pass "INSTALL_PACKAGE_OK.*delta=61")
 
 # Reverse component order, with an identical pre-existing audio interface.
 set(stage "${work}/identical baseline with spaces")
@@ -369,8 +493,8 @@ file(COPY_FILE "${SOURCE_DIR}/audio.pure" "${stage}/lib/pure/audio.pure")
 set(preseeded lib/pure/audio.pure)
 install_component(documentation)
 install_component(runtime)
-run_verifier(identical-reversed-pristine pass "INSTALL_PACKAGE_OK.*delta=46")
-message(STATUS "INSTALL_CONTRACT_OK negatives=${negative} pristine=${positive} controls=4 artifacts=47 runtime=22 documentation=25 standard_delta=47 identical_delta=46 pe=29 license_payloads=13 mapped_dlls=13 evidence=${work}")
+run_verifier(identical-reversed-pristine pass "INSTALL_PACKAGE_OK.*delta=60")
+message(STATUS "INSTALL_CONTRACT_OK negatives=${negative} pristine=${positive} controls=10 artifacts=61 runtime=22 documentation=39 standard_delta=61 identical_delta=60 pe=29 license_payloads=27 third_party_dlls=22 project_owned_pe=7 evidence=${work}")
 if(NOT KEEP_EVIDENCE)
   pure_audio_cleanup_leaf("${work}")
 endif()

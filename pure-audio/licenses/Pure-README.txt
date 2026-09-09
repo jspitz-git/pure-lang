@@ -1,0 +1,200 @@
+
+PURE - The Pure programming language.
+=====================================
+
+Pure is a functional programming language based on term rewriting. It has a
+modern syntax featuring curried function applications, lexical closures and
+equational definitions with pattern matching, and thus is somewhat similar to
+languages of the Haskell and ML variety. But Pure is also a very dynamic
+language, and is more like Lisp in this respect. The interpreter has an LLVM
+backend to do JIT compilation, hence programs run blazingly fast and
+interfacing to C modules is easy.
+
+WHERE TO GET IT
+---------------
+
+You can find tarballs, binary packages and the source repository at
+https://agraef.github.io/pure-lang.
+
+COPYING
+-------
+
+Unless explicitly stated otherwise, this software is Copyright (c) 2008-2018
+by Albert Graef. Please see the source for the copyright and license notes
+pertaining to individual source files.
+
+Pure comes with a fairly liberal license which lets you distribute your own
+Pure programs and extensions under a license of your choice and permits
+linking of commercial applications against the Pure runtime and the Pure
+standard library without requiring special permission. Moreover, the Pure
+interpreter (the `pure` main program), the Pure runtime library (`libpure`)
+and the Pure standard library (the Pure scripts in the `lib` folder) are
+distributed as free software, and you are welcome to modify and redistribute
+them under the appropriate license terms, as detailed below.
+
+(The above explanations are not legal advice. Please read the full text of the
+licenses and consult qualified professional counsel for an interpretation of
+the license terms as they apply to you.)
+
+The *Pure interpreter* is free software: you can redistribute it and/or modify
+it under the terms of the GNU General Public License as published by the Free
+Software Foundation, either version 3 of the License, or (at your option) any
+later version.
+
+The *Pure runtime library* and the *Pure standard library* are also free
+software: you can redistribute them and/or modify them under the terms of the
+GNU *Lesser* General Public License as published by the Free Software
+Foundation, either version 3 of the License, or (at your option) any later
+version.
+
+Pure is distributed in the hope that it will be useful, but WITHOUT ANY
+WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR
+A PARTICULAR PURPOSE.
+
+Please see the accompanying COPYING and COPYING.LESSER files for the precise
+license terms. Online copies of the GPL and LGPL are also available at
+http://www.gnu.org/licenses/.
+
+LINKING WITH GPLV2 SOFTWARE
+---------------------------
+
+In addition to the above license conditions we also grant the special
+permission to link code distributed under GPLv2 *only* (that is, version 2 of
+the GNU General Public License without the "or later" clause) with the Pure
+runtime library and the Pure standard library.
+
+This is a temporary measure to enable interoperability with software which,
+for whatever reason, is still distributed under the GPLv2 only (such as
+Gnumeric), and may be revoked in future Pure releases when all relevant
+software has migrated to GPLv3-compatible licenses.
+
+NON-COPYLEFTED MATERIALS
+------------------------
+
+The distribution also contains some non-copylefted sources which can be used
+in both open source and commercial applications, usually under the terms of
+the new (a.k.a. 3-clause) BSD license:
+
+- pure_norl.cc is a version of the interpreter main program without readline
+  support, which can be used as a starting point for alternate interpreter
+  frontends.
+
+- The sample programs in the examples subdirectory. (Please see the COPYING
+  files in examples and its subdirectories for details.)
+
+Please also check the corresponding source files for additional licensing
+information and pertaining copyrights.
+
+LLVM LICENSE
+------------
+
+Pure uses LLVM (http://llvm.org) as its compiler backend. LLVM is under
+Copyright (c) 2003-2016 by the University of Illinois at Urbana-Champaign,
+and is licensed under a 3-clause BSD-style license, please read COPYING.LLVM
+included in the distribution for the exact licensing terms. You can also find
+the LLVM license at http://llvm.org.
+
+INSTALLATION
+------------
+
+Please see the INSTALL file for detailed instructions. The supported build uses
+Clang/LLVM 22, CMake 3.25 or newer, and Ninja. A typical optimized build is:
+
+    $ cmake --preset llvm22-release
+    $ cmake --build --preset llvm22-release --parallel 1
+    $ ctest --preset llvm22-release -E pure-regression --output-on-failure
+    $ sudo cmake --install build/llvm22-release
+
+The complete regression corpus can be run by omitting `-E pure-regression`; it
+starts a fresh interpreter for every script and therefore needs a generous time
+budget. The legacy Autoconf and GNU make files are not the supported LLVM 22
+development path.
+
+Online documentation is available at https://agraef.github.io/pure-docs/.
+The source distribution also installs the `pure(1)` manual page.
+
+USING PURE
+----------
+
+To start the Pure interpreter, just type `pure` at the command prompt. You'll
+be greeted with a sign-on message, after which the interpreter leaves you at
+its prompt and you can start typing definitions and expressions to be
+evaluated. Use the `quit` command to exit the interpreter (on most systems you
+can also just type EOF a.k.a. Ctrl-D at the beginning of the interpreter's
+command line). For instance:
+
+     __ \  |   |  __| _ \    Pure 0.67 (x86_64-unknown-linux-gnu)
+     |   | |   | |    __/    Copyright (c) 2008-2018 by Albert Graef
+     .__/ \__,_|_|  \___|    (Type 'help' for help, 'help copying'
+    _|                       for license information.)
+
+    Loaded prelude from /usr/local/lib/pure/prelude.pure.
+
+    > fact n = if n>0 then n*fact (n-1) else 1;
+    > map fact (1..10);
+    [1,2,6,24,120,720,5040,40320,362880,3628800]
+    > quit
+
+Of course, you can also put your definitions into a script and run that script
+from the command line:
+
+    $ pure factorial.pure
+
+Add the -i option to force interactive mode when executing a script, and -q to
+suppress the sign-on message:
+
+    $ pure -i -q factorial.pure
+    > 
+
+Or you can compile your script to a native executable:
+
+    $ pure -c factorial.pure -o factorial
+    $ ./factorial
+
+Pure scripts are just ordinary text files, which can be created with any text
+editor. The distribution contains some language definition files and
+programming modes to provide syntax highlighting in various popular text
+editors, such as Emacs, Gedit, Kate and Vim. The Emacs mode also lets you run
+the Pure interpreter in an Emacs buffer, this is probably the most convenient
+interface to the interpreter if you're friends with Emacs. Syntax files for
+Andre Simon's highlight program and the Pygments highlighter are also
+included, these let you pretty-print Pure source in various output formats
+such as HTML and LaTeX. You can find all this stuff in the etc subdirectory in
+the source distribution, installation instructions are included in the syntax
+files.
+
+Online documentation is available in the form of a (brief) Unix manual page
+and an extensive manual in html format which contains detailed information on
+the Pure language, the interpreter, the standard library and all available
+addon modules and libraries. You can invoke the manpage with `man pure` after
+installation, and the online manual by using the `help` command inside the
+interpreter. The former needs the `man` program, the latter a html browser,
+w3m by default. See the INSTALL file or the manpage for details. Or just point
+your browser at the following URL to read the manual on the web:
+
+https://agraef.github.io/pure-docs/
+
+Some example programs can be found in the examples subdir in the sources; in
+particular, have a look at the hello.pure program which will quickly give you
+an idea how Pure programs look like. You can also browse the scripts in the
+lib directory, in particular prelude.pure and the modules included there,
+which contain the "built-in" definitions readily available when you start up
+the Pure interpreter.
+
+Further documentation including a wiki is available at:
+https://agraef.github.io/pure-lang
+
+You're also invited to join the Pure mailing list at:
+http://groups.google.com/group/pure-lang
+
+Enjoy! :)
+
+
+Albert Graef  
+Dept. of Computer Music  
+Johannes Gutenberg University (JGU)  
+Mainz, Germany
+
+<aggraef@gmail.com>  
+https://agraef.github.io/pure-lang  
+http://groups.google.com/group/pure-lang
