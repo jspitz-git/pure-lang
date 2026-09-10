@@ -6,7 +6,14 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <limits.h>
+#include <stdbool.h>
+#include <stdint.h>
 #include "midifile.h"
+
+#ifdef PURE_MIDI_TEST_SEAM
+#include "midifile_test_api.h"
+#endif
 
 /* Silence clang warnings about undefined switch cases. We should maybe look
    into these some time. */
@@ -128,24 +135,102 @@ struct MidiFileEvent
  * Helpers
  */
 
+static FILE *runtime_open_file(const char *filename, const char *mode) { return fopen(filename, mode); }
+static size_t runtime_read(void *buffer, size_t size, size_t count, FILE *file) { return fread(buffer, size, count, file); }
+static size_t runtime_write(const void *buffer, size_t size, size_t count, FILE *file) { return fwrite(buffer, size, count, file); }
+static int runtime_seek(FILE *file, long offset, int origin) { return fseek(file, offset, origin); }
+static long runtime_tell(FILE *file) { return ftell(file); }
+static int runtime_flush(FILE *file) { return fflush(file); }
+static int runtime_close(FILE *file) { return fclose(file); }
+static void *runtime_allocate(size_t size) { return malloc(size); }
+static void *runtime_allocate_zeroed(size_t count, size_t size) { return calloc(count, size); }
+static void runtime_deallocate(void *pointer) { free(pointer); }
+
+#ifdef PURE_MIDI_TEST_SEAM
+static const MidiFileIoApi runtime_io_api = {
+	runtime_open_file, runtime_read, runtime_write, runtime_seek, runtime_tell,
+	runtime_flush, runtime_close
+};
+static const MidiFileAllocApi runtime_alloc_api = {
+	runtime_allocate, runtime_allocate_zeroed, runtime_deallocate
+};
+static MidiFileIoApi active_io_api = {
+	runtime_open_file, runtime_read, runtime_write, runtime_seek, runtime_tell,
+	runtime_flush, runtime_close
+};
+static MidiFileAllocApi active_alloc_api = {
+	runtime_allocate, runtime_allocate_zeroed, runtime_deallocate
+};
+static MidiFileParserCounters parser_counters;
+
+void MidiFile_setTestIoApi(const MidiFileIoApi *api)
+{
+	active_io_api = (api == NULL) ? runtime_io_api : *api;
+}
+
+void MidiFile_setTestAllocApi(const MidiFileAllocApi *api)
+{
+	active_alloc_api = (api == NULL) ? runtime_alloc_api : *api;
+}
+
+void MidiFile_resetTestApis(void)
+{
+	active_io_api = runtime_io_api;
+	active_alloc_api = runtime_alloc_api;
+	memset(&parser_counters, 0, sizeof(parser_counters));
+}
+
+MidiFileParserCounters MidiFile_getTestParserCounters(void)
+{
+	return parser_counters;
+}
+
+#define MIDI_IO(name) active_io_api.name
+#define MIDI_ALLOC(name) active_alloc_api.name
+#define COUNT_READ(n) (parser_counters.bytes_read += (n))
+#define COUNT_CHUNK() (parser_counters.chunks_read++)
+#define COUNT_TRACK() (parser_counters.tracks_read++)
+#define COUNT_EVENT() (parser_counters.events_read++)
+#define COUNT_VLQ() (parser_counters.vlq_bytes_read++)
+#define RESET_COUNTERS() memset(&parser_counters, 0, sizeof(parser_counters))
+#else
+#define MIDI_IO(name) runtime_##name
+#define MIDI_ALLOC(name) runtime_##name
+#define COUNT_READ(n) ((void)(n))
+#define COUNT_CHUNK() ((void)0)
+#define COUNT_TRACK() ((void)0)
+#define COUNT_EVENT() ((void)0)
+#define COUNT_VLQ() ((void)0)
+#define RESET_COUNTERS() ((void)0)
+#endif
+
+static void *midi_malloc(size_t size) { return MIDI_ALLOC(allocate)(size); }
+static void *midi_calloc(size_t count, size_t size) { return MIDI_ALLOC(allocate_zeroed)(count, size); }
+static void midi_free(void *pointer) { MIDI_ALLOC(deallocate)(pointer); }
+
+bool midi_checked_add_size(size_t a, size_t b, size_t *out)
+{
+	if ((out == NULL) || (b > SIZE_MAX - a)) return false;
+	*out = a + b;
+	return true;
+}
+
+bool midi_checked_mul_size(size_t a, size_t b, size_t *out)
+{
+	if ((out == NULL) || ((a != 0) && (b > SIZE_MAX / a))) return false;
+	*out = a * b;
+	return true;
+}
+
 static unsigned short interpret_uint16(unsigned char *buffer)
 {
 	return ((unsigned short)(buffer[0]) << 8) | (unsigned short)(buffer[1]);
 }
 
-static unsigned short read_uint16(FILE *in)
+static void encode_uint16(unsigned char buffer[2], unsigned short value)
 {
-	unsigned char buffer[2];
-	if (fread(buffer, 1, 2, in)) {}
-	return interpret_uint16(buffer);
-}
-
-static void write_uint16(FILE *out, unsigned short value)
-{
-	unsigned char buffer[2];
 	buffer[0] = (unsigned char)((value >> 8) & 0xFF);
 	buffer[1] = (unsigned char)(value & 0xFF);
-	fwrite(buffer, 1, 2, out);
 }
 
 static uint32_t interpret_uint32(unsigned char *buffer)
@@ -153,53 +238,18 @@ static uint32_t interpret_uint32(unsigned char *buffer)
 	return ((uint32_t)(buffer[0]) << 24) | ((uint32_t)(buffer[1]) << 16) | ((uint32_t)(buffer[2]) << 8) | (uint32_t)(buffer[3]);
 }
 
-static uint32_t read_uint32(FILE *in)
+static uint32_t interpret_little_uint32(const unsigned char *buffer)
 {
-	unsigned char buffer[4];
-	if (fread(buffer, 1, 4, in)) {}
-	return interpret_uint32(buffer);
+	return ((uint32_t)(buffer[3]) << 24) | ((uint32_t)(buffer[2]) << 16) |
+		((uint32_t)(buffer[1]) << 8) | (uint32_t)(buffer[0]);
 }
 
-static void write_uint32(FILE *out, uint32_t value)
+static void encode_uint32(unsigned char buffer[4], uint32_t value)
 {
-	unsigned char buffer[4];
 	buffer[0] = (unsigned char)(value >> 24);
 	buffer[1] = (unsigned char)((value >> 16) & 0xFF);
 	buffer[2] = (unsigned char)((value >> 8) & 0xFF);
 	buffer[3] = (unsigned char)(value & 0xFF);
-	fwrite(buffer, 1, 4, out);
-}
-
-static uint32_t read_variable_length_quantity(FILE *in)
-{
-	unsigned char b;
-	uint32_t value = 0;
-
-	do
-	{
-		b = fgetc(in);
-		value = (value << 7) | (b & 0x7F);
-	}
-	while ((b & 0x80) == 0x80);
-
-	return value;
-}
-
-static void write_variable_length_quantity(FILE *out, uint32_t value)
-{
-	unsigned char buffer[4];
-	int offset = 3;
-
-	while (1)
-	{
-		buffer[offset] = (unsigned char)(value & 0x7F);
-		if (offset < 3) buffer[offset] |= 0x80;
-		value >>= 7;
-		if ((value == 0) || (offset == 0)) break;
-		offset--;
-	}
-
-	fwrite(buffer + offset, 1, 4 - offset, out);
 }
 
 static void add_event(MidiFileEvent_t new_event)
@@ -310,19 +360,328 @@ static void free_events_in_track(MidiFileTrack_t track)
 		{
 			case MIDI_FILE_EVENT_TYPE_SYSEX:
 			{
-				free(event->u.sysex.data_buffer);
+				midi_free(event->u.sysex.data_buffer);
 				break;
 			}
 			case MIDI_FILE_EVENT_TYPE_META:
 			{
-				free(event->u.meta.data_buffer);
+				midi_free(event->u.meta.data_buffer);
 				break;
 			}
 			default: ;
 		}
 
-		free(event);
+		midi_free(event);
 	}
+}
+
+typedef struct MidiFileReader
+{
+	FILE *file;
+	size_t offset;
+	size_t limit;
+} MidiFileReader;
+
+static bool reader_read(MidiFileReader *reader, void *buffer, size_t size)
+{
+	if ((reader == NULL) || (buffer == NULL) || (reader->offset > reader->limit) ||
+		(size > reader->limit - reader->offset)) return false;
+	if ((size != 0) && (MIDI_IO(read)(buffer, 1, size, reader->file) != size)) return false;
+	reader->offset += size;
+	COUNT_READ(size);
+	return true;
+}
+
+static bool reader_seek(MidiFileReader *reader, size_t offset)
+{
+	if ((reader == NULL) || (offset > reader->limit) || (offset > (size_t)LONG_MAX)) return false;
+	if (MIDI_IO(seek)(reader->file, (long)offset, SEEK_SET) != 0) return false;
+	reader->offset = offset;
+	return true;
+}
+
+static bool reader_uint16(MidiFileReader *reader, unsigned short *value)
+{
+	unsigned char buffer[2];
+	if ((value == NULL) || !reader_read(reader, buffer, sizeof(buffer))) return false;
+	*value = interpret_uint16(buffer);
+	return true;
+}
+
+static bool reader_uint32(MidiFileReader *reader, uint32_t *value)
+{
+	unsigned char buffer[4];
+	if ((value == NULL) || !reader_read(reader, buffer, sizeof(buffer))) return false;
+	*value = interpret_uint32(buffer);
+	return true;
+}
+
+static bool reader_little_uint32(MidiFileReader *reader, uint32_t *value)
+{
+	unsigned char buffer[4];
+	if ((value == NULL) || !reader_read(reader, buffer, sizeof(buffer))) return false;
+	*value = interpret_little_uint32(buffer);
+	return true;
+}
+
+static bool reader_vlq(MidiFileReader *reader, uint32_t *value)
+{
+	uint32_t result = 0;
+	unsigned int index;
+
+	if (value == NULL) return false;
+	for (index = 0; index < 4; index++)
+	{
+		unsigned char byte;
+		if (!reader_read(reader, &byte, 1)) return false;
+		COUNT_VLQ();
+		result = (result << 7) | (uint32_t)(byte & 0x7f);
+		if ((byte & 0x80) == 0)
+		{
+			*value = result;
+			return true;
+		}
+	}
+	return false;
+}
+
+static bool read_data_byte(MidiFileReader *reader, int *value)
+{
+	unsigned char byte;
+	if ((value == NULL) || !reader_read(reader, &byte, 1) || (byte >= 0x80)) return false;
+	*value = byte;
+	return true;
+}
+
+static bool checked_tick(int32_t previous_tick, uint32_t delta, int32_t *tick)
+{
+	if ((tick == NULL) || (previous_tick < 0) || (delta > (uint32_t)(INT32_MAX - previous_tick))) return false;
+	*tick = previous_tick + (int32_t)delta;
+	return true;
+}
+
+static bool parse_track(MidiFileReader *reader, MidiFile_t midi_file)
+{
+	MidiFileTrack_t track;
+	int32_t previous_tick = 0;
+	unsigned char running_status = 0;
+	bool found_end_of_track = false;
+
+	track = MidiFile_createTrack(midi_file);
+	if (track == NULL) return false;
+	COUNT_TRACK();
+
+	while ((reader->offset < reader->limit) && !found_end_of_track)
+	{
+		uint32_t delta;
+		int32_t tick;
+		unsigned char first_byte;
+		unsigned char status;
+		bool have_first_data = false;
+		MidiFileEvent_t event = NULL;
+
+		if (!reader_vlq(reader, &delta) || !checked_tick(previous_tick, delta, &tick) ||
+			!reader_read(reader, &first_byte, 1)) return false;
+		previous_tick = tick;
+
+		if ((first_byte & 0x80) == 0)
+		{
+			if ((running_status < 0x80) || (running_status >= 0xf0)) return false;
+			status = running_status;
+			have_first_data = true;
+		}
+		else
+		{
+			status = first_byte;
+			if (status < 0xf0) running_status = status;
+		}
+
+		switch (status & 0xf0)
+		{
+			case 0x80:
+			case 0x90:
+			case 0xa0:
+			case 0xb0:
+			case 0xe0:
+			{
+				int first;
+				int second;
+				if (have_first_data)
+					first = first_byte;
+				else if (!read_data_byte(reader, &first))
+					return false;
+				if (!read_data_byte(reader, &second)) return false;
+				switch (status & 0xf0)
+				{
+					case 0x80: event = MidiFileTrack_createNoteOffEvent(track, tick, status & 0x0f, first, second); break;
+					case 0x90: event = MidiFileTrack_createNoteOnEvent(track, tick, status & 0x0f, first, second); break;
+					case 0xa0: event = MidiFileTrack_createKeyPressureEvent(track, tick, status & 0x0f, first, second); break;
+					case 0xb0: event = MidiFileTrack_createControlChangeEvent(track, tick, status & 0x0f, first, second); break;
+					case 0xe0: event = MidiFileTrack_createPitchWheelEvent(track, tick, status & 0x0f, first | (second << 7)); break;
+					default: return false;
+				}
+				break;
+			}
+			case 0xc0:
+			case 0xd0:
+			{
+				int data;
+				if (have_first_data)
+					data = first_byte;
+				else if (!read_data_byte(reader, &data))
+					return false;
+				if ((status & 0xf0) == 0xc0)
+					event = MidiFileTrack_createProgramChangeEvent(track, tick, status & 0x0f, data);
+				else
+					event = MidiFileTrack_createChannelPressureEvent(track, tick, status & 0x0f, data);
+				break;
+			}
+			case 0xf0:
+			{
+				uint32_t encoded_length;
+				size_t allocation_size;
+				int data_length;
+				unsigned char *data = NULL;
+
+				if (have_first_data) return false;
+				if ((status == 0xf0) || (status == 0xf7))
+				{
+					if (!reader_vlq(reader, &encoded_length) ||
+						!midi_checked_add_size((size_t)encoded_length, 1, &allocation_size) ||
+						(allocation_size > (size_t)INT_MAX) ||
+						(encoded_length > reader->limit - reader->offset)) return false;
+					data = (unsigned char *)midi_malloc(allocation_size);
+					if (data == NULL) return false;
+					data[0] = status;
+					if (!reader_read(reader, data + 1, encoded_length))
+					{
+						midi_free(data);
+						return false;
+					}
+					data_length = (int)allocation_size;
+					event = MidiFileTrack_createSysexEvent(track, tick, data_length, data);
+					midi_free(data);
+					if (event == NULL) return false;
+				}
+				else if (status == 0xff)
+				{
+					unsigned char number;
+					if (!reader_read(reader, &number, 1) || !reader_vlq(reader, &encoded_length) ||
+						(encoded_length > (uint32_t)INT_MAX) ||
+						(encoded_length > reader->limit - reader->offset)) return false;
+					if (number == 0x2f)
+					{
+						if (encoded_length != 0) return false;
+						if (MidiFileTrack_setEndTick(track, tick) != 0) return false;
+						found_end_of_track = true;
+					}
+					else
+					{
+						if (encoded_length != 0)
+						{
+							data = (unsigned char *)midi_malloc((size_t)encoded_length);
+							if (data == NULL) return false;
+							if (!reader_read(reader, data, (size_t)encoded_length))
+							{
+								midi_free(data);
+								return false;
+							}
+						}
+						event = MidiFileTrack_createMetaEvent(track, tick, number, (int)encoded_length, data);
+						midi_free(data);
+						if (event == NULL) return false;
+					}
+				}
+				else
+				{
+					return false;
+				}
+				break;
+			}
+			default:
+				return false;
+		}
+
+		if (event != NULL) COUNT_EVENT();
+	}
+
+	return found_end_of_track;
+}
+
+typedef struct MidiFileWriter
+{
+	FILE *file;
+	bool failed;
+} MidiFileWriter;
+
+static bool writer_write(MidiFileWriter *writer, const void *buffer, size_t size)
+{
+	if ((writer == NULL) || writer->failed || ((size != 0) &&
+		(MIDI_IO(write)(buffer, 1, size, writer->file) != size)))
+	{
+		if (writer != NULL) writer->failed = true;
+		return false;
+	}
+	return true;
+}
+
+static bool writer_byte(MidiFileWriter *writer, unsigned char value)
+{
+	return writer_write(writer, &value, 1);
+}
+
+static bool writer_uint16(MidiFileWriter *writer, unsigned short value)
+{
+	unsigned char buffer[2];
+	encode_uint16(buffer, value);
+	return writer_write(writer, buffer, sizeof(buffer));
+}
+
+static bool writer_uint32(MidiFileWriter *writer, uint32_t value)
+{
+	unsigned char buffer[4];
+	encode_uint32(buffer, value);
+	return writer_write(writer, buffer, sizeof(buffer));
+}
+
+static bool writer_vlq(MidiFileWriter *writer, uint32_t value)
+{
+	unsigned char buffer[4];
+	int offset = 3;
+
+	if (value > 0x0fffffffU) return false;
+	do
+	{
+		buffer[offset] = (unsigned char)(value & 0x7f);
+		if (offset < 3) buffer[offset] |= 0x80;
+		value >>= 7;
+		offset--;
+	}
+	while (value != 0);
+	return writer_write(writer, buffer + offset + 1, (size_t)(3 - offset));
+}
+
+static bool writer_tell(MidiFileWriter *writer, long *offset)
+{
+	long result;
+	if ((writer == NULL) || (offset == NULL) || writer->failed ||
+		((result = MIDI_IO(tell)(writer->file)) < 0))
+	{
+		if (writer != NULL) writer->failed = true;
+		return false;
+	}
+	*offset = result;
+	return true;
+}
+
+static bool writer_seek(MidiFileWriter *writer, long offset)
+{
+	if ((writer == NULL) || writer->failed || (MIDI_IO(seek)(writer->file, offset, SEEK_SET) != 0))
+	{
+		if (writer != NULL) writer->failed = true;
+		return false;
+	}
+	return true;
 }
 
 /*
@@ -331,385 +690,281 @@ static void free_events_in_track(MidiFileTrack_t track)
 
 MidiFile_t MidiFile_load(char *filename)
 {
-	MidiFile_t midi_file;
-	FILE *in;
-	unsigned char chunk_id[4], division_type_and_resolution[4];
-	int32_t chunk_size, chunk_start;
-	int file_format, number_of_tracks, number_of_tracks_read = 0;
+	MidiFile_t midi_file = NULL;
+	FILE *in = NULL;
+	MidiFileReader reader;
+	unsigned char chunk_id[4];
+	unsigned char division_bytes[2];
+	uint32_t chunk_size;
+	size_t chunk_end;
+	size_t container_end;
+	unsigned short file_format;
+	unsigned short number_of_tracks;
+	unsigned short division;
+	unsigned int tracks_read = 0;
+	MidiFileDivisionType_t division_type;
+	int resolution;
+	long file_end;
+	bool ok = false;
 
-	if ((filename == NULL) || ((in = fopen(filename, "rb")) == NULL)) return NULL;
+	RESET_COUNTERS();
+	if ((filename == NULL) || ((in = MIDI_IO(open_file)(filename, "rb")) == NULL)) return NULL;
+	if ((MIDI_IO(seek)(in, 0, SEEK_END) != 0) || ((file_end = MIDI_IO(tell)(in)) < 0) ||
+		(MIDI_IO(seek)(in, 0, SEEK_SET) != 0)) goto cleanup;
+	reader.file = in;
+	reader.offset = 0;
+	reader.limit = (size_t)file_end;
+	container_end = reader.limit;
 
-	if (fread(chunk_id, 1, 4, in)) {}
-	chunk_size = read_uint32(in);
-	chunk_start = ftell(in);
-
-	/* check for the RMID variation on SMF */
-
+	if (!reader_read(&reader, chunk_id, sizeof(chunk_id))) goto cleanup;
 	if (memcmp(chunk_id, "RIFF", 4) == 0)
 	{
-		if (fread(chunk_id, 1, 4, in)) {} /* technically this one is a type id rather than a chunk id, but we'll reuse the buffer anyway */
-
-		if (memcmp(chunk_id, "RMID", 4) != 0)
+		uint32_t riff_size;
+		if (!reader_little_uint32(&reader, &riff_size) ||
+			!midi_checked_add_size(8, (size_t)riff_size, &container_end) ||
+			(container_end < 12) || (container_end > reader.limit)) goto cleanup;
+		reader.limit = container_end;
+		if (!reader_read(&reader, chunk_id, sizeof(chunk_id)) || (memcmp(chunk_id, "RMID", 4) != 0)) goto cleanup;
+		while (reader.offset < container_end)
 		{
-			fclose(in);
-			return NULL;
-		}
-
-		if (fread(chunk_id, 1, 4, in)) {}
-		chunk_size = read_uint32(in);
-
-		if (memcmp(chunk_id, "data", 4) != 0)
-		{
-			fclose(in);
-			return NULL;
-		}
-
-		if (fread(chunk_id, 1, 4, in)) {}
-		chunk_size = read_uint32(in);
-		chunk_start = ftell(in);
-	}
-
-	if (memcmp(chunk_id, "MThd", 4) != 0)
-	{
-		fclose(in);
-		return NULL;
-	}
-
-	file_format = read_uint16(in);
-	number_of_tracks = read_uint16(in);
-	if (fread(division_type_and_resolution, 1, 2, in)) {}
-
-	switch ((signed char)(division_type_and_resolution[0]))
-	{
-		case -24:
-		{
-			midi_file = MidiFile_new(file_format, MIDI_FILE_DIVISION_TYPE_SMPTE24, division_type_and_resolution[1]);
-			break;
-		}
-		case -25:
-		{
-			midi_file = MidiFile_new(file_format, MIDI_FILE_DIVISION_TYPE_SMPTE25, division_type_and_resolution[1]);
-			break;
-		}
-		case -29:
-		{
-			midi_file = MidiFile_new(file_format, MIDI_FILE_DIVISION_TYPE_SMPTE30DROP, division_type_and_resolution[1]);
-			break;
-		}
-		case -30:
-		{
-			midi_file = MidiFile_new(file_format, MIDI_FILE_DIVISION_TYPE_SMPTE30, division_type_and_resolution[1]);
-			break;
-		}
-		default:
-		{
-			midi_file = MidiFile_new(file_format, MIDI_FILE_DIVISION_TYPE_PPQ, interpret_uint16(division_type_and_resolution));
-			break;
+			size_t data_end;
+			reader.limit = container_end;
+			if (!reader_read(&reader, chunk_id, sizeof(chunk_id)) ||
+				!reader_little_uint32(&reader, &chunk_size) ||
+				!midi_checked_add_size(reader.offset, (size_t)chunk_size, &data_end) ||
+				(data_end > container_end)) goto cleanup;
+			COUNT_CHUNK();
+			if (memcmp(chunk_id, "data", 4) == 0)
+			{
+				container_end = data_end;
+				reader.limit = container_end;
+				if (!reader_read(&reader, chunk_id, sizeof(chunk_id))) goto cleanup;
+				break;
+			}
+			{
+				size_t next_chunk;
+				if (!midi_checked_add_size(data_end, (chunk_size & 1U) != 0U, &next_chunk) ||
+					!reader_seek(&reader, next_chunk)) goto cleanup;
+			}
 		}
 	}
 
-	/* forwards compatibility:  skip over any extra header data */
-	fseek(in, chunk_start + chunk_size, SEEK_SET);
-
-	while (number_of_tracks_read < number_of_tracks)
+	if (memcmp(chunk_id, "MThd", 4) != 0 || !reader_uint32(&reader, &chunk_size) ||
+		(chunk_size < 6) || !midi_checked_add_size(reader.offset, (size_t)chunk_size, &chunk_end) ||
+		(chunk_end > container_end)) goto cleanup;
+	COUNT_CHUNK();
+	if (!reader_uint16(&reader, &file_format) || !reader_uint16(&reader, &number_of_tracks) ||
+		!reader_read(&reader, division_bytes, sizeof(division_bytes))) goto cleanup;
+	division = interpret_uint16(division_bytes);
+	if ((file_format > 2) || (number_of_tracks == 0) || ((file_format == 0) && (number_of_tracks != 1))) goto cleanup;
+	if ((division & 0x8000U) == 0)
 	{
-		if (fread(chunk_id, 1, 4, in)) {}
-		chunk_size = read_uint32(in);
-		chunk_start = ftell(in);
+		division_type = MIDI_FILE_DIVISION_TYPE_PPQ;
+		resolution = division;
+		if (resolution == 0) goto cleanup;
+	}
+	else
+	{
+		resolution = division_bytes[1];
+		if (resolution == 0) goto cleanup;
+		switch ((signed char)division_bytes[0])
+		{
+			case -24: division_type = MIDI_FILE_DIVISION_TYPE_SMPTE24; break;
+			case -25: division_type = MIDI_FILE_DIVISION_TYPE_SMPTE25; break;
+			case -29: division_type = MIDI_FILE_DIVISION_TYPE_SMPTE30DROP; break;
+			case -30: division_type = MIDI_FILE_DIVISION_TYPE_SMPTE30; break;
+			default: goto cleanup;
+		}
+	}
 
+	midi_file = MidiFile_new(file_format, division_type, resolution);
+	if ((midi_file == NULL) || !reader_seek(&reader, chunk_end)) goto cleanup;
+	while (tracks_read < number_of_tracks)
+	{
+		size_t payload_start;
+		reader.limit = container_end;
+		if (!reader_read(&reader, chunk_id, sizeof(chunk_id)) || !reader_uint32(&reader, &chunk_size)) goto cleanup;
+		payload_start = reader.offset;
+		if (!midi_checked_add_size(payload_start, (size_t)chunk_size, &chunk_end) ||
+			(chunk_end > container_end)) goto cleanup;
+		COUNT_CHUNK();
 		if (memcmp(chunk_id, "MTrk", 4) == 0)
 		{
-			MidiFileTrack_t track = MidiFile_createTrack(midi_file);
-			int32_t tick, previous_tick = 0;
-			unsigned char status, running_status = 0;
-			int at_end_of_track = 0;
-
-			while ((ftell(in) < chunk_start + chunk_size) && !at_end_of_track)
-			{
-				tick = read_variable_length_quantity(in) + previous_tick;
-				previous_tick = tick;
-
-				status = fgetc(in);
-
-				if ((status & 0x80) == 0x00)
-				{
-					status = running_status;
-					fseek(in, -1, SEEK_CUR);
-				}
-				else
-				{
-					running_status = status;
-				}
-
-				switch (status & 0xF0)
-				{
-					case 0x80:
-					{
-						int channel = status & 0x0F;
-						int note = fgetc(in);
-						int velocity = fgetc(in);
-						MidiFileTrack_createNoteOffEvent(track, tick, channel, note, velocity);
-						break;
-					}
-					case 0x90:
-					{
-						int channel = status & 0x0F;
-						int note = fgetc(in);
-						int velocity = fgetc(in);
-						MidiFileTrack_createNoteOnEvent(track, tick, channel, note, velocity);
-						break;
-					}
-					case 0xA0:
-					{
-						int channel = status & 0x0F;
-						int note = fgetc(in);
-						int amount = fgetc(in);
-						MidiFileTrack_createKeyPressureEvent(track, tick, channel, note, amount);
-						break;
-					}
-					case 0xB0:
-					{
-						int channel = status & 0x0F;
-						int number = fgetc(in);
-						int value = fgetc(in);
-						MidiFileTrack_createControlChangeEvent(track, tick, channel, number, value);
-						break;
-					}
-					case 0xC0:
-					{
-						int channel = status & 0x0F;
-						int number = fgetc(in);
-						MidiFileTrack_createProgramChangeEvent(track, tick, channel, number);
-						break;
-					}
-					case 0xD0:
-					{
-						int channel = status & 0x0F;
-						int amount = fgetc(in);
-						MidiFileTrack_createChannelPressureEvent(track, tick, channel, amount);
-						break;
-					}
-					case 0xE0:
-					{
-						int channel = status & 0x0F;
-						int value = fgetc(in);
-						// fixed reversed byte order -- ag
-						value = value | (fgetc(in) << 7);
-						MidiFileTrack_createPitchWheelEvent(track, tick, channel, value);
-						break;
-					}
-					case 0xF0:
-					{
-						switch (status)
-						{
-							case 0xF0:
-							case 0xF7:
-							{
-								int data_length = read_variable_length_quantity(in) + 1;
-								unsigned char *data_buffer = malloc(data_length);
-								data_buffer[0] = status;
-								if (fread(data_buffer + 1, 1, data_length - 1, in)) {}
-								MidiFileTrack_createSysexEvent(track, tick, data_length, data_buffer);
-								free(data_buffer);
-								break;
-							}
-							case 0xFF:
-							{
-								int number = fgetc(in);
-								int data_length = read_variable_length_quantity(in);
-								unsigned char *data_buffer = malloc(data_length);
-								if (fread(data_buffer, 1, data_length, in)) {}
-
-								if (number == 0x2F)
-								{
-									MidiFileTrack_setEndTick(track, tick);
-									at_end_of_track = 1;
-								}
-								else
-								{
-									MidiFileTrack_createMetaEvent(track, tick, number, data_length, data_buffer);
-								}
-
-								free(data_buffer);
-								break;
-							}
-						}
-
-						break;
-					}
-				}
-			}
-
-			number_of_tracks_read++;
+			reader.limit = chunk_end;
+			if (!parse_track(&reader, midi_file)) goto cleanup;
+			tracks_read++;
 		}
-
-		/* forwards compatibility:  skip over any unrecognized chunks, or extra data at the end of tracks */
-		fseek(in, chunk_start + chunk_size, SEEK_SET);
+		reader.limit = container_end;
+		if (!reader_seek(&reader, chunk_end)) goto cleanup;
 	}
+	ok = true;
 
-	fclose(in);
+cleanup:
+	if (in != NULL)
+	{
+		if (MIDI_IO(close)(in) != 0) ok = false;
+		in = NULL;
+	}
+	if (!ok)
+	{
+		MidiFile_free(midi_file);
+		midi_file = NULL;
+	}
 	return midi_file;
 }
 
 int MidiFile_save(MidiFile_t midi_file, const char* filename)
 {
-	FILE *out;
+	FILE *out = NULL;
+	MidiFileWriter writer;
 	MidiFileTrack_t track;
+	bool ok = true;
 
-	if ((midi_file == NULL) || (filename == NULL) || ((out = fopen(filename, "wb")) == NULL)) return -1;
-
-	fwrite("MThd", 1, 4, out);
-	write_uint32(out, 6);
-	write_uint16(out, (unsigned short)(MidiFile_getFileFormat(midi_file)));
-	write_uint16(out, (unsigned short)(MidiFile_getNumberOfTracks(midi_file)));
+	if ((midi_file == NULL) || (filename == NULL) || ((out = MIDI_IO(open_file)(filename, "wb")) == NULL)) return -1;
+	writer.file = out;
+	writer.failed = false;
+	ok = writer_write(&writer, "MThd", 4) && writer_uint32(&writer, 6) &&
+		writer_uint16(&writer, (unsigned short)MidiFile_getFileFormat(midi_file)) &&
+		writer_uint16(&writer, (unsigned short)MidiFile_getNumberOfTracks(midi_file));
 
 	switch (MidiFile_getDivisionType(midi_file))
 	{
 		case MIDI_FILE_DIVISION_TYPE_PPQ:
 		{
-			write_uint16(out, (unsigned short)(MidiFile_getResolution(midi_file)));
+			ok = ok && writer_uint16(&writer, (unsigned short)MidiFile_getResolution(midi_file));
 			break;
 		}
 		case MIDI_FILE_DIVISION_TYPE_SMPTE24:
 		{
-			fputc(-24, out);
-			fputc(MidiFile_getResolution(midi_file), out);
+			ok = ok && writer_byte(&writer, (unsigned char)-24) && writer_byte(&writer, (unsigned char)MidiFile_getResolution(midi_file));
 			break;
 		}
 		case MIDI_FILE_DIVISION_TYPE_SMPTE25:
 		{
-			fputc(-25, out);
-			fputc(MidiFile_getResolution(midi_file), out);
+			ok = ok && writer_byte(&writer, (unsigned char)-25) && writer_byte(&writer, (unsigned char)MidiFile_getResolution(midi_file));
 			break;
 		}
 		case MIDI_FILE_DIVISION_TYPE_SMPTE30DROP:
 		{
-			fputc(-29, out);
-			fputc(MidiFile_getResolution(midi_file), out);
+			ok = ok && writer_byte(&writer, (unsigned char)-29) && writer_byte(&writer, (unsigned char)MidiFile_getResolution(midi_file));
 			break;
 		}
 		case MIDI_FILE_DIVISION_TYPE_SMPTE30:
 		{
-			fputc(-30, out);
-			fputc(MidiFile_getResolution(midi_file), out);
+			ok = ok && writer_byte(&writer, (unsigned char)-30) && writer_byte(&writer, (unsigned char)MidiFile_getResolution(midi_file));
 			break;
 		}
-		default: ;
+		default: ok = false;
 	}
 
-	for (track = MidiFile_getFirstTrack(midi_file); track != NULL; track = MidiFileTrack_getNextTrack(track))
+	for (track = MidiFile_getFirstTrack(midi_file); ok && (track != NULL); track = MidiFileTrack_getNextTrack(track))
 	{
 		MidiFileEvent_t event;
-		int32_t track_size_offset, track_start_offset, track_end_offset, tick, previous_tick;
+		long track_size_offset, track_start_offset, track_end_offset;
+		int32_t tick, previous_tick;
 
-		fwrite("MTrk", 1, 4, out);
-
-		track_size_offset = ftell(out);
-		write_uint32(out, 0);
-
-		track_start_offset = ftell(out);
+		ok = writer_write(&writer, "MTrk", 4) && writer_tell(&writer, &track_size_offset) &&
+			writer_uint32(&writer, 0) && writer_tell(&writer, &track_start_offset);
 
 		previous_tick = 0;
 
-		for (event = MidiFileTrack_getFirstEvent(track); event != NULL; event = MidiFileEvent_getNextEventInTrack(event))
+		for (event = MidiFileTrack_getFirstEvent(track); ok && (event != NULL); event = MidiFileEvent_getNextEventInTrack(event))
 		{
 			tick = MidiFileEvent_getTick(event);
-			write_variable_length_quantity(out, tick - previous_tick);
+			if ((tick < previous_tick) || !writer_vlq(&writer, (uint32_t)(tick - previous_tick))) { ok = false; break; }
 
 			switch (MidiFileEvent_getType(event))
 			{
 				case MIDI_FILE_EVENT_TYPE_NOTE_OFF:
 				{
-					fputc(0x80 | (MidiFileNoteOffEvent_getChannel(event) & 0x0F), out);
-					fputc(MidiFileNoteOffEvent_getNote(event) & 0x7F, out);
-					fputc(MidiFileNoteOffEvent_getVelocity(event) & 0x7F, out);
+					ok = writer_byte(&writer, (unsigned char)(0x80 | (MidiFileNoteOffEvent_getChannel(event) & 0x0f))) &&
+						writer_byte(&writer, (unsigned char)(MidiFileNoteOffEvent_getNote(event) & 0x7f)) &&
+						writer_byte(&writer, (unsigned char)(MidiFileNoteOffEvent_getVelocity(event) & 0x7f));
 					break;
 				}
 				case MIDI_FILE_EVENT_TYPE_NOTE_ON:
 				{
-					fputc(0x90 | (MidiFileNoteOnEvent_getChannel(event) & 0x0F), out);
-					fputc(MidiFileNoteOnEvent_getNote(event) & 0x7F, out);
-					fputc(MidiFileNoteOnEvent_getVelocity(event) & 0x7F, out);
+					ok = writer_byte(&writer, (unsigned char)(0x90 | (MidiFileNoteOnEvent_getChannel(event) & 0x0f))) &&
+						writer_byte(&writer, (unsigned char)(MidiFileNoteOnEvent_getNote(event) & 0x7f)) &&
+						writer_byte(&writer, (unsigned char)(MidiFileNoteOnEvent_getVelocity(event) & 0x7f));
 					break;
 				}
 				case MIDI_FILE_EVENT_TYPE_KEY_PRESSURE:
 				{
-					fputc(0xA0 | (MidiFileKeyPressureEvent_getChannel(event) & 0x0F), out);
-					fputc(MidiFileKeyPressureEvent_getNote(event) & 0x7F, out);
-					fputc(MidiFileKeyPressureEvent_getAmount(event) & 0x7F, out);
+					ok = writer_byte(&writer, (unsigned char)(0xa0 | (MidiFileKeyPressureEvent_getChannel(event) & 0x0f))) &&
+						writer_byte(&writer, (unsigned char)(MidiFileKeyPressureEvent_getNote(event) & 0x7f)) &&
+						writer_byte(&writer, (unsigned char)(MidiFileKeyPressureEvent_getAmount(event) & 0x7f));
 					break;
 				}
 				case MIDI_FILE_EVENT_TYPE_CONTROL_CHANGE:
 				{
-					fputc(0xB0 | (MidiFileControlChangeEvent_getChannel(event) & 0x0F), out);
-					fputc(MidiFileControlChangeEvent_getNumber(event) & 0x7F, out);
-					fputc(MidiFileControlChangeEvent_getValue(event) & 0x7F, out);
+					ok = writer_byte(&writer, (unsigned char)(0xb0 | (MidiFileControlChangeEvent_getChannel(event) & 0x0f))) &&
+						writer_byte(&writer, (unsigned char)(MidiFileControlChangeEvent_getNumber(event) & 0x7f)) &&
+						writer_byte(&writer, (unsigned char)(MidiFileControlChangeEvent_getValue(event) & 0x7f));
 					break;
 				}
 				case MIDI_FILE_EVENT_TYPE_PROGRAM_CHANGE:
 				{
-					fputc(0xC0 | (MidiFileProgramChangeEvent_getChannel(event) & 0x0F), out);
-					fputc(MidiFileProgramChangeEvent_getNumber(event) & 0x7F, out);
+					ok = writer_byte(&writer, (unsigned char)(0xc0 | (MidiFileProgramChangeEvent_getChannel(event) & 0x0f))) &&
+						writer_byte(&writer, (unsigned char)(MidiFileProgramChangeEvent_getNumber(event) & 0x7f));
 					break;
 				}
 				case MIDI_FILE_EVENT_TYPE_CHANNEL_PRESSURE:
 				{
-					fputc(0xD0 | (MidiFileChannelPressureEvent_getChannel(event) & 0x0F), out);
-					fputc(MidiFileChannelPressureEvent_getAmount(event) & 0x7F, out);
+					ok = writer_byte(&writer, (unsigned char)(0xd0 | (MidiFileChannelPressureEvent_getChannel(event) & 0x0f))) &&
+						writer_byte(&writer, (unsigned char)(MidiFileChannelPressureEvent_getAmount(event) & 0x7f));
 					break;
 				}
 				case MIDI_FILE_EVENT_TYPE_PITCH_WHEEL:
 				{
 					int value = MidiFilePitchWheelEvent_getValue(event);
-					fputc(0xE0 | (MidiFilePitchWheelEvent_getChannel(event) & 0x0F), out);
-					// fixed reversed byte order -- ag
-					fputc(value & 0x7F, out);
-					fputc((value >> 7) & 0x7F, out);
+					ok = writer_byte(&writer, (unsigned char)(0xe0 | (MidiFilePitchWheelEvent_getChannel(event) & 0x0f))) &&
+						writer_byte(&writer, (unsigned char)(value & 0x7f)) &&
+						writer_byte(&writer, (unsigned char)((value >> 7) & 0x7f));
 					break;
 				}
 				case MIDI_FILE_EVENT_TYPE_SYSEX:
 				{
 					int data_length = MidiFileSysexEvent_getDataLength(event);
 					unsigned char *data = MidiFileSysexEvent_getData(event);
-					fputc(data[0], out);
-					write_variable_length_quantity(out, data_length - 1);
-					fwrite(data + 1, 1, data_length - 1, out);
+					ok = (data_length >= 1) && (data != NULL) && ((data[0] == 0xf0) || (data[0] == 0xf7)) &&
+						writer_byte(&writer, data[0]) && writer_vlq(&writer, (uint32_t)(data_length - 1)) &&
+						writer_write(&writer, data + 1, (size_t)(data_length - 1));
 					break;
 				}
 				case MIDI_FILE_EVENT_TYPE_META:
 				{
 					int data_length = MidiFileMetaEvent_getDataLength(event);
 					unsigned char *data = MidiFileMetaEvent_getData(event);
-					fputc(0xFF, out);
-					fputc(MidiFileMetaEvent_getNumber(event) & 0x7F, out);
-					write_variable_length_quantity(out, data_length);
-					fwrite(data, 1, data_length, out);
+					ok = (data_length >= 0) && ((data_length == 0) || (data != NULL)) &&
+						writer_byte(&writer, 0xff) && writer_byte(&writer, (unsigned char)(MidiFileMetaEvent_getNumber(event) & 0x7f)) &&
+						writer_vlq(&writer, (uint32_t)data_length) && writer_write(&writer, data, (size_t)data_length);
 					break;
 				}
-				default: ;
+				default: ok = false;
 			}
 
 			previous_tick = tick;
 		}
 
-		write_variable_length_quantity(out, MidiFileTrack_getEndTick(track) - previous_tick);
-		fwrite("\xFF\x2F\x00", 1, 3, out);
-
-		track_end_offset = ftell(out);
-
-		fseek(out, track_size_offset, SEEK_SET);
-		write_uint32(out, track_end_offset - track_start_offset);
-
-		fseek(out, track_end_offset, SEEK_SET);
+		if ((MidiFileTrack_getEndTick(track) < previous_tick) ||
+			!writer_vlq(&writer, (uint32_t)(MidiFileTrack_getEndTick(track) - previous_tick)) ||
+			!writer_write(&writer, "\xff\x2f\x00", 3) || !writer_tell(&writer, &track_end_offset) ||
+			(track_end_offset < track_start_offset) ||
+			((unsigned long)(track_end_offset - track_start_offset) > UINT32_MAX) ||
+			!writer_seek(&writer, track_size_offset) ||
+			!writer_uint32(&writer, (uint32_t)(track_end_offset - track_start_offset)) ||
+			!writer_seek(&writer, track_end_offset)) ok = false;
 	}
-
-	fclose(out);
-	return 0;
+	if (ok && (MIDI_IO(flush)(out) != 0)) ok = false;
+	if (MIDI_IO(close)(out) != 0) ok = false;
+	return ok ? 0 : -1;
 }
 
 MidiFile_t MidiFile_new(int file_format, MidiFileDivisionType_t division_type, int resolution)
 {
-	MidiFile_t midi_file = (MidiFile_t)(malloc(sizeof(struct MidiFile)));
+	MidiFile_t midi_file = (MidiFile_t)midi_calloc(1, sizeof(struct MidiFile));
+	if (midi_file == NULL) return NULL;
 	midi_file->file_format = file_format;
 	midi_file->division_type = division_type;
 	midi_file->resolution = resolution;
@@ -731,10 +986,10 @@ int MidiFile_free(MidiFile_t midi_file)
 	{
 		next_track = track->next_track;
 		free_events_in_track(track);
-		free(track);
+		midi_free(track);
 	}
 
-	free(midi_file);
+	midi_free(midi_file);
 	return 0;
 }
 
@@ -783,7 +1038,8 @@ MidiFileTrack_t MidiFile_createTrack(MidiFile_t midi_file)
 
 	if (midi_file == NULL) return NULL;
 
-	new_track = (MidiFileTrack_t)(malloc(sizeof(struct MidiFileTrack)));
+	new_track = (MidiFileTrack_t)midi_calloc(1, sizeof(struct MidiFileTrack));
+	if (new_track == NULL) return NULL;
 	new_track->midi_file = midi_file;
 	new_track->number = midi_file->number_of_tracks;
 	new_track->end_tick = 0;
@@ -1075,7 +1331,7 @@ int MidiFileTrack_delete(MidiFileTrack_t track)
 	}
 
 	free_events_in_track(track);
-	free(track);
+	midi_free(track);
 	return 0;
 }
 
@@ -1110,7 +1366,8 @@ MidiFileTrack_t MidiFileTrack_createTrackBefore(MidiFileTrack_t track)
 
 	if (track == NULL) return NULL;
 
-	new_track = (MidiFileTrack_t)(malloc(sizeof(struct MidiFileTrack)));
+	new_track = (MidiFileTrack_t)midi_calloc(1, sizeof(struct MidiFileTrack));
+	if (new_track == NULL) return NULL;
 	new_track->midi_file = track->midi_file;
 	new_track->number = track->number;
 	new_track->end_tick = 0;
@@ -1156,7 +1413,8 @@ MidiFileEvent_t MidiFileTrack_createNoteOffEvent(MidiFileTrack_t track, int32_t 
 
 	if (track == NULL) return NULL;
 
-	new_event = (MidiFileEvent_t)(malloc(sizeof(struct MidiFileEvent)));
+	new_event = (MidiFileEvent_t)midi_calloc(1, sizeof(struct MidiFileEvent));
+	if (new_event == NULL) return NULL;
 	new_event->track = track;
 	new_event->tick = tick;
 	new_event->type = MIDI_FILE_EVENT_TYPE_NOTE_OFF;
@@ -1175,7 +1433,8 @@ MidiFileEvent_t MidiFileTrack_createNoteOnEvent(MidiFileTrack_t track, int32_t t
 
 	if (track == NULL) return NULL;
 
-	new_event = (MidiFileEvent_t)(malloc(sizeof(struct MidiFileEvent)));
+	new_event = (MidiFileEvent_t)midi_calloc(1, sizeof(struct MidiFileEvent));
+	if (new_event == NULL) return NULL;
 	new_event->track = track;
 	new_event->tick = tick;
 	new_event->type = MIDI_FILE_EVENT_TYPE_NOTE_ON;
@@ -1194,7 +1453,8 @@ MidiFileEvent_t MidiFileTrack_createKeyPressureEvent(MidiFileTrack_t track, int3
 
 	if (track == NULL) return NULL;
 
-	new_event = (MidiFileEvent_t)(malloc(sizeof(struct MidiFileEvent)));
+	new_event = (MidiFileEvent_t)midi_calloc(1, sizeof(struct MidiFileEvent));
+	if (new_event == NULL) return NULL;
 	new_event->track = track;
 	new_event->tick = tick;
 	new_event->type = MIDI_FILE_EVENT_TYPE_KEY_PRESSURE;
@@ -1213,7 +1473,8 @@ MidiFileEvent_t MidiFileTrack_createControlChangeEvent(MidiFileTrack_t track, in
 
 	if (track == NULL) return NULL;
 
-	new_event = (MidiFileEvent_t)(malloc(sizeof(struct MidiFileEvent)));
+	new_event = (MidiFileEvent_t)midi_calloc(1, sizeof(struct MidiFileEvent));
+	if (new_event == NULL) return NULL;
 	new_event->track = track;
 	new_event->tick = tick;
 	new_event->type = MIDI_FILE_EVENT_TYPE_CONTROL_CHANGE;
@@ -1232,7 +1493,8 @@ MidiFileEvent_t MidiFileTrack_createProgramChangeEvent(MidiFileTrack_t track, in
 
 	if (track == NULL) return NULL;
 
-	new_event = (MidiFileEvent_t)(malloc(sizeof(struct MidiFileEvent)));
+	new_event = (MidiFileEvent_t)midi_calloc(1, sizeof(struct MidiFileEvent));
+	if (new_event == NULL) return NULL;
 	new_event->track = track;
 	new_event->tick = tick;
 	new_event->type = MIDI_FILE_EVENT_TYPE_PROGRAM_CHANGE;
@@ -1250,7 +1512,8 @@ MidiFileEvent_t MidiFileTrack_createChannelPressureEvent(MidiFileTrack_t track, 
 
 	if (track == NULL) return NULL;
 
-	new_event = (MidiFileEvent_t)(malloc(sizeof(struct MidiFileEvent)));
+	new_event = (MidiFileEvent_t)midi_calloc(1, sizeof(struct MidiFileEvent));
+	if (new_event == NULL) return NULL;
 	new_event->track = track;
 	new_event->tick = tick;
 	new_event->type = MIDI_FILE_EVENT_TYPE_CHANNEL_PRESSURE;
@@ -1268,7 +1531,8 @@ MidiFileEvent_t MidiFileTrack_createPitchWheelEvent(MidiFileTrack_t track, int32
 
 	if (track == NULL) return NULL;
 
-	new_event = (MidiFileEvent_t)(malloc(sizeof(struct MidiFileEvent)));
+	new_event = (MidiFileEvent_t)midi_calloc(1, sizeof(struct MidiFileEvent));
+	if (new_event == NULL) return NULL;
 	new_event->track = track;
 	new_event->tick = tick;
 	new_event->type = MIDI_FILE_EVENT_TYPE_PITCH_WHEEL;
@@ -1286,12 +1550,18 @@ MidiFileEvent_t MidiFileTrack_createSysexEvent(MidiFileTrack_t track, int32_t ti
 
 	if ((track == NULL) || (data_length < 1) || (data_buffer == NULL)) return NULL;
 
-	new_event = (MidiFileEvent_t)(malloc(sizeof(struct MidiFileEvent)));
+	new_event = (MidiFileEvent_t)midi_calloc(1, sizeof(struct MidiFileEvent));
+	if (new_event == NULL) return NULL;
 	new_event->track = track;
 	new_event->tick = tick;
 	new_event->type = MIDI_FILE_EVENT_TYPE_SYSEX;
 	new_event->u.sysex.data_length = data_length;
-	new_event->u.sysex.data_buffer = malloc(data_length);
+	new_event->u.sysex.data_buffer = midi_malloc((size_t)data_length);
+	if (new_event->u.sysex.data_buffer == NULL)
+	{
+		midi_free(new_event);
+		return NULL;
+	}
 	memcpy(new_event->u.sysex.data_buffer, data_buffer, data_length);
 	new_event->should_be_visited = 0;
 	add_event(new_event);
@@ -1303,16 +1573,26 @@ MidiFileEvent_t MidiFileTrack_createMetaEvent(MidiFileTrack_t track, int32_t tic
 {
 	MidiFileEvent_t new_event;
 
-	if (track == NULL) return NULL;
+	if ((track == NULL) || (data_length < 0) || ((data_length != 0) && (data_buffer == NULL))) return NULL;
 
-	new_event = (MidiFileEvent_t)(malloc(sizeof(struct MidiFileEvent)));
+	new_event = (MidiFileEvent_t)midi_calloc(1, sizeof(struct MidiFileEvent));
+	if (new_event == NULL) return NULL;
 	new_event->track = track;
 	new_event->tick = tick;
 	new_event->type = MIDI_FILE_EVENT_TYPE_META;
 	new_event->u.meta.number = number;
 	new_event->u.meta.data_length = data_length;
-	new_event->u.meta.data_buffer = malloc(data_length);
-	memcpy(new_event->u.meta.data_buffer, data_buffer, data_length);
+	new_event->u.meta.data_buffer = NULL;
+	if (data_length != 0)
+	{
+		new_event->u.meta.data_buffer = midi_malloc((size_t)data_length);
+		if (new_event->u.meta.data_buffer == NULL)
+		{
+			midi_free(new_event);
+			return NULL;
+		}
+		memcpy(new_event->u.meta.data_buffer, data_buffer, (size_t)data_length);
+	}
 	new_event->should_be_visited = 0;
 	add_event(new_event);
 
@@ -1342,7 +1622,8 @@ MidiFileEvent_t MidiFileTrack_createVoiceEvent(MidiFileTrack_t track, int32_t ti
 
 	if (track == NULL) return NULL;
 
-	new_event = (MidiFileEvent_t)(malloc(sizeof(struct MidiFileEvent)));
+	new_event = (MidiFileEvent_t)midi_calloc(1, sizeof(struct MidiFileEvent));
+	if (new_event == NULL) return NULL;
 	new_event->track = track;
 	new_event->tick = tick;
 	MidiFileVoiceEvent_setData(new_event, data);
@@ -1395,18 +1676,18 @@ int MidiFileEvent_delete(MidiFileEvent_t event)
 	{
 		case MIDI_FILE_EVENT_TYPE_SYSEX:
 		{
-			free(event->u.sysex.data_buffer);
+			midi_free(event->u.sysex.data_buffer);
 			break;
 		}
 		case MIDI_FILE_EVENT_TYPE_META:
 		{
-			free(event->u.meta.data_buffer);
+			midi_free(event->u.meta.data_buffer);
 			break;
 		}
 		default: ;
 	}
 
-	free(event);
+	midi_free(event);
 	return 0;
 }
 
@@ -1756,10 +2037,14 @@ unsigned char *MidiFileSysexEvent_getData(MidiFileEvent_t event)
 int MidiFileSysexEvent_setData(MidiFileEvent_t event, int data_length, unsigned char *data_buffer)
 {
 	if ((event == NULL) || (event->type != MIDI_FILE_EVENT_TYPE_SYSEX) || (data_length < 1) || (data_buffer == NULL)) return -1;
-	free(event->u.sysex.data_buffer);
-	event->u.sysex.data_length = data_length;
-	event->u.sysex.data_buffer = malloc(data_length);
-	memcpy(event->u.sysex.data_buffer, data_buffer, data_length);
+	{
+		unsigned char *replacement = (unsigned char *)midi_malloc((size_t)data_length);
+		if (replacement == NULL) return -1;
+		memcpy(replacement, data_buffer, (size_t)data_length);
+		midi_free(event->u.sysex.data_buffer);
+		event->u.sysex.data_length = data_length;
+		event->u.sysex.data_buffer = replacement;
+	}
 	return 0;
 }
 
@@ -1790,11 +2075,19 @@ unsigned char *MidiFileMetaEvent_getData(MidiFileEvent_t event)
 
 int MidiFileMetaEvent_setData(MidiFileEvent_t event, int data_length, unsigned char *data_buffer)
 {
-	if ((event == NULL) || (event->type != MIDI_FILE_EVENT_TYPE_META) || (data_length < 1) || (data_buffer == NULL)) return -1;
-	free(event->u.meta.data_buffer);
-	event->u.meta.data_length = data_length;
-	event->u.meta.data_buffer = malloc(data_length);
-	memcpy(event->u.meta.data_buffer, data_buffer, data_length);
+	if ((event == NULL) || (event->type != MIDI_FILE_EVENT_TYPE_META) || (data_length < 0) || ((data_length != 0) && (data_buffer == NULL))) return -1;
+	{
+		unsigned char *replacement = NULL;
+		if (data_length != 0)
+		{
+			replacement = (unsigned char *)midi_malloc((size_t)data_length);
+			if (replacement == NULL) return -1;
+			memcpy(replacement, data_buffer, (size_t)data_length);
+		}
+		midi_free(event->u.meta.data_buffer);
+		event->u.meta.data_length = data_length;
+		event->u.meta.data_buffer = replacement;
+	}
 	return 0;
 }
 

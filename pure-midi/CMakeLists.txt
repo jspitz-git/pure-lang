@@ -45,6 +45,39 @@ endif()
 
 include(CTest)
 if(BUILD_TESTING)
+	add_executable(pure-midi-midifile-fault
+		tests/midifile_fault_harness.c
+		midifile/midifile.c)
+	target_compile_features(pure-midi-midifile-fault PRIVATE c_std_11)
+	target_compile_definitions(pure-midi-midifile-fault PRIVATE PURE_MIDI_TEST_SEAM=1)
+	target_include_directories(pure-midi-midifile-fault PRIVATE midifile tests)
+	if(MINGW)
+		target_compile_options(pure-midi-midifile-fault PRIVATE -Wall -Wextra -Werror)
+	endif()
+	add_test(NAME pure-midi-midifile-fault
+		COMMAND pure-midi-midifile-fault "${CMAKE_CURRENT_SOURCE_DIR}/examples/prelude3.mid")
+	set_tests_properties(pure-midi-midifile-fault PROPERTIES
+		LABELS "midi;midifile;fault;no-hardware"
+		TIMEOUT 20)
+
+	if(MINGW AND CMAKE_C_COMPILER_ID MATCHES "Clang")
+		add_executable(pure-midi-midifile-fault-asan
+			tests/midifile_fault_harness.c
+			midifile/midifile.c)
+		target_compile_features(pure-midi-midifile-fault-asan PRIVATE c_std_11)
+		target_compile_definitions(pure-midi-midifile-fault-asan PRIVATE PURE_MIDI_TEST_SEAM=1)
+		target_include_directories(pure-midi-midifile-fault-asan PRIVATE midifile tests)
+		target_compile_options(pure-midi-midifile-fault-asan PRIVATE
+			-Wall -Wextra -Werror -fsanitize=address -fno-omit-frame-pointer)
+		target_link_options(pure-midi-midifile-fault-asan PRIVATE -fsanitize=address)
+		add_test(NAME pure-midi-midifile-fault-asan
+			COMMAND pure-midi-midifile-fault-asan "${CMAKE_CURRENT_SOURCE_DIR}/examples/prelude3.mid")
+		set_tests_properties(pure-midi-midifile-fault-asan PROPERTIES
+			LABELS "midi;midifile;fault;asan;no-hardware"
+			ENVIRONMENT "ASAN_OPTIONS=detect_leaks=0:halt_on_error=1:strict_string_checks=1"
+			TIMEOUT 30)
+	endif()
+
   pkg_get_variable(PURE_PREFIX pure prefix)
   find_program(PURE_EXECUTABLE
     NAMES pure

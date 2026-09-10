@@ -80,6 +80,8 @@
  *     range from 0 to 127, etc.
  */
 
+#include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 
 #ifdef __cplusplus
@@ -91,6 +93,9 @@ typedef struct MidiFile *MidiFile_t;
 typedef struct MidiFileTrack *MidiFileTrack_t;
 typedef struct MidiFileEvent *MidiFileEvent_t;
 typedef void (*MidiFileEventVisitorCallback_t)(MidiFileEvent_t event, void *user_data);
+
+bool midi_checked_add_size(size_t a, size_t b, size_t *out);
+bool midi_checked_mul_size(size_t a, size_t b, size_t *out);
 
 typedef enum
 {
