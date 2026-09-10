@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #define ARRAY_COUNT(a) (sizeof(a) / sizeof((a)[0]))
 #define MAX_TRACKED_ALLOCATIONS 8192
@@ -28,7 +29,14 @@ static size_t live_file_count;
 static size_t io_calls;
 static size_t io_fail_at;
 static IoFault io_fault;
+static int fault_fired;
 static int cases_run;
+static unsigned long delayed_read_ms;
+static int delayed_read_fired;
+static int deadline_contract;
+static int deadline_violation_observed;
+
+static double wall_time_seconds(void);
 
 static int fail(const char *message)
 {
@@ -46,7 +54,11 @@ static void *test_allocate(size_t size)
 {
 	void *pointer;
 	allocation_calls++;
-	if ((allocation_fail_at != 0) && (allocation_calls == allocation_fail_at)) return NULL;
+	if ((allocation_fail_at != 0) && (allocation_calls == allocation_fail_at))
+	{
+		fault_fired = 1;
+		return NULL;
+	}
 	pointer = malloc(size);
 	track_pointer(pointer);
 	return pointer;
@@ -56,7 +68,11 @@ static void *test_allocate_zeroed(size_t count, size_t size)
 {
 	void *pointer;
 	allocation_calls++;
-	if ((allocation_fail_at != 0) && (allocation_calls == allocation_fail_at)) return NULL;
+	if ((allocation_fail_at != 0) && (allocation_calls == allocation_fail_at))
+	{
+		fault_fired = 1;
+		return NULL;
+	}
 	pointer = calloc(count, size);
 	track_pointer(pointer);
 	return pointer;
@@ -82,7 +98,12 @@ static int inject(IoFault operation)
 {
 	if (io_fault != operation) return 0;
 	io_calls++;
-	return (io_fail_at != 0) && (io_calls == io_fail_at);
+	if ((io_fail_at != 0) && (io_calls == io_fail_at))
+	{
+		fault_fired = 1;
+		return 1;
+	}
+	return 0;
 }
 
 static FILE *test_open_file(const char *filename, const char *mode)
@@ -94,6 +115,13 @@ static FILE *test_open_file(const char *filename, const char *mode)
 
 static size_t test_read(void *buffer, size_t size, size_t count, FILE *file)
 {
+	if ((delayed_read_ms != 0) && !delayed_read_fired)
+	{
+		double started = wall_time_seconds();
+		delayed_read_fired = 1;
+		if (started >= 0.0)
+			while ((wall_time_seconds() - started) < ((double)delayed_read_ms / 1000.0)) {}
+	}
 	if (inject(IO_FAULT_READ)) return 0;
 	return fread(buffer, size, count, file);
 }
@@ -146,6 +174,7 @@ static void reset_faults(void)
 	io_calls = 0;
 	io_fail_at = 0;
 	io_fault = IO_FAULT_NONE;
+	fault_fired = 0;
 	MidiFile_setTestIoApi(&test_io_api);
 	MidiFile_setTestAllocApi(&test_alloc_api);
 }
@@ -173,6 +202,13 @@ static int write_fixture(const char *path, const unsigned char *data, size_t siz
 	return fclose(file) == 0;
 }
 
+static double wall_time_seconds(void)
+{
+	struct timespec now;
+	if (timespec_get(&now, TIME_UTC) != TIME_UTC) return -1.0;
+	return (double)now.tv_sec + ((double)now.tv_nsec / 1000000000.0);
+}
+
 static size_t make_smf(unsigned char *output, size_t capacity,
 	const unsigned char *track_data, size_t track_size)
 {
@@ -195,11 +231,30 @@ static int expect_rejected_bytes(const char *name, const unsigned char *data, si
 	const char *path = "midifile-fault-input.mid";
 	MidiFile_t midi_file;
 	MidiFileParserCounters counters;
+	double started;
+	double finished;
 
 	reset_faults();
 	if (!write_fixture(path, data, size)) return fail("could not create malformed fixture");
+	started = wall_time_seconds();
+	if (started < 0.0)
+	{
+		remove(path);
+		return fail("could not start malformed-fixture deadline timer");
+	}
 	midi_file = MidiFile_load((char *)path);
+	finished = wall_time_seconds();
 	remove(path);
+	if ((finished < started) || ((finished - started) > 2.0))
+	{
+		if (midi_file != NULL) MidiFile_free(midi_file);
+		if (!resources_are_zero("malformed-fixture deadline")) return 0;
+		deadline_violation_observed = 1;
+		fprintf(deadline_contract ? stdout : stderr,
+			"%s: malformed fixture exceeded two-second deadline: %s (%.3f seconds)\n",
+			deadline_contract ? "PASS" : "FAIL", name, finished - started);
+		return 0;
+	}
 	if (midi_file != NULL)
 	{
 		MidiFile_free(midi_file);
@@ -401,35 +456,54 @@ static int test_hostile_lengths(void)
 static int test_allocation_failures(void)
 {
 	static const unsigned char payload[] = {
-		0, 0x90, 60, 64, 0, 0xf0, 2, 1, 0xf7,
+		0, 0x80, 60, 64, 0, 0x90, 60, 64, 0, 0xa0, 60, 64,
+		0, 0xb0, 1, 2, 0, 0xc0, 5, 0, 0xd0, 6, 0, 0xe0, 0, 64,
+		0, 0xf0, 2, 1, 0xf7,
 		0, 0xff, 1, 2, 'A', 'B', 0, 0xff, 0x2f, 0
 	};
 	unsigned char fixture[128];
 	const char *path = "midifile-allocation.mid";
 	size_t size = make_smf(fixture, sizeof(fixture), payload, sizeof(payload));
 	size_t failure;
-	int reached_success = 0;
+	size_t baseline_calls;
+	MidiFile_t file;
 
 	if (!write_fixture(path, fixture, size)) return fail("could not create allocation fixture");
-	for (failure = 1; failure < 32; failure++)
+	reset_faults();
+	file = MidiFile_load((char *)path);
+	if (file == NULL) return fail("allocation baseline did not load");
+	baseline_calls = allocation_calls;
+	MidiFile_free(file);
+	if (!resources_are_zero("allocation baseline")) return 0;
+
+	for (failure = 1; failure <= baseline_calls; failure++)
 	{
-		MidiFile_t file;
 		reset_faults();
 		allocation_fail_at = failure;
 		file = MidiFile_load((char *)path);
+		if (!fault_fired)
+		{
+			if (file != NULL) MidiFile_free(file);
+			return fail("scheduled allocation fault did not fire");
+		}
 		if (file != NULL)
 		{
 			MidiFile_free(file);
-			reached_success = 1;
-			cases_run++;
-			if (!resources_are_zero("allocation success boundary")) return 0;
-			break;
+			return fail("load succeeded after injected allocation failure");
 		}
 		cases_run++;
 		if (!resources_are_zero("allocation failure rollback")) return 0;
 	}
+
+	reset_faults();
+	allocation_fail_at = baseline_calls + 1;
+	file = MidiFile_load((char *)path);
+	if ((file == NULL) || fault_fired) return fail("allocation terminal success boundary was not clean");
+	MidiFile_free(file);
+	cases_run++;
+	if (!resources_are_zero("allocation terminal success boundary")) return 0;
 	remove(path);
-	return reached_success || fail("allocation failure sweep never reached success");
+	return 1;
 }
 
 static int test_load_io_failure(IoFault fault, const char *name)
@@ -440,30 +514,48 @@ static int test_load_io_failure(IoFault fault, const char *name)
 	};
 	const char *path = "midifile-io-load.mid";
 	size_t failure;
-	int reached_success = 0;
+	size_t baseline_calls;
+	MidiFile_t file;
 
 	if (!write_fixture(path, fixture, sizeof(fixture))) return fail("could not create I/O fixture");
-	for (failure = 1; failure < 64; failure++)
+	reset_faults();
+	io_fault = fault;
+	file = MidiFile_load((char *)path);
+	if (file == NULL) return fail("load I/O baseline did not load");
+	baseline_calls = io_calls;
+	MidiFile_free(file);
+	if (!resources_are_zero("load I/O baseline")) return 0;
+
+	for (failure = 1; failure <= baseline_calls; failure++)
 	{
-		MidiFile_t file;
 		reset_faults();
 		io_fault = fault;
 		io_fail_at = failure;
 		file = MidiFile_load((char *)path);
+		if (!fault_fired)
+		{
+			if (file != NULL) MidiFile_free(file);
+			return fail("scheduled load I/O fault did not fire");
+		}
 		if (file != NULL)
 		{
 			MidiFile_free(file);
-			reached_success = 1;
-			cases_run++;
-			if (!resources_are_zero(name)) return 0;
-			break;
+			return fail("load succeeded after injected I/O failure");
 		}
 		cases_run++;
 		if (!resources_are_zero(name)) return 0;
-		if (fault == IO_FAULT_CLOSE) break;
 	}
+
+	reset_faults();
+	io_fault = fault;
+	io_fail_at = baseline_calls + 1;
+	file = MidiFile_load((char *)path);
+	if ((file == NULL) || fault_fired) return fail("load I/O terminal success boundary was not clean");
+	MidiFile_free(file);
+	cases_run++;
+	if (!resources_are_zero(name)) return 0;
 	remove(path);
-	return ((fault == IO_FAULT_CLOSE) || reached_success) || fail("load I/O sweep never reached success");
+	return 1;
 }
 
 static MidiFile_t make_save_fixture(void)
@@ -487,12 +579,23 @@ static int test_save_io_failure(IoFault fault, const char *name)
 {
 	const char *path = "midifile-io-save.mid";
 	size_t failure;
-	int reached_success = 0;
+	size_t baseline_calls;
+	MidiFile_t file;
+	int result;
 
-	for (failure = 1; failure < 128; failure++)
+	reset_faults();
+	file = make_save_fixture();
+	if (file == NULL) return fail("could not create save baseline fixture");
+	io_fault = fault;
+	io_calls = 0;
+	result = MidiFile_save(file, path);
+	baseline_calls = io_calls;
+	MidiFile_free(file);
+	remove(path);
+	if ((result != 0) || !resources_are_zero("save I/O baseline")) return fail("save I/O baseline failed");
+
+	for (failure = 1; failure <= baseline_calls; failure++)
 	{
-		MidiFile_t file;
-		int result;
 		reset_faults();
 		file = make_save_fixture();
 		if (file == NULL) return fail("could not create save fixture");
@@ -502,19 +605,27 @@ static int test_save_io_failure(IoFault fault, const char *name)
 		result = MidiFile_save(file, path);
 		MidiFile_free(file);
 		remove(path);
+		if (!fault_fired) return fail("scheduled save I/O fault did not fire");
 		if (result == 0)
 		{
-			reached_success = 1;
-			cases_run++;
-			if (!resources_are_zero(name)) return 0;
-			break;
+			return fail("save succeeded after injected I/O failure");
 		}
 		cases_run++;
 		if (!resources_are_zero(name)) return 0;
-		if ((fault == IO_FAULT_FLUSH) || (fault == IO_FAULT_CLOSE)) break;
 	}
-	return (((fault == IO_FAULT_FLUSH) || (fault == IO_FAULT_CLOSE)) || reached_success) ||
-		fail("save I/O sweep never reached success");
+
+	reset_faults();
+	file = make_save_fixture();
+	if (file == NULL) return fail("could not create terminal save fixture");
+	io_fault = fault;
+	io_fail_at = baseline_calls + 1;
+	io_calls = 0;
+	result = MidiFile_save(file, path);
+	MidiFile_free(file);
+	remove(path);
+	if ((result != 0) || fault_fired) return fail("save I/O terminal success boundary was not clean");
+	cases_run++;
+	return resources_are_zero(name);
 }
 
 static int test_valid_roundtrip(const char *fixture_path, size_t *valid_event_count)
@@ -551,10 +662,21 @@ static int test_valid_roundtrip(const char *fixture_path, size_t *valid_event_co
 int main(int argc, char **argv)
 {
 	size_t valid_event_count = 0;
-	if (argc != 2)
+	if ((argc != 2) && !((argc == 3) && (strcmp(argv[2], "--deadline-contract") == 0)))
 	{
-		fail("expected path to the valid MIDI fixture");
+		fail("expected fixture path and optional --deadline-contract");
 		return 2;
+	}
+	if (argc == 3)
+	{
+		deadline_contract = 1;
+		delayed_read_ms = 2100;
+		if (test_truncation_matrix() || !deadline_violation_observed)
+		{
+			fail("deadline contract did not observe an over-budget malformed fixture");
+			return 1;
+		}
+		return 0;
 	}
 	if (!test_truncation_matrix() || !test_hostile_lengths() || !test_allocation_failures() ||
 		!test_load_io_failure(IO_FAULT_READ, "short read") ||

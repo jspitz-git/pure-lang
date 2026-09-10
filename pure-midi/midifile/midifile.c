@@ -520,6 +520,7 @@ static bool parse_track(MidiFileReader *reader, MidiFile_t midi_file)
 					case 0xe0: event = MidiFileTrack_createPitchWheelEvent(track, tick, status & 0x0f, first | (second << 7)); break;
 					default: return false;
 				}
+				if (event == NULL) return false;
 				break;
 			}
 			case 0xc0:
@@ -534,6 +535,7 @@ static bool parse_track(MidiFileReader *reader, MidiFile_t midi_file)
 					event = MidiFileTrack_createProgramChangeEvent(track, tick, status & 0x0f, data);
 				else
 					event = MidiFileTrack_createChannelPressureEvent(track, tick, status & 0x0f, data);
+				if (event == NULL) return false;
 				break;
 			}
 			case 0xf0:

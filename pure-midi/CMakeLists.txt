@@ -45,6 +45,14 @@ endif()
 
 include(CTest)
 if(BUILD_TESTING)
+	set(MIDIFILE_FAULT_RELEASE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/midifile-fault-release")
+	set(MIDIFILE_FAULT_ASAN_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/midifile-fault-asan")
+	set(MIDIFILE_FAULT_DEADLINE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/midifile-fault-deadline")
+	file(MAKE_DIRECTORY
+		"${MIDIFILE_FAULT_RELEASE_DIRECTORY}"
+		"${MIDIFILE_FAULT_ASAN_DIRECTORY}"
+		"${MIDIFILE_FAULT_DEADLINE_DIRECTORY}")
+
 	add_executable(pure-midi-midifile-fault
 		tests/midifile_fault_harness.c
 		midifile/midifile.c)
@@ -58,7 +66,17 @@ if(BUILD_TESTING)
 		COMMAND pure-midi-midifile-fault "${CMAKE_CURRENT_SOURCE_DIR}/examples/prelude3.mid")
 	set_tests_properties(pure-midi-midifile-fault PROPERTIES
 		LABELS "midi;midifile;fault;no-hardware"
+		WORKING_DIRECTORY "${MIDIFILE_FAULT_RELEASE_DIRECTORY}"
 		TIMEOUT 20)
+	add_test(NAME pure-midi-midifile-deadline-contract
+		COMMAND pure-midi-midifile-fault
+			"${CMAKE_CURRENT_SOURCE_DIR}/examples/prelude3.mid"
+			--deadline-contract)
+	set_tests_properties(pure-midi-midifile-deadline-contract PROPERTIES
+		LABELS "midi;midifile;fault;deadline;no-hardware"
+		PASS_REGULAR_EXPRESSION "malformed fixture exceeded two-second deadline"
+		WORKING_DIRECTORY "${MIDIFILE_FAULT_DEADLINE_DIRECTORY}"
+		TIMEOUT 5)
 
 	if(MINGW AND CMAKE_C_COMPILER_ID MATCHES "Clang")
 		add_executable(pure-midi-midifile-fault-asan
@@ -75,6 +93,7 @@ if(BUILD_TESTING)
 		set_tests_properties(pure-midi-midifile-fault-asan PROPERTIES
 			LABELS "midi;midifile;fault;asan;no-hardware"
 			ENVIRONMENT "ASAN_OPTIONS=detect_leaks=0:halt_on_error=1:strict_string_checks=1"
+			WORKING_DIRECTORY "${MIDIFILE_FAULT_ASAN_DIRECTORY}"
 			TIMEOUT 30)
 	endif()
 
