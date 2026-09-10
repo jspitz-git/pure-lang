@@ -96,12 +96,12 @@ AUDIO_ENVIRONMENT = {
     'CTEST_EXE': 'C:/msys64/clang64/bin/ctest.exe',
     'INSTALL_PREFIX': 'build/windows-clang64-prefix',
     'AUDIO_SOURCE': '${{ github.workspace }}/pure-audio',
-    'AUDIO_BUILD': '${{ runner.temp }}/pa8',
-    'AUDIO_STAGE': '${{ runner.temp }}/pa8/package',
     'AUDIO_PREFIX': '${{ github.workspace }}/pure/build/windows-clang64-prefix',
     'AUDIO_RUNTIME_PATH': '${{ github.workspace }}/pure/build/windows-clang64-prefix/bin;C:/msys64/clang64/bin;C:/msys64/usr/bin;C:/Windows/System32;C:/Windows',
 }
 AUDIO_STEP_ENVIRONMENT = {
+    'AUDIO_BUILD': '${{ runner.temp }}/pa8',
+    'AUDIO_STAGE': '${{ runner.temp }}/pa8/package',
     'PATH': '${{ env.AUDIO_RUNTIME_PATH }}', 'PURELIB': '',
     'PURE_INCLUDE': '', 'PURE_LIBRARY': '',
 }
@@ -318,6 +318,9 @@ def validate_audio(root: dict[str, Any], core: dict[str, Any], steps: list[Any])
                 not any(str(value).startswith('!') for value in paths+declared_branches),
                 'audio trigger exclusions can suppress the gate')
     environment = mapping(core.get('env'), 'audio job env')
+    unavailable_runner = re.compile(r'\$\{\{\s*runner\s*(?:\.|\[)')
+    require(not any(unavailable_runner.search(str(value)) for value in environment.values()),
+            'job environment cannot use the unavailable runner context')
     for key, value in AUDIO_ENVIRONMENT.items():
         require(environment.get(key) == value, f'audio job environment origin mismatch: {key}')
     prerequisite = step_by_name(steps, 'Install the CLANG64 build prerequisites')

@@ -43,12 +43,12 @@ AUDIO_PACKAGES = ['tar', 'gzip', 'make'] + [
         'mpfr', 'libiconv', 'pcre', 'readline', 'termcap', 'zstd', 'zlib')]
 AUDIO_JOB_ENV = {
     'AUDIO_SOURCE': '${{ github.workspace }}/pure-audio',
-    'AUDIO_BUILD': '${{ runner.temp }}/pa8',
-    'AUDIO_STAGE': '${{ runner.temp }}/pa8/package',
     'AUDIO_PREFIX': '${{ github.workspace }}/pure/build/windows-clang64-prefix',
     'AUDIO_RUNTIME_PATH': '${{ github.workspace }}/pure/build/windows-clang64-prefix/bin;C:/msys64/clang64/bin;C:/msys64/usr/bin;C:/Windows/System32;C:/Windows',
 }
-AUDIO_ENV = {'PATH': '${{ env.AUDIO_RUNTIME_PATH }}',
+AUDIO_ENV = {'AUDIO_BUILD': '${{ runner.temp }}/pa8',
+             'AUDIO_STAGE': '${{ runner.temp }}/pa8/package',
+             'PATH': '${{ env.AUDIO_RUNTIME_PATH }}',
              'PURELIB': '', 'PURE_INCLUDE': '', 'PURE_LIBRARY': ''}
 AUDIO_INPUTS = {
     'CMAKE_BUILD_TYPE': 'Release', 'BUILD_TESTING': 'ON',
@@ -209,6 +209,12 @@ def audio_mutations():
     for key in AUDIO_JOB_ENV:
         mutate(f'job-env-missing:{key}', lambda d, k=key: d['jobs']['windows-pure-core']['env'].pop(k))
         mutate(f'job-env-origin:{key}', lambda d, k=key: d['jobs']['windows-pure-core']['env'].update({k: 'C:/untrusted'}))
+    mutate('job-env-unavailable-runner-context',
+           lambda d: d['jobs']['windows-pure-core']['env'].update(
+               {'AUDIO_BUILD': '${{ runner.temp }}/pa8'}))
+    mutate('job-env-unavailable-runner-context-compact',
+           lambda d: d['jobs']['windows-pure-core']['env'].update(
+               {'AUDIO_BUILD': '${{runner.temp}}/pa8'}))
     for i, name in enumerate(AUDIO_NAMES):
         mutate(f'step-missing:{name}', lambda d, i=i: d['jobs']['windows-pure-core']['steps'].remove(audio_step(d, i)))
         mutate(f'step-duplicate:{name}', lambda d, i=i: d['jobs']['windows-pure-core']['steps'].append(copy.deepcopy(audio_step(d, i))))
@@ -397,6 +403,12 @@ def expansion_mutations():
 
 
 class AudioWorkflowMutationTests(unittest.TestCase):
+    def test_job_environment_uses_only_available_expression_contexts(self):
+        core_environment = data_workflow()['jobs']['windows-pure-core']['env']
+        for key, value in core_environment.items():
+            with self.subTest(variable=key):
+                self.assertIsNone(re.search(r'\$\{\{\s*runner\s*(?:\.|\[)', value))
+
     def test_independently_authored_pristine(self):
         validate_data(candidate())
 

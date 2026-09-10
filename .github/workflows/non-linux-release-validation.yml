@@ -120,8 +120,6 @@ jobs:
       INSTALL_PREFIX: build/windows-clang64-prefix
       LOG_DIR: build/native-logs/windows-11-x86_64
       AUDIO_SOURCE: ${{ github.workspace }}/pure-audio
-      AUDIO_BUILD: ${{ runner.temp }}/pa8
-      AUDIO_STAGE: ${{ runner.temp }}/pa8/package
       AUDIO_PREFIX: ${{ github.workspace }}/pure/build/windows-clang64-prefix
       AUDIO_RUNTIME_PATH: ${{ github.workspace }}/pure/build/windows-clang64-prefix/bin;C:/msys64/clang64/bin;C:/msys64/usr/bin;C:/Windows/System32;C:/Windows
       FAUST_URL: https://github.com/grame-cncm/faust/releases/download/2.85.9/Faust-2.85.9-win64.exe
@@ -296,6 +294,8 @@ jobs:
       - name: Configure strict pure-audio audit
         shell: pwsh
         env: &pure-audio-environment
+          AUDIO_BUILD: ${{ runner.temp }}/pa8
+          AUDIO_STAGE: ${{ runner.temp }}/pa8/package
           PATH: ${{ env.AUDIO_RUNTIME_PATH }}
           PURELIB: ""
           PURE_INCLUDE: ""
