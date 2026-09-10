@@ -1,0 +1,126 @@
+using system, audio, fftw, samplerate, sndfile;
+
+namespace bounds;
+
+extern expr *pure_audio_test_make_stream(int, int, int, int);
+extern void pure_audio_test_destroy_stream(expr *);
+extern int64 pure_audio_test_io_calls();
+extern int64 pure_audio_test_open_calls();
+extern int64 pure_audio_test_raw_io_calls();
+extern int64 pure_audio_test_echo_int64(int64);
+extern int64 pure_audio_test_sf_seek_roundtrip(char*, int64);
+extern int pure_audio_test_print_bounds_marker();
+
+check name condition
+  = () if condition;
+  = fprintf stderr "pure-audio bounds failed: %s\n" name $$
+    fflush stderr $$ exit 1 otherwise;
+
+  let input_stream = pure_audio_test_make_stream 2 0 Pa::Int16 0;
+  let output_stream = pure_audio_test_make_stream 0 2 0 Pa::Int16;
+  check "fault input stream" (audio::streamp input_stream);
+  check "fault output stream" (audio::streamp output_stream);
+
+  // Windows long is signed 32-bit. These bigints previously narrowed to 0/1.
+  // NULL buffers make a missed raw guard observable without blocking or access.
+  let before_open = pure_audio_test_open_calls;
+  let before_raw = pure_audio_test_raw_io_calls;
+  let open_bad = [audio::open_stream {} {0,1,Pa::Int16,0} 48000 n 0 |
+                 n = [4294967296L,-4294967295L]];
+  let raw_bad = [f s NULL n |
+                f,s = [(audio::read_stream,input_stream),
+                       (audio::write_stream,output_stream)];
+                n = [-1,4294967296L,-4294967295L]];
+  printf "PUBLIC_NARROWING_ENTRY_DELTA open=%d raw=%d\n"
+    (pure_audio_test_open_calls-before_open,
+     pure_audio_test_raw_io_calls-before_raw);
+  // Close accidentally accepted opens before reporting a RED, using only fake devices.
+  do (\s -> if pointerp s then audio::close_stream s else ()) open_bad;
+  check "bigint open sizes rejected before FFI"
+    (all (\s -> ~pointerp s) open_bad && pure_audio_test_open_calls==before_open);
+  check "negative/wrapped raw counts rejected before FFI"
+    (all (\x -> ~intp x) raw_bad && pure_audio_test_raw_io_calls==before_raw);
+  let zero_raw = (audio::read_stream input_stream NULL 0,
+                  audio::write_stream output_stream NULL 0);
+  check "zero raw transfers still reach FFI"
+    (zero_raw==(0,0) && pure_audio_test_raw_io_calls==before_raw+2);
+  let default_streams = [audio::open_stream {} {0,1,Pa::Int16,0} 48000 n 0 |
+                        n = [0,-1,-2147483648L]];
+  check "representable nonpositive open sizes keep default"
+    (all (\s -> audio::streamp s && (audio::stream_info s)!1==512) default_streams &&
+     pure_audio_test_open_calls==before_open+3);
+  do audio::close_stream default_streams;
+
+  let valid_result = audio::write_stream output_stream (imatrix 0) 0;
+  check "fault seam receives valid matrix call"
+    (valid_result == 0);
+  check "fault seam counts valid matrix call"
+    (pure_audio_test_io_calls == 1L);
+  let input_result = audio::read_stream input_stream {0,0,0} 2;
+  check "short audio input matrix rejected"
+    (~intp input_result && pure_audio_test_io_calls == 1L);
+  let output_result = audio::write_stream output_stream {0,0,0} 2;
+  check "short audio output matrix rejected"
+    (~intp output_result && pure_audio_test_io_calls == 1L);
+  let negative_result = audio::write_stream output_stream {0,0,0,0} (-1);
+  check "negative audio frame count rejected"
+    (~intp negative_result && pure_audio_test_io_calls == 1L);
+  let overflow_audio = audio::write_stream output_stream (imatrix 0)
+    1073741824;
+  check "overflowed audio matrix product rejected before FFI"
+    (~intp overflow_audio && pure_audio_test_io_calls == 1L);
+  let native_range_audio = audio::write_stream output_stream (imatrix 0)
+    2147483648L;
+  check "audio frame count outside native long rejected before FFI"
+    (~intp native_range_audio && pure_audio_test_io_calls == 1L);
+  check "Pure int64 FFI round trip"
+    (pure_audio_test_echo_int64 4294967297L == 4294967297L);
+  let short_input = src_simple ({0.0,1.0,2.0},dmatrix 0,2,0,1.0)
+    SRC_LINEAR 2;
+  check "short samplerate input matrix rejected" (~tuplep short_input);
+  let short_output = src_simple (dmatrix 0,dmatrix 3,0,2,1.0)
+    SRC_LINEAR 2;
+  check "short samplerate output matrix rejected" (~tuplep short_output);
+  let invalid_ratio = src_simple (dmatrix 0,dmatrix 0,0,0,0.0)
+    SRC_LINEAR 1;
+  check "invalid samplerate ratio rejected" (~tuplep invalid_ratio);
+  let overflow_output = src_simple
+    (dmatrix 0,dmatrix 0,0,1073741824,1.0) SRC_LINEAR 2;
+  check "overflowed samplerate output product rejected"
+    (~tuplep overflow_output);
+  let native_range_output = src_simple
+    (dmatrix 0,dmatrix 0,0,2147483648L,1.0) SRC_LINEAR 1;
+  check "samplerate frame count outside native long rejected"
+    (~tuplep native_range_output);
+  let nan_ratio = 0.0/0.0;
+  let nan_result = src_simple (dmatrix 0,dmatrix 0,0,0,nan_ratio)
+    SRC_LINEAR 1;
+  check "NaN samplerate ratio rejected" (~tuplep nan_result);
+  let infinite_ratio = 1.0/0.0;
+  let infinite_result = src_simple
+    (dmatrix 0,dmatrix 0,0,0,infinite_ratio) SRC_LINEAR 1;
+  check "infinite samplerate ratio rejected" (~tuplep infinite_result);
+  let state_error = {0};
+  let raw_state = src_new SRC_LINEAR 2 state_error;
+  check "public src_new creates a raw state" (pointerp raw_state);
+  let raw_state_short = src_process raw_state
+    ({0.0},dmatrix 0,1,0,1.0);
+  check "raw public src_new state uses queried channels for bounds"
+    (~tuplep raw_state_short);
+  let raw_state_result = src_process raw_state
+    (dmatrix 0,dmatrix 0,0,0,1.0);
+  check "raw public src_new state remains compatible" (tuplep raw_state_result);
+  check "raw public src_new state cleanup" (null (src_delete raw_state));
+  check "odd FFT input rejected" (~tuplep (fft {1.0,2.0,3.0}));
+
+  let wide_offset = pure_audio_test_echo_int64 4294967297L;
+  let raw_seek = pure_audio_test_sf_seek_roundtrip
+    "pure-audio-bounds.wav" wide_offset;
+  check "sf_count_t input is not truncated to 32 bits"
+    (raw_seek == -1L);
+
+  check "completion marker" (pure_audio_test_print_bounds_marker == 0);
+  pure_audio_test_destroy_stream input_stream;
+  pure_audio_test_destroy_stream output_stream;
+  audio::stop;
+  puts (last argv);

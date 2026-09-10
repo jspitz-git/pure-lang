@@ -13,3 +13,5 @@ src_simple_data(int conv_type, int channels,
 		float *in, long in_size,
 		float *out, long out_size,
 		double ratio);
+
+int pure_src_get_channels(SRC_STATE *state);

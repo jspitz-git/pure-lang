@@ -1,94 +1,578 @@
-foreach(required IN ITEMS
-    LLVM_READOBJ RUNTIME_DIR AUDIO_MODULE FFTW_MODULE SRCPROCESS_MODULE
-    SFINFO_MODULE REALTIME_MODULE)
+cmake_minimum_required(VERSION 3.25)
+
+# Frozen, version-sensitive import policy from the audited Clang 22.1.8
+# payload. Inspection at verification time never supplies its own expectations.
+function(audio_expected_imports name output)
+  set(table
+    "audio.dll|api-ms-win-crt-heap-l1-1-0.dll,api-ms-win-crt-private-l1-1-0.dll,api-ms-win-crt-runtime-l1-1-0.dll,api-ms-win-crt-stdio-l1-1-0.dll,api-ms-win-crt-string-l1-1-0.dll,kernel32.dll,libportaudio.dll,libpure.dll,libwinpthread-1.dll"
+    "fftw.dll|api-ms-win-crt-math-l1-1-0.dll,api-ms-win-crt-private-l1-1-0.dll,api-ms-win-crt-runtime-l1-1-0.dll,api-ms-win-crt-stdio-l1-1-0.dll,api-ms-win-crt-string-l1-1-0.dll,kernel32.dll,libfftw3-3.dll"
+    "srcprocess.dll|api-ms-win-crt-private-l1-1-0.dll,api-ms-win-crt-runtime-l1-1-0.dll,api-ms-win-crt-stdio-l1-1-0.dll,api-ms-win-crt-string-l1-1-0.dll,kernel32.dll,libpure.dll,libsamplerate-0.dll"
+    "sfinfo.dll|api-ms-win-crt-heap-l1-1-0.dll,api-ms-win-crt-private-l1-1-0.dll,api-ms-win-crt-runtime-l1-1-0.dll,api-ms-win-crt-stdio-l1-1-0.dll,api-ms-win-crt-string-l1-1-0.dll,kernel32.dll,libpure.dll,libsndfile-1.dll"
+    "realtime.dll|api-ms-win-crt-private-l1-1-0.dll,api-ms-win-crt-runtime-l1-1-0.dll,api-ms-win-crt-stdio-l1-1-0.dll,api-ms-win-crt-string-l1-1-0.dll,kernel32.dll,libpure.dll,libwinpthread-1.dll"
+    "libc++.dll|api-ms-win-crt-convert-l1-1-0.dll,api-ms-win-crt-environment-l1-1-0.dll,api-ms-win-crt-filesystem-l1-1-0.dll,api-ms-win-crt-heap-l1-1-0.dll,api-ms-win-crt-locale-l1-1-0.dll,api-ms-win-crt-math-l1-1-0.dll,api-ms-win-crt-multibyte-l1-1-0.dll,api-ms-win-crt-private-l1-1-0.dll,api-ms-win-crt-runtime-l1-1-0.dll,api-ms-win-crt-stdio-l1-1-0.dll,api-ms-win-crt-string-l1-1-0.dll,api-ms-win-crt-time-l1-1-0.dll,api-ms-win-crt-utility-l1-1-0.dll,kernel32.dll"
+    "libgmp-10.dll|api-ms-win-crt-convert-l1-1-0.dll,api-ms-win-crt-environment-l1-1-0.dll,api-ms-win-crt-filesystem-l1-1-0.dll,api-ms-win-crt-heap-l1-1-0.dll,api-ms-win-crt-locale-l1-1-0.dll,api-ms-win-crt-private-l1-1-0.dll,api-ms-win-crt-runtime-l1-1-0.dll,api-ms-win-crt-stdio-l1-1-0.dll,api-ms-win-crt-string-l1-1-0.dll,api-ms-win-crt-time-l1-1-0.dll,api-ms-win-crt-utility-l1-1-0.dll,kernel32.dll"
+    "libiconv-2.dll|api-ms-win-crt-convert-l1-1-0.dll,api-ms-win-crt-heap-l1-1-0.dll,api-ms-win-crt-locale-l1-1-0.dll,api-ms-win-crt-private-l1-1-0.dll,api-ms-win-crt-runtime-l1-1-0.dll,api-ms-win-crt-stdio-l1-1-0.dll,api-ms-win-crt-string-l1-1-0.dll,api-ms-win-crt-utility-l1-1-0.dll,kernel32.dll"
+    "libmpfr-6.dll|api-ms-win-crt-convert-l1-1-0.dll,api-ms-win-crt-filesystem-l1-1-0.dll,api-ms-win-crt-heap-l1-1-0.dll,api-ms-win-crt-locale-l1-1-0.dll,api-ms-win-crt-private-l1-1-0.dll,api-ms-win-crt-runtime-l1-1-0.dll,api-ms-win-crt-stdio-l1-1-0.dll,api-ms-win-crt-string-l1-1-0.dll,api-ms-win-crt-utility-l1-1-0.dll,kernel32.dll,libgmp-10.dll"
+    "libpcre-1.dll|api-ms-win-crt-heap-l1-1-0.dll,api-ms-win-crt-private-l1-1-0.dll,api-ms-win-crt-runtime-l1-1-0.dll,api-ms-win-crt-stdio-l1-1-0.dll,api-ms-win-crt-string-l1-1-0.dll,api-ms-win-crt-utility-l1-1-0.dll,kernel32.dll"
+    "libpcreposix-0.dll|api-ms-win-crt-convert-l1-1-0.dll,api-ms-win-crt-heap-l1-1-0.dll,api-ms-win-crt-locale-l1-1-0.dll,api-ms-win-crt-private-l1-1-0.dll,api-ms-win-crt-runtime-l1-1-0.dll,api-ms-win-crt-stdio-l1-1-0.dll,api-ms-win-crt-string-l1-1-0.dll,api-ms-win-crt-utility-l1-1-0.dll,kernel32.dll,libpcre-1.dll"
+    "libpure.dll|advapi32.dll,api-ms-win-crt-convert-l1-1-0.dll,api-ms-win-crt-environment-l1-1-0.dll,api-ms-win-crt-filesystem-l1-1-0.dll,api-ms-win-crt-heap-l1-1-0.dll,api-ms-win-crt-locale-l1-1-0.dll,api-ms-win-crt-math-l1-1-0.dll,api-ms-win-crt-private-l1-1-0.dll,api-ms-win-crt-process-l1-1-0.dll,api-ms-win-crt-runtime-l1-1-0.dll,api-ms-win-crt-stdio-l1-1-0.dll,api-ms-win-crt-string-l1-1-0.dll,api-ms-win-crt-time-l1-1-0.dll,api-ms-win-crt-utility-l1-1-0.dll,kernel32.dll,libc++.dll,libgmp-10.dll,libiconv-2.dll,libmpfr-6.dll,libpcreposix-0.dll,libwinpthread-1.dll,libzstd.dll,ntdll.dll,ole32.dll,shell32.dll,zlib1.dll"
+    "libreadline8.dll|api-ms-win-crt-convert-l1-1-0.dll,api-ms-win-crt-environment-l1-1-0.dll,api-ms-win-crt-filesystem-l1-1-0.dll,api-ms-win-crt-heap-l1-1-0.dll,api-ms-win-crt-locale-l1-1-0.dll,api-ms-win-crt-math-l1-1-0.dll,api-ms-win-crt-private-l1-1-0.dll,api-ms-win-crt-runtime-l1-1-0.dll,api-ms-win-crt-stdio-l1-1-0.dll,api-ms-win-crt-string-l1-1-0.dll,api-ms-win-crt-utility-l1-1-0.dll,kernel32.dll,libtermcap-0.dll,user32.dll"
+    "libtermcap-0.dll|api-ms-win-crt-convert-l1-1-0.dll,api-ms-win-crt-environment-l1-1-0.dll,api-ms-win-crt-filesystem-l1-1-0.dll,api-ms-win-crt-heap-l1-1-0.dll,api-ms-win-crt-locale-l1-1-0.dll,api-ms-win-crt-private-l1-1-0.dll,api-ms-win-crt-runtime-l1-1-0.dll,api-ms-win-crt-stdio-l1-1-0.dll,api-ms-win-crt-string-l1-1-0.dll,api-ms-win-crt-time-l1-1-0.dll,kernel32.dll"
+    "libwinpthread-1.dll|api-ms-win-crt-convert-l1-1-0.dll,api-ms-win-crt-heap-l1-1-0.dll,api-ms-win-crt-private-l1-1-0.dll,api-ms-win-crt-runtime-l1-1-0.dll,api-ms-win-crt-stdio-l1-1-0.dll,api-ms-win-crt-string-l1-1-0.dll,api-ms-win-crt-utility-l1-1-0.dll,kernel32.dll"
+    "libzstd.dll|api-ms-win-crt-convert-l1-1-0.dll,api-ms-win-crt-filesystem-l1-1-0.dll,api-ms-win-crt-heap-l1-1-0.dll,api-ms-win-crt-locale-l1-1-0.dll,api-ms-win-crt-private-l1-1-0.dll,api-ms-win-crt-runtime-l1-1-0.dll,api-ms-win-crt-stdio-l1-1-0.dll,api-ms-win-crt-string-l1-1-0.dll,api-ms-win-crt-time-l1-1-0.dll,api-ms-win-crt-utility-l1-1-0.dll,kernel32.dll"
+    "zlib1.dll|api-ms-win-crt-convert-l1-1-0.dll,api-ms-win-crt-heap-l1-1-0.dll,api-ms-win-crt-locale-l1-1-0.dll,api-ms-win-crt-private-l1-1-0.dll,api-ms-win-crt-runtime-l1-1-0.dll,api-ms-win-crt-stdio-l1-1-0.dll,api-ms-win-crt-string-l1-1-0.dll,api-ms-win-crt-utility-l1-1-0.dll,kernel32.dll"
+    "pure.exe|api-ms-win-crt-convert-l1-1-0.dll,api-ms-win-crt-environment-l1-1-0.dll,api-ms-win-crt-filesystem-l1-1-0.dll,api-ms-win-crt-heap-l1-1-0.dll,api-ms-win-crt-locale-l1-1-0.dll,api-ms-win-crt-math-l1-1-0.dll,api-ms-win-crt-private-l1-1-0.dll,api-ms-win-crt-runtime-l1-1-0.dll,api-ms-win-crt-stdio-l1-1-0.dll,api-ms-win-crt-string-l1-1-0.dll,kernel32.dll,libc++.dll,libpure.dll,libreadline8.dll"
+    "libportaudio.dll|advapi32.dll,api-ms-win-crt-convert-l1-1-0.dll,api-ms-win-crt-filesystem-l1-1-0.dll,api-ms-win-crt-heap-l1-1-0.dll,api-ms-win-crt-locale-l1-1-0.dll,api-ms-win-crt-private-l1-1-0.dll,api-ms-win-crt-runtime-l1-1-0.dll,api-ms-win-crt-stdio-l1-1-0.dll,api-ms-win-crt-string-l1-1-0.dll,api-ms-win-crt-utility-l1-1-0.dll,kernel32.dll,libc++.dll,ole32.dll,setupapi.dll,user32.dll,winmm.dll"
+    "libfftw3-3.dll|api-ms-win-crt-convert-l1-1-0.dll,api-ms-win-crt-filesystem-l1-1-0.dll,api-ms-win-crt-heap-l1-1-0.dll,api-ms-win-crt-locale-l1-1-0.dll,api-ms-win-crt-math-l1-1-0.dll,api-ms-win-crt-private-l1-1-0.dll,api-ms-win-crt-runtime-l1-1-0.dll,api-ms-win-crt-stdio-l1-1-0.dll,api-ms-win-crt-string-l1-1-0.dll,api-ms-win-crt-utility-l1-1-0.dll,kernel32.dll"
+    "libsamplerate-0.dll|api-ms-win-crt-environment-l1-1-0.dll,api-ms-win-crt-heap-l1-1-0.dll,api-ms-win-crt-private-l1-1-0.dll,api-ms-win-crt-runtime-l1-1-0.dll,api-ms-win-crt-stdio-l1-1-0.dll,api-ms-win-crt-string-l1-1-0.dll,api-ms-win-crt-time-l1-1-0.dll,api-ms-win-crt-utility-l1-1-0.dll,kernel32.dll"
+    "libsndfile-1.dll|api-ms-win-crt-convert-l1-1-0.dll,api-ms-win-crt-environment-l1-1-0.dll,api-ms-win-crt-filesystem-l1-1-0.dll,api-ms-win-crt-heap-l1-1-0.dll,api-ms-win-crt-locale-l1-1-0.dll,api-ms-win-crt-math-l1-1-0.dll,api-ms-win-crt-private-l1-1-0.dll,api-ms-win-crt-runtime-l1-1-0.dll,api-ms-win-crt-stdio-l1-1-0.dll,api-ms-win-crt-string-l1-1-0.dll,api-ms-win-crt-time-l1-1-0.dll,api-ms-win-crt-utility-l1-1-0.dll,kernel32.dll,libflac.dll,libmp3lame-0.dll,libmpg123-0.dll,libogg-0.dll,libopus-0.dll,libvorbis-0.dll,libvorbisenc-2.dll"
+    "libogg-0.dll|api-ms-win-crt-heap-l1-1-0.dll,api-ms-win-crt-private-l1-1-0.dll,api-ms-win-crt-runtime-l1-1-0.dll,api-ms-win-crt-stdio-l1-1-0.dll,api-ms-win-crt-string-l1-1-0.dll,api-ms-win-crt-utility-l1-1-0.dll,kernel32.dll"
+    "libvorbisenc-2.dll|api-ms-win-crt-environment-l1-1-0.dll,api-ms-win-crt-heap-l1-1-0.dll,api-ms-win-crt-private-l1-1-0.dll,api-ms-win-crt-runtime-l1-1-0.dll,api-ms-win-crt-stdio-l1-1-0.dll,api-ms-win-crt-string-l1-1-0.dll,api-ms-win-crt-time-l1-1-0.dll,api-ms-win-crt-utility-l1-1-0.dll,kernel32.dll,libvorbis-0.dll"
+    "libflac.dll|api-ms-win-crt-convert-l1-1-0.dll,api-ms-win-crt-filesystem-l1-1-0.dll,api-ms-win-crt-heap-l1-1-0.dll,api-ms-win-crt-locale-l1-1-0.dll,api-ms-win-crt-math-l1-1-0.dll,api-ms-win-crt-private-l1-1-0.dll,api-ms-win-crt-runtime-l1-1-0.dll,api-ms-win-crt-stdio-l1-1-0.dll,api-ms-win-crt-string-l1-1-0.dll,api-ms-win-crt-time-l1-1-0.dll,api-ms-win-crt-utility-l1-1-0.dll,kernel32.dll,libogg-0.dll,libwinpthread-1.dll"
+    "libopus-0.dll|api-ms-win-crt-convert-l1-1-0.dll,api-ms-win-crt-filesystem-l1-1-0.dll,api-ms-win-crt-heap-l1-1-0.dll,api-ms-win-crt-locale-l1-1-0.dll,api-ms-win-crt-math-l1-1-0.dll,api-ms-win-crt-private-l1-1-0.dll,api-ms-win-crt-runtime-l1-1-0.dll,api-ms-win-crt-stdio-l1-1-0.dll,api-ms-win-crt-string-l1-1-0.dll,api-ms-win-crt-utility-l1-1-0.dll,kernel32.dll"
+    "libmpg123-0.dll|api-ms-win-crt-convert-l1-1-0.dll,api-ms-win-crt-environment-l1-1-0.dll,api-ms-win-crt-filesystem-l1-1-0.dll,api-ms-win-crt-heap-l1-1-0.dll,api-ms-win-crt-locale-l1-1-0.dll,api-ms-win-crt-math-l1-1-0.dll,api-ms-win-crt-private-l1-1-0.dll,api-ms-win-crt-runtime-l1-1-0.dll,api-ms-win-crt-stdio-l1-1-0.dll,api-ms-win-crt-string-l1-1-0.dll,api-ms-win-crt-utility-l1-1-0.dll,kernel32.dll,shlwapi.dll"
+    "libmp3lame-0.dll|api-ms-win-crt-convert-l1-1-0.dll,api-ms-win-crt-environment-l1-1-0.dll,api-ms-win-crt-filesystem-l1-1-0.dll,api-ms-win-crt-heap-l1-1-0.dll,api-ms-win-crt-locale-l1-1-0.dll,api-ms-win-crt-math-l1-1-0.dll,api-ms-win-crt-private-l1-1-0.dll,api-ms-win-crt-runtime-l1-1-0.dll,api-ms-win-crt-stdio-l1-1-0.dll,api-ms-win-crt-string-l1-1-0.dll,api-ms-win-crt-time-l1-1-0.dll,api-ms-win-crt-utility-l1-1-0.dll,kernel32.dll"
+    "libvorbis-0.dll|api-ms-win-crt-environment-l1-1-0.dll,api-ms-win-crt-heap-l1-1-0.dll,api-ms-win-crt-math-l1-1-0.dll,api-ms-win-crt-private-l1-1-0.dll,api-ms-win-crt-runtime-l1-1-0.dll,api-ms-win-crt-stdio-l1-1-0.dll,api-ms-win-crt-string-l1-1-0.dll,api-ms-win-crt-time-l1-1-0.dll,api-ms-win-crt-utility-l1-1-0.dll,kernel32.dll,libogg-0.dll")
+  foreach(row IN LISTS table)
+    string(REPLACE "|" ";" fields "${row}")
+    list(GET fields 0 key)
+    if(key STREQUAL name)
+      list(GET fields 1 imports)
+      string(REPLACE "," ";" imports "${imports}")
+      list(SORT imports)
+      set(${output} "${imports}" PARENT_SCOPE)
+      return()
+    endif()
+  endforeach()
+  message(FATAL_ERROR "audio audit: unknown PE contract: ${name}")
+endfunction()
+
+
+# Shared strict-configure / installed verification primitives. Manifests are
+# data, never executable CMake code. No runtime is discovered through PATH.
+function(audio_path input kind output)
+  string(REPLACE "\\" "/" path "${input}")
+  if(NOT path MATCHES "^[A-Za-z]:/" OR path MATCHES "[;|<>\"?*'\r\n]" OR
+      path MATCHES "(^|/)[^/]*[. ](/|$)" OR path MATCHES ":[^/]")
+    message(FATAL_ERROR "audio audit: malformed absolute path: ${input}")
+  endif()
+  cmake_path(NORMAL_PATH path)
+  if(NOT EXISTS "${path}" OR IS_SYMLINK "${path}")
+    message(FATAL_ERROR "audio audit: missing or reparse ${kind}: ${path}")
+  endif()
+  if(kind STREQUAL "file" AND IS_DIRECTORY "${path}")
+    message(FATAL_ERROR "audio audit: expected regular file: ${path}")
+  elseif(kind STREQUAL "directory" AND NOT IS_DIRECTORY "${path}")
+    message(FATAL_ERROR "audio audit: expected directory: ${path}")
+  endif()
+  file(REAL_PATH "${path}" canonical)
+  string(TOLOWER "${path}" folded)
+  string(TOLOWER "${canonical}" folded_real)
+  if(NOT folded STREQUAL folded_real)
+    message(FATAL_ERROR "audio audit: redirected path origin: ${path}")
+  endif()
+  set(${output} "${canonical}" PARENT_SCOPE)
+endfunction()
+
+function(audio_equal_path actual expected)
+  string(TOLOWER "${actual}" actual)
+  string(TOLOWER "${expected}" expected)
+  if(NOT actual STREQUAL expected)
+    message(FATAL_ERROR "audio audit: wrong origin; expected ${expected}, got ${actual}")
+  endif()
+endfunction()
+
+function(audio_windows_authority)
+  cmake_host_system_information(RESULT registered QUERY WINDOWS_REGISTRY
+    "HKLM/SOFTWARE/Microsoft/Windows NT/CurrentVersion" VALUE SystemRoot)
+  audio_path("${registered}/System32" directory system)
+  audio_path("${PURE_AUDIO_WINDOWS_SYSTEM_DIRECTORY}" directory supplied)
+  audio_equal_path("${supplied}" "${system}")
+  set(AUDIO_SYSTEM_DIR "${system}" PARENT_SCOPE)
+  set(AUDIO_POWERSHELL "${system}/WindowsPowerShell/v1.0/powershell.exe" PARENT_SCOPE)
+endfunction()
+
+# IS_SYMLINK alone does not reject every Windows reparse attribute. Validate
+# every ancestor in one process, before launching tools or descending trees.
+function(audio_no_reparse)
+  set(quoted)
+  foreach(path IN LISTS ARGN)
+    audio_path("${path}" any canonical)
+    list(APPEND quoted "'${canonical}'")
+  endforeach()
+  list(JOIN quoted "," array)
+  execute_process(COMMAND "${AUDIO_POWERSHELL}" -NoProfile -NonInteractive -Command
+    "$ErrorActionPreference='Stop'; $seen=@{}; foreach($p in @(${array})) { while($p -and -not $seen.ContainsKey($p)) { $i=Get-Item -LiteralPath $p -Force; if(($i.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) { throw ('reparse component: '+$p) }; $seen[$p]=1; $p=[IO.Path]::GetDirectoryName($p.TrimEnd('/','\\')) } }"
+    RESULT_VARIABLE rc OUTPUT_VARIABLE out ERROR_VARIABLE err TIMEOUT 30)
+  if(NOT rc EQUAL 0 OR NOT err STREQUAL "" OR NOT out STREQUAL "")
+    message(FATAL_ERROR "audio audit: non-reparse validation failed: ${rc}\n${out}${err}")
+  endif()
+endfunction()
+
+function(audio_runtime_names pure_names audio_names)
+  set(${pure_names} pure.exe libpure.dll libc++.dll libgmp-10.dll libiconv-2.dll
+    libmpfr-6.dll libpcre-1.dll libpcreposix-0.dll libreadline8.dll
+    libtermcap-0.dll libwinpthread-1.dll libzstd.dll zlib1.dll PARENT_SCOPE)
+  set(${audio_names} libportaudio.dll libfftw3-3.dll libsamplerate-0.dll
+    libsndfile-1.dll libogg-0.dll libvorbisenc-2.dll libFLAC.dll libopus-0.dll
+    libmpg123-0.dll libmp3lame-0.dll libvorbis-0.dll PARENT_SCOPE)
+endfunction()
+
+function(audio_runtime_rows rows hashes output_paths output_manifest)
+  audio_runtime_names(pure_names audio_names)
+  set(expected ${pure_names} ${audio_names})
+  set(seen)
+  set(paths)
+  set(manifest "")
+  foreach(row IN LISTS rows)
+    string(REPLACE "|" ";" fields "${row}")
+    list(LENGTH fields count)
+    if((hashes AND NOT count EQUAL 3) OR (NOT hashes AND NOT count EQUAL 2))
+      message(FATAL_ERROR "audio audit: malformed runtime declaration: ${row}")
+    endif()
+    list(GET fields 0 name)
+    list(GET fields 1 source)
+    string(TOLOWER "${name}" lower)
+    if(lower IN_LIST seen)
+      message(FATAL_ERROR "audio audit: duplicate runtime declaration: ${name}")
+    endif()
+    list(APPEND seen "${lower}")
+    if(name IN_LIST pure_names)
+      set(origin "${PURE_AUDIO_PURE_PREFIX}/bin/${name}")
+    elseif(name IN_LIST audio_names)
+      set(origin "${PURE_AUDIO_CLANG64_PREFIX}/bin/${name}")
+    else()
+      message(FATAL_ERROR "audio audit: unknown or misspelled runtime declaration: ${name}")
+    endif()
+    audio_path("${source}" file source)
+    audio_equal_path("${source}" "${origin}")
+    file(SHA256 "${source}" hash)
+    if(hashes)
+      list(GET fields 2 pinned)
+      if(NOT pinned MATCHES "^[0-9a-f]+$" OR NOT pinned STREQUAL hash)
+        message(FATAL_ERROR "audio audit: changed configured runtime source: ${source}")
+      endif()
+    endif()
+    list(APPEND paths "${source}")
+    string(APPEND manifest "${name}|${source}|${hash}\n")
+  endforeach()
+  list(LENGTH expected expected_count)
+  list(LENGTH seen actual_count)
+  if(NOT actual_count EQUAL expected_count)
+    message(FATAL_ERROR "audio audit: incomplete runtime declarations: expected ${expected_count}, got ${actual_count}")
+  endif()
+  set(${output_paths} "${paths}" PARENT_SCOPE)
+  set(${output_manifest} "${manifest}" PARENT_SCOPE)
+endfunction()
+
+function(audio_parse_pe text path output)
+  set(keys_ImageFileHeader Machine SectionCount TimeDateStamp PointerToSymbolTable
+    SymbolCount StringTableSize OptionalHeaderSize Characteristics)
+  set(keys_ImageOptionalHeader Magic MajorLinkerVersion MinorLinkerVersion
+    SizeOfCode SizeOfInitializedData SizeOfUninitializedData AddressOfEntryPoint
+    BaseOfCode ImageBase SectionAlignment FileAlignment MajorOperatingSystemVersion
+    MinorOperatingSystemVersion MajorImageVersion MinorImageVersion MajorSubsystemVersion
+    MinorSubsystemVersion SizeOfImage SizeOfHeaders CheckSum Subsystem Characteristics
+    SizeOfStackReserve SizeOfStackCommit SizeOfHeapReserve SizeOfHeapCommit
+    NumberOfRvaAndSize DataDirectory)
+  set(keys_DOSHeader Magic UsedBytesInTheLastPage FileSizeInPages NumberOfRelocationItems
+    HeaderSizeInParagraphs MinimumExtraParagraphs MaximumExtraParagraphs InitialRelativeSS
+    InitialSP Checksum InitialIP InitialRelativeCS AddressOfRelocationTable OverlayNumber
+    OEMid OEMinfo AddressOfNewExeHeader)
+  set(keys_DataDirectory ExportTableRVA ExportTableSize ImportTableRVA ImportTableSize
+    ResourceTableRVA ResourceTableSize ExceptionTableRVA ExceptionTableSize
+    CertificateTableRVA CertificateTableSize BaseRelocationTableRVA BaseRelocationTableSize
+    DebugRVA DebugSize ArchitectureRVA ArchitectureSize GlobalPtrRVA GlobalPtrSize
+    TLSTableRVA TLSTableSize LoadConfigTableRVA LoadConfigTableSize BoundImportRVA
+    BoundImportSize IATRVA IATSize DelayImportDescriptorRVA DelayImportDescriptorSize
+    CLRRuntimeHeaderRVA CLRRuntimeHeaderSize ReservedRVA ReservedSize)
+  string(REPLACE "\r\n" "\n" text "${text}")
+  if(text MATCHES "[;\r]")
+    message(FATAL_ERROR "audio audit: malformed readobj characters for ${path}")
+  endif()
+  # CMake lists treat unmatched square brackets as grouping, even across
+  # semicolons. Encode readobj's flag delimiters before splitting lines.
+  string(REPLACE "[" "@AUDIO_LBRACKET@" text "${text}")
+  string(REPLACE "]" "@AUDIO_RBRACKET@" text "${text}")
+  string(REPLACE "\n" ";" lines "${text}")
+  set(stack)
+  set(top_seen)
+  set(imports)
+  foreach(line IN LISTS lines)
+    string(REPLACE "@AUDIO_LBRACKET@" "[" line "${line}")
+    string(REPLACE "@AUDIO_RBRACKET@" "]" line "${line}")
+    if(line STREQUAL "")
+      continue()
+    endif()
+    string(STRIP "${line}" stripped)
+    if(NOT stack)
+      if(line MATCHES "^(File|Format|Arch|AddressSize): (.+)$")
+        set(key "${CMAKE_MATCH_1}")
+        set(value "${CMAKE_MATCH_2}")
+        if(key IN_LIST top_seen)
+          message(FATAL_ERROR "audio audit: duplicate ${key} record for ${path}")
+        endif()
+        list(APPEND top_seen "${key}")
+        set(meta_${key} "${value}")
+      elseif(line MATCHES "^(ImageFileHeader|ImageOptionalHeader|DOSHeader|Import) \\{$")
+        set(section "${CMAKE_MATCH_1}")
+        if(NOT section STREQUAL "Import")
+          if(section IN_LIST top_seen)
+            message(FATAL_ERROR "audio audit: duplicate ${section} for ${path}")
+          endif()
+          list(APPEND top_seen "${section}")
+        endif()
+        set(stack "${section}")
+        set(fields)
+      else()
+        message(FATAL_ERROR "audio audit: unknown/incomplete top-level record for ${path}: ${line}")
+      endif()
+      continue()
+    endif()
+    list(GET stack -1 current)
+    list(LENGTH stack depth)
+    if(stripped STREQUAL "}" OR stripped STREQUAL "]")
+      if((current STREQUAL "Characteristics" AND NOT stripped STREQUAL "]") OR
+          (NOT current STREQUAL "Characteristics" AND NOT stripped STREQUAL "}"))
+        message(FATAL_ERROR "audio audit: unbalanced readobj block for ${path}")
+      endif()
+      if(section STREQUAL "Import")
+        foreach(required Name ImportLookupTableRVA ImportAddressTableRVA)
+          if(NOT required IN_LIST fields)
+            message(FATAL_ERROR "audio audit: incomplete import (${required}) for ${path}")
+          endif()
+        endforeach()
+        string(TOLOWER "${import_Name}" name)
+        if(name MATCHES "^(msys.*|libgcc.*|libstdc\\+\\+.*)\\.dll$")
+          message(FATAL_ERROR "audio audit: forbidden runtime import ${name}")
+        endif()
+        if(name IN_LIST imports)
+          message(FATAL_ERROR "audio audit: duplicate import ${name}")
+        endif()
+        list(APPEND imports "${name}")
+      elseif(NOT current STREQUAL "Characteristics")
+        foreach(key IN LISTS keys_${current})
+          if(NOT "${current}_${key}" IN_LIST fields)
+            message(FATAL_ERROR "audio audit: incomplete ${current} field ${key} for ${path}")
+          endif()
+        endforeach()
+      endif()
+      list(POP_BACK stack)
+    elseif(section STREQUAL "Import")
+      if(NOT depth EQUAL 1 OR NOT line MATCHES "^  (Name|ImportLookupTableRVA|ImportAddressTableRVA|Symbol): (.+)$")
+        message(FATAL_ERROR "audio audit: malformed import record for ${path}: ${line}")
+      endif()
+      set(key "${CMAKE_MATCH_1}")
+      set(value "${CMAKE_MATCH_2}")
+      if(NOT key STREQUAL "Symbol")
+        if(key IN_LIST fields)
+          message(FATAL_ERROR "audio audit: multiple ${key} fields in import for ${path}")
+        endif()
+        list(APPEND fields "${key}")
+      endif()
+      if(key STREQUAL "Name")
+        if(NOT value MATCHES "^[A-Za-z0-9_+.-]+\\.[dD][lL][lL]$")
+          message(FATAL_ERROR "audio audit: malformed import name ${value}")
+        endif()
+      elseif(key MATCHES "RVA$" AND NOT value MATCHES "^0x[0-9A-Fa-f]+$")
+        message(FATAL_ERROR "audio audit: malformed import RVA for ${path}")
+      elseif(key STREQUAL "Symbol" AND NOT value MATCHES "^[^{}]+ \\([0-9]+\\)$")
+        message(FATAL_ERROR "audio audit: malformed import symbol for ${path}")
+      endif()
+      set(import_${key} "${value}")
+    elseif(stripped MATCHES "^Characteristics \\[ \\(0x[0-9A-Fa-f]+\\)$" AND depth EQUAL 1)
+      if("${current}_Characteristics" IN_LIST fields)
+        message(FATAL_ERROR "audio audit: duplicate characteristics for ${path}")
+      endif()
+      list(APPEND fields "${current}_Characteristics")
+      list(APPEND stack Characteristics)
+    elseif(stripped STREQUAL "DataDirectory {" AND section STREQUAL "ImageOptionalHeader" AND depth EQUAL 1)
+      if(ImageOptionalHeader_DataDirectory IN_LIST fields)
+        message(FATAL_ERROR "audio audit: duplicate DataDirectory for ${path}")
+      endif()
+      list(APPEND fields ImageOptionalHeader_DataDirectory)
+      list(APPEND stack DataDirectory)
+    elseif(current STREQUAL "Characteristics")
+      if(NOT stripped MATCHES "^IMAGE_[A-Z0-9_]+ \\(0x[0-9A-Fa-f]+\\)$")
+        message(FATAL_ERROR "audio audit: malformed PE characteristics for ${path}")
+      endif()
+    elseif(stripped MATCHES "^([A-Za-z][A-Za-z0-9]+): ([^{}]+)$")
+      set(key "${CMAKE_MATCH_1}")
+      set(value "${CMAKE_MATCH_2}")
+      if(NOT key IN_LIST keys_${current})
+        message(FATAL_ERROR "audio audit: unknown ${current} field ${key} for ${path}")
+      endif()
+      if(key STREQUAL "Machine")
+        if(NOT value MATCHES "^IMAGE_FILE_MACHINE_[A-Z0-9_]+ \\(0x[0-9A-Fa-f]+\\)$")
+          message(FATAL_ERROR "audio audit: malformed Machine field for ${path}")
+        endif()
+      elseif(key STREQUAL "Subsystem")
+        if(NOT value MATCHES "^IMAGE_SUBSYSTEM_[A-Z0-9_]+ \\(0x[0-9A-Fa-f]+\\)$")
+          message(FATAL_ERROR "audio audit: malformed Subsystem field for ${path}")
+        endif()
+      elseif(key STREQUAL "TimeDateStamp")
+        if(NOT value MATCHES "^[0-9-]+ [0-9:]+ \\(0x[0-9A-Fa-f]+\\)$")
+          message(FATAL_ERROR "audio audit: malformed TimeDateStamp field for ${path}")
+        endif()
+      elseif(NOT (current STREQUAL "DOSHeader" AND key STREQUAL "Magic") AND
+          NOT value MATCHES "^(0x[0-9A-Fa-f]+|[0-9]+)$")
+        message(FATAL_ERROR "audio audit: malformed numeric ${key} field for ${path}")
+      endif()
+      set(field "${current}_${key}")
+      if(field IN_LIST fields)
+        message(FATAL_ERROR "audio audit: duplicate header field ${field} for ${path}")
+      endif()
+      list(APPEND fields "${field}")
+      set(header_${field} "${value}")
+    else()
+      message(FATAL_ERROR "audio audit: malformed header block for ${path}: ${line}")
+    endif()
+  endforeach()
+  if(stack)
+    message(FATAL_ERROR "audio audit: truncated readobj block for ${path}")
+  endif()
+  foreach(required File Format Arch AddressSize ImageFileHeader ImageOptionalHeader DOSHeader)
+    if(NOT required IN_LIST top_seen)
+      message(FATAL_ERROR "audio audit: missing ${required} for ${path}")
+    endif()
+  endforeach()
+  audio_equal_path("${meta_File}" "${path}")
+  if(NOT meta_Format STREQUAL "COFF-x86-64" OR NOT meta_Arch STREQUAL "x86_64" OR
+      NOT meta_AddressSize STREQUAL "64bit" OR
+      NOT header_ImageFileHeader_Machine STREQUAL "IMAGE_FILE_MACHINE_AMD64 (0x8664)" OR
+      NOT header_ImageOptionalHeader_Magic STREQUAL "0x20B" OR
+      NOT header_DOSHeader_Magic STREQUAL "MZ")
+    message(FATAL_ERROR "audio audit: AMD64 PE32+ headers required for ${path}")
+  endif()
+  if(NOT header_DataDirectory_DelayImportDescriptorRVA STREQUAL "0x0" OR
+      NOT header_DataDirectory_DelayImportDescriptorSize STREQUAL "0x0")
+    message(FATAL_ERROR "audio audit: absent/malformed/nonzero delay import directory for ${path}")
+  endif()
+  list(SORT imports)
+  set(${output} "${imports}" PARENT_SCOPE)
+endfunction()
+
+function(audio_read_pe_records path output)
+  execute_process(COMMAND "${LLVM_READOBJ}" --file-headers --coff-imports "${path}"
+    RESULT_VARIABLE rc OUTPUT_VARIABLE records ERROR_VARIABLE err TIMEOUT 30)
+  if(NOT rc EQUAL 0 OR NOT err STREQUAL "")
+    message(FATAL_ERROR "audio audit: cannot inspect ${path}: ${rc}\n${err}")
+  endif()
+  set(${output} "${records}" PARENT_SCOPE)
+endfunction()
+
+function(audio_inspect_pe path output)
+  audio_read_pe_records("${path}" records)
+  audio_parse_pe("${records}" "${path}" imports)
+  set(${output} "${imports}" PARENT_SCOPE)
+endfunction()
+
+function(audio_import_library path)
+  execute_process(COMMAND "${LLVM_READOBJ}" --file-headers "${path}"
+    RESULT_VARIABLE rc OUTPUT_VARIABLE records ERROR_VARIABLE err TIMEOUT 30)
+  if(NOT rc EQUAL 0 OR NOT err STREQUAL "")
+    message(FATAL_ERROR "audio audit: cannot inspect import library ${path}: ${err}")
+  endif()
+  string(REGEX MATCHALL "(^|\n)File: [^\n]+" files "${records}")
+  string(REGEX MATCHALL "(^|\n)Format: [^\n]+" formats "${records}")
+  list(LENGTH files file_count)
+  list(LENGTH formats format_count)
+  if(file_count EQUAL 0 OR NOT file_count EQUAL format_count)
+    message(FATAL_ERROR "audio audit: malformed import library records: ${path}")
+  endif()
+  foreach(format IN LISTS formats)
+    string(STRIP "${format}" format)
+    if(NOT format MATCHES "^Format: COFF-(import-file-)?x86-64$")
+      message(FATAL_ERROR "audio audit: non-AMD64 import library: ${path}: ${format}")
+    endif()
+  endforeach()
+  string(REGEX MATCHALL "(^|\n)  Machine: [^\n]+" machines "${records}")
+  foreach(machine IN LISTS machines)
+    string(STRIP "${machine}" machine)
+    if(NOT machine STREQUAL "Machine: IMAGE_FILE_MACHINE_AMD64 (0x8664)")
+      message(FATAL_ERROR "audio audit: non-AMD64 archive member: ${path}")
+    endif()
+  endforeach()
+  file(READ "${path}" archive_magic LIMIT 8 HEX)
+  if(NOT archive_magic STREQUAL "213c617263683e0a" OR
+      NOT records MATCHES "(^|\n)Format: COFF-import-file-x86-64(\n|$)")
+    message(FATAL_ERROR "audio audit: import-library members required: ${path}")
+  endif()
+endfunction()
+
+function(audio_verify_readobj)
+  audio_path("${LLVM_READOBJ}" file readobj)
+  audio_equal_path("${readobj}" "${PURE_AUDIO_CLANG64_PREFIX}/bin/llvm-readobj.exe")
+  audio_no_reparse("${readobj}")
+  file(SHA256 "${readobj}" actual_hash)
+  if(NOT DEFINED PURE_AUDIO_LLVM_READOBJ_SHA256 OR
+      NOT actual_hash STREQUAL PURE_AUDIO_LLVM_READOBJ_SHA256)
+    message(FATAL_ERROR "audio audit: llvm-readobj configured hash mismatch")
+  endif()
+  execute_process(COMMAND "${readobj}" --version RESULT_VARIABLE rc
+    OUTPUT_VARIABLE version ERROR_VARIABLE err TIMEOUT 30)
+  if(NOT rc EQUAL 0 OR NOT err STREQUAL "" OR
+      NOT version MATCHES "LLVM version 22\\.[0-9]+\\.[0-9]+([ \r\n]|$)")
+    message(FATAL_ERROR "audio audit: standalone llvm-readobj major 22 required: ${rc} ${version}${err}")
+  endif()
+endfunction()
+
+# Tests may include this file and override audio_read_pe_records in their own
+# driver. There is no production CLI option for selecting recorded records.
+function(audio_verify_closure)
+foreach(required LLVM_READOBJ AUDIO_MODULE_DIR PURE_AUDIO_CLANG64_PREFIX
+    PURE_AUDIO_PURE_PREFIX PURE_AUDIO_WINDOWS_SYSTEM_DIRECTORY PURE_AUDIO_RUNTIME_MANIFEST
+    PURE_AUDIO_LLVM_READOBJ_SHA256)
   if(NOT DEFINED ${required} OR "${${required}}" STREQUAL "")
-    message(FATAL_ERROR "${required} is required")
+    message(FATAL_ERROR "audio audit: ${required} is required")
   endif()
 endforeach()
-
-set(runtime_names
-  libportaudio.dll
-  libfftw3-3.dll
-  libsamplerate-0.dll
-  libsndfile-1.dll
-  libogg-0.dll
-  libvorbisenc-2.dll
-  libFLAC.dll
-  libopus-0.dll
-  libmpg123-0.dll
-  libmp3lame-0.dll
-  libvorbis-0.dll
-  libwinpthread-1.dll
-  libc++.dll
-)
-set(modules
-  "${AUDIO_MODULE}"
-  "${FFTW_MODULE}"
-  "${SRCPROCESS_MODULE}"
-  "${SFINFO_MODULE}"
-  "${REALTIME_MODULE}"
-)
-foreach(runtime IN LISTS runtime_names)
-  list(APPEND modules "${RUNTIME_DIR}/${runtime}")
+audio_windows_authority()
+foreach(var LLVM_READOBJ PURE_AUDIO_RUNTIME_MANIFEST)
+  audio_path("${${var}}" file ${var})
 endforeach()
+foreach(var AUDIO_MODULE_DIR PURE_AUDIO_CLANG64_PREFIX PURE_AUDIO_PURE_PREFIX)
+  audio_path("${${var}}" directory ${var})
+endforeach()
+audio_verify_readobj()
+file(READ "${PURE_AUDIO_RUNTIME_MANIFEST}" manifest_text)
+if(manifest_text MATCHES "[;\r]" OR manifest_text MATCHES "\n\n" OR
+    NOT manifest_text MATCHES "\n$")
+  message(FATAL_ERROR "audio audit: malformed runtime manifest text")
+endif()
+string(REGEX REPLACE "\n$" "" manifest_text "${manifest_text}")
+string(REPLACE "\n" ";" rows "${manifest_text}")
+audio_runtime_rows("${rows}" TRUE sources unused_manifest)
+set(paths "${LLVM_READOBJ}" "${PURE_AUDIO_RUNTIME_MANIFEST}" ${sources})
+set(module_names audio.dll fftw.dll srcprocess.dll sfinfo.dll realtime.dll)
+set(all_names)
+foreach(source IN LISTS sources)
+  get_filename_component(name "${source}" NAME)
+  string(TOLOWER "${name}" lower)
+  set(source_${lower} "${source}")
+  if(STAGE_PREFIX)
+    set(resolved_${lower} "${STAGE_PREFIX}/bin/${name}")
+  else()
+    set(resolved_${lower} "${source}")
+  endif()
+  list(APPEND all_names "${lower}")
+endforeach()
+foreach(name IN LISTS module_names)
+  set(source_${name} "${AUDIO_MODULE_DIR}/${name}")
+  if(STAGE_PREFIX)
+    set(resolved_${name} "${STAGE_PREFIX}/lib/pure/${name}")
+  else()
+    set(resolved_${name} "${source_${name}}")
+  endif()
+  list(APPEND all_names "${name}")
+endforeach()
+foreach(name IN LISTS all_names)
+  audio_path("${source_${name}}" file source_${name})
+  audio_path("${resolved_${name}}" file resolved_${name})
+  list(APPEND paths "${source_${name}}" "${resolved_${name}}")
+  file(SHA256 "${source_${name}}" source_hash)
+  file(SHA256 "${resolved_${name}}" resolved_hash)
+  if(NOT source_hash STREQUAL resolved_hash)
+    message(FATAL_ERROR "audio audit: staged hash/origin mismatch: ${name}")
+  endif()
+endforeach()
+audio_no_reparse(${paths})
+if(STAGE_PREFIX)
+  audio_path("${STAGE_PREFIX}" directory STAGE_PREFIX)
+  # Check each directory before descending. An additional PE anywhere under
+  # the stage is rejected, even if it has a known basename in another folder.
+  set(directories "${STAGE_PREFIX}")
+  set(stage_pes)
+  while(directories)
+    list(POP_FRONT directories directory)
+    file(GLOB entries LIST_DIRECTORIES TRUE "${directory}/*")
+    if(entries)
+      audio_no_reparse(${entries})
+    endif()
+    foreach(entry IN LISTS entries)
+      if(IS_DIRECTORY "${entry}")
+        list(APPEND directories "${entry}")
+      else()
+        string(TOLOWER "${entry}" lower)
+        file(READ "${entry}" signature LIMIT 2 HEX)
+        if(lower MATCHES "\\.(dll|exe)$" OR signature STREQUAL "4d5a")
+          get_filename_component(name "${lower}" NAME)
+          if(NOT name IN_LIST all_names OR name IN_LIST stage_pes)
+            message(FATAL_ERROR "audio audit: extra/ambiguous staged PE: ${entry}")
+          endif()
+          audio_equal_path("${entry}" "${resolved_${name}}")
+          list(APPEND stage_pes "${name}")
+        endif()
+      endif()
+    endforeach()
+  endwhile()
+endif()
 
-function(read_imports module output_var)
-  if(NOT EXISTS "${module}")
-    message(FATAL_ERROR "Dependency does not exist: ${module}")
+set(queue audio.dll fftw.dll srcprocess.dll sfinfo.dll realtime.dll pure.exe libpure.dll)
+set(visited)
+set(system_names)
+set(evidence "")
+while(queue)
+  list(POP_FRONT queue name)
+  if(name IN_LIST visited)
+    continue()
   endif()
-  execute_process(
-    COMMAND "${LLVM_READOBJ}" --coff-imports "${module}"
-    RESULT_VARIABLE result
-    OUTPUT_VARIABLE output
-    ERROR_VARIABLE error
-    ENCODING UTF-8
-  )
-  if(NOT result EQUAL 0)
-    message(FATAL_ERROR
-      "Unable to inspect ${module} (${result})\n${output}\n${error}")
+  audio_inspect_pe("${resolved_${name}}" actual)
+  audio_expected_imports("${name}" expected)
+  if(NOT actual STREQUAL expected)
+    message(FATAL_ERROR "audio audit: exact imports differ for ${name}\nexpected: ${expected}\nactual: ${actual}")
   endif()
-  set(${output_var} "${output}" PARENT_SCOPE)
+  list(APPEND visited "${name}")
+  string(APPEND evidence "${name}|${resolved_${name}}|${actual}\n")
+  foreach(import IN LISTS actual)
+    if(import IN_LIST all_names)
+      list(APPEND queue "${import}")
+    elseif(import MATCHES "^api-ms-win-crt-[a-z]+-l1-1-0\\.dll$" OR
+        import MATCHES "^(advapi32|kernel32|ntdll|ole32|setupapi|shell32|shlwapi|user32|winmm)\\.dll$")
+      list(APPEND system_names "${import}")
+    else()
+      message(FATAL_ERROR "audio audit: unknown/unresolved import ${import} from ${name}")
+    endif()
+  endforeach()
+endwhile()
+list(SORT visited)
+list(SORT all_names)
+if(NOT visited STREQUAL all_names)
+  message(FATAL_ERROR "audio audit: declared runtime is outside recursive closure")
+endif()
+list(REMOVE_DUPLICATES system_names)
+list(SORT system_names)
+set(quoted)
+foreach(name IN LISTS system_names)
+  list(APPEND quoted "'${name}'")
+endforeach()
+list(JOIN quoted "," array)
+# Resolve API sets through the OS loader. Guessed downlevel filenames do not
+# establish the Windows mapping, particularly for the private UCRT contract.
+set(native [=[
+using System;
+using System.Text;
+using System.Runtime.InteropServices;
+public static class AudioSystemPE {
+ [DllImport("kernel32", CharSet=CharSet.Unicode, SetLastError=true)] public static extern IntPtr LoadLibraryEx(string n, IntPtr f, uint flags);
+ [DllImport("kernel32", CharSet=CharSet.Unicode)] public static extern uint GetModuleFileName(IntPtr h, StringBuilder p, uint n);
+ [DllImport("kernel32")] public static extern bool FreeLibrary(IntPtr h);
+}
+]=])
+execute_process(COMMAND "${AUDIO_POWERSHELL}" -NoProfile -NonInteractive -Command
+  "$ErrorActionPreference='Stop'; Add-Type -TypeDefinition '${native}'; foreach($n in @(${array})) { $h=[AudioSystemPE]::LoadLibraryEx($n,[IntPtr]::Zero,0x800); if($h -eq [IntPtr]::Zero) { throw ('cannot resolve system import '+$n) }; try { $b=New-Object Text.StringBuilder 4096; if(-not [AudioSystemPE]::GetModuleFileName($h,$b,4096)) { throw 'no system path' }; $p=$b.ToString(); if(-not $p.StartsWith('${AUDIO_SYSTEM_DIR}/'.Replace([char]47,[char]92),[StringComparison]::OrdinalIgnoreCase)) { throw ('foreign system origin '+$p) }; $q=$p; while($q) { $i=Get-Item -LiteralPath $q -Force; if(($i.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) { throw 'system reparse' }; $q=[IO.Path]::GetDirectoryName($q) }; $bytes=[IO.File]::ReadAllBytes($p); if($bytes.Length -lt 64) { throw 'truncated system PE' }; $off=[BitConverter]::ToInt32($bytes,60); if($off -lt 64 -or $off+26 -ge $bytes.Length -or [BitConverter]::ToUInt32($bytes,$off) -ne 0x4550 -or [BitConverter]::ToUInt16($bytes,$off+4) -ne 0x8664 -or [BitConverter]::ToUInt16($bytes,$off+24) -ne 0x20b) { throw 'system PE architecture' }; if($n.StartsWith('api-ms-win-crt-') -and [IO.Path]::GetFileName($p) -ine 'ucrtbase.dll') { throw ('unexpected UCRT host '+$p) }; $n+'|'+$p } finally { [void][AudioSystemPE]::FreeLibrary($h) } }"
+  RESULT_VARIABLE rc OUTPUT_VARIABLE system_evidence ERROR_VARIABLE err TIMEOUT 45)
+if(NOT rc EQUAL 0 OR NOT err STREQUAL "")
+  message(FATAL_ERROR "audio audit: authoritative system resolution failed: ${rc}\n${err}")
+endif()
+list(LENGTH visited count)
+message(STATUS "${evidence}${system_evidence}PE_CLOSURE_OK count=${count}; AMD64 PE32+; UCRT resolved by Windows loader")
 endfunction()
 
-function(require_import module import_name)
-  read_imports("${module}" imports)
-  if(NOT imports MATCHES "Name: ${import_name}")
-    message(FATAL_ERROR "${module} does not import ${import_name}")
+if(PURE_AUDIO_VERIFIER_HELPERS_ONLY)
+  if(CMAKE_SCRIPT_MODE_FILE STREQUAL CMAKE_CURRENT_LIST_FILE)
+    message(FATAL_ERROR "audio audit: helpers-only mode requires inclusion by a driver")
   endif()
-endfunction()
-
-foreach(module IN LISTS modules)
-  read_imports("${module}" imports)
-  if(imports MATCHES
-      "Name: (msys-2\\.0|libgcc[^.]*|libstdc\\+\\+[^.]*)\\.dll")
-    message(FATAL_ERROR "${module} imports an incompatible MSYS/GNU runtime")
-  endif()
-endforeach()
-
-require_import("${AUDIO_MODULE}" "libpure\\.dll")
-require_import("${AUDIO_MODULE}" "libportaudio\\.dll")
-require_import("${AUDIO_MODULE}" "libwinpthread-1\\.dll")
-require_import("${FFTW_MODULE}" "libfftw3-3\\.dll")
-require_import("${SRCPROCESS_MODULE}" "libpure\\.dll")
-require_import("${SRCPROCESS_MODULE}" "libsamplerate-0\\.dll")
-require_import("${SFINFO_MODULE}" "libpure\\.dll")
-require_import("${SFINFO_MODULE}" "libsndfile-1\\.dll")
-require_import("${REALTIME_MODULE}" "libpure\\.dll")
-require_import("${REALTIME_MODULE}" "libwinpthread-1\\.dll")
-
-require_import("${RUNTIME_DIR}/libportaudio.dll" "WINMM\\.dll")
-require_import("${RUNTIME_DIR}/libportaudio.dll" "ole32\\.dll")
-require_import("${RUNTIME_DIR}/libportaudio.dll" "libc\\+\\+\\.dll")
-foreach(codec IN ITEMS
-    libogg-0.dll libvorbisenc-2.dll libFLAC.dll libopus-0.dll
-    libmpg123-0.dll libmp3lame-0.dll libvorbis-0.dll)
-  require_import("${RUNTIME_DIR}/libsndfile-1.dll" "${codec}")
-endforeach()
-require_import("${RUNTIME_DIR}/libvorbisenc-2.dll" "libvorbis-0\\.dll")
-require_import("${RUNTIME_DIR}/libvorbis-0.dll" "libogg-0\\.dll")
-require_import("${RUNTIME_DIR}/libFLAC.dll" "libogg-0\\.dll")
-require_import("${RUNTIME_DIR}/libFLAC.dll" "libwinpthread-1\\.dll")
-
-message(STATUS
-  "Verified pure-audio PE closure: 5 modules, 11 audio/codec DLLs, "
-  "reused libc++/winpthreads, native Windows audio APIs, and UCRT")
+else()
+  audio_verify_closure()
+endif()

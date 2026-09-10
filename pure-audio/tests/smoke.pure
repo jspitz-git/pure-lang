@@ -1,4 +1,4 @@
-using audio, fftw, samplerate, sndfile, realtime;
+using system, audio, fftw, samplerate, sndfile, realtime;
 
 namespace smoke;
 
@@ -80,3 +80,4 @@ when
 end;
 
 smoke::run;
+puts (last argv);

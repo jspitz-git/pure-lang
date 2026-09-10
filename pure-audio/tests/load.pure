@@ -1,4 +1,4 @@
-using audio, fftw, samplerate, sndfile, realtime;
+using system, audio, fftw, samplerate, sndfile, realtime;
 
 if stringp Pa::GetVersionText &&
    stringp src_get_version &&
@@ -6,3 +6,5 @@ if stringp Pa::GetVersionText &&
    intp audio::driver_count &&
    intp audio::device_count
 then audio::stop else exit 1;
+
+puts (last argv);

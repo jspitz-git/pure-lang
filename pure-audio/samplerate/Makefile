@@ -7,13 +7,22 @@ LIBS = -lsamplerate
 
 all: srcprocess$(DLL) samplerate.pure
 
-clean:
-	@test -n "$(DLL)" || { echo "refusing to clean: Pure DLL suffix is empty" >&2; exit 1; }
-	rm -Rf *.o *$(DLL)*
+# Direct cleanup has the same exact suffix/ownership contract as the package.
+ifneq ($(filter clean realclean,$(MAKECMDGOALS)),)
+ifneq ($(DLL),.dll)
+ifneq ($(DLL),.so)
+ifneq ($(DLL),.dylib)
+$(error refusing to clean: invalid Pure DLL suffix)
+endif
+endif
+endif
+endif
 
-realclean:
-	@test -n "$(DLL)" || { echo "refusing to clean: Pure DLL suffix is empty" >&2; exit 1; }
-	rm -Rf *.o *$(DLL)* samplerate.pure
+clean:
+	rm -f -- srcprocess.o srcprocess$(DLL)
+
+realclean: clean
+	rm -f -- samplerate.pure
 
 srcprocess$(DLL): srcprocess.c
 	$(CC) $(shared) $(dllname) -o $@ $(MOD_CFLAGS) $< $(MOD_LDFLAGS)

@@ -134,6 +134,12 @@ audio::errmsg errno::int = Pa::GetErrorText errno;
 private extern expr *open_audio_stream
   (int *in, int *out, double sr, long size, int flags);
 private extern void audio_sentry(void *v, expr *stream);
+private native_long_max native_long_min native_long_count;
+audio::native_long_max =
+  if SIZEOF_LONG==4 then 2147483647L else 9223372036854775807L;
+audio::native_long_min = -native_long_max-1L;
+audio::native_long_count size =
+  integerp size && bigint size>=native_long_min && bigint size<=native_long_max;
 
 /* Open and audio stream for reading, writing or both.
 
@@ -152,7 +158,8 @@ private extern void audio_sentry(void *v, expr *stream);
 
    - size denotes the block size (maximum number of samples per channel which
      can be read or written without blocking). If this is zero or negative, a
-     reasonable default is chosen (512 in the current implementation).
+     reasonable default is chosen (512 in the current implementation). Values
+     outside the signed native long range are rejected before FFI conversion.
 
    - flags can be used to specify special processing options for the stream,
      by or'ing together the corresponding flag values (Pa::ClipOff,
@@ -166,7 +173,7 @@ audio::open_stream inparams::matrix outparams::matrix sr::double size
     when
       inparams = {inparams,{0|i=1..4-#inparams}};
       outparams = {outparams,{0|i=1..4-#outparams}};
-    end if integerp size && sr>0.0 &&
+    end if native_long_count size && sr>0.0 &&
       (null inparams || rowvectorp inparams) && #inparams<=4 &&
       (null outparams || rowvectorp outparams) && #outparams<=4;
 
@@ -174,12 +181,13 @@ audio::open_stream inparams::matrix outparams::matrix sr::double size
 
 public streamp;
 private extern void close_audio_stream(expr *stream);
-audio::close_stream as::pointer = close_audio_stream as if streamp as;
+audio::close_stream as::pointer = close_audio_stream as;
 
 /* Check for a valid open audio stream object and get its associated data. */
 
+private extern int audio_stream_valid(void *v);
 audio::streamp as::pointer = case get_sentry as of
-  audio_sentry v = pointerp v; _ = false;
+  audio_sentry v::pointer = audio_stream_valid v ~= 0; _ = false;
 end;
 audio::streamp _ = false otherwise;
 
@@ -204,6 +212,10 @@ end;
    - audio::stream_time returns the current time of the stream, which is
      useful for synchonizing between different audio and MIDI devices. */
 
+/* audio::stream_consumed reports how many queued output frames the PortAudio
+   callback has actually removed. This supports bounded drain checks; it does
+   not claim that the hardware has physically rendered those frames. */
+
 private extern expr *audio_stream_info(void *v, void *as);
 private extern expr *audio_stream_latencies(void *v, void *as);
 private extern double audio_stream_time(void *v, void *as);
@@ -214,7 +226,9 @@ audio::stream_latencies as::pointer =
   audio_stream_latencies (stream_data as) as if streamp as;
 audio::stream_time as::pointer =
   audio_stream_time (stream_data as) as if streamp as;
-audio::stream_cpu_load as::pointer = Pa::GetStreamCpuLoad as if streamp as;
+private extern double audio_stream_cpu_load(void *v, void *as);
+audio::stream_cpu_load as::pointer =
+  audio_stream_cpu_load (stream_data as) as if streamp as;
 
 /* Stream I/O. These block until the given number of frames have been read or
    written, and return the number of frames actually read or written (which
@@ -222,18 +236,20 @@ audio::stream_cpu_load as::pointer = Pa::GetStreamCpuLoad as if streamp as;
    return value of -1 indicates a generic error (such as, e.g., trying to read
    from a stream which has only be opened for output). */
 
-/* These take a (suitably malloc'ed) buffer pointer for the sample data. */
+/* These take a (suitably malloc'ed) buffer pointer for the sample data. Counts
+   must be nonnegative and fit signed native long before FFI conversion. The
+   caller remains responsible for raw pointer capacity and lifetime. */
 
 private extern int read_audio_stream(void *v, void *as, void *buf, long size);
 private extern int write_audio_stream(void *v, void *as, void *buf, long size);
 
 audio::read_stream as::pointer buf::pointer size =
   read_audio_stream (stream_data as) as buf size
-  if streamp as && integerp size;
+  if streamp as && native_long_count size && size>=0;
 
 audio::write_stream as::pointer buf::pointer size =
   write_audio_stream (stream_data as) as buf size
-  if streamp as && integerp size;
+  if streamp as && native_long_count size && size>=0;
 
 /* For convenience, we also allow the buffer to be specified as an int or
    double matrix. In this case, the sample format of the stream must match the
@@ -246,28 +262,42 @@ private extern int read_audio_stream_int(void*, void*, int*, long);
 private extern int read_audio_stream_double(void*, void*, double*, long);
 private extern int write_audio_stream_int(void*, void*, int*, long);
 private extern int write_audio_stream_double(void*, void*, double*, long);
+private extern int audio_stream_channels(void*, int);
 
 private check_matrix;
 audio::check_matrix x =
   (imatrixp x || dmatrixp x) && (null x || vectorp x || packed x);
 
+private matrix_fits;
+
+audio::matrix_fits as buf size input =
+  check_matrix buf && integerp size && size>=0 && channels>0 &&
+  bigint size<=native_long_max && bigint (#buf)>=sample_count
+when
+  channels = audio_stream_channels (stream_data as) input;
+  sample_count = bigint size*bigint channels;
+end;
+
 audio::read_stream as::pointer buf::matrix size =
   (if imatrixp buf then read_audio_stream_int else read_audio_stream_double)
   (stream_data as) as buf size
-  if streamp as && check_matrix buf && integerp size;
+  if streamp as && matrix_fits as buf size 1;
 
 audio::write_stream as::pointer buf::matrix size =
   (if imatrixp buf then write_audio_stream_int else write_audio_stream_double)
   (stream_data as) as buf size
-  if streamp as && check_matrix buf && integerp size;
+  if streamp as && matrix_fits as buf size 0;
 
 /* Check how many frames can be read from or written to a stream without
    blocking. */
 
 private extern int audio_stream_readable(void *v, void *as);
 private extern int audio_stream_writeable(void *v, void *as);
+private extern int64 audio_stream_consumed_frames(void *v, void *as);
 
 audio::stream_readable as::pointer = audio_stream_readable (stream_data as) as
   if streamp as;
 audio::stream_writeable as::pointer = audio_stream_writeable (stream_data as) as
   if streamp as;
+audio::stream_consumed as::pointer =
+  audio_stream_consumed_frames (stream_data as) as if streamp as;

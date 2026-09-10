@@ -1,4 +1,4 @@
-using audio;
+using system, audio;
 
 namespace hardware;
 
@@ -6,6 +6,11 @@ check name condition
   = () if condition;
   = fprintf stderr "pure-audio hardware test failed: %s\n" name $$ exit 1
     otherwise;
+
+wait_consumed stream frames attempts
+  = true if audio::stream_consumed stream >= frames;
+  = false if attempts <= 0;
+  = nanosleep 0.01 $$ wait_consumed stream frames (attempts-1) otherwise;
 
 playback = ()
 when
@@ -18,9 +23,10 @@ when
   check "playback stream open" (audio::streamp stream);
   silence = dmatrix 256;
   check "bounded playback" (audio::write_stream stream silence 256 == 256);
+  check "callback consumed 256 queued frames" (wait_consumed stream 256 500);
   audio::close_stream stream;
   check "playback stream close" (~audio::streamp stream);
-  printf "playback passed: device %d, %s, %.0f Hz\n"
+  printf "callback consumption passed: device %d, %s, %.0f Hz, 1 channel, 256 frames\n"
          (device,info!0,sample_rate);
   audio::stop;
 end;
@@ -35,11 +41,12 @@ when
                               sample_rate 128 0;
   check "capture stream open" (audio::streamp stream);
   samples = dmatrix 128;
-  check "bounded capture" (audio::read_stream stream samples 128 == 128);
+  received = audio::read_stream stream samples 128;
+  check "bounded capture" (received == 128);
   audio::close_stream stream;
   check "capture stream close" (~audio::streamp stream);
-  printf "capture passed: device %d, %s, %.0f Hz, 128 frames (memory only)\n"
-         (device,info!0,sample_rate);
+  printf "capture passed: device %d, %s, %.0f Hz, 1 requested/received channel, %d frames (memory only)\n"
+         (device,info!0,sample_rate,received);
   audio::stop;
 end;
 

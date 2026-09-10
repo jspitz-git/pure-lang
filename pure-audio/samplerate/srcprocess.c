@@ -2,6 +2,12 @@
 #include "srcprocess.h"
 #include <string.h>
 
+int
+pure_src_get_channels(SRC_STATE *state)
+{
+  return state ? src_get_channels(state) : 0;
+}
+
 pure_expr *
 src_process_data(SRC_STATE *state,
 		 float *in, long in_size,

@@ -1,3 +1,4 @@
 using hardware;
 
 hardware::playback;
+puts (last argv);

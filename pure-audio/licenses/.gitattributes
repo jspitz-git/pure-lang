@@ -1,0 +1,4 @@
+# License payloads are byte-exact copies; do not rewrite their line endings.
+* -text
+# Keep upstream whitespace verbatim; lint the surrounding metadata normally.
+*.txt -whitespace

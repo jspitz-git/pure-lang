@@ -26,14 +26,44 @@ extern void src_float_to_int_array(float*, int*, int);
 /* srcprocess.h: */
 extern expr* src_process_data(SRC_STATE*, float*, long, float*, long, double, int);
 extern expr* src_simple_data(int, int, float*, long, float*, long, double);
+extern int pure_src_get_channels(SRC_STATE*);
 
 /* Convenience wrapper around src_new which either returns an integer error
    code or a SRC_STATE* pointer. It also sets a sentry on the pointer so that
    it frees itself when garbage-collected. */
 
+private src_channels;
+
 src_state conv_type::int channels::int
   = if null state then error!0 else sentry src_delete state
     when error = {0}; state = src_new conv_type channels error end;
+
+src_channels state::pointer = pure_src_get_channels state;
+
+private valid_buffers;
+private valid_frame_count;
+private valid_capacity;
+private valid_ratio;
+private src_native_long_max;
+src_native_long_max =
+  if SIZEOF_LONG==4 then 2147483647L else 9223372036854775807L;
+
+valid_frame_count size =
+  integerp size && size>=0 && bigint size<=src_native_long_max;
+
+valid_capacity buf size channels =
+  bigint (#buf)>=bigint size*bigint channels;
+
+valid_ratio ratio =
+  ~nanp ratio && ~infp ratio && src_is_valid_ratio ratio;
+
+valid_buffers in out in_size out_size ratio channels =
+  dmatrixp in && dmatrixp out &&
+  channels>0 &&
+  valid_frame_count in_size && valid_frame_count out_size &&
+  valid_capacity in in_size channels &&
+  valid_capacity out out_size channels &&
+  valid_ratio ratio;
 
 /* Convenience wrapper around src_process which takes care of filling in the
    the SRC_DATA* pointer. The argument matrices must be of double type. The
@@ -63,11 +93,14 @@ src_process state::pointer (in::matrix, out::matrix,
 
 // Do the actual processing.
 src_process state::pointer (in::matrix, out::matrix,
-	    		    in_size, out_size,
+			    in_size, out_size,
 			    ratio::double,wrap::int)
   = src_process_data state in in_size out out_size ratio wrap
-    if dmatrixp in && dmatrixp out &&
-       integerp in_size && integerp out_size;
+    if valid_buffers in out in_size out_size ratio (src_channels state);
+src_process state::pointer (in::matrix, out::matrix,
+                            in_size, out_size,
+                            ratio::double,wrap::int)
+  = -1 otherwise;
 
 /* Same for the src_simple API. */
 
@@ -85,5 +118,7 @@ src_simple (in::matrix, out::matrix, in_size, out_size, ratio@(p%q))
 src_simple (in::matrix, out::matrix, in_size, out_size, ratio::double)
   conv_type::int channels::int
   = src_simple_data conv_type channels in in_size out out_size ratio
-    if dmatrixp in && dmatrixp out &&
-       integerp in_size && integerp out_size;
+    if valid_buffers in out in_size out_size ratio channels;
+src_simple (in::matrix, out::matrix, in_size, out_size, ratio::double)
+  conv_type::int channels::int
+  = -1 otherwise;

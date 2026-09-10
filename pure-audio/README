@@ -48,14 +48,25 @@ Installation
 Get the latest source from
 https://bitbucket.org/purelang/pure-lang/downloads/pure-audio-@version@.tar.gz.
 
+On native Windows x64, use the strict standalone CMake/CLANG64 instructions
+in WINDOWS.md. They give explicit compiler, header, import-library, runtime
+and Pure-prefix inputs; separate four-worker build/PE gates; the complete
+no-hardware test and extracted-source audit; and component install/license
+verification. Do not regenerate Windows imports with 'make generate' or use
+the POSIX Make installation instructions below. The supported five DLLs and
+six interfaces are listed in WINDOWS.md. Hardware playback/capture are
+bounded, optional manual targets, never mandatory CTest/CI tests.
+
+The following instructions are for POSIX systems:
+
 You need to have libportaudio (v19), libsndfile (1.x), libsamplerate (0.1.x)
 and libfftw3 (3.x) installed on your system. Any fairly recent version of
 these libraries should do. For the realtime module you also need a POSIX
 threads library (libpthread) with the POSIX realtime thread extension; Linux,
 OSX and other Un*x systems should offer this.
 
-The Pure wrappers contained in the distribution are for 64 bit POSIX
-systems. If you're running a 32 bit system, or Windows, then you should
+The POSIX Pure wrappers contained in the distribution are for 64 bit
+systems. If you're running a 32 bit POSIX system, then you should
 regenerate them using 'make generate'. This requires the header files
 portaudio.h, samplerate.h and sndfile.h (and pure-gen, of course). If you do
 this, check the includedir variables defined in the Makefiles, these need to
@@ -74,8 +85,11 @@ License
 pure-audio is Copyright (c) 2010 by Albert Graef, licensed under the 3-clause
 BSD license, see the COPYING file for details.
 
-Please note that if you're using these modules, you're also bound by the
-license terms of the PortAudio, libsamplerate and libsndfile libraries they
-are based on, see the corresponding sources and websites for details.
+Dependency license terms also apply, including FFTW, PortAudio,
+libsamplerate, libsndfile and their runtime dependencies. For the
+version-sensitive Windows package, THIRD_PARTY.md and licenses/origins.tsv
+map the complete staged DLL closure to full license payloads and provenance.
+Bundled texts alone are not a claim that all distribution obligations have
+been satisfied; see those documents and the upstream terms.
 
 .. Enjoy! :)

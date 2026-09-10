@@ -4,22 +4,58 @@ dist = pure-audio-$(version)
 version = 0.6
 
 # check Makefile.common for compiler flags and platform-specific settings
+ifeq ($(strip $(filter-out dist distcheck diffs deb,$(MAKECMDGOALS))),)
+ifneq ($(strip $(MAKECMDGOALS)),)
+# Source/package targets do not need a configured compiler or Pure pkg-config.
+else
 include Makefile.common
+endif
+else
+include Makefile.common
+endif
 
 LIBS = -lportaudio -lpthread
 
 # Comment this out to *not* install the realtime module.
 realtime = realtime
 
-DISTFILES = COPYING Makefile Makefile.common README \
-debian/* examples/*.pure examples/*.pd audio.c audio.pure portaudio.pure \
+override DISTFILES = COPYING CMakeLists.txt Makefile Makefile.common README WINDOWS.md THIRD_PARTY.md \
+audio.c audio.pure audio_test_api.h portaudio.pure \
+cmake/Install.cmake cmake/RunHardwareTest.cmake cmake/RunPureTest.cmake \
+cmake/VerifyInstalledPackage.cmake cmake/VerifyWindowsDependencies.cmake cmake/install_guard.c \
+cmake/CreateSourceArchive.cmake cmake/SourceArchiveTools.ps1 \
+cmake/SourceWorkflow.cmake \
+debian/changelog debian/compat debian/control debian/copyright debian/docs \
+debian/rules debian/source/format debian/watch examples/audio_examp.pure examples/audio_test.pd \
 fftw/Makefile fftw/fftw.c fftw/fftw.pure \
 samplerate/Makefile samplerate/srcprocess.c samplerate/srcprocess.h \
 samplerate/src.pure samplerate/samplerate.pure \
 sndfile/Makefile sndfile/sfinfo.c sndfile/sfinfo.h sndfile/sf.pure \
 sndfile/sndfile.pure \
-realtime/Makefile realtime/realtime.c realtime/realtime.pure
+realtime/Makefile realtime/realtime.c realtime/realtime.pure \
+tests/audio_fault_harness.c tests/bounds.pure tests/cleanup_contract.cmake \
+tests/configure_contract.cmake tests/hardware-capture.pure tests/hardware-playback.pure \
+tests/hardware.pure tests/install_contract.cmake tests/install_guard_contract.ps1 \
+tests/load.pure tests/run_pure_test.c tests/runner_contract.cmake \
+tests/runtime_verifier_contract.cmake tests/smoke.pure tests/source_dist_contract.cmake \
+tests/source_dist_tools.ps1 \
+tests/source_dist_extracted.cmake \
+licenses/.gitattributes licenses/FFTW-COPYING.txt licenses/FFTW-COPYRIGHT.txt licenses/FLAC-Xiph.txt \
+licenses/GMP-COPYING-LESSERv3.txt licenses/GMP-COPYINGv2.txt licenses/GMP-COPYINGv3.txt \
+licenses/LAME-COPYING.txt licenses/MPFR-COPYING-LESSER.txt licenses/MPFR-COPYING.txt \
+licenses/Opus.txt licenses/PCRE-LICENCE.txt licenses/PortAudio.txt \
+licenses/Pure-COPYING-LESSER.txt licenses/Pure-COPYING.txt licenses/Pure-README.txt \
+licenses/Readline-COPYING.txt licenses/Termcap-COPYING.txt licenses/Vorbis-COPYING.txt \
+licenses/Zlib-LICENSE.txt licenses/Zstd-LICENSE.txt licenses/libcxx.txt \
+licenses/libiconv-COPYING-LIB.txt licenses/libogg.txt licenses/libsamplerate.txt \
+licenses/libsndfile.txt licenses/mpg123.txt licenses/origins.tsv licenses/winpthreads.txt
 SEDFILES = README
+DIST_CMAKE ?= cmake
+DIST_TAR ?= tar
+DIST_OUTPUT_DIRECTORY ?= $(CURDIR)
+# Preserve quoting inside legacy Debian flags without interpolating them into
+# another shell command line. SourceWorkflow parses this exported value once.
+export DEBUILD_FLAGS
 
 subdirs = fftw samplerate sndfile $(realtime)
 
@@ -33,17 +69,31 @@ all: audio$(DLL) portaudio.pure subdirs
 subdirs:
 	for dir in $(subdirs); do $(MAKE) -C $$dir all; done
 
+# Validate before expanding the suffix into a shell recipe. Only these exact
+# platform suffixes are supported; patterns and path fragments are never names.
+ifneq ($(filter clean realclean,$(MAKECMDGOALS)),)
+ifneq ($(DLL),.dll)
+ifneq ($(DLL),.so)
+ifneq ($(DLL),.dylib)
+$(error refusing to clean: invalid Pure DLL suffix)
+endif
+endif
+endif
+endif
+
+owned_outputs = audio.o audio$(DLL) \
+fftw/fftw.o fftw/fftw$(DLL) \
+samplerate/srcprocess.o samplerate/srcprocess$(DLL) \
+sndfile/sfinfo.o sndfile/sfinfo$(DLL) \
+realtime/realtime.o realtime/realtime$(DLL)
+
 clean:
-	@test -n "$(DLL)" || { echo "refusing to clean: Pure DLL suffix is empty" >&2; exit 1; }
-	rm -Rf *.o *$(DLL)*
-	for dir in $(subdirs); do $(MAKE) -C $$dir clean; done
+	rm -f -- $(owned_outputs)
 
-realclean:
-	@test -n "$(DLL)" || { echo "refusing to clean: Pure DLL suffix is empty" >&2; exit 1; }
-	rm -Rf *.o *$(DLL)* portaudio.pure
-	for dir in $(subdirs); do $(MAKE) -C $$dir realclean; done
+realclean: clean
+	rm -f -- portaudio.pure samplerate/samplerate.pure sndfile/sndfile.pure
 
-audio$(DLL): audio.c
+audio$(DLL): audio.c audio_test_api.h
 	$(CC) $(shared) $(dllname) -o $@ $(MOD_CFLAGS) $< $(MOD_LDFLAGS)
 
 # Type 'make generate' to force a rebuild of the wrappers. This requires
@@ -73,14 +123,7 @@ endif
 # them against the distributed sources.
 
 diffs:
-	@$(MAKE) dist > /dev/null
-	@rm -rf xxx yyy
-	@tar xfz $(dist).tar.gz && mv $(dist) xxx
-	@tar xfz $(dist).tar.gz && mv $(dist) yyy
-	@rm -f $(dist).tar.gz
-	@cd yyy && $(MAKE) generate > /dev/null
-	@diff -ru xxx yyy || true
-	@rm -rf xxx yyy
+	"$(DIST_CMAKE)" "-DMODE=diffs" $(source_workflow_args) -P "$(CURDIR)/cmake/SourceWorkflow.cmake"
 
 install:
 	test -d "$(DESTDIR)$(libdir)/pure" || mkdir -p "$(DESTDIR)$(libdir)/pure"
@@ -99,25 +142,12 @@ date = $(shell date "+%B %-d, %Y")
 datesubst = sed -e "s?@version@?$(version)?g" -e "s?|today|?$(date)?g" < $(1) > $(2)
 
 dist:
-	rm -rf $(dist)
-	mkdir $(dist) && mkdir $(dist)/debian && mkdir $(dist)/examples && mkdir $(dist)/fftw && mkdir $(dist)/samplerate && mkdir $(dist)/sndfile && mkdir $(dist)/realtime
-	for x in $(DISTFILES); do ln -sf $$PWD/$$x $(dist)/$$x; done
-	for x in $(SEDFILES); do rm -f $(dist)/$$x; $(call datesubst,$$PWD/$$x,$(dist)/$$x); done
-	rm -f $(dist).tar.gz
-	tar cfzh $(dist).tar.gz $(dist)
-	rm -rf $(dist)
+	"$(DIST_CMAKE)" "-DDIST_SOURCE_ROOT=$(CURDIR)" "-DDIST_OUTPUT_DIRECTORY=$(DIST_OUTPUT_DIRECTORY)" "-DDIST_ARCHIVE_BASENAME=$(dist)" "-DDIST_FILES=$(DISTFILES)" "-DDIST_TAR=$(DIST_TAR)" -P "$(CURDIR)/cmake/CreateSourceArchive.cmake"
 
-distcheck: dist
-	tar xfz $(dist).tar.gz
-	cd $(dist) && make && make install DESTDIR=./BUILD
-	rm -rf $(dist)
+source_workflow_args = "-DDIST_SOURCE_ROOT=$(CURDIR)" "-DDIST_ARCHIVE_BASENAME=$(dist)" "-DDIST_FILES=$(DISTFILES)" "-DDIST_TAR=$(DIST_TAR)" "-DDIST_MAKE=$(MAKE)" "-DDIST_AUDIT_BUILD=$(DIST_AUDIT_BUILD)" "-DDIST_DEBIAN_ORIG=$(DIST_DEBIAN_ORIG)"
 
-debsrc = $(shell echo $(dist) | sed -e 's/-$(version)/_$(version)/').orig.tar.gz
+distcheck:
+	"$(DIST_CMAKE)" "-DMODE=distcheck" $(source_workflow_args) -P "$(CURDIR)/cmake/SourceWorkflow.cmake"
 
-deb: $(debsrc) dist
-	tar xfz $(dist).tar.gz
-	cd $(dist) && debuild $(DEBUILD_FLAGS)
-	rm -rf $(dist)
-
-$(debsrc):
-	wget -nv https://bitbucket.org/purelang/pure-lang/downloads/$(dist).tar.gz -O $@
+deb:
+	"$(DIST_CMAKE)" "-DMODE=deb" $(source_workflow_args) -P "$(CURDIR)/cmake/SourceWorkflow.cmake"

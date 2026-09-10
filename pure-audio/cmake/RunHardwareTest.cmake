@@ -1,31 +1,20 @@
-foreach(required IN ITEMS
-    PURE_EXECUTABLE PURE_SOURCE_DIR MODULE_DIR MODE)
-  if(NOT DEFINED ${required} OR "${${required}}" STREQUAL "")
-    message(FATAL_ERROR "${required} is required")
-  endif()
-endforeach()
 if(NOT MODE STREQUAL "playback" AND NOT MODE STREQUAL "capture")
   message(FATAL_ERROR "MODE must be playback or capture")
 endif()
-
-set(ENV{PATH} "${MODULE_DIR};$ENV{PATH}")
-execute_process(
-  COMMAND "${PURE_EXECUTABLE}" --norc
-    -I "${PURE_SOURCE_DIR}"
-    -I "${PURE_SOURCE_DIR}/tests"
-    -L "${MODULE_DIR}"
-    -x "${PURE_SOURCE_DIR}/tests/hardware-${MODE}.pure"
-  WORKING_DIRECTORY "${MODULE_DIR}"
-  TIMEOUT 15
-  RESULT_VARIABLE result
-  OUTPUT_VARIABLE output
-  ERROR_VARIABLE error
-  ENCODING UTF-8
-)
-if(NOT result EQUAL 0)
-  message(FATAL_ERROR
-    "pure-audio ${MODE} test failed or timed out (${result})\n"
-    "stdout:\n${output}\nstderr:\n${error}")
-endif()
-string(STRIP "${output}" output)
-message(STATUS "${output}")
+set(TEST_SCRIPT "${PURE_SOURCE_DIR}/tests/hardware-${MODE}.pure")
+set(TEST_TIMEOUT 15000)
+foreach(name PURE_AUDIO_IN PURE_AUDIO_OUT)
+  unset(PURE_AUDIO_DEVICE_${name})
+  if(DEFINED ENV{${name}})
+    # Reject list separators/control characters before constructing argv. The
+    # native runner independently enforces exact names, range and uniqueness.
+    set(selected "$ENV{${name}}")
+    string(LENGTH "${selected}" selected_length)
+    if(selected_length GREATER 10 OR NOT selected MATCHES "^(0|[1-9][0-9]*)$" OR
+       selected GREATER 2147483647)
+      message(FATAL_ERROR "${name} must be a canonical device index 0..2147483647")
+    endif()
+    set(PURE_AUDIO_DEVICE_${name} "${selected}")
+  endif()
+endforeach()
+include("${CMAKE_CURRENT_LIST_DIR}/RunPureTest.cmake")
