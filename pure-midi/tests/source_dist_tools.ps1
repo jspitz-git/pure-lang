@@ -1,7 +1,7 @@
 param([Parameter(Mandatory=$true)][string]$SourceDir,
       [Parameter(Mandatory=$true)][string]$Clang64Prefix,
       [Parameter(Mandatory=$true)][string]$DistRoot, [switch]$RedOnly,
-      [switch]$PublishRedOnly)
+      [switch]$PublishRedOnly, [switch]$PairRedOnly)
 $ErrorActionPreference='Stop'
 # Independent literal release inventory: an omitted producer entry must fail.
 [string[]]$expected=@(
@@ -31,6 +31,7 @@ function PublicDist([string]$Root,[string]$Output,[bool]$Good=$true) {
  $old=$ErrorActionPreference; $ErrorActionPreference='Continue'
  $out=& "$Clang64Prefix/bin/mingw32-make.exe" -C $Root dist 'DLL=.dll' "SHELL=$Clang64Prefix/../usr/bin/sh.exe" "CMAKE=$Clang64Prefix/bin/cmake.exe" "DIST_DIR=$Output" 2>&1
  $rc=$LASTEXITCODE; $ErrorActionPreference=$old
+ $script:lastPublicOutput=$out -join "`n"
  if(($Good -and $rc -ne 0) -or (-not $Good -and $rc -eq 0)) { throw "RED: public dist expected success=$Good exit=$rc : $out" }
  $out | Write-Host
  return $rc
@@ -107,6 +108,8 @@ $first=Hash $archive
 [IO.File]::Copy($archive,"$work/first.tar.gz")
 Add-Type -TypeDefinition @'
 using System.IO;
+using System;
+using System.Security.Cryptography;
 using System.Threading;
 public static class SourceArchiveReaderLock {
  public static Thread ReleaseAfter(string path,int delay) {
@@ -115,7 +118,160 @@ public static class SourceArchiveReaderLock {
   thread.Start(); return thread;
  }
 }
+public sealed class SourceArchiveChangeLock : IDisposable {
+ readonly ManualResetEvent stop=new ManualResetEvent(false);
+ readonly Thread thread;
+ public volatile bool Locked;
+ public string Error;
+ public SourceArchiveChangeLock(string path,string wanted) {
+  thread=new Thread(delegate() {
+   var until=DateTime.UtcNow.AddSeconds(20);
+   while(!stop.WaitOne(0) && DateTime.UtcNow<until) {
+    FileStream file=null;
+    try {
+     file=File.Open(path,FileMode.Open,FileAccess.Read,FileShare.Read);
+     string got;
+     using(var sha=SHA256.Create()) got=BitConverter.ToString(sha.ComputeHash(file)).Replace("-", "").ToLowerInvariant();
+     if(got==wanted) { Locked=true; stop.WaitOne(20000); return; }
+    } catch(IOException) { }
+    catch(Exception error) { Error=error.Message; return; }
+    finally { if(file!=null) file.Dispose(); }
+    Thread.Sleep(10);
+   }
+   if(!Locked) Error="changed archive was not observed";
+  });
+  thread.Start();
+ }
+ public void Dispose() { stop.Set(); thread.Join(); stop.Dispose(); }
+}
 '@
+# A failure after the archive swap must not leave a new archive paired with the
+# old manifest. Changed input bytes are essential: unchanged-byte retries hide it.
+$pairInput="$source/midi_bounds.c"; $pairSaved=[IO.File]::ReadAllBytes($pairInput)
+$oldPair=@((Hash $archive),(Hash $manifest))
+$pairFailures=New-Object 'Collections.Generic.List[string]'
+function PairCopy([string]$Destination) {
+ [IO.Directory]::CreateDirectory($Destination) | Out-Null
+ [IO.File]::Copy($archive,"$Destination/pure-midi-0.6.tar.gz")
+ [IO.File]::Copy($manifest,"$Destination/pure-midi-0.6.manifest.tsv")
+}
+function PairCase([string]$Label,[scriptblock]$Action) {
+ try { & $Action; $script:negative++; "SOURCE_CASE_OK $Label" }
+ catch { $pairFailures.Add("${Label}: $($_.Exception.Message)"); "SOURCE_PAIR_RED ${Label}: $($_.Exception.Message)" }
+}
+try {
+ [IO.File]::AppendAllText($pairInput,"`n/* changed publication fixture */`n")
+ $changedPairOut="$work/changed pair"; [IO.Directory]::CreateDirectory($changedPairOut) | Out-Null
+ PublicDist $source $changedPairOut | Out-Null
+ $newPair=@((Hash "$changedPairOut/pure-midi-0.6.tar.gz"),(Hash "$changedPairOut/pure-midi-0.6.manifest.tsv"))
+ if($newPair[0] -ceq $oldPair[0] -or $newPair[1] -ceq $oldPair[1]) { throw 'Changed input did not change both public artifacts' }
+ $positive++; 'SOURCE_CASE_OK changed-pair-from-absent'
+ $changedExistingOut="$work/changed existing pair"; PairCopy $changedExistingOut
+ PublicDist $source $changedExistingOut | Out-Null
+ if((Hash "$changedExistingOut/pure-midi-0.6.tar.gz") -cne $newPair[0] -or (Hash "$changedExistingOut/pure-midi-0.6.manifest.tsv") -cne $newPair[1] -or @(Get-ChildItem -LiteralPath $changedExistingOut -Force).Count -ne 2) { throw 'Successful changed publication did not commit exactly the new pair' }
+ $positive++; 'SOURCE_CASE_OK changed-pair-replaces-existing'
+ # Real simultaneous public writers must serialize while a manifest reader
+ # delays one transaction. The final pair must be wholly one source generation.
+ $parallelOut="$work/concurrent pair"; PairCopy $parallelOut
+ $parallelReader=[SourceArchiveReaderLock]::ReleaseAfter("$parallelOut/pure-midi-0.6.manifest.tsv",3500)
+ $pairJobs=@()
+ try {
+  foreach($writerSource in @($source,$SourceDir)) {
+   $pairJobs+=Start-Job -ArgumentList $Clang64Prefix,$writerSource,$parallelOut -ScriptBlock {
+    param($prefix,$inputRoot,$outputRoot)
+    $ErrorActionPreference='Continue'
+    $transcript=& "$prefix/bin/mingw32-make.exe" -C $inputRoot dist 'DLL=.dll' "SHELL=$prefix/../usr/bin/sh.exe" "CMAKE=$prefix/bin/cmake.exe" "DIST_DIR=$outputRoot" 2>&1
+    [pscustomobject]@{ExitCode=$LASTEXITCODE;Output=($transcript -join "`n")}
+   }
+  }
+  $pairJobs | Wait-Job -Timeout 60 | Out-Null
+  foreach($job in $pairJobs) {
+   if($job.State -ne 'Completed') { throw "Concurrent public writer did not complete: $($job.State)" }
+   $result=Receive-Job -Job $job
+   if($result.ExitCode -ne 0) { throw "Concurrent public writer failed: $($result.Output)" }
+  }
+ } finally { $parallelReader.Join(); foreach($job in $pairJobs) { if($job.State -eq 'Running') { Stop-Job -Job $job }; Remove-Job -Job $job -Force } }
+ $parallelPair=@((Hash "$parallelOut/pure-midi-0.6.tar.gz"),(Hash "$parallelOut/pure-midi-0.6.manifest.tsv"))
+ if(($parallelPair -join '|') -cnotin @(($oldPair -join '|'),($newPair -join '|')) -or @(Get-ChildItem -LiteralPath $parallelOut -Force).Count -ne 2) { throw 'Concurrent public writers left a mixed pair or recovery artifacts' }
+ $positive++; 'SOURCE_CASE_OK concurrent-public-pair'
+ foreach($endpoint in @('archive','manifest')) {
+  foreach($blocker in @('reader','readonly')) {
+   $pairCaseOut="$work/pair-$endpoint-$blocker"; PairCopy $pairCaseOut
+   $pairArchive="$pairCaseOut/pure-midi-0.6.tar.gz"; $pairManifest="$pairCaseOut/pure-midi-0.6.manifest.tsv"
+   $blocked=if($endpoint -ceq 'archive') { $pairArchive } else { $pairManifest }
+   PairCase "changed-pair-$endpoint-$blocker" {
+    $held=$null; $attributes=[IO.File]::GetAttributes($blocked)
+    try {
+     if($blocker -ceq 'reader') { $held=[IO.File]::Open($blocked,[IO.FileMode]::Open,[IO.FileAccess]::Read,[IO.FileShare]::Read) }
+     else { [IO.File]::SetAttributes($blocked,$attributes -bor [IO.FileAttributes]::ReadOnly) }
+     PublicDist $source $pairCaseOut $false | Out-Null
+    } finally { if($null -ne $held) { $held.Dispose() }; [IO.File]::SetAttributes($blocked,$attributes) }
+    $after=@((Hash $pairArchive),(Hash $pairManifest))
+    "SOURCE_PAIR_OBSERVED endpoint=$endpoint blocker=$blocker old_archive=$($oldPair[0]) archive=$($after[0]) old_manifest=$($oldPair[1]) manifest=$($after[1])"
+    if($after[0] -cne $oldPair[0] -or $after[1] -cne $oldPair[1]) { throw 'Rejected publication left a partial changed archive/manifest pair' }
+    if(@(Get-ChildItem -LiteralPath $pairCaseOut -Force).Count -ne 2) { throw 'Recovered publication leaked temporary/recovery artifacts' }
+   }
+  }
+ }
+ foreach($endpoint in @('archive','manifest')) {
+  $absentOut="$work/absent-$endpoint"; [IO.Directory]::CreateDirectory($absentOut) | Out-Null
+  $unavailable=if($endpoint -ceq 'archive') { "$absentOut/pure-midi-0.6.tar.gz" } else { "$absentOut/pure-midi-0.6.manifest.tsv" }
+  [IO.Directory]::CreateDirectory($unavailable) | Out-Null
+  PairCase "absent-pair-unavailable-$endpoint" {
+   PublicDist $source $absentOut $false | Out-Null
+   if(@(Get-ChildItem -LiteralPath $absentOut -Force).Count -ne 1 -or -not [IO.Directory]::Exists($unavailable)) { throw 'Absent-pair rejection left a partial artifact or removed the blocker' }
+  }
+ }
+ $incompleteOut="$work/incomplete-pair"; [IO.Directory]::CreateDirectory($incompleteOut) | Out-Null
+ [IO.File]::Copy($archive,"$incompleteOut/pure-midi-0.6.tar.gz")
+ PairCase incomplete-previous-pair {
+  PublicDist $source $incompleteOut $false | Out-Null
+  if((Hash "$incompleteOut/pure-midi-0.6.tar.gz") -cne $oldPair[0] -or @(Get-ChildItem -LiteralPath $incompleteOut -Force).Count -ne 1) { throw 'Incomplete prior pair changed on rejection' }
+ }
+ $mismatchedOut="$work/mismatched-pair"; PairCopy $mismatchedOut
+ [IO.File]::Copy("$changedPairOut/pure-midi-0.6.manifest.tsv","$mismatchedOut/pure-midi-0.6.manifest.tsv",$true)
+ PairCase mismatched-previous-pair {
+  PublicDist $source $mismatchedOut $false | Out-Null
+  if((Hash "$mismatchedOut/pure-midi-0.6.tar.gz") -cne $oldPair[0] -or (Hash "$mismatchedOut/pure-midi-0.6.manifest.tsv") -cne $newPair[1]) { throw 'Mismatched prior pair changed on rejection' }
+ }
+ # The coordinator must also restore absence if the second candidate becomes
+ # unavailable after preparation. A real read handle denies moving that file.
+ $absentRollbackOut="$work/absent rollback"; [IO.Directory]::CreateDirectory($absentRollbackOut) | Out-Null
+ $absentCandidate="$absentRollbackOut/candidate.tmp"; $absentManifest="$absentRollbackOut/candidate-manifest.tmp"
+ [IO.File]::Copy("$changedPairOut/pure-midi-0.6.tar.gz",$absentCandidate)
+ [IO.File]::Copy("$changedPairOut/pure-midi-0.6.manifest.tsv",$absentManifest)
+ PairCase absent-pair-rollback-after-first {
+  $candidateReader=[IO.File]::Open($absentManifest,[IO.FileMode]::Open,[IO.FileAccess]::Read,[IO.FileShare]::Read)
+  $caught=$null
+  try { Publish-SourcePair $absentCandidate $absentManifest $absentRollbackOut }
+  catch { $caught=$_.Exception.Message }
+  finally { $candidateReader.Dispose() }
+  if(-not $caught -or $caught -notmatch 'previous absence restored') { throw "Absent-pair rollback did not restore and report absence: $caught" }
+  if([IO.File]::Exists("$absentRollbackOut/pure-midi-0.6.tar.gz") -or [IO.File]::Exists("$absentRollbackOut/pure-midi-0.6.manifest.tsv") -or [IO.File]::Exists("$absentRollbackOut/.source-recovery")) { throw 'Absent-pair rollback left published/recovery artifacts' }
+ }
+ # Force a genuine rollback failure: hold the old manifest, then acquire a real
+ # reader on the changed archive after its atomic swap. No production failpoint.
+ $recoveryOut="$work/rollback failure"; PairCopy $recoveryOut
+ PairCase rollback-failure-retains-pair-recovery {
+  $manifestReader=[IO.File]::Open("$recoveryOut/pure-midi-0.6.manifest.tsv",[IO.FileMode]::Open,[IO.FileAccess]::Read,[IO.FileShare]::Read)
+  $changedReader=New-Object SourceArchiveChangeLock("$recoveryOut/pure-midi-0.6.tar.gz",$newPair[0])
+  try { PublicDist $source $recoveryOut $false | Out-Null }
+  finally { $changedReader.Dispose(); $manifestReader.Dispose() }
+  if(-not $changedReader.Locked -or $changedReader.Error) { throw "Rollback fixture failed to lock changed archive: $($changedReader.Error)" }
+  if($lastPublicOutput -notmatch 'recovery required') { throw 'Rollback failure did not report required recovery' }
+  $recoveryMarker="$recoveryOut/.source-recovery"
+  if(-not [IO.File]::Exists($recoveryMarker)) { throw 'Rollback failure did not retain a recovery marker' }
+  $recoverable=@(Get-ChildItem -LiteralPath $recoveryOut -File -Force | ForEach-Object { Hash $_.FullName })
+  if($oldPair[0] -cnotin $recoverable -or $oldPair[1] -cnotin $recoverable) { throw 'Rollback failure discarded a previous artifact' }
+  $recoveryBefore=@(Get-ChildItem -LiteralPath $recoveryOut -File -Force | Sort-Object Name | ForEach-Object { $_.Name+'|'+(Hash $_.FullName) }) -join "`n"
+  PublicDist $source $recoveryOut $false | Out-Null
+  if($lastPublicOutput -notmatch 'recovery required') { throw 'Unrecovered publication did not fail closed' }
+  $recoveryAfter=@(Get-ChildItem -LiteralPath $recoveryOut -File -Force | Sort-Object Name | ForEach-Object { $_.Name+'|'+(Hash $_.FullName) }) -join "`n"
+  if($recoveryBefore -cne $recoveryAfter) { throw 'Unrecovered publication modified recovery evidence' }
+ }
+} finally { [IO.File]::WriteAllBytes($pairInput,$pairSaved) }
+if($pairFailures.Count) { throw "Changed-pair publication RED: $($pairFailures -join '; ')" }
+if($PairRedOnly) { "SOURCE_PAIR_CONTRACT_OK negative=$negative positive=$positive"; Remove-SourceLeaf $DistRoot $work $nonce; exit 0 }
 # Real Windows readers (including indexers) may briefly deny replacement.
 # Require eventual publication, and separately reject a persistent lock without
 # changing either existing output. This exercises the real filesystem API.

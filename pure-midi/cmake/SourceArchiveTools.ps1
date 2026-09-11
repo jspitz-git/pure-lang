@@ -87,11 +87,10 @@ using System.Text;
 using System.Collections.Generic;
 using System.Security.Cryptography;
 public static class MidiSourceArchive {
- public static void Publish(string source,string destination) {
+ static void PublicationIO(Action operation) {
   for(int attempt=0;;attempt++) {
    try {
-    if(File.Exists(destination)) File.Replace(source,destination,null);
-    else File.Move(source,destination);
+    operation();
     return;
    } catch(IOException error) {
     int code=error.HResult & 0xffff;
@@ -103,6 +102,13 @@ public static class MidiSourceArchive {
    }
   }
  }
+ public static void Publish(string source,string destination) {
+  PublicationIO(delegate() {
+   if(File.Exists(destination)) File.Replace(source,destination,null);
+   else File.Move(source,destination);
+  });
+ }
+ public static void RemovePublished(string path) { PublicationIO(delegate() { File.Delete(path); }); }
  public static string Hash(byte[] bytes) { using(var h=SHA256.Create()) return BitConverter.ToString(h.ComputeHash(bytes)).Replace("-", "").ToLowerInvariant(); }
  static void Text(byte[] h,int offset,int length,string text) {
   byte[] bytes=Encoding.ASCII.GetBytes(text);
@@ -200,6 +206,84 @@ function Get-SourceRows([string[]]$Rows) {
  if(($sorted -join '|') -cne ($names -join '|')) { throw 'source manifest not ordered' }
  return ,$Rows
 }
+function Publish-SourcePair([string]$Temporary,[string]$ManifestTemp,[string]$Output) {
+ $Output=Assert-SourcePath $Output $true
+ $destinations=@("$Output/pure-midi-0.6.tar.gz","$Output/pure-midi-0.6.manifest.tsv")
+ $marker="$Output/.source-recovery"
+ # Serialize cooperating publishers without a persistent lock-file or unsafe
+ # lock-file unlink. This is not hostile same-user or power-loss atomicity.
+ $identity=[MidiSourceArchive]::Hash([Text.Encoding]::UTF8.GetBytes($Output.ToUpperInvariant()))
+ $mutex=New-Object Threading.Mutex($false,"Local\PureMidiSourcePair-$identity")
+ $acquired=$false; $keepRecovery=$false; $markerOwned=$false
+ $backups=New-Object 'Collections.Generic.List[string]'
+ try {
+  try { $acquired=$mutex.WaitOne(30000) } catch [Threading.AbandonedMutexException] { $acquired=$true }
+  if(-not $acquired) { throw 'source pair publication already active' }
+  if(Test-Path -LiteralPath $marker) { Assert-SourcePath $marker | Out-Null; throw "source pair recovery required at $marker; previous evidence retained" }
+  foreach($destination in $destinations) { if(Test-Path -LiteralPath $destination) { Assert-SourcePath $destination | Out-Null } }
+  $present=[IO.File]::Exists($destinations[0])
+  if($present -ne [IO.File]::Exists($destinations[1])) { throw 'source pair recovery required: incomplete previous archive/manifest pair' }
+  $oldHashes=@(); $snapshotHandles=New-Object 'Collections.Generic.List[IO.FileStream]'
+  try {
+   if($present) {
+    foreach($destination in $destinations) { $snapshotHandles.Add([IO.File]::Open($destination,[IO.FileMode]::Open,[IO.FileAccess]::Read,[IO.FileShare]::Read)) }
+    $previousRows=Get-SourceRows ([IO.File]::ReadAllLines($destinations[1]))
+    try { Read-SourceArchive $destinations[0] $previousRows | Out-Null }
+    catch { throw "source pair recovery required: mismatched previous archive/manifest pair: $($_.Exception.Message)" }
+    $token=[Guid]::NewGuid().ToString('N')
+    for($index=0;$index -lt 2;$index++) {
+     $bytes=[IO.File]::ReadAllBytes($destinations[$index]); $oldHashes+=,[MidiSourceArchive]::Hash($bytes)
+     $backup="$Output/.source-$token.previous-$index.tmp"
+     $saved=[IO.File]::Open($backup,[IO.FileMode]::CreateNew,[IO.FileAccess]::Write,[IO.FileShare]::None)
+     $backups.Add($backup)
+     try { $saved.Write($bytes,0,$bytes.Length) } finally { $saved.Dispose() }
+    }
+   }
+  } finally { foreach($handle in $snapshotHandles) { $handle.Dispose() } }
+  # A marker is published before either replacement. Failed rollback preserves
+  # it and the old bytes, and subsequent cooperating calls refuse to proceed.
+  $journal=[IO.File]::Open($marker,[IO.FileMode]::CreateNew,[IO.FileAccess]::Write,[IO.FileShare]::None)
+  $markerOwned=$true
+  try {
+   $record=if($present) { "prior=pair`narchive=$([IO.Path]::GetFileName($backups[0]))`nmanifest=$([IO.Path]::GetFileName($backups[1]))`n" } else { "prior=absent`n" }
+   $bytes=[Text.Encoding]::UTF8.GetBytes($record); $journal.Write($bytes,0,$bytes.Length)
+  } finally { $journal.Dispose() }
+  try {
+   [MidiSourceArchive]::Publish($Temporary,$destinations[0])
+   [MidiSourceArchive]::Publish($ManifestTemp,$destinations[1])
+  } catch {
+   $publicationError=$_.Exception.Message
+   try {
+    for($index=1;$index -ge 0;$index--) {
+     if(Test-Path -LiteralPath $destinations[$index]) { Assert-SourcePath $destinations[$index] | Out-Null }
+     if($present) {
+      # Inspect actual bytes after failure instead of assuming a failed OS call
+      # had no side effect. Unchanged locked destinations need no replacement.
+      if(-not [IO.File]::Exists($destinations[$index]) -or (Get-SourceHash $destinations[$index]) -cne $oldHashes[$index]) {
+       Assert-SourcePath $backups[$index] | Out-Null
+       [MidiSourceArchive]::Publish($backups[$index],$destinations[$index])
+      }
+      if((Get-SourceHash $destinations[$index]) -cne $oldHashes[$index]) { throw 'restored artifact hash mismatch' }
+     } elseif([IO.File]::Exists($destinations[$index])) { [MidiSourceArchive]::RemovePublished($destinations[$index]) }
+    }
+   } catch {
+    $keepRecovery=$true
+    throw "source pair publication failed; recovery required at $marker; publication: $publicationError; rollback: $($_.Exception.Message)"
+   }
+   $restored=if($present) { 'pair' } else { 'absence' }
+   throw "source pair publication failed; previous $restored restored: $publicationError"
+  }
+ } finally {
+  try {
+   if(-not $keepRecovery) {
+    try {
+     foreach($backup in $backups) { if([IO.File]::Exists($backup)) { Assert-SourcePath $backup | Out-Null; [MidiSourceArchive]::RemovePublished($backup) } }
+     if($markerOwned) { Assert-SourcePath $marker | Out-Null; [MidiSourceArchive]::RemovePublished($marker) }
+    } catch { throw "source pair recovery required at $marker; cleanup failed: $($_.Exception.Message)" }
+   }
+  } finally { if($acquired) { $mutex.ReleaseMutex() }; $mutex.Dispose() }
+ }
+}
 function New-SourceArchive([string]$Root,[string]$Output,[string]$Declaration) {
  $Root=Assert-SourcePath $Root $true; $Output=Assert-SourcePath $Output $true
  $names=Get-SourceNames $Declaration; $rows=New-Object 'Collections.Generic.List[string]'
@@ -218,20 +302,15 @@ function New-SourceArchive([string]$Root,[string]$Output,[string]$Declaration) {
   try { $stream.Write($bytes,0,$bytes.Length) } finally { $stream.Dispose() }
   try {
    [MidiSourceArchive]::Read($temporary,$rows.ToArray()) | Out-Null
-   foreach($destination in @("$Output/pure-midi-0.6.tar.gz","$Output/pure-midi-0.6.manifest.tsv")) {
-    if(Test-Path -LiteralPath $destination) { Assert-SourcePath $destination | Out-Null }
-   }
-   # These two enumerated outputs are the only replaced files. No staging tree
-   # or recursive cleanup is involved in public make dist.
+   # The pair coordinator snapshots and restores old bytes on publication
+   # failure. All backup/temp cleanup remains exact and non-recursive.
    $manifestTemp="$Output/.manifest-$token.tmp"
    $m=[IO.File]::Open($manifestTemp,[IO.FileMode]::CreateNew,[IO.FileAccess]::Write,[IO.FileShare]::None)
    try { $content=[Text.Encoding]::UTF8.GetBytes(($rows -join "`n")+"`n"); $m.Write($content,0,$content.Length) } finally { $m.Dispose() }
    try {
-    foreach($pair in @(@($temporary,"$Output/pure-midi-0.6.tar.gz"),@($manifestTemp,"$Output/pure-midi-0.6.manifest.tsv"))) {
-     [MidiSourceArchive]::Publish($pair[0],$pair[1])
-    }
-   } finally { if([IO.File]::Exists($manifestTemp)) { Assert-SourcePath $manifestTemp | Out-Null; [IO.File]::Delete($manifestTemp) } }
-  } finally { if([IO.File]::Exists($temporary)) { Assert-SourcePath $temporary | Out-Null; [IO.File]::Delete($temporary) } }
+    Publish-SourcePair $temporary $manifestTemp $Output
+   } finally { if([IO.File]::Exists($manifestTemp)) { Assert-SourcePath $manifestTemp | Out-Null; [MidiSourceArchive]::RemovePublished($manifestTemp) } }
+  } finally { if([IO.File]::Exists($temporary)) { Assert-SourcePath $temporary | Out-Null; [MidiSourceArchive]::RemovePublished($temporary) } }
   "SOURCE_ARCHIVE_OK files=$($names.Count) sha256=$([MidiSourceArchive]::Hash($bytes)) archive=$Output/pure-midi-0.6.tar.gz"
  } finally { foreach($handle in $handles) { $handle.Dispose() } }
 }
