@@ -1,10 +1,10 @@
-using midi, midifile;
+using system, midi, midifile;
 
 namespace smoke;
 
 check name condition
   = () if condition;
-  = exit 1 otherwise;
+  = fprintf stderr "FAIL: %s\n" name $$ fflush stderr $$ exit 1 otherwise;
 
 run = ()
 when
@@ -36,7 +36,8 @@ when
   check "copy close" (midifile::free copy);
   check "source close" (midifile::free source);
   check "PortMidi stop" (midi::stop == Pm::NoError);
-  check "PortTime stop" (Pt::Stop == Pt::NoError);
+  check "PortTime stopped by midi::stop" (Pt::Started == 0);
+  check "repeated PortMidi stop" (midi::stop == Pm::NoError);
 end;
 
 smoke::run;

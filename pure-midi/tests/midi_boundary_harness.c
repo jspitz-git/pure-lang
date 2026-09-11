@@ -106,7 +106,11 @@ int Pm_Terminate(void) { boundary_calls++; return 0; }
 int Pm_CountDevices(void) { boundary_calls++; return 0; }
 int Pm_GetDefaultInputDeviceID(void) { boundary_calls++; return -1; }
 int Pm_GetDefaultOutputDeviceID(void) { boundary_calls++; return -1; }
-const void *Pm_GetDeviceInfo(int id) { (void)id; boundary_calls++; return NULL; }
+const void *Pm_GetDeviceInfo(int id) {
+  static const struct { int version; const char *interf,*name; int input,output,opened,is_virtual; }
+    info={1,"boundary","fake",1,1,0,0};
+  boundary_calls++; return id==0 ? &info : NULL;
+}
 int Pm_HasHostError(void *stream) { (void)stream; boundary_calls++; return 0; }
 const char *Pm_GetErrorText(int error) { (void)error; boundary_calls++; return "boundary fake"; }
 void Pm_GetHostErrorText(char *message, int length)
@@ -170,8 +174,6 @@ int Pt_Start(int resolution, void *callback, void *user_data)
 int Pt_Stop(void) { boundary_calls++; return 0; }
 int Pt_Started(void) { boundary_calls++; return 1; }
 int Pt_Time(void) { boundary_calls++; return 0; }
-
-pure_expr *pm_device_info(int id) { (void)id; return NULL; }
 
 #else
 

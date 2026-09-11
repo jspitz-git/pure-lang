@@ -34,8 +34,8 @@ namespace midi;
    any time, in order to update the device table, hence this function comes in
    handy if new devices have to be detected at runtime. */
 
-midi::start = Pm::Terminate $$ Pm::Initialize;
-midi::stop  = Pm::Terminate;
+extern int pure_midi_start() = start;
+extern int pure_midi_stop() = stop;
 
 /* The default MIDI devices for input and output. These can be set with
    PortMidi's pmdefaults application. */
@@ -128,7 +128,20 @@ let midi::output_time_proc, midi::output_time_info = addr "Pt_Time", NULL;
    encoding. */
 
 private byte_vector event_buffer short_message short_length
-  input_stream output_stream close_input close_output;
+  input_stream output_stream;
+private extern void pm_stream_sentry(expr*) = stream_sentry;
+private extern int pure_midi_valid(void*,int) = stream_valid;
+private extern expr* pm_open_input(int,int,void*,void*) = owned_open_input;
+private extern expr* pm_open_output(int,int,void*,void*,int) = owned_open_output;
+private extern int pm_stream_close(expr*) = owned_close;
+private extern int pure_midi_abort(void*) = owned_abort;
+private extern int pure_midi_poll(void*) = owned_poll;
+private extern int pure_midi_set_filter(void*,int) = owned_filter;
+private extern int pure_midi_set_channel_mask(void*,int) = owned_channel_mask;
+private extern int pure_midi_read(void*,PmEvent*,int) = owned_read;
+private extern int pure_midi_write(void*,PmEvent*,int) = owned_write;
+private extern int pure_midi_write_short(void*,int,int) = owned_write_short;
+private extern int pure_midi_write_sysex(void*,int,char*,int) = owned_write_sysex;
 private extern int pure_midi_byte_count(expr*) = byte_count;
 private extern int pure_midi_event_count(expr*) = event_count;
 byte_vector data = byte_count data>0;
@@ -157,14 +170,12 @@ midi::word data::matrix = foldr (\x y->x+(y<<8)) 0 data
 
 public close;
 midi::streamp stream::pointer = stream~=NULL &&
-  (get_sentry stream === close_input || get_sentry stream === close_output);
+  get_sentry stream === stream_sentry && stream_valid stream 0;
 midi::streamp _ = false;
-input_stream stream::pointer = stream~=NULL && get_sentry stream === close_input;
+input_stream stream::pointer = midi::streamp stream && stream_valid stream 1;
 input_stream _ = false;
-output_stream stream::pointer = stream~=NULL && get_sentry stream === close_output;
+output_stream stream::pointer = midi::streamp stream && stream_valid stream 2;
 output_stream _ = false;
-close_input stream = midi::close stream;
-close_output stream = midi::close stream;
 
 /* Open a stream for input. id is the index of the device, and the bufsize
    argument determines how many MIDI events can be buffered on input (if zero
@@ -175,13 +186,8 @@ close_output stream = midi::close stream;
    entire sequence. */
 
 midi::open_input id::int bufsize::int =
-  case Pm::OpenInput stream id NULL bufsize
-       midi::input_time_proc midi::input_time_info of
-    0 = sentry close_input $ get_pointer stream;
-    res = res;
-  end when
-    stream = ptrtag __C::voidpp_t $ cooked $ malloc SIZEOF_POINTER;
-  end;
+  owned_open_input id bufsize midi::input_time_proc midi::input_time_info;
+midi::open_input _ _ = Pm::BadData;
 
 /* Open a stream for output. Here the bufsize arguments determines how many
    MIDI events can be buffered on output, if they are scheduled for later
@@ -194,24 +200,20 @@ midi::open_input id::int bufsize::int =
    MIDI I/O below for details. */
 
 midi::open_output id::int bufsize::int latency::int =
-  case Pm::OpenOutput stream id NULL bufsize
-       midi::output_time_proc midi::output_time_info latency of
-    0 = sentry close_output $ get_pointer stream;
-    res = res;
-  end when
-    stream = ptrtag __C::voidpp_t $ cooked $ malloc SIZEOF_POINTER;
-  end;
+  owned_open_output id bufsize midi::output_time_proc midi::output_time_info latency;
+midi::open_output _ _ _ = Pm::BadData;
 
 /* Close a stream. This is also done automatically when a stream object is
    garbage-collected. */
 
-midi::close stream::pointer = clear_sentry stream $$ Pm::Close stream
-  if midi::streamp stream;
+midi::close stream::pointer = owned_close stream;
+midi::close _ = Pm::BadPtr;
 
 /* This terminates outgoing messages immediately. (According to the PortMidi
    documentation, the stream should be closed afterwards.) */
 
-midi::abort stream::pointer = Pm::Abort stream;
+midi::abort stream::pointer = owned_abort stream;
+midi::abort _ = Pm::BadPtr;
 
 /* Message filtering. PortMidi allows you to filter incoming messages based on
    message types and/or channel numbers. midi::set_filter accepts an integer
@@ -223,10 +225,12 @@ midi::abort stream::pointer = Pm::Abort stream;
    channel. */
 
 midi::set_filter stream::pointer filters::int =
-  Pm::SetFilter stream filters;
+  owned_filter stream filters;
+midi::set_filter _ _ = Pm::BadPtr;
 
 midi::set_channel_mask stream::pointer channels::int =
-  Pm::SetChannelMask stream channels;
+  owned_channel_mask stream channels;
+midi::set_channel_mask _ _ = Pm::BadPtr;
 
 /* MIDI I/O. PortMidi encodes MIDI sequences as vectors of PmEvent structs,
    which are in fact alternating sequences of messages and timestamps, where
@@ -268,7 +272,8 @@ def midi::event buf = ptrtag Pm::Event $ pointer buf;
 /* Check whether an input message is currently available. This returns either
    true, false or a PortMidi error code. */
 
-midi::poll stream::pointer = Pm::Poll stream;
+midi::poll stream::pointer = owned_poll stream;
+midi::poll _ = Pm::BadPtr;
 
 /* Read MIDI events into a buffer. This modifies the given int matrix in
    place, and returns either the number of events actually read, or a negative
@@ -276,7 +281,7 @@ midi::poll stream::pointer = Pm::Poll stream;
    non-blocking; it returns zero if no message is currently available. */
 
 midi::read stream::pointer buf::matrix =
-  Pm::Read stream (midi::event buf) (event_count buf)
+  owned_read stream (midi::event buf) (event_count buf)
   if input_stream stream && event_buffer buf;
 midi::read stream _ = if input_stream stream then Pm::BadData else Pm::BadPtr;
 
@@ -286,7 +291,7 @@ midi::read stream _ = if input_stream stream then Pm::BadData else Pm::BadPtr;
    after scheduling events to be delivered later. */
 
 midi::write stream::pointer buf::matrix =
-  Pm::Write stream (midi::event buf) (event_count buf)
+  owned_write stream (midi::event buf) (event_count buf)
   if output_stream stream && event_buffer buf;
 midi::write stream _ = if output_stream stream then Pm::BadData else Pm::BadPtr;
 
@@ -303,7 +308,7 @@ midi::write stream _ = if output_stream stream then Pm::BadData else Pm::BadPtr;
    EOX while reading a sysex message, it will simply give up and return what's
    been read. (In this case, the next message will be lost, so beware.) */
 
-midi::readmsg stream::pointer = case Pm::Read stream (midi::event buf) 1 of
+midi::readmsg stream::pointer = case owned_read stream (midi::event buf) 1 of
   0 = midi::sleep 1 $$ midi::readmsg stream;
   1 = if data!0 == 0xf0 then read_sysex time data []
       else if short_message data then time, data
@@ -320,7 +325,7 @@ midi::readmsg stream::pointer = case Pm::Read stream (midi::event buf) 1 of
 	  = read_sysex time next_sysex (data:parts); // keep reading
 	// Grab the next part of the sysex message.
 	next_sysex
-	  = case Pm::Read stream (midi::event buf) 1 of
+	  = case owned_read stream (midi::event buf) 1 of
   	      0 = midi::sleep 1 $$ next_sysex;
 	      1 = midi::bytes (bigint msg and 0xffffffffL) when msg,_ = buf!0, buf!1 end;
 	      ret = ret;
@@ -337,11 +342,11 @@ midi::readmsg _ = Pm::BadPtr;
    value is zero if successful, or an error code otherwise. */
 
 midi::writemsg stream::pointer time::int data::matrix =
-  Pm::WriteShort stream time (midi::word data)
+  owned_write_short stream time (midi::word data)
   if output_stream stream && time>=0 && short_message data;
 
 midi::writemsg stream::pointer time::int data::matrix =
-  Pm::WriteSysEx stream time msg when
+  owned_write_sysex stream time msg (byte_count data) when
     msg = ptrtag __C::charp_t $ cooked $ byte_pointer NULL data;
   end if output_stream stream && time>=0 && byte_vector data &&
     #data>=2 && data!0==0xf0 && last data==0xf7 &&
@@ -363,4 +368,3 @@ midi::sleep dur::int = Pt::Sleep dur;
 /* Initialize PortMidi and kick off the timer. */
 
 midi::start;
-Pt::Start 1 NULL NULL;

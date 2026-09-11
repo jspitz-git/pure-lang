@@ -19,8 +19,12 @@ function(add_pure_midi_module target)
     WINDOWS_EXPORT_ALL_SYMBOLS ON)
 endfunction()
 
-add_pure_midi_module(pmlib pmdev.c midi_bounds.c)
+add_pure_midi_module(pmlib pmdev.c midi_bounds.c midi_stream.c)
 target_link_libraries(pmlib PRIVATE PkgConfig::PORTMIDI)
+if(NOT WIN32)
+  find_package(Threads REQUIRED)
+  target_link_libraries(pmlib PRIVATE Threads::Threads)
+endif()
 
 add_pure_midi_module(midifile midifile/midifile.c midifile/mf.c midi_bounds.c)
 
@@ -45,15 +49,39 @@ endif()
 
 include(CTest)
 if(BUILD_TESTING)
+	if(WIN32)
+		foreach(variant IN ITEMS release asan)
+			set(lifecycle_target "pure-midi-lifecycle-${variant}")
+			add_executable(${lifecycle_target} tests/midi_lifecycle_harness.c midi_stream.c)
+			target_compile_features(${lifecycle_target} PRIVATE c_std_11)
+			target_compile_definitions(${lifecycle_target} PRIVATE PURE_MIDI_TEST_SEAM=1)
+			target_link_libraries(${lifecycle_target} PRIVATE PkgConfig::PORTMIDI)
+			target_compile_options(${lifecycle_target} PRIVATE -Wall -Wextra -Werror)
+			if(variant STREQUAL "asan")
+				target_compile_options(${lifecycle_target} PRIVATE -fsanitize=address -fno-omit-frame-pointer)
+				target_link_options(${lifecycle_target} PRIVATE -fsanitize=address)
+			endif()
+			add_test(NAME ${lifecycle_target} COMMAND ${lifecycle_target})
+			set_tests_properties(${lifecycle_target} PROPERTIES
+				LABELS "midi;lifecycle;fault;${variant};no-hardware"
+				ENVIRONMENT "ASAN_OPTIONS=detect_leaks=0:halt_on_error=1:strict_string_checks=1"
+				ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$ENV{MSYSTEM_PREFIX}/bin"
+				TIMEOUT 180)
+		endforeach()
+	endif()
 	set(MIDI_BOUNDARY_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/midi-boundary")
 	set(MIDI_BOUNDARY_FAKE_DIRECTORY "${MIDI_BOUNDARY_DIRECTORY}/fake")
 	file(MAKE_DIRECTORY "${MIDI_BOUNDARY_DIRECTORY}" "${MIDI_BOUNDARY_FAKE_DIRECTORY}")
 	string(RANDOM LENGTH 24 ALPHABET 0123456789abcdef MIDI_BOUNDS_TOKEN)
 
-	add_library(pure-midi-boundary-fake MODULE tests/midi_boundary_harness.c midi_bounds.c)
+	add_library(pure-midi-boundary-fake MODULE tests/midi_boundary_harness.c midi_bounds.c midi_stream.c pmdev.c)
 	target_compile_features(pure-midi-boundary-fake PRIVATE c_std_11)
 	target_compile_definitions(pure-midi-boundary-fake PRIVATE PURE_MIDI_BOUNDARY_FAKE=1)
 	target_link_libraries(pure-midi-boundary-fake PRIVATE PkgConfig::PURE)
+	target_include_directories(pure-midi-boundary-fake PRIVATE ${PORTMIDI_INCLUDE_DIRS})
+	if(NOT WIN32)
+		target_link_libraries(pure-midi-boundary-fake PRIVATE Threads::Threads)
+	endif()
 	set_target_properties(pure-midi-boundary-fake PROPERTIES
 		PREFIX ""
 		OUTPUT_NAME "pmlib"
