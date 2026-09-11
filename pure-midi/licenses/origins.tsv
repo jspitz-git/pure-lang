@@ -1,0 +1,2 @@
+# binary|project|installed-package-version|source-url|license|local-payload|license-sha256|binary-sha256
+libportmidi.dll|PortMidi|1~2.0.8-1|https://github.com/PortMidi/portmidi/blob/v2.0.8/license.txt|MIT|PortMidi.txt|8d187c40c782da0e24489c4c4bf7590635e072dc0b70b0afda7b0652d290c1ea|99454395751bfad786db9c457b93db62f31f7d68dc2bebb2281f33289d43cb49

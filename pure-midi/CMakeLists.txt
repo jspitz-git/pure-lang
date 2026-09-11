@@ -629,3 +629,17 @@ if(BUILD_TESTING)
 endif()
 
 include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/Install.cmake")
+if(BUILD_TESTING AND PURE_MIDI_STRICT_WINDOWS_AUDIT)
+  add_test(NAME pure-midi-install-contract
+    COMMAND "${CMAKE_COMMAND}" "-DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
+      "-DMODULE_DIR=${CMAKE_CURRENT_BINARY_DIR}" "-DPURE_PREFIX=${PURE_MIDI_PURE_PREFIX}"
+      "-DRUNNER=$<TARGET_FILE:run_pure_test>"
+      -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/install_contract.cmake")
+  add_test(NAME pure-midi-install-guard-contract
+    COMMAND "${MIDI_POWERSHELL}" -NoProfile -NonInteractive -ExecutionPolicy Bypass
+      -File "${CMAKE_CURRENT_SOURCE_DIR}/tests/install_guard_contract.ps1"
+      -SourceDir "${CMAKE_CURRENT_SOURCE_DIR}" -BuildDir "${CMAKE_CURRENT_BINARY_DIR}"
+      -PurePrefix "${PURE_MIDI_PURE_PREFIX}" -Runner "$<TARGET_FILE:run_pure_test>" -Suite guard)
+  set_tests_properties(pure-midi-install-contract pure-midi-install-guard-contract
+    PROPERTIES LABELS "midi;contract;install;no-hardware" TIMEOUT 600 RUN_SERIAL TRUE)
+endif()

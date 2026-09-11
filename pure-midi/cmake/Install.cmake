@@ -1,69 +1,130 @@
-set(PURE_LIBRARY_INSTALL_DIR "lib/pure" CACHE STRING
-  "Relative install directory for Pure modules")
-set(PURE_DOCUMENTATION_INSTALL_DIR "share/doc/${PROJECT_NAME}" CACHE STRING
-  "Relative install directory for package documentation")
-set(PURE_EXAMPLES_INSTALL_DIR "${PURE_DOCUMENTATION_INSTALL_DIR}/examples"
-  CACHE STRING "Relative install directory for package examples")
-
-foreach(destination_var IN ITEMS
-    PURE_LIBRARY_INSTALL_DIR
-    PURE_DOCUMENTATION_INSTALL_DIR
-    PURE_EXAMPLES_INSTALL_DIR)
-  set(destination "${${destination_var}}")
-  if(IS_ABSOLUTE "${destination}" OR
-      destination MATCHES "(^|[/\\\\])\\.\\.([/\\\\]|$)")
-    message(FATAL_ERROR
-      "${destination_var} must remain within the installation prefix: ${destination}")
+set(PURE_LIBRARY_INSTALL_DIR "lib/pure" CACHE STRING "Relative Pure module destination")
+set(PURE_DOCUMENTATION_INSTALL_DIR "share/doc/${PROJECT_NAME}" CACHE STRING "Relative documentation destination")
+set(PURE_EXAMPLES_INSTALL_DIR "${PURE_DOCUMENTATION_INSTALL_DIR}/examples" CACHE STRING "Relative examples destination")
+foreach(var PURE_LIBRARY_INSTALL_DIR PURE_DOCUMENTATION_INSTALL_DIR PURE_EXAMPLES_INSTALL_DIR)
+  if(IS_ABSOLUTE "${${var}}" OR "${${var}}" MATCHES "(^|[/\\\\])\\.\\.([/\\\\]|$)")
+    message(FATAL_ERROR "Invalid relative install destination: ${var}")
   endif()
 endforeach()
-
+if(PURE_MIDI_STRICT_WINDOWS_AUDIT AND
+    (NOT PURE_LIBRARY_INSTALL_DIR STREQUAL "lib/pure" OR
+     NOT PURE_DOCUMENTATION_INSTALL_DIR STREQUAL "share/doc/pure-midi" OR
+     NOT PURE_EXAMPLES_INSTALL_DIR STREQUAL "share/doc/pure-midi/examples"))
+  message(FATAL_ERROR "Strict audit requires the fixed package layout")
+endif()
 set(version "${PROJECT_VERSION}")
 string(TIMESTAMP today "%B %d, %Y")
-configure_file("${CMAKE_CURRENT_SOURCE_DIR}/README"
-  "${CMAKE_CURRENT_BINARY_DIR}/README" @ONLY NEWLINE_STYLE UNIX)
+configure_file("${CMAKE_CURRENT_SOURCE_DIR}/README" "${CMAKE_CURRENT_BINARY_DIR}/README" @ONLY NEWLINE_STYLE UNIX)
 file(READ "${CMAKE_CURRENT_BINARY_DIR}/README" readme)
 string(REPLACE "|today|" "${today}" readme "${readme}")
 file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/README" "${readme}")
 
-install(TARGETS pmlib midifile
-  RUNTIME DESTINATION "${PURE_LIBRARY_INSTALL_DIR}"
-  LIBRARY DESTINATION "${PURE_LIBRARY_INSTALL_DIR}"
-  COMPONENT runtime)
-install(FILES
-    "${CMAKE_CURRENT_SOURCE_DIR}/midi.pure"
-    "${CMAKE_CURRENT_SOURCE_DIR}/portmidi.pure"
-    "${CMAKE_CURRENT_SOURCE_DIR}/midifile/midifile.pure"
-  DESTINATION "${PURE_LIBRARY_INSTALL_DIR}"
-  COMPONENT runtime)
-
-if(WIN32)
-  install(FILES "${PORTMIDI_RUNTIME_DLL}" DESTINATION bin COMPONENT runtime)
-  set(portmidi_license
-    "$ENV{MSYSTEM_PREFIX}/share/licenses/portmidi/license.txt")
-  if(NOT EXISTS "${portmidi_license}")
-    message(FATAL_ERROR "Missing PortMidi license: ${portmidi_license}")
+# Component, destination, canonical source, SHA256, project, version, URL,
+# license, and local license destination. Module hashes are sealed on build.
+function(midi_install_artifact component destination source project version url license mapping)
+  if(source MATCHES "^\\$<TARGET_FILE:")
+    set(hash BUILD)
+  else()
+    if(NOT EXISTS "${source}" OR IS_DIRECTORY "${source}" OR IS_SYMLINK "${source}")
+      message(FATAL_ERROR "Missing regular install source: ${source}")
+    endif()
+    file(SHA256 "${source}" hash)
   endif()
-  install(FILES "${portmidi_license}"
-    DESTINATION "${PURE_DOCUMENTATION_INSTALL_DIR}/licenses"
-    RENAME "PortMidi.txt"
-    COMPONENT documentation)
+  set(MIDI_INSTALL_POLICY "${MIDI_INSTALL_POLICY}${component}|${destination}|${source}|${hash}|${project}|${version}|${url}|${license}|${mapping}\n" PARENT_SCOPE)
+  if(NOT PURE_MIDI_STRICT_WINDOWS_AUDIT AND NOT hash STREQUAL BUILD)
+    get_filename_component(dir "${destination}" DIRECTORY)
+    get_filename_component(name "${destination}" NAME)
+    install(FILES "${source}" DESTINATION "${dir}" RENAME "${name}" COMPONENT "${component}")
+  endif()
+endfunction()
+function(midi_install_own component destination source)
+  midi_install_artifact("${component}" "${destination}" "${source}" pure-midi
+    "${PROJECT_VERSION}" "https://github.com/agraef/pure-lang/tree/master/pure-midi"
+    BSD-3-Clause "${PURE_DOCUMENTATION_INSTALL_DIR}/COPYING")
+  set(MIDI_INSTALL_POLICY "${MIDI_INSTALL_POLICY}" PARENT_SCOPE)
+endfunction()
+foreach(target pmlib midifile)
+  midi_install_own(runtime "${PURE_LIBRARY_INSTALL_DIR}/$<TARGET_FILE_NAME:${target}>" "$<TARGET_FILE:${target}>")
+endforeach()
+if(NOT PURE_MIDI_STRICT_WINDOWS_AUDIT)
+  install(TARGETS pmlib midifile
+    RUNTIME DESTINATION "${PURE_LIBRARY_INSTALL_DIR}" COMPONENT runtime
+    LIBRARY DESTINATION "${PURE_LIBRARY_INSTALL_DIR}" COMPONENT runtime)
+endif()
+foreach(path midi.pure portmidi.pure midifile/midifile.pure)
+  get_filename_component(name "${path}" NAME)
+  midi_install_own(runtime "${PURE_LIBRARY_INSTALL_DIR}/${name}" "${CMAKE_CURRENT_SOURCE_DIR}/${path}")
+endforeach()
+foreach(name README COPYING WINDOWS.md THIRD_PARTY.md)
+  if(name STREQUAL README)
+    set(source "${CMAKE_CURRENT_BINARY_DIR}/README")
+  else()
+    set(source "${CMAKE_CURRENT_SOURCE_DIR}/${name}")
+  endif()
+  midi_install_own(documentation "${PURE_DOCUMENTATION_INSTALL_DIR}/${name}" "${source}")
+endforeach()
+foreach(name midi_examp.pure prelude3.mid)
+  midi_install_own(documentation "${PURE_EXAMPLES_INSTALL_DIR}/${name}" "${CMAKE_CURRENT_SOURCE_DIR}/examples/${name}")
+endforeach()
+foreach(name device-timing.pure smoke.pure hardware-output.pure)
+  midi_install_own(documentation "${PURE_DOCUMENTATION_INSTALL_DIR}/tests/${name}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/${name}")
+endforeach()
+if(WIN32)
+  set(license_dir "${CMAKE_CURRENT_SOURCE_DIR}/licenses")
+  set(origin "libportmidi.dll|PortMidi|1~2.0.8-1|https://github.com/PortMidi/portmidi/blob/v2.0.8/license.txt|MIT|PortMidi.txt|8d187c40c782da0e24489c4c4bf7590635e072dc0b70b0afda7b0652d290c1ea|99454395751bfad786db9c457b93db62f31f7d68dc2bebb2281f33289d43cb49")
+  file(STRINGS "${license_dir}/origins.tsv" rows REGEX "^[^#]")
+  file(SHA256 "${license_dir}/PortMidi.txt" license_hash)
+  if(NOT rows STREQUAL origin OR NOT license_hash STREQUAL "8d187c40c782da0e24489c4c4bf7590635e072dc0b70b0afda7b0652d290c1ea")
+    message(FATAL_ERROR "PortMidi license/origins differ from the pinned upstream payload")
+  endif()
+  set(url "https://github.com/PortMidi/portmidi/blob/v2.0.8/license.txt")
+  set(mapping "${PURE_DOCUMENTATION_INSTALL_DIR}/licenses/PortMidi.txt")
+  midi_install_artifact(runtime "bin/libportmidi.dll" "${PORTMIDI_RUNTIME_DLL}" PortMidi "1~2.0.8-1" "${url}" MIT "${mapping}")
+  midi_install_artifact(documentation "${mapping}" "${license_dir}/PortMidi.txt" PortMidi "1~2.0.8-1" "${url}" MIT "${mapping}")
+  midi_install_own(documentation "${PURE_DOCUMENTATION_INSTALL_DIR}/licenses/origins.tsv" "${license_dir}/origins.tsv")
 endif()
 
-install(FILES
-    "${CMAKE_CURRENT_BINARY_DIR}/README"
-    "${CMAKE_CURRENT_SOURCE_DIR}/COPYING"
-    "${CMAKE_CURRENT_SOURCE_DIR}/WINDOWS.md"
-    "${CMAKE_CURRENT_SOURCE_DIR}/THIRD_PARTY.md"
-  DESTINATION "${PURE_DOCUMENTATION_INSTALL_DIR}"
-  COMPONENT documentation)
-install(FILES
-    "${CMAKE_CURRENT_SOURCE_DIR}/examples/midi_examp.pure"
-    "${CMAKE_CURRENT_SOURCE_DIR}/examples/prelude3.mid"
-  DESTINATION "${PURE_EXAMPLES_INSTALL_DIR}"
-  COMPONENT documentation)
-install(FILES
-    "${CMAKE_CURRENT_SOURCE_DIR}/tests/device-timing.pure"
-    "${CMAKE_CURRENT_SOURCE_DIR}/tests/smoke.pure"
-    "${CMAKE_CURRENT_SOURCE_DIR}/tests/hardware-output.pure"
-  DESTINATION "${PURE_DOCUMENTATION_INSTALL_DIR}/tests"
-  COMPONENT documentation)
+if(PURE_MIDI_STRICT_WINDOWS_AUDIT)
+  foreach(target install_guard install_guard_fixture)
+    if(target STREQUAL install_guard_fixture AND NOT BUILD_TESTING)
+      continue()
+    endif()
+    add_executable(${target} cmake/install_guard.c)
+    target_compile_features(${target} PRIVATE c_std_11)
+    target_compile_options(${target} PRIVATE -Wall -Wextra -Werror)
+    target_link_options(${target} PRIVATE -municode)
+    target_link_libraries(${target} PRIVATE bcrypt)
+    if(target STREQUAL install_guard_fixture)
+      target_compile_definitions(${target} PRIVATE PURE_MIDI_INSTALL_GUARD_FIXTURE=1)
+    endif()
+  endforeach()
+  set(MIDI_INSTALL_GUARD "$<TARGET_FILE:install_guard>")
+  set(MIDI_INSTALL_CONTEXT "${CMAKE_CURRENT_BINARY_DIR}/windows-install-context.cmake")
+  set(MIDI_INSTALL_INVENTORY "${CMAKE_CURRENT_BINARY_DIR}/windows-install-inventory.tsv")
+  set(MIDI_INSTALL_BUILD_DIR "${CMAKE_CURRENT_BINARY_DIR}")
+  set(MIDI_INSTALL_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
+  set(MIDI_INSTALL_SCRIPT "${CMAKE_CURRENT_SOURCE_DIR}/cmake/VerifyInstalledPackage.cmake")
+  set(MIDI_INSTALL_RUNNER "${CMAKE_CURRENT_BINARY_DIR}/run_pure_test.exe")
+  set(MIDI_INSTALL_CONTRACT_ROOT "${MIDI_CONTRACT_ROOT}")
+  set(context "# Trusted configured build context; manifests remain data.\nset(MIDI_INSTALL_POLICY [==[${MIDI_INSTALL_POLICY}]==])\n")
+  set(MIDI_INSTALL_HELPERS_ONLY ON)
+  include("${MIDI_INSTALL_SCRIPT}")
+  unset(MIDI_INSTALL_HELPERS_ONLY)
+  install_tree("${PURE_MIDI_PURE_PREFIX}" baseline_rows)
+  list(JOIN baseline_rows "\n" baseline_policy)
+  string(APPEND context "set(MIDI_INSTALL_BASELINE_POLICY [==[${baseline_policy}\n]==])\n")
+  foreach(var MIDI_INSTALL_INVENTORY MIDI_INSTALL_BUILD_DIR MIDI_INSTALL_SOURCE_DIR
+      MIDI_INSTALL_SCRIPT MIDI_INSTALL_GUARD MIDI_INSTALL_RUNNER MIDI_INSTALL_CONTRACT_ROOT
+      PURE_MIDI_CLANG64_PREFIX PURE_MIDI_PURE_PREFIX PURE_MIDI_WINDOWS_SYSTEM_DIRECTORY
+      PURE_MIDI_RUNTIME_MANIFEST PURE_MIDI_LLVM_READOBJ_SHA256 LLVM_READOBJ)
+    string(APPEND context "set(${var} [==[${${var}}]==])\n")
+  endforeach()
+  file(GENERATE OUTPUT "${MIDI_INSTALL_CONTEXT}" CONTENT "${context}")
+  add_custom_target(pure-midi-install-inventory ALL
+    COMMAND "${CMAKE_COMMAND}" "-DMIDI_INSTALL_CONTEXT=${MIDI_INSTALL_CONTEXT}"
+      -DMIDI_INSTALL_MODE=seal -P "${MIDI_INSTALL_SCRIPT}"
+    DEPENDS pmlib midifile install_guard VERBATIM)
+  foreach(component runtime documentation)
+    install(CODE "set(MIDI_INSTALL_CONTEXT [==[${MIDI_INSTALL_CONTEXT}]==])\nset(MIDI_INSTALL_MODE install)\nset(MIDI_INSTALL_COMPONENT ${component})\nif(NOT CMAKE_INSTALL_COMPONENT)\n  set(MIDI_INSTALL_COMPONENT all)\nendif()\nset(STAGE_PREFIX \"\${CMAKE_INSTALL_PREFIX}\")\ninclude([==[${MIDI_INSTALL_SCRIPT}]==])\nreturn()" COMPONENT "${component}")
+  endforeach()
+endif()

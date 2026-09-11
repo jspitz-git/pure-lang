@@ -1,3 +1,5 @@
 pure-reduce/licenses/*.txt text eol=lf whitespace=-trailing-space,-space-before-tab
 pure-reduce/patches/*.patch text eol=lf whitespace=-blank-at-eol,-blank-at-eof
 pure-fastcgi/patches/*.patch text eol=lf whitespace=-blank-at-eol,-blank-at-eof
+pure-midi/licenses/*.txt text eol=lf whitespace=-trailing-space
+pure-midi/licenses/origins.tsv text eol=lf
