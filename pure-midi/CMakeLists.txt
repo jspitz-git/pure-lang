@@ -629,7 +629,28 @@ if(BUILD_TESTING)
 endif()
 
 include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/Install.cmake")
+if(WIN32)
+  add_custom_target(source-dist
+    COMMAND "${CMAKE_COMMAND}" "-DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
+      "-DDIST_DIR=${CMAKE_CURRENT_BINARY_DIR}"
+      -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/CreateSourceArchive.cmake" VERBATIM)
+endif()
 if(BUILD_TESTING AND PURE_MIDI_STRICT_WINDOWS_AUDIT)
+  add_test(NAME pure-midi-source-dist-contract
+    COMMAND "${CMAKE_COMMAND}" "-DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
+      "-DCLANG64_PREFIX=${PURE_MIDI_CLANG64_PREFIX}"
+      "-DDIST_ROOT=${CMAKE_CURRENT_BINARY_DIR}/source-contract-root"
+      -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/source_dist_contract.cmake")
+  set_tests_properties(pure-midi-source-dist-contract PROPERTIES
+    LABELS "midi;contract;source;no-hardware" TIMEOUT 600 RUN_SERIAL TRUE)
+  # distcheck is intentionally explicit and uses a short caller-owned root;
+  # embedding it as a recursive CTest would multiply nested release workflows.
+  set(PURE_MIDI_SOURCE_DIST_ROOT "" CACHE PATH "Explicit short source verification root")
+  add_custom_target(source-distcheck
+    COMMAND "${CMAKE_COMMAND}" "-DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
+      "-DCLANG64_PREFIX=${PURE_MIDI_CLANG64_PREFIX}" "-DPURE_PREFIX=${PURE_MIDI_PURE_PREFIX}"
+      "-DDIST_ROOT=${PURE_MIDI_SOURCE_DIST_ROOT}"
+      -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/source_dist_extracted.cmake" VERBATIM)
   add_test(NAME pure-midi-install-contract
     COMMAND "${CMAKE_COMMAND}" "-DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
       "-DMODULE_DIR=${CMAKE_CURRENT_BINARY_DIR}" "-DPURE_PREFIX=${PURE_MIDI_PURE_PREFIX}"

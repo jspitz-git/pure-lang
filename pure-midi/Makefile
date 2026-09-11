@@ -25,12 +25,12 @@ endif
 MOD_CFLAGS  = $(PIC) $(shell pkg-config pure --cflags) $(CFLAGS) $(CPPFLAGS)
 MOD_LDFLAGS = $(shell pkg-config pure --libs) $(LDFLAGS) $(LIBS)
 
-DISTFILES = COPYING Makefile README \
-debian/* examples/*.pure examples/*.mid pmdev.h pmdev.c \
-midi.pure portmidi.pure portmidi.h porttime.h \
-midifile/Makefile midifile/midifile.c midifile/midifile.h \
-midifile/mf.c midifile/mf.h midifile/midifile.pure
-SEDFILES = README
+# CreateSourceArchive.cmake owns the complete explicit release inventory.
+CMAKE ?= cmake
+DIST_DIR ?= $(CURDIR)
+CLANG64_PREFIX ?=
+PURE_PREFIX ?=
+DIST_ROOT ?=
 
 # Makefile to build the PortMidi wrapper and the midifile support library.
 
@@ -90,20 +90,12 @@ date = $(shell date "+%B %-d, %Y")
 datesubst = sed -e "s?@version@?$(version)?g" -e "s?|today|?$(date)?g" < $(1) > $(2)
 
 dist:
-	rm -rf $(dist)
-	mkdir $(dist) && mkdir $(dist)/debian && mkdir $(dist)/examples && mkdir $(dist)/midifile
-	for x in $(DISTFILES); do ln -sf $$PWD/$$x $(dist)/$$x; done
-	for x in $(SEDFILES); do rm -f $(dist)/$$x; $(call datesubst,$$PWD/$$x,$(dist)/$$x); done
-	rm -f $(dist).tar.gz
-	tar cfzh $(dist).tar.gz $(dist)
-	rm -rf $(dist)
+	"$(CMAKE)" "-DSOURCE_DIR=$(CURDIR)" "-DDIST_DIR=$(DIST_DIR)" -P "$(CURDIR)/cmake/CreateSourceArchive.cmake"
 
 distcheck: dist
-	tar xfz $(dist).tar.gz
-	cd $(dist) && make && make install DESTDIR=./BUILD
-	rm -rf $(dist)
+	"$(CMAKE)" "-DSOURCE_DIR=$(CURDIR)" "-DCLANG64_PREFIX=$(CLANG64_PREFIX)" "-DPURE_PREFIX=$(PURE_PREFIX)" "-DDIST_ROOT=$(DIST_ROOT)" -P "$(CURDIR)/cmake/SourceWorkflow.cmake"
 
-debsrc = $(shell echo $(dist) | sed -e 's/-$(version)/_$(version)/').orig.tar.gz
+debsrc = pure-midi_$(version).orig.tar.gz
 
 deb: $(debsrc) dist
 	tar xfz $(dist).tar.gz
