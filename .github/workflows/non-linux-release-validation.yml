@@ -26,6 +26,8 @@ on:
       - "pure-glpk/**"
       - "pure-odbc/**"
       - "pure-audio/**"
+      - "pure-midi/**"
+      - "pure/todo/TODO-34-windows-pure-midi.md"
       - "pure/todo/TODO-33-windows-pure-audio.md"
       - "purepad/**"
       - "pure/todo/TODO-45-windows-pure-bonjour.md"
@@ -71,6 +73,8 @@ on:
       - "pure-glpk/**"
       - "pure-odbc/**"
       - "pure-audio/**"
+      - "pure-midi/**"
+      - "pure/todo/TODO-34-windows-pure-midi.md"
       - "pure/todo/TODO-33-windows-pure-audio.md"
       - "purepad/**"
       - "pure/todo/TODO-45-windows-pure-bonjour.md"
@@ -122,6 +126,9 @@ jobs:
       AUDIO_SOURCE: ${{ github.workspace }}/pure-audio
       AUDIO_PREFIX: ${{ github.workspace }}/pure/build/windows-clang64-prefix
       AUDIO_RUNTIME_PATH: ${{ github.workspace }}/pure/build/windows-clang64-prefix/bin;C:/msys64/clang64/bin;C:/msys64/usr/bin;C:/Windows/System32;C:/Windows
+      MIDI_SOURCE: ${{ github.workspace }}/pure-midi
+      MIDI_PREFIX: ${{ github.workspace }}/pure/build/windows-clang64-prefix
+      MIDI_RUNTIME_PATH: ${{ github.workspace }}/pure/build/windows-clang64-prefix/bin;C:/msys64/clang64/bin;C:/msys64/usr/bin;C:/Windows/System32;C:/Windows
       FAUST_URL: https://github.com/grame-cncm/faust/releases/download/2.85.9/Faust-2.85.9-win64.exe
       FAUST_SHA256: d0994eb444ab4b1e75e3ed7c31897da24013db0672e2c6be8f2ab09b73d16977
 
@@ -168,6 +175,7 @@ jobs:
             mingw-w64-clang-x86_64-pcre
             mingw-w64-clang-x86_64-pkgconf
             mingw-w64-clang-x86_64-portaudio
+            mingw-w64-clang-x86_64-portmidi
             mingw-w64-clang-x86_64-python-yaml
             mingw-w64-clang-x86_64-readline
             mingw-w64-clang-x86_64-termcap
@@ -287,6 +295,105 @@ jobs:
             & C:/msys64/clang64/bin/pkgconf.exe --modversion pure
             if ($LASTEXITCODE -ne 0) { throw 'Installed pkg-config probe failed' }
           } 2>&1 | Tee-Object -FilePath "$env:LOG_DIR/installed-runtime.log"
+
+      # All 19 MIDI CTests are mandatory and hardware-free. Public distcheck
+      # repeats the complete gate from an archive with checkout access denied.
+      - name: Configure strict pure-midi audit
+        shell: pwsh
+        env: &pure-midi-environment
+          MIDI_BUILD: ${{ runner.temp }}/pm8
+          MIDI_STAGE: ${{ runner.temp }}/pm8/package
+          MIDI_DIST_ROOT: ${{ runner.temp }}/ms8
+          PATH: ${{ env.MIDI_RUNTIME_PATH }}
+          PURELIB: ""
+          PURE_INCLUDE: ""
+          PURE_LIBRARY: ""
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($env:MIDI_BUILD.Length -gt 32) { throw 'Use a MIDI build root at most 32 characters long' }
+          if (Test-Path -LiteralPath $env:MIDI_BUILD) { throw 'Fresh MIDI build already exists' }
+          & $env:CMAKE_EXE -S "$env:MIDI_SOURCE" -B "$env:MIDI_BUILD" -G Ninja `
+            -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON `
+            -DPURE_MIDI_STRICT_WINDOWS_AUDIT=ON `
+            -DCMAKE_C_COMPILER=C:/msys64/clang64/bin/clang.exe `
+            -DCMAKE_C_COMPILER_TARGET=x86_64-w64-windows-gnu `
+            -DCMAKE_MAKE_PROGRAM=C:/msys64/clang64/bin/ninja.exe `
+            -DPKG_CONFIG_EXECUTABLE=C:/msys64/clang64/bin/pkgconf.exe `
+            -DLLVM_READOBJ=C:/msys64/clang64/bin/llvm-readobj.exe `
+            -DPURE_MIDI_MAKE_EXECUTABLE=C:/msys64/clang64/bin/mingw32-make.exe `
+            -DPURE_MIDI_SH_EXECUTABLE=C:/msys64/usr/bin/sh.exe `
+            -DPURE_MIDI_CLANG64_PREFIX=C:/msys64/clang64 `
+            "-DPURE_MIDI_PURE_PREFIX=$env:MIDI_PREFIX" `
+            "-DPURE_INCLUDE_DIR=$env:MIDI_PREFIX/include" `
+            "-DPURE_EXECUTABLE=$env:MIDI_PREFIX/bin/pure.exe" `
+            "-DPURE_HEADER=$env:MIDI_PREFIX/include/pure/runtime.h" `
+            "-DPURE_GLOB_HEADER=$env:MIDI_PREFIX/include/glob.h" `
+            "-DPURE_IMPORT_LIBRARY=$env:MIDI_PREFIX/lib/libpure.dll.a" `
+            "-DPURE_RUNTIME_DLL=$env:MIDI_PREFIX/bin/libpure.dll" `
+            -DPORTMIDI_HEADER=C:/msys64/clang64/include/portmidi.h `
+            -DPORTTIME_HEADER=C:/msys64/clang64/include/porttime.h `
+            -DPORTMIDI_IMPORT_LIBRARY=C:/msys64/clang64/lib/libportmidi.dll.a `
+            -DPORTMIDI_RUNTIME_DLL=C:/msys64/clang64/bin/libportmidi.dll `
+            -DGMP_HEADER=C:/msys64/clang64/include/gmp.h `
+            -DMPFR_HEADER=C:/msys64/clang64/include/mpfr.h `
+            -DPURE_MIDI_WINDOWS_HEADER=C:/msys64/clang64/include/windows.h `
+            -DPURE_MIDI_WINDOWS_SYSTEM_DIRECTORY=C:/Windows/System32 `
+            "-DPURE_MIDI_RUNTIME_SOURCES=pure.exe|$env:MIDI_PREFIX/bin/pure.exe;libpure.dll|$env:MIDI_PREFIX/bin/libpure.dll;libc++.dll|$env:MIDI_PREFIX/bin/libc++.dll;libgmp-10.dll|$env:MIDI_PREFIX/bin/libgmp-10.dll;libiconv-2.dll|$env:MIDI_PREFIX/bin/libiconv-2.dll;libmpfr-6.dll|$env:MIDI_PREFIX/bin/libmpfr-6.dll;libpcre-1.dll|$env:MIDI_PREFIX/bin/libpcre-1.dll;libpcreposix-0.dll|$env:MIDI_PREFIX/bin/libpcreposix-0.dll;libreadline8.dll|$env:MIDI_PREFIX/bin/libreadline8.dll;libtermcap-0.dll|$env:MIDI_PREFIX/bin/libtermcap-0.dll;libwinpthread-1.dll|$env:MIDI_PREFIX/bin/libwinpthread-1.dll;libzstd.dll|$env:MIDI_PREFIX/bin/libzstd.dll;zlib1.dll|$env:MIDI_PREFIX/bin/zlib1.dll;libportmidi.dll|C:/msys64/clang64/bin/libportmidi.dll" `
+            2>&1 | Tee-Object -FilePath "$env:LOG_DIR/configure-pure-midi.log"
+          if ($LASTEXITCODE -ne 0) { throw 'Strict pure-midi configure failed' }
+
+      - name: Build and verify pure-midi PE closure
+        shell: pwsh
+        env: *pure-midi-environment
+        run: |
+          $ErrorActionPreference = 'Stop'
+          & $env:CMAKE_EXE --build "$env:MIDI_BUILD" --parallel 4 `
+            2>&1 | Tee-Object -FilePath "$env:LOG_DIR/build-pure-midi.log"
+          if ($LASTEXITCODE -ne 0) { throw 'pure-midi build failed' }
+          & $env:CMAKE_EXE --build "$env:MIDI_BUILD" --target verify-windows-dependencies --parallel 4 `
+            2>&1 | Tee-Object -FilePath "$env:LOG_DIR/pe-pure-midi.log"
+          if ($LASTEXITCODE -ne 0) { throw 'pure-midi PE closure failed' }
+
+      - name: Run mandatory no-hardware pure-midi tests
+        shell: pwsh
+        env: *pure-midi-environment
+        run: |
+          $ErrorActionPreference = 'Stop'
+          & $env:CTEST_EXE --test-dir "$env:MIDI_BUILD" -L "^no-hardware$" -LE "^hardware$" `
+            --output-on-failure --no-tests=error `
+            2>&1 | Tee-Object -FilePath "$env:LOG_DIR/ctest-pure-midi.log"
+          if ($LASTEXITCODE -ne 0) { throw 'Mandatory no-hardware pure-midi tests failed' }
+
+      - name: Install and verify the pure-midi package
+        shell: pwsh
+        env: *pure-midi-environment
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if (Test-Path -LiteralPath $env:MIDI_STAGE) { throw 'Fresh MIDI package stage already exists' }
+          & $env:CMAKE_EXE -E copy_directory "$env:MIDI_PREFIX" "$env:MIDI_STAGE"
+          if ($LASTEXITCODE -ne 0) { throw 'MIDI baseline copy failed' }
+          & $env:CMAKE_EXE --install "$env:MIDI_BUILD" --prefix "$env:MIDI_STAGE" --component runtime
+          if ($LASTEXITCODE -ne 0) { throw 'MIDI runtime install failed' }
+          & $env:CMAKE_EXE --install "$env:MIDI_BUILD" --prefix "$env:MIDI_STAGE" --component documentation
+          if ($LASTEXITCODE -ne 0) { throw 'MIDI documentation install failed' }
+          & $env:CMAKE_EXE "-DMIDI_INSTALL_CONTEXT=$env:MIDI_BUILD/windows-install-context.cmake" `
+            "-DSTAGE_PREFIX=$env:MIDI_STAGE" -P "$env:MIDI_SOURCE/cmake/VerifyInstalledPackage.cmake" `
+            2>&1 | Tee-Object -FilePath "$env:LOG_DIR/installed-pure-midi.log"
+          if ($LASTEXITCODE -ne 0) { throw 'Installed MIDI package verification failed' }
+
+      - name: Verify pure-midi source distribution
+        shell: pwsh
+        env: *pure-midi-environment
+        run: |
+          $ErrorActionPreference = 'Stop'
+          & $env:CMAKE_EXE -E make_directory "$env:MIDI_DIST_ROOT"
+          if ($LASTEXITCODE -ne 0) { throw 'MIDI source output directory creation failed' }
+          & C:/msys64/clang64/bin/mingw32-make.exe -C "$env:MIDI_SOURCE" distcheck `
+            DLL=.dll CMAKE=C:/msys64/clang64/bin/cmake.exe CLANG64_PREFIX=C:/msys64/clang64 `
+            "PURE_PREFIX=$env:MIDI_PREFIX" "DIST_ROOT=$env:MIDI_DIST_ROOT" `
+            "DIST_DIR=$env:MIDI_DIST_ROOT" SHELL=C:/msys64/usr/bin/sh.exe `
+            2>&1 | Tee-Object -FilePath "$env:LOG_DIR/distcheck-pure-midi.log"
+          if ($LASTEXITCODE -ne 0) { throw 'pure-midi public distcheck failed' }
 
       # The ten native/no-hardware tests precede package verification. The
       # eleventh test (source distribution) runs once through public distcheck

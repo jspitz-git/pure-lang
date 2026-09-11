@@ -22,30 +22,27 @@ is required). It includes the following modules:
   David G. Slomin's light-weight midifile library, which comes bundled with
   the pure-midi sources.
 
-Documentation still needs to be written, so for the time being please read the
-source modules listed above and have a look at the examples provided in the
-distribution.
+For the public operations, read the source modules and bundled examples.
+WINDOWS.md documents the supported Windows build, checked event layouts,
+stream ownership, package verification and optional output testing.
 
 Installation
 ------------
 
-Get the latest source from
-https://bitbucket.org/purelang/pure-lang/downloads/pure-midi-@version@.tar.gz.
+Sources are maintained at https://github.com/agraef/pure-lang.
+On Windows, follow WINDOWS.md: use MSYS2 CLANG64 Clang/LLVM 22, Ninja,
+portable Pure 0.68 and the audited PortMidi package. MSYS2 is the build
+environment; installed executables and modules use native Windows runtimes.
+The strict gate runs all mandatory Release/ASan no-hardware tests, recursive
+PE verification, exact runtime/documentation installs and public make distcheck.
+Package versions and hashes are intentionally checked; see THIRD_PARTY.md and
+licenses/origins.tsv before changing dependencies.
 
-You need to have the PortMidi library installed on your system. This release
-was tested with PortMidi 2.00 (I recommend using the svn version of PortMidi,
-since it fixes some 64 bit compilation problems). If you have to use some
-earlier PortMidi version then you may have to fiddle with portmidi.pure and/or
-midi.pure to make it work. (You can also just regenerate the wrapper by
-copying portmidi.h and porttime.h from your PortMidi installation to the
-pure-midi source directory and running 'make generate'. This requires
-pure-gen. See the toplevel Makefile for details.)
-
-Run 'make' to compile the package. If you're lucky and everything compiles
-smoothly, you can install with 'sudo make install'.
-
-If you're not so lucky, you can get help on the Pure mailing list, see
-http://groups.google.com/group/pure-lang.
+Existing non-strict CMake and legacy Make builds remain available for upstream
+platforms with Pure and PortMidi installed. Native POSIX behavior and Debian
+source packaging have not been revalidated in the Windows audit. Historical
+bundled PortMidi headers describe source origins, not modern Windows dependency
+selection; strict builds consume the explicit CLANG64 headers/import library.
 
 NOTE: You may also want to install the related pure-audio package. In
 particular, pure-audio also provides realtime.pure, a little utility module

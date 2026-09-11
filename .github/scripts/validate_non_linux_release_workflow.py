@@ -232,7 +232,7 @@ def audio_command_tokens(line: str) -> list[str]:
     return [value for value, quote in words]
 
 
-def audio_native_calls(script: str) -> tuple[list[list[str]], set[str]]:
+def audio_native_calls(script: str, namespace: str = 'AUDIO') -> tuple[list[list[str]], set[str]]:
     """Parse the deliberately small audited PowerShell command language.
 
     Expansion-aware quotes/continuations and logging pipelines are normalized
@@ -272,9 +272,11 @@ def audio_native_calls(script: str) -> tuple[list[list[str]], set[str]]:
             index += 1
         else:
             fresh = re.fullmatch(
-                r"if\s*\(Test-Path\s+-LiteralPath\s+\$env:(AUDIO_BUILD|AUDIO_STAGE)\)\s*\{\s*throw\s+'[^']+'\s*\}", line)
+                r"if\s*\(Test-Path\s+-LiteralPath\s+\$env:(" + namespace +
+                r"_BUILD|" + namespace + r"_STAGE)\)\s*\{\s*throw\s+'[^']+'\s*\}", line)
             short = re.fullmatch(
-                r"if\s*\(\$env:AUDIO_BUILD.Length\s+-gt\s+32\)\s*\{\s*throw\s+'[^']+'\s*\}", line)
+                r"if\s*\(\$env:" + namespace +
+                r"_BUILD.Length\s+-gt\s+32\)\s*\{\s*throw\s+'[^']+'\s*\}", line)
             require(not calls and (fresh is not None or short is not None),
                     'unsupported or reordered audio PowerShell statement')
             guard = fresh.group(1) if fresh else 'short'
@@ -401,6 +403,172 @@ def validate_audio(root: dict[str, Any], core: dict[str, Any], steps: list[Any])
             'workflow semantics must actually run both mutation tests and pristine validation')
 
 
+MIDI_STEP_ORDER = (
+    'Configure strict pure-midi audit', 'Build and verify pure-midi PE closure',
+    'Run mandatory no-hardware pure-midi tests',
+    'Install and verify the pure-midi package', 'Verify pure-midi source distribution',
+)
+MIDI_PATHS = {
+    'pure-midi/**', 'pure/todo/TODO-34-windows-pure-midi.md',
+    '.github/workflows/non-linux-release-validation.yml',
+    '.github/scripts/validate_non_linux_release_workflow.py',
+    '.github/scripts/test_validate_non_linux_release_workflow.py',
+}
+MIDI_PACKAGES = {'make'} | {'mingw-w64-clang-x86_64-' + package for package in (
+    'clang', 'cmake', 'llvm', 'ninja', 'pkgconf', 'make', 'python-yaml',
+    'portmidi', 'gmp', 'mpfr', 'libc++', 'libiconv', 'pcre', 'readline',
+    'termcap', 'winpthreads', 'zstd', 'zlib')}
+MIDI_ENVIRONMENT = {
+    'CMAKE_EXE': 'C:/msys64/clang64/bin/cmake.exe',
+    'CTEST_EXE': 'C:/msys64/clang64/bin/ctest.exe',
+    'INSTALL_PREFIX': 'build/windows-clang64-prefix',
+    'MIDI_SOURCE': '${{ github.workspace }}/pure-midi',
+    'MIDI_PREFIX': '${{ github.workspace }}/pure/build/windows-clang64-prefix',
+    'MIDI_RUNTIME_PATH': '${{ github.workspace }}/pure/build/windows-clang64-prefix/bin;C:/msys64/clang64/bin;C:/msys64/usr/bin;C:/Windows/System32;C:/Windows',
+}
+MIDI_STEP_ENVIRONMENT = {
+    'MIDI_BUILD': '${{ runner.temp }}/pm8',
+    'MIDI_STAGE': '${{ runner.temp }}/pm8/package',
+    'MIDI_DIST_ROOT': '${{ runner.temp }}/ms8',
+    'PATH': '${{ env.MIDI_RUNTIME_PATH }}',
+    'PURELIB': '', 'PURE_INCLUDE': '', 'PURE_LIBRARY': '',
+}
+MIDI_CONFIGURE_INPUTS = {
+    'CMAKE_BUILD_TYPE': 'Release', 'BUILD_TESTING': 'ON',
+    'PURE_MIDI_STRICT_WINDOWS_AUDIT': 'ON',
+    'CMAKE_C_COMPILER': 'C:/msys64/clang64/bin/clang.exe',
+    'CMAKE_C_COMPILER_TARGET': 'x86_64-w64-windows-gnu',
+    'CMAKE_MAKE_PROGRAM': 'C:/msys64/clang64/bin/ninja.exe',
+    'PKG_CONFIG_EXECUTABLE': 'C:/msys64/clang64/bin/pkgconf.exe',
+    'LLVM_READOBJ': 'C:/msys64/clang64/bin/llvm-readobj.exe',
+    'PURE_MIDI_MAKE_EXECUTABLE': 'C:/msys64/clang64/bin/mingw32-make.exe',
+    'PURE_MIDI_SH_EXECUTABLE': 'C:/msys64/usr/bin/sh.exe',
+    'PURE_MIDI_CLANG64_PREFIX': 'C:/msys64/clang64',
+    'PURE_MIDI_PURE_PREFIX': '$env:MIDI_PREFIX',
+    'PURE_INCLUDE_DIR': '$env:MIDI_PREFIX/include',
+    'PURE_EXECUTABLE': '$env:MIDI_PREFIX/bin/pure.exe',
+    'PURE_HEADER': '$env:MIDI_PREFIX/include/pure/runtime.h',
+    'PURE_GLOB_HEADER': '$env:MIDI_PREFIX/include/glob.h',
+    'PURE_IMPORT_LIBRARY': '$env:MIDI_PREFIX/lib/libpure.dll.a',
+    'PURE_RUNTIME_DLL': '$env:MIDI_PREFIX/bin/libpure.dll',
+    'PORTMIDI_HEADER': 'C:/msys64/clang64/include/portmidi.h',
+    'PORTTIME_HEADER': 'C:/msys64/clang64/include/porttime.h',
+    'PORTMIDI_IMPORT_LIBRARY': 'C:/msys64/clang64/lib/libportmidi.dll.a',
+    'PORTMIDI_RUNTIME_DLL': 'C:/msys64/clang64/bin/libportmidi.dll',
+    'GMP_HEADER': 'C:/msys64/clang64/include/gmp.h',
+    'MPFR_HEADER': 'C:/msys64/clang64/include/mpfr.h',
+    'PURE_MIDI_WINDOWS_HEADER': 'C:/msys64/clang64/include/windows.h',
+    'PURE_MIDI_WINDOWS_SYSTEM_DIRECTORY': 'C:/Windows/System32',
+}
+MIDI_RUNTIME_POLICY = {
+    name: f'$env:MIDI_PREFIX/bin/{name}' for name in (
+        'pure.exe', 'libpure.dll', 'libc++.dll', 'libgmp-10.dll', 'libiconv-2.dll',
+        'libmpfr-6.dll', 'libpcre-1.dll', 'libpcreposix-0.dll', 'libreadline8.dll',
+        'libtermcap-0.dll', 'libwinpthread-1.dll', 'libzstd.dll', 'zlib1.dll')
+} | {'libportmidi.dll': 'C:/msys64/clang64/bin/libportmidi.dll'}
+
+
+def validate_midi(root: dict[str, Any], core: dict[str, Any], steps: list[Any]) -> None:
+    """Fail closed on the public strict MIDI gate's effective command vectors."""
+    require(core.get('runs-on') == 'windows-2025' and
+            'if' not in core and 'continue-on-error' not in core,
+            'MIDI requires the unconditional Windows 2025 job')
+    defaults = ({'shell': 'pwsh'} | audio_run_defaults(root, 'workflow') |
+                audio_run_defaults(core, 'job'))
+    # runner/env/steps/job are not available at either env scope. Only GitHub
+    # expression context roots are checked here; actionlint checks full syntax.
+    for scope, allowed in [(root, {'github', 'secrets', 'inputs', 'vars'}),
+                           (core, {'github', 'needs', 'strategy', 'matrix', 'vars', 'secrets', 'inputs'})]:
+        for value in mapping(scope.get('env', {}), 'MIDI environment scope').values():
+            for expression in re.findall(r'\$\{\{(.*?)\}\}', str(value)):
+                # Keep quoted strings atomic, skip member names and functions,
+                # and validate bare roots too (e.g. toJSON(runner)).
+                tokens = re.findall(r"'(?:[^']|'')*'|[A-Za-z_][A-Za-z_0-9]*|[^\s]", expression)
+                for index, token in enumerate(tokens):
+                    if (re.fullmatch(r'[A-Za-z_][A-Za-z_0-9]*', token) and
+                            (index == 0 or tokens[index-1] != '.') and
+                            (index+1 == len(tokens) or tokens[index+1] != '(')):
+                        require(token in allowed | {'true', 'false', 'null'},
+                                'unavailable GitHub expression context in environment')
+    for event, branches in [('push', {'master', 'todo/**', 'codex/**'}), ('pull_request', {'master'})]:
+        trigger = mapping(mapping(root.get('on'), 'on').get(event), event)
+        paths = sequence(trigger.get('paths'), event+'.paths')
+        actual = sequence(trigger.get('branches'), event+'.branches')
+        require(MIDI_PATHS <= set(paths), f'{event} missing MIDI trigger inputs')
+        require(set(actual) == branches and len(actual) == len(branches),
+                f'{event} must preserve the exact existing branch policy')
+        require('paths-ignore' not in trigger and 'branches-ignore' not in trigger and
+                not any(str(p).startswith('!') for p in paths),
+                f'{event} MIDI triggers cannot be excluded')
+    environment = mapping(core.get('env'), 'MIDI job env')
+    for key, value in MIDI_ENVIRONMENT.items():
+        require(environment.get(key) == value, f'MIDI job input origin changed: {key}')
+    prerequisite = step_by_name(steps, 'Install the CLANG64 build prerequisites')
+    portable = step_by_name(steps, 'Install and validate the portable runtime')
+    semantic = step_by_name(steps, 'Validate non-Linux workflow semantics')
+    for step in (prerequisite, portable, semantic):
+        require('if' not in step and 'continue-on-error' not in step, 'MIDI prerequisite cannot be skipped')
+    require_audio_run_context(defaults, portable)
+    require_audio_run_context(defaults, semantic)
+    options = mapping(prerequisite.get('with'), 'MIDI prerequisite options')
+    require(prerequisite.get('uses') == 'msys2/setup-msys2@v2' and options.get('msystem') == 'CLANG64',
+            'MIDI requires explicit CLANG64 setup')
+    require(MIDI_PACKAGES <= set(str(options.get('install', '')).split()),
+            'missing MIDI build prerequisites')
+    selected = [step_by_name(steps, name) for name in MIDI_STEP_ORDER]
+    positions = [steps.index(s) for s in [prerequisite, portable, *selected, semantic]]
+    require(positions == sorted(set(positions)), 'MIDI release steps are out of dependency order')
+    parsed = []
+    for step in selected:
+        require('if' not in step and 'continue-on-error' not in step, 'MIDI step cannot be skipped')
+        require_audio_run_context(defaults, step)
+        require(mapping(step.get('env'), 'MIDI step env') == MIDI_STEP_ENVIRONMENT,
+                'MIDI must replace PATH, clear Pure discovery, and use exact fresh roots')
+        parsed.append(audio_native_calls(command(step, step['name']), 'MIDI'))
+    configure, guards = parsed[0]
+    require(guards == {'errors', 'MIDI_BUILD', 'short'}, 'MIDI configure requires a fresh short root')
+    prefix = ['&', '$env:CMAKE_EXE', '-S', '$env:MIDI_SOURCE', '-B', '$env:MIDI_BUILD', '-G', 'Ninja']
+    require(len(configure) == 1 and configure[0][:8] == prefix, 'MIDI strict configure command changed')
+    inputs = {}
+    for argument in configure[0][8:]:
+        match = re.fullmatch(r'-D([A-Z][A-Z0-9_]*)=(.+)', argument)
+        require(match is not None, f'unsupported MIDI configure argument: {argument}')
+        key, value = match.groups()
+        require(key not in inputs, f'duplicate MIDI configure input: {key}')
+        inputs[key] = value
+    require(set(inputs) == set(MIDI_CONFIGURE_INPUTS) | {'PURE_MIDI_RUNTIME_SOURCES'},
+            'MIDI must declare all strict inputs without overrides')
+    for key, value in MIDI_CONFIGURE_INPUTS.items():
+        require(inputs[key] == value, f'MIDI strict input origin changed: {key}')
+    runtime = {}
+    for row in inputs['PURE_MIDI_RUNTIME_SOURCES'].split(';'):
+        fields = row.split('|')
+        require(len(fields) == 2 and fields[0] not in runtime, 'duplicate/malformed MIDI runtime row')
+        runtime[fields[0]] = fields[1]
+    require(runtime == MIDI_RUNTIME_POLICY, 'MIDI requires the complete exact runtime origins')
+    cmake = ['&', '$env:CMAKE_EXE']
+    normal = cmake + ['--build', '$env:MIDI_BUILD', '--parallel', '4']
+    pe = cmake + ['--build', '$env:MIDI_BUILD', '--target', 'verify-windows-dependencies', '--parallel', '4']
+    require(parsed[1] == ([normal, pe], {'errors'}), 'MIDI requires distinct normal/PE four-worker builds')
+    tests = ['&', '$env:CTEST_EXE', '--test-dir', '$env:MIDI_BUILD', '-L', '^no-hardware$',
+             '-LE', '^hardware$', '--output-on-failure', '--no-tests=error']
+    require(parsed[2] == ([tests], {'errors'}), 'MIDI must run every mandatory nonempty no-hardware test')
+    copy = cmake + ['-E', 'copy_directory', '$env:MIDI_PREFIX', '$env:MIDI_STAGE']
+    install = cmake + ['--install', '$env:MIDI_BUILD', '--prefix', '$env:MIDI_STAGE', '--component']
+    verify = cmake + ['-DMIDI_INSTALL_CONTEXT=$env:MIDI_BUILD/windows-install-context.cmake',
+                     '-DSTAGE_PREFIX=$env:MIDI_STAGE', '-P', '$env:MIDI_SOURCE/cmake/VerifyInstalledPackage.cmake']
+    require(parsed[3] == ([copy, install+['runtime'], install+['documentation'], verify],
+                         {'errors', 'MIDI_STAGE'}),
+            'MIDI requires fresh baseline, runtime/docs components, then full installed verification')
+    dist = ['&', 'C:/msys64/clang64/bin/mingw32-make.exe', '-C', '$env:MIDI_SOURCE', 'distcheck',
+            'DLL=.dll', 'CMAKE=C:/msys64/clang64/bin/cmake.exe', 'CLANG64_PREFIX=C:/msys64/clang64',
+            'PURE_PREFIX=$env:MIDI_PREFIX', 'DIST_ROOT=$env:MIDI_DIST_ROOT',
+            'DIST_DIR=$env:MIDI_DIST_ROOT', 'SHELL=C:/msys64/usr/bin/sh.exe']
+    directory = cmake + ['-E', 'make_directory', '$env:MIDI_DIST_ROOT']
+    require(parsed[4] == ([directory, dist], {'errors'}),
+            'MIDI requires checked output-directory creation then public make distcheck with exact inputs')
+
+
 def validate(path: Path) -> None:
     with path.open("r", encoding="utf-8") as stream:
         document = yaml.load(stream, Loader=yaml.BaseLoader)
@@ -490,6 +658,7 @@ def validate(path: Path) -> None:
     require("C:/msys64/clang64/bin/python.exe" in semantic,
             "workflow validation must use the packaged PyYAML interpreter")
     validate_audio(root, core, steps)
+    validate_midi(root, core, steps)
 
 
 def main() -> int:

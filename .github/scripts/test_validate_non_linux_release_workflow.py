@@ -467,6 +467,317 @@ class AudioWorkflowMutationTests(unittest.TestCase):
         validate_data(document)
 
 
+# Independent MIDI fixture, authored from the public Tasks 4-7 interfaces.
+# It does not copy the shipped MIDI block or import validator expectations.
+MIDI_NAMES = [
+    'Configure strict pure-midi audit', 'Build and verify pure-midi PE closure',
+    'Run mandatory no-hardware pure-midi tests',
+    'Install and verify the pure-midi package', 'Verify pure-midi source distribution',
+]
+MIDI_PATHS = ['pure-midi/**', 'pure/todo/TODO-34-windows-pure-midi.md',
+              '.github/workflows/non-linux-release-validation.yml',
+              '.github/scripts/validate_non_linux_release_workflow.py',
+              '.github/scripts/test_validate_non_linux_release_workflow.py']
+MIDI_PACKAGES = ['make'] + ['mingw-w64-clang-x86_64-' + name for name in
+    ('clang', 'cmake', 'llvm', 'ninja', 'pkgconf', 'make', 'python-yaml',
+     'portmidi', 'gmp', 'mpfr', 'libc++', 'libiconv', 'pcre', 'readline',
+     'termcap', 'winpthreads', 'zstd', 'zlib')]
+MIDI_JOB_ENV = {
+    'MIDI_SOURCE': '${{ github.workspace }}/pure-midi',
+    'MIDI_PREFIX': '${{ github.workspace }}/pure/build/windows-clang64-prefix',
+    'MIDI_RUNTIME_PATH': '${{ github.workspace }}/pure/build/windows-clang64-prefix/bin;C:/msys64/clang64/bin;C:/msys64/usr/bin;C:/Windows/System32;C:/Windows',
+}
+MIDI_ENV = {
+    'MIDI_BUILD': '${{ runner.temp }}/pm8',
+    'MIDI_STAGE': '${{ runner.temp }}/pm8/package',
+    'MIDI_DIST_ROOT': '${{ runner.temp }}/ms8',
+    'PATH': '${{ env.MIDI_RUNTIME_PATH }}',
+    'PURELIB': '', 'PURE_INCLUDE': '', 'PURE_LIBRARY': '',
+}
+MIDI_INPUTS = {
+    'CMAKE_BUILD_TYPE': 'Release', 'BUILD_TESTING': 'ON',
+    'PURE_MIDI_STRICT_WINDOWS_AUDIT': 'ON',
+    'CMAKE_C_COMPILER': 'C:/msys64/clang64/bin/clang.exe',
+    'CMAKE_C_COMPILER_TARGET': 'x86_64-w64-windows-gnu',
+    'CMAKE_MAKE_PROGRAM': 'C:/msys64/clang64/bin/ninja.exe',
+    'PKG_CONFIG_EXECUTABLE': 'C:/msys64/clang64/bin/pkgconf.exe',
+    'LLVM_READOBJ': 'C:/msys64/clang64/bin/llvm-readobj.exe',
+    'PURE_MIDI_MAKE_EXECUTABLE': 'C:/msys64/clang64/bin/mingw32-make.exe',
+    'PURE_MIDI_SH_EXECUTABLE': 'C:/msys64/usr/bin/sh.exe',
+    'PURE_MIDI_CLANG64_PREFIX': 'C:/msys64/clang64',
+    'PURE_MIDI_PURE_PREFIX': '$env:MIDI_PREFIX',
+    'PURE_INCLUDE_DIR': '$env:MIDI_PREFIX/include',
+    'PURE_HEADER': '$env:MIDI_PREFIX/include/pure/runtime.h',
+    'PURE_GLOB_HEADER': '$env:MIDI_PREFIX/include/glob.h',
+    'PURE_IMPORT_LIBRARY': '$env:MIDI_PREFIX/lib/libpure.dll.a',
+    'PURE_RUNTIME_DLL': '$env:MIDI_PREFIX/bin/libpure.dll',
+    'PURE_EXECUTABLE': '$env:MIDI_PREFIX/bin/pure.exe',
+    'PORTMIDI_HEADER': 'C:/msys64/clang64/include/portmidi.h',
+    'PORTTIME_HEADER': 'C:/msys64/clang64/include/porttime.h',
+    'PORTMIDI_IMPORT_LIBRARY': 'C:/msys64/clang64/lib/libportmidi.dll.a',
+    'PORTMIDI_RUNTIME_DLL': 'C:/msys64/clang64/bin/libportmidi.dll',
+    'GMP_HEADER': 'C:/msys64/clang64/include/gmp.h',
+    'MPFR_HEADER': 'C:/msys64/clang64/include/mpfr.h',
+    'PURE_MIDI_WINDOWS_HEADER': 'C:/msys64/clang64/include/windows.h',
+    'PURE_MIDI_WINDOWS_SYSTEM_DIRECTORY': 'C:/Windows/System32',
+}
+MIDI_RUNTIME = [
+    f'{name}|$env:MIDI_PREFIX/bin/{name}' for name in (
+        'pure.exe', 'libpure.dll', 'libc++.dll', 'libgmp-10.dll', 'libiconv-2.dll',
+        'libmpfr-6.dll', 'libpcre-1.dll', 'libpcreposix-0.dll', 'libreadline8.dll',
+        'libtermcap-0.dll', 'libwinpthread-1.dll', 'libzstd.dll', 'zlib1.dll')
+] + ['libportmidi.dll|C:/msys64/clang64/bin/libportmidi.dll']
+MIDI_INPUTS['PURE_MIDI_RUNTIME_SOURCES'] = ';'.join(MIDI_RUNTIME)
+MIDI_NORMAL = '& $env:CMAKE_EXE --build "$env:MIDI_BUILD" --parallel 4'
+MIDI_PE = '& $env:CMAKE_EXE --build "$env:MIDI_BUILD" --target verify-windows-dependencies --parallel 4'
+MIDI_TEST = ('& $env:CTEST_EXE --test-dir "$env:MIDI_BUILD" -L "^no-hardware$" '
+             '-LE "^hardware$" --output-on-failure --no-tests=error')
+MIDI_INSTALL = '& $env:CMAKE_EXE --install "$env:MIDI_BUILD" --prefix "$env:MIDI_STAGE" --component'
+MIDI_VERIFY = ('& $env:CMAKE_EXE "-DMIDI_INSTALL_CONTEXT=$env:MIDI_BUILD/windows-install-context.cmake" '
+               '"-DSTAGE_PREFIX=$env:MIDI_STAGE" -P "$env:MIDI_SOURCE/cmake/VerifyInstalledPackage.cmake"')
+MIDI_DIST = ('& C:/msys64/clang64/bin/mingw32-make.exe -C "$env:MIDI_SOURCE" distcheck '
+             'DLL=.dll CMAKE=C:/msys64/clang64/bin/cmake.exe CLANG64_PREFIX=C:/msys64/clang64 '
+             '"PURE_PREFIX=$env:MIDI_PREFIX" "DIST_ROOT=$env:MIDI_DIST_ROOT" '
+             '"DIST_DIR=$env:MIDI_DIST_ROOT" SHELL=C:/msys64/usr/bin/sh.exe')
+MIDI_DIST_DIRECTORY = '& $env:CMAKE_EXE -E make_directory "$env:MIDI_DIST_ROOT"'
+MIDI_FAILURE = "if ($LASTEXITCODE -ne 0) { throw 'MIDI native command failed' }"
+
+
+def midi_step(document, index):
+    return next(step for step in document['jobs']['windows-pure-core']['steps']
+                if step.get('name') == MIDI_NAMES[index])
+
+
+def midi_candidate():
+    document = candidate()  # Preserve independent unrelated audio/ODBC controls.
+    core = document['jobs']['windows-pure-core']
+    core['env'].update(MIDI_JOB_ENV)
+    for event in ('push', 'pull_request'):
+        paths = document['on'][event]['paths']
+        paths.extend(path for path in MIDI_PATHS if path not in paths)
+    steps = core['steps']
+    prereq = next(s for s in steps if s.get('name') == 'Install the CLANG64 build prerequisites')
+    packages = prereq['with']['install'].split()
+    packages.extend(p for p in MIDI_PACKAGES if p not in packages)
+    prereq['with']['install'] = ' '.join(packages)
+    def run(*lines):
+        return "$ErrorActionPreference = 'Stop'\n" + ''.join(
+            line + '\n' + (MIDI_FAILURE + '\n' if line.startswith('& ') else '')
+            for line in lines)
+    config = '& $env:CMAKE_EXE -S "$env:MIDI_SOURCE" -B "$env:MIDI_BUILD" -G Ninja '
+    config += ' '.join(f'"-D{k}={v}"' for k, v in MIDI_INPUTS.items())
+    commands = [
+        run("if ($env:MIDI_BUILD.Length -gt 32) { throw 'Short MIDI root required' }",
+            "if (Test-Path -LiteralPath $env:MIDI_BUILD) { throw 'Fresh MIDI root required' }", config),
+        run(MIDI_NORMAL, MIDI_PE), run(MIDI_TEST),
+        run("if (Test-Path -LiteralPath $env:MIDI_STAGE) { throw 'Fresh MIDI stage required' }",
+            '& $env:CMAKE_EXE -E copy_directory "$env:MIDI_PREFIX" "$env:MIDI_STAGE"',
+            MIDI_INSTALL+' runtime', MIDI_INSTALL+' documentation', MIDI_VERIFY),
+        run(MIDI_DIST_DIRECTORY, MIDI_DIST),
+    ]
+    steps[:] = [s for s in steps if s.get('name') not in MIDI_NAMES]
+    at = next(i for i, s in enumerate(steps) if s.get('name') == 'Install and validate the portable runtime') + 1
+    steps[at:at] = [dict(name=n, shell='pwsh', env=copy.deepcopy(MIDI_ENV), run=r)
+                   for n, r in zip(MIDI_NAMES, commands)]
+    return document
+
+
+def midi_mutations():
+    cases = []
+    def mutate(label, operation):
+        document = midi_candidate()
+        operation(document)
+        cases.append((label, document))
+    def replace(label, index, old, new):
+        def operation(d):
+            s = midi_step(d, index)
+            assert old in s['run'], (label, old)
+            s['run'] = s['run'].replace(old, new, 1)
+        mutate(label, operation)
+    for event, branches in [('push', ['master', 'todo/**', 'codex/**']), ('pull_request', ['master'])]:
+        for path in MIDI_PATHS:
+            mutate(f'{event}:path:{path}', lambda d, e=event, p=path: d['on'][e]['paths'].remove(p))
+        for branch in branches:
+            mutate(f'{event}:branch:{branch}', lambda d, e=event, b=branch: d['on'][e]['branches'].remove(b))
+        for field, value in [('paths-ignore', ['pure-midi/**']), ('branches-ignore', ['master']),
+                             ('paths', 'pure-midi/**'), ('branches', 'master')]:
+            mutate(f'{event}:{field}', lambda d, e=event, f=field, v=value: d['on'][e].update({f:v}))
+        for field in ('paths', 'branches'):
+            mutate(f'{event}:negative:{field}', lambda d, e=event, f=field: d['on'][e][f].append('!*'))
+        mutate(f'{event}:extra-branch', lambda d, e=event: d['on'][e]['branches'].append('unreviewed'))
+    def prerequisite(d):
+        return next(s for s in d['jobs']['windows-pure-core']['steps']
+                    if s.get('name') == 'Install the CLANG64 build prerequisites')
+    for package in MIDI_PACKAGES:
+        mutate('package:'+package, lambda d, p=package: prerequisite(d)['with'].update(
+            install=' '.join(x for x in prerequisite(d)['with']['install'].split() if x != p)))
+    for field, value in [('uses', 'msys2/setup-msys2@v1'), ('if', 'false'), ('continue-on-error', 'true')]:
+        mutate('prereq:'+field, lambda d, f=field, v=value: prerequisite(d).update({f:v}))
+    mutate('prereq:msystem', lambda d: prerequisite(d)['with'].update(msystem='MINGW64'))
+    for key in ('CMAKE_EXE', 'CTEST_EXE', 'INSTALL_PREFIX', *MIDI_JOB_ENV):
+        mutate('job-env:'+key, lambda d, k=key: d['jobs']['windows-pure-core']['env'].update({k:'C:/wrong'}))
+    for context in ('runner.temp', "runner['temp']", 'env.PATH', 'steps.setup.outputs.path', 'job.status'):
+        mutate('job-unavailable:'+context, lambda d, c=context: d['jobs']['windows-pure-core']['env'].update(
+            EXTRA='${{ '+c+' }}'))
+        mutate('workflow-unavailable:'+context, lambda d, c=context: d.update(env={'EXTRA':'${{ '+c+' }}'}))
+    for field, value in [('runs-on', 'windows-latest'), ('if', 'false'), ('continue-on-error', 'true')]:
+        mutate('job:'+field, lambda d, f=field, v=value: d['jobs']['windows-pure-core'].update({f:v}))
+    for scope in ('workflow', 'job'):
+        for key, value in [('shell', 'bash'), ('working-directory', 'pure-midi'),
+                           ('working-directory', '${{ runner.temp }}')]:
+            mutate(f'default:{scope}:{key}:{value}', lambda d, s=scope, k=key, v=value:
+                (d if s=='workflow' else d['jobs']['windows-pure-core']).update(defaults={'run':{k:v}}))
+    for index in range(5):
+        mutate(f'missing-step:{index}', lambda d, i=index: d['jobs']['windows-pure-core']['steps'].remove(midi_step(d,i)))
+        mutate(f'duplicate-step:{index}', lambda d, i=index: d['jobs']['windows-pure-core']['steps'].append(copy.deepcopy(midi_step(d,i))))
+        for field, value in [('shell','bash'), ('working-directory','pure-midi'),
+                             ('if','false'), ('continue-on-error','true')]:
+            mutate(f'step:{index}:{field}', lambda d, i=index, f=field, v=value: midi_step(d,i).update({f:v}))
+        for key in MIDI_ENV:
+            mutate(f'env-missing:{index}:{key}', lambda d, i=index, k=key: midi_step(d,i)['env'].pop(k))
+            mutate(f'env-poison:{index}:{key}', lambda d, i=index, k=key: midi_step(d,i)['env'].update({k:'${{ env.PATH }}'}))
+        mutate(f'env-extra:{index}', lambda d, i=index: midi_step(d,i)['env'].update(CMAKE_EXE='C:/wrong.exe'))
+        for old,new,label in [("$ErrorActionPreference = 'Stop'", "$ErrorActionPreference = 'Continue'",'errors'),
+                              ("$ErrorActionPreference = 'Stop'",'exit 0','early-exit'),
+                              ('& ','if ($false) { & ','conditional')]:
+            replace(f'{label}:{index}',index,old,new)
+        lines = midi_step(midi_candidate(), index)['run'].splitlines()
+        for call in [n for n, line in enumerate(lines) if line.startswith('& ')]:
+            def drop_guard(d, i=index, n=call):
+                altered = midi_step(d,i)['run'].splitlines()
+                del altered[n+1]
+                midi_step(d,i)['run'] = '\n'.join(altered)
+            mutate(f'failure-guard:{index}:{call}', drop_guard)
+    ordered = ['Install the CLANG64 build prerequisites', 'Install and validate the portable runtime',
+               *MIDI_NAMES, 'Validate non-Linux workflow semantics']
+    for first, second in zip(ordered, ordered[1:]):
+        def swap(d, a=first, b=second):
+            steps = d['jobs']['windows-pure-core']['steps']
+            x, y = (next(i for i,s in enumerate(steps) if s.get('name')==n) for n in (a,b))
+            steps[x], steps[y] = steps[y], steps[x]
+        mutate(f'order:{first}:{second}', swap)
+    for key, value in MIDI_INPUTS.items():
+        argument = f'"-D{key}={value}"'
+        replace('input-missing:'+key, 0, argument, '')
+        replace('input-wrong:'+key, 0, argument, f'"-D{key}=OFF"')
+        replace('input-duplicate:'+key, 0, argument, argument+' '+argument)
+    replace('input-override', 0, '-G Ninja', '-G Ninja -DCMAKE_SUPPRESS_REGENERATION=ON')
+    for row in MIDI_RUNTIME:
+        replace('runtime-missing:'+row.split('|')[0], 0, ';'.join(MIDI_RUNTIME),
+                ';'.join(r for r in MIDI_RUNTIME if r != row))
+        replace('runtime-origin:'+row.split('|')[0], 0, row, row.split('|')[0]+'|C:/wrong/file.dll')
+    for index in (0, 3):
+        for line in midi_step(midi_candidate(), index)['run'].splitlines():
+            if line.startswith('if ') and '$LASTEXITCODE' not in line:
+                replace(f'preflight:{index}:{line}', index, line, '')
+    for old,new,label in [
+        (MIDI_NORMAL, MIDI_PE, 'pe-for-normal'), (MIDI_PE,MIDI_NORMAL,'normal-for-pe'),
+        (MIDI_NORMAL,MIDI_NORMAL+'\n'+MIDI_FAILURE+'\n'+MIDI_NORMAL,'duplicate-normal'),
+        ('--parallel 4','--parallel 2','two-workers'),
+        ('--parallel 4','--parallel 2 --parallel 4','duplicate-workers'),
+        ('--parallel 4','--parallel','implicit-workers'),
+        ('--parallel 4','--parallel 4 --target pmlib','partial-build'),
+        ('--target verify-windows-dependencies','--target pmlib','wrong-pe-target')]:
+        replace('build:'+label,1,old,new)
+    replace('build:pe-workers',1,MIDI_PE,MIDI_PE.replace('--parallel 4','--parallel 1'))
+    for old,new in [('-L "^no-hardware$"',''), ('^no-hardware$','^absent$'),
+                    ('-LE "^hardware$"',''), ('--no-tests=error',''),
+                    ('--output-on-failure','--output-on-failure -E install'),
+                    ('--no-tests=error','--no-tests=ignore')]:
+        replace('test:'+old+':'+new,2,old,new)
+    for old,new in [(' runtime',' documentation'), (' documentation',' runtime'),
+                    ('-E copy_directory','-E make_directory'),
+                    ('windows-install-context.cmake','wrong-context.cmake'),
+                    ('-DSTAGE_PREFIX=$env:MIDI_STAGE','-DSTAGE_PREFIX=$env:MIDI_PREFIX'),
+                    ('VerifyInstalledPackage.cmake','VerifyWindowsDependencies.cmake')]:
+        replace('install:'+old,3,old,new)
+    for atom in MIDI_DIST.split()[1:]:
+        replace('dist-missing:'+atom,4,atom,'')
+    for old,new in [('distcheck','dist'), ('DLL=.dll','DLL=.so'),
+                    ('C:/msys64/clang64/bin/mingw32-make.exe','make'),
+                    ('CLANG64_PREFIX=C:/msys64/clang64','CLANG64_PREFIX=C:/other')]:
+        replace('dist-wrong:'+old,4,old,new)
+    for index in range(5):
+        script = midi_step(midi_candidate(), index)['run']
+        for ref in sorted(set(re.findall(r'\$env:[A-Z_]+', script))):
+            if '"'+ref+'"' in script:
+                replace(f'literal:{index}:{ref}', index, '"'+ref+'"', "'"+ref+"'")
+        mutate('appended-exit:'+str(index), lambda d, i=index: midi_step(d,i).update(
+            run=midi_step(d,i)['run']+'exit 0\n'))
+    return cases
+
+
+class MidiWorkflowMutationTests(unittest.TestCase):
+    def test_distcheck_requires_directory_creation(self):
+        for mutation in ('missing', 'wrong-root', 'unchecked', 'reordered'):
+            d = midi_candidate()
+            s = midi_step(d,4)
+            pair = MIDI_DIST_DIRECTORY+'\n'+MIDI_FAILURE+'\n'
+            if mutation == 'missing':
+                s['run'] = s['run'].replace(pair,'')
+            elif mutation == 'wrong-root':
+                s['run'] = s['run'].replace(MIDI_DIST_DIRECTORY,
+                    MIDI_DIST_DIRECTORY.replace('$env:MIDI_DIST_ROOT','$env:MIDI_BUILD'))
+            elif mutation == 'unchecked':
+                s['run'] = s['run'].replace(pair,MIDI_DIST_DIRECTORY+'\n')
+            else:
+                s['run'] = s['run'].replace(pair,'')+pair
+            with self.subTest(mutation=mutation), self.assertRaises(AssertionError):
+                validate_data(d)
+        print('MIDI_DIST_DIRECTORY_CASES negatives=4')
+
+    def test_rejects_bare_unavailable_context_references(self):
+        cases = 0
+        for scope in ('workflow', 'job'):
+            for context in ('runner', 'env', 'steps', 'job'):
+                for expression in (context, f'toJSON({context})'):
+                    d = midi_candidate()
+                    target = d if scope == 'workflow' else d['jobs']['windows-pure-core']
+                    target.setdefault('env', {})['EXTRA'] = '${{ '+expression+' }}'
+                    with self.subTest(scope=scope, expression=expression), self.assertRaises(AssertionError):
+                        validate_data(d)
+                    cases += 1
+        print(f'MIDI_CONTEXT_CASES negatives={cases}')
+
+    def test_actual_workflow_has_midi_gate(self):
+        names = [s.get('name') for s in data_workflow()['jobs']['windows-pure-core']['steps']]
+        self.assertTrue(set(MIDI_NAMES) <= set(names), 'old workflow omits the mandatory pure-midi gate')
+
+    def test_independent_pristine_and_formatting_variants(self):
+        validate_data(midi_candidate())
+        for variant in ('reordered', 'continued', 'inherited-job', 'inherited-workflow', 'quoted', 'expression'):
+            d = midi_candidate()
+            if variant == 'reordered':
+                s = midi_step(d,0)
+                s['run'] = s['run'].replace(';'.join(MIDI_RUNTIME), ';'.join(reversed(MIDI_RUNTIME)))
+            elif variant == 'continued':
+                for i in range(5):
+                    s = midi_step(d,i)
+                    s['run'] = '# harmless comment\n'+s['run'].replace(' --', ' `\n  --')
+            elif variant.startswith('inherited'):
+                scope = d if variant.endswith('workflow') else d['jobs']['windows-pure-core']
+                scope['defaults'] = {'run':{'shell':'pwsh','working-directory':'pure'}}
+                for i in range(5):
+                    midi_step(d,i).pop('shell')
+            elif variant == 'quoted':
+                s = midi_step(d,2)
+                s['run'] = s['run'].replace('"^no-hardware$"', "'^no-hardware$'")
+                s['run'] = s['run'].replace('$env:CTEST_EXE', '"$env:CTEST_EXE"')
+                s['run'] = s['run'].replace('--no-tests=error',
+                    '--no-tests=error 2>&1 | Tee-Object -FilePath "$env:LOG_DIR/midi.log"')
+            else:
+                d['jobs']['windows-pure-core']['env']['EXTRA'] = "${{ format('{0}', toJSON(github)) }}"
+            validate_data(d)
+        print('MIDI_WORKFLOW_PRISTINE independent=7')
+
+    def test_rejects_midi_semantic_mutations(self):
+        cases = midi_mutations()
+        for label, document in cases:
+            with self.subTest(mutation=label), self.assertRaises(AssertionError):
+                validate_data(document)
+        print(f'MIDI_WORKFLOW_CASES negatives={len(cases)}')
+
+
 class BuildInvocationMutationTests(unittest.TestCase):
     def assert_rejected(self, mutated: str) -> None:
         path = SCRIPT_DIR / ".workflow-mutation-test.yml"
