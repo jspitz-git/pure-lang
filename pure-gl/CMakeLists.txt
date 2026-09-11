@@ -107,8 +107,16 @@ pkg_check_modules(PURE REQUIRED IMPORTED_TARGET "pure>=0.68")
 pkg_check_modules(FREEGLUT REQUIRED IMPORTED_TARGET freeglut)
 pkg_get_variable(discovered_pure_prefix pure prefix)
 pkg_get_variable(discovered_freeglut_prefix freeglut prefix)
+pkg_get_variable(discovered_freeglut_include freeglut includedir)
+pkg_get_variable(discovered_freeglut_library freeglut libdir)
 file(TO_CMAKE_PATH "${discovered_pure_prefix}" discovered_pure_prefix)
 file(TO_CMAKE_PATH "${discovered_freeglut_prefix}" discovered_freeglut_prefix)
+file(TO_CMAKE_PATH "${discovered_freeglut_include}" discovered_freeglut_include)
+file(TO_CMAKE_PATH "${discovered_freeglut_library}" discovered_freeglut_library)
+cmake_path(NORMAL_PATH discovered_freeglut_include
+  OUTPUT_VARIABLE discovered_freeglut_include)
+cmake_path(NORMAL_PATH discovered_freeglut_library
+  OUTPUT_VARIABLE discovered_freeglut_library)
 
 if(PURE_GL_STRICT_AUDIT)
   string(TOLOWER "${discovered_pure_prefix}" discovered_pure_casefolded)
@@ -122,6 +130,15 @@ if(PURE_GL_STRICT_AUDIT)
   if(NOT discovered_glut_casefolded STREQUAL clang_prefix_casefolded)
     message(FATAL_ERROR
       "freeglut pkg-config prefix must equal PURE_GL_CLANG64_PREFIX: ${discovered_freeglut_prefix}")
+  endif()
+  string(TOLOWER "${discovered_freeglut_include}" discovered_include_casefolded)
+  string(TOLOWER "${discovered_freeglut_library}" discovered_library_casefolded)
+  string(TOLOWER "${FREEGLUT_INCLUDE_DIR}" validated_include_casefolded)
+  string(TOLOWER "${PURE_GL_CLANG64_PREFIX}/lib" validated_library_casefolded)
+  if(NOT discovered_include_casefolded STREQUAL validated_include_casefolded OR
+      NOT discovered_library_casefolded STREQUAL validated_library_casefolded)
+    message(FATAL_ERROR
+      "freeglut pkg-config resolved inputs must match validated CLANG64 inputs; include=${discovered_freeglut_include}, library=${discovered_freeglut_library}")
   endif()
 else()
   set(PURE_GL_PURE_PREFIX "${discovered_pure_prefix}" CACHE PATH
@@ -151,8 +168,14 @@ endif()
 add_library(pure-gl MODULE
   GL.c GL_ARB.c GL_EXT.c GL_NV.c GL_ATI.c GLU.c GLUT.c)
 target_compile_features(pure-gl PRIVATE c_std_11)
-target_link_libraries(pure-gl PRIVATE
-  PkgConfig::PURE PkgConfig::FREEGLUT opengl32 glu32)
+if(PURE_GL_STRICT_AUDIT)
+  target_include_directories(pure-gl PRIVATE "${FREEGLUT_INCLUDE_DIR}")
+  target_link_libraries(pure-gl PRIVATE PkgConfig::PURE
+    "${FREEGLUT_IMPORT_LIBRARY}" opengl32 glu32)
+else()
+  target_link_libraries(pure-gl PRIVATE
+    PkgConfig::PURE PkgConfig::FREEGLUT opengl32 glu32)
+endif()
 if(MINGW)
   target_compile_options(pure-gl PRIVATE -Wall -Wextra -Werror)
   target_link_options(pure-gl PRIVATE "LINKER:--enable-auto-import")
@@ -161,6 +184,20 @@ set_target_properties(pure-gl PROPERTIES
   PREFIX "" WINDOWS_EXPORT_ALL_SYMBOLS ON)
 
 if(WIN32)
+  set(PURE_GL_TEST_RUNTIME_DIRECTORY
+    "${CMAKE_CURRENT_BINARY_DIR}/pure-gl-runtime")
+  set(PURE_GL_TEST_RUNTIME_DLL
+    "${PURE_GL_TEST_RUNTIME_DIRECTORY}/libfreeglut.dll")
+  add_custom_command(OUTPUT "${PURE_GL_TEST_RUNTIME_DLL}"
+    COMMAND "${CMAKE_COMMAND}" -E make_directory
+      "${PURE_GL_TEST_RUNTIME_DIRECTORY}"
+    COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+      "${FREEGLUT_RUNTIME_DLL}" "${PURE_GL_TEST_RUNTIME_DLL}"
+    DEPENDS "${FREEGLUT_RUNTIME_DLL}"
+    COMMENT "Staging the selected FreeGLUT runtime for hermetic tests"
+    VERBATIM)
+  add_custom_target(stage-pure-gl-test-runtime ALL
+    DEPENDS "${PURE_GL_TEST_RUNTIME_DLL}")
   add_executable(pure-gl-test-runner cmake/pure_gl_runner.c)
   target_compile_features(pure-gl-test-runner PRIVATE c_std_11)
   target_link_libraries(pure-gl-test-runner PRIVATE bcrypt)
@@ -194,7 +231,7 @@ set(pure_gl_runner_arguments
   "-DPURE_EXECUTABLE=${PURE_EXECUTABLE}"
   "-DPURE_GL_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
   "-DPURE_GL_MODULE=$<TARGET_FILE:pure-gl>"
-  "-DFREEGLUT_RUNTIME_DLL=${FREEGLUT_RUNTIME_DLL}"
+  "-DFREEGLUT_RUNTIME_DLL=${PURE_GL_TEST_RUNTIME_DLL}"
   "-DPURE_GL_PURE_PREFIX=${PURE_GL_PURE_PREFIX}"
   "-DPURE_GL_CLANG64_PREFIX=${PURE_GL_CLANG64_PREFIX}"
   "-DPURE_GL_WINDOWS_SYSTEM_DIRECTORY=${PURE_GL_WINDOWS_SYSTEM_DIRECTORY}"
@@ -205,7 +242,7 @@ add_custom_target(check-gl-interactive
   COMMAND "${CMAKE_COMMAND}" ${pure_gl_runner_arguments}
     "-DTEST_SCRIPT=${CMAKE_CURRENT_SOURCE_DIR}/tests/interactive.pure"
     -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunPureTest.cmake"
-  DEPENDS pure-gl pure-gl-test-runner
+  DEPENDS pure-gl pure-gl-test-runner stage-pure-gl-test-runtime
   COMMENT "Displaying the bounded pure-gl Windows desktop test"
   USES_TERMINAL VERBATIM)
 
@@ -216,14 +253,14 @@ if(BUILD_TESTING)
       -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunPureTest.cmake")
   set_tests_properties(pure-gl.load-all-modules PROPERTIES
     LABELS "gl;load" TIMEOUT 55 RUN_SERIAL TRUE
-    REQUIRED_FILES "$<TARGET_FILE:pure-gl>")
+    REQUIRED_FILES "$<TARGET_FILE:pure-gl>;${PURE_GL_TEST_RUNTIME_DLL}")
   add_test(NAME pure-gl.hidden-render
     COMMAND "${CMAKE_COMMAND}" ${pure_gl_runner_arguments}
       "-DTEST_SCRIPT=${CMAKE_CURRENT_SOURCE_DIR}/tests/hidden-render.pure"
       -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunPureTest.cmake")
   set_tests_properties(pure-gl.hidden-render PROPERTIES
     LABELS "gl;render" TIMEOUT 55 RUN_SERIAL TRUE
-    REQUIRED_FILES "$<TARGET_FILE:pure-gl>")
+    REQUIRED_FILES "$<TARGET_FILE:pure-gl>;${PURE_GL_TEST_RUNTIME_DLL}")
   if(WIN32)
     add_test(NAME pure-gl-configure-contract
       COMMAND "${CMAKE_COMMAND}"
@@ -249,6 +286,7 @@ if(BUILD_TESTING)
         "-DBINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}"
         "-DC_COMPILER=${CMAKE_C_COMPILER}"
         "-DPURE_EXECUTABLE=${PURE_EXECUTABLE}"
+        "-DCONFIGURED_FREEGLUT_RUNTIME_DLL=${PURE_GL_TEST_RUNTIME_DLL}"
         "-DPURE_GL_PURE_PREFIX=${PURE_GL_PURE_PREFIX}"
         "-DPURE_GL_CLANG64_PREFIX=${PURE_GL_CLANG64_PREFIX}"
         "-DPURE_GL_WINDOWS_SYSTEM_DIRECTORY=${PURE_GL_WINDOWS_SYSTEM_DIRECTORY}"

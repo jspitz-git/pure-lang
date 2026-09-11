@@ -74,6 +74,7 @@ int main(int argc, char **argv)
 #define CAPTURE_LIMIT (8u*1024u*1024u)
 #define CONTRACT_ERROR 125u
 #define DEADLINE_ERROR 124u
+#define CLEANUP_MARGIN_MS 3000u
 #define MAX_VALUES 128u
 
 typedef struct { wchar_t *data; size_t used, capacity; } Text;
@@ -293,6 +294,14 @@ static int completed(const Capture *output, const Capture *error,
   return matches == 1;
 }
 
+static DWORD remaining_time(ULONGLONG deadline)
+{
+  ULONGLONG now = GetTickCount64();
+  if (now >= deadline) return 0;
+  ULONGLONG remaining = deadline-now;
+  return remaining > MAXDWORD ? MAXDWORD : (DWORD)remaining;
+}
+
 static DWORD launch(const wchar_t *executable, Text *command, Text *environment,
                     const wchar_t *working_directory, DWORD timeout,
                     const wchar_t *token, Capture captures[2])
@@ -309,6 +318,8 @@ static DWORD launch(const wchar_t *executable, Text *command, Text *environment,
   DWORD child_result = CONTRACT_ERROR;
   int started = 0;
   int timed_out = 0;
+  ULONGLONG execution_deadline = GetTickCount64()+timeout;
+  ULONGLONG cleanup_deadline = execution_deadline+CLEANUP_MARGIN_MS;
 
   job = CreateJobObjectW(NULL, NULL);
   JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits = {0};
@@ -349,7 +360,8 @@ static DWORD launch(const wchar_t *executable, Text *command, Text *environment,
     if (!readers[i]) goto finished;
   }
   if (ResumeThread(process.hThread) == (DWORD)-1) goto finished;
-  DWORD wait = WaitForSingleObject(process.hProcess, timeout);
+  DWORD wait = WaitForSingleObject(process.hProcess,
+    remaining_time(execution_deadline));
   if (wait == WAIT_TIMEOUT) {
     timed_out = 1;
     result = DEADLINE_ERROR;
@@ -364,16 +376,21 @@ finished:
   if (started && result == CONTRACT_ERROR)
     TerminateProcess(process.hProcess, CONTRACT_ERROR);
   if (job) TerminateJobObject(job, timed_out ? DEADLINE_ERROR : CONTRACT_ERROR);
-  if (started) WaitForSingleObject(process.hProcess, 5000);
+  if (started && WaitForSingleObject(process.hProcess,
+      remaining_time(cleanup_deadline)) != WAIT_OBJECT_0 && !timed_out)
+    result = CONTRACT_ERROR;
   for (size_t i = 0; i < 2; ++i)
     if (write_pipes[i]) CloseHandle(write_pipes[i]);
   if (job) CloseHandle(job);
   for (size_t i = 0; i < 2; ++i) {
     if (readers[i]) {
-      if (WaitForSingleObject(readers[i], 5000) != WAIT_OBJECT_0) {
+      if (WaitForSingleObject(readers[i],
+          remaining_time(cleanup_deadline)) != WAIT_OBJECT_0) {
         CancelSynchronousIo(readers[i]);
-        WaitForSingleObject(readers[i], INFINITE);
-        result = CONTRACT_ERROR;
+        if (WaitForSingleObject(readers[i],
+            remaining_time(cleanup_deadline)) != WAIT_OBJECT_0)
+          ExitProcess(CONTRACT_ERROR);
+        if (!timed_out) result = CONTRACT_ERROR;
       }
       CloseHandle(readers[i]);
     }

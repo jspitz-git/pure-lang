@@ -1,12 +1,21 @@
 cmake_minimum_required(VERSION 3.25)
 
 foreach(required IN ITEMS SOURCE_DIR BINARY_DIR C_COMPILER PURE_EXECUTABLE
-    PURE_GL_PURE_PREFIX PURE_GL_CLANG64_PREFIX
+    CONFIGURED_FREEGLUT_RUNTIME_DLL PURE_GL_PURE_PREFIX PURE_GL_CLANG64_PREFIX
     PURE_GL_WINDOWS_SYSTEM_DIRECTORY)
   if(NOT DEFINED ${required} OR "${${required}}" STREQUAL "")
     message(FATAL_ERROR "${required} is required")
   endif()
 endforeach()
+
+file(REAL_PATH "${CONFIGURED_FREEGLUT_RUNTIME_DLL}" configured_runtime)
+file(REAL_PATH "${PURE_GL_CLANG64_PREFIX}" actual_clang_prefix)
+cmake_path(IS_PREFIX actual_clang_prefix "${configured_runtime}" NORMALIZE
+  runtime_from_clang_prefix)
+if(runtime_from_clang_prefix)
+  message(FATAL_ERROR
+    "Configured test runtime must be staged outside the CLANG64 prefix: ${configured_runtime}")
+endif()
 
 set(test_root "${BINARY_DIR}/runner contract with spaces")
 file(REMOVE_RECURSE "${test_root}")
@@ -33,6 +42,23 @@ execute_process(COMMAND "${C_COMPILER}" -std=c11 -Wall -Wextra -Werror
   ERROR_VARIABLE compile_error)
 if(NOT compile_result EQUAL 0)
   message(FATAL_ERROR "Cannot compile legacy runner probe: ${compile_output}${compile_error}")
+endif()
+
+set(hanging_runner_source "${test_root}/hanging_runner.c")
+set(hanging_runner "${test_root}/hanging runner.exe")
+file(WRITE "${hanging_runner_source}" [=[
+#include <windows.h>
+int main(void) {
+  Sleep(30000);
+  return 0;
+}
+]=])
+execute_process(COMMAND "${C_COMPILER}" -std=c11 -Wall -Wextra -Werror
+  "${hanging_runner_source}" -o "${hanging_runner}"
+  RESULT_VARIABLE compile_result OUTPUT_VARIABLE compile_output
+  ERROR_VARIABLE compile_error)
+if(NOT compile_result EQUAL 0)
+  message(FATAL_ERROR "Cannot compile hanging adapter probe: ${compile_output}${compile_error}")
 endif()
 
 if(LEGACY)
@@ -73,14 +99,15 @@ set(source_dir "${test_root}/source inputs")
 set(module_dir "${test_root}/module output")
 set(pure_prefix "${test_root}/pure prefix")
 set(clang_prefix "${test_root}/clang prefix")
+set(runtime_dir "${test_root}/package runtime")
 file(MAKE_DIRECTORY "${source_dir}/tests" "${module_dir}"
-  "${pure_prefix}/bin" "${clang_prefix}/bin")
+  "${pure_prefix}/bin" "${clang_prefix}" "${runtime_dir}")
 foreach(interface IN ITEMS GL GL_ARB GL_EXT GL_NV GL_ATI GLU GLUT)
   file(WRITE "${source_dir}/${interface}.pure" "// ${interface} interface fixture\n")
 endforeach()
 file(COPY_FILE "${FIXTURE}" "${pure_prefix}/bin/pure fixture.exe")
 file(COPY_FILE "${FIXTURE}" "${module_dir}/pure-gl.dll")
-file(COPY_FILE "${FIXTURE}" "${clang_prefix}/bin/libfreeglut.dll")
+file(COPY_FILE "${FIXTURE}" "${runtime_dir}/libfreeglut.dll")
 file(COPY_FILE "${SOURCE_DIR}/tests/runner_probe.pure"
   "${source_dir}/tests/runner probe.pure")
 
@@ -89,7 +116,7 @@ set(base_args
   "-DPURE_EXECUTABLE=${pure_prefix}/bin/pure fixture.exe"
   "-DPURE_GL_SOURCE_DIR=${source_dir}"
   "-DPURE_GL_MODULE=${module_dir}/pure-gl.dll"
-  "-DFREEGLUT_RUNTIME_DLL=${clang_prefix}/bin/libfreeglut.dll"
+  "-DFREEGLUT_RUNTIME_DLL=${runtime_dir}/libfreeglut.dll"
   "-DPURE_GL_PURE_PREFIX=${pure_prefix}"
   "-DPURE_GL_CLANG64_PREFIX=${clang_prefix}"
   "-DPURE_GL_WINDOWS_SYSTEM_DIRECTORY=${PURE_GL_WINDOWS_SYSTEM_DIRECTORY}"
@@ -100,7 +127,7 @@ set(base_args
 function(run_adapter expected name)
   execute_process(COMMAND "${CMAKE_COMMAND}" ${ARGN}
     -P "${SOURCE_DIR}/cmake/RunPureTest.cmake"
-    RESULT_VARIABLE result OUTPUT_VARIABLE output ERROR_VARIABLE error TIMEOUT 10)
+    RESULT_VARIABLE result OUTPUT_VARIABLE output ERROR_VARIABLE error TIMEOUT 30)
   set(diagnostics "${output}\n${error}")
   if(expected STREQUAL "PASS")
     if(NOT result EQUAL 0)
@@ -125,6 +152,14 @@ foreach(missing IN ITEMS PURE_GL_RUNNER PURE_EXECUTABLE PURE_GL_SOURCE_DIR
   list(FILTER args EXCLUDE REGEX "^-D${missing}=")
   run_adapter("${missing}.*required" "missing-${missing}" ${args})
 endforeach()
+
+set(outer_timeout_args ${base_args})
+list(FILTER outer_timeout_args EXCLUDE REGEX "^-DPURE_GL_RUNNER=")
+list(FILTER outer_timeout_args EXCLUDE REGEX "^-DTIMEOUT_MS=")
+list(APPEND outer_timeout_args "-DPURE_GL_RUNNER=${hanging_runner}"
+  -DTIMEOUT_MS=1)
+run_adapter("terminated due to timeout" adapter-outer-timeout
+  ${outer_timeout_args})
 
 foreach(mode IN ITEMS stderr wrong hang pristine)
   file(WRITE "${source_dir}/tests/${mode}.pure" "${mode}\n")
@@ -155,12 +190,16 @@ foreach(mode IN ITEMS stderr wrong hang pristine)
   else()
     run_adapter(PASS paths-with-spaces ${args})
     set(expected_path
-      "${pure_prefix}/bin;${module_dir};${clang_prefix}/bin;${PURE_GL_WINDOWS_SYSTEM_DIRECTORY}")
+      "${pure_prefix}/bin;${module_dir};${runtime_dir};${PURE_GL_WINDOWS_SYSTEM_DIRECTORY}")
     file(TO_CMAKE_PATH "${expected_path}" expected_path)
     string(REGEX MATCH "EFFECTIVE_PATH=([^\r\n]+)" unused "${last_output}")
     file(TO_CMAKE_PATH "${CMAKE_MATCH_1}" actual_path)
     if(NOT actual_path STREQUAL expected_path)
       message(FATAL_ERROR "Exact PATH mismatch: expected '${expected_path}', got '${actual_path}'")
+    endif()
+    string(FIND "${actual_path}" "${clang_prefix}" clang_prefix_position)
+    if(NOT clang_prefix_position EQUAL -1)
+      message(FATAL_ERROR "Exact PATH contains the CLANG64 source prefix: ${actual_path}")
     endif()
     if(NOT last_output MATCHES "EFFECTIVE_CWD=C:\\\\Windows" OR
         NOT last_output MATCHES "EFFECTIVE_PURELIB=UNSET")
@@ -185,6 +224,11 @@ if(NOT last_output MATCHES "EFFECTIVE_CWD=C:\\\\Windows" OR
     NOT last_output MATCHES "EFFECTIVE_PURELIB=UNSET" OR
     NOT last_output MATCHES "EFFECTIVE_PATH=")
   message(FATAL_ERROR "Real Pure probe omitted environment evidence: ${last_output}")
+endif()
+string(FIND "${last_output}" "${PURE_GL_CLANG64_PREFIX}" actual_clang_position)
+if(NOT actual_clang_position EQUAL -1)
+  message(FATAL_ERROR
+    "Real Pure probe PATH contains the actual CLANG64 prefix: ${last_output}")
 endif()
 
 execute_process(COMMAND "${RUNNER}" --pure "${pure_prefix}/bin/pure fixture.exe"

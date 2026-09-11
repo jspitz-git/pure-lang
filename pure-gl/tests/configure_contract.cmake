@@ -111,5 +111,36 @@ if(NOT unlink_result EQUAL 0)
   message(FATAL_ERROR "Cannot unlink FreeGLUT prefix junction")
 endif()
 
+set(mismatch_prefix "${BINARY_DIR}/mismatched-resolved-prefix")
+set(mismatch_root "${BINARY_DIR}/wrong-resolved-inputs")
+file(REMOVE_RECURSE "${mismatch_prefix}" "${mismatch_root}")
+file(MAKE_DIRECTORY
+  "${mismatch_prefix}/include/GL"
+  "${mismatch_prefix}/lib/pkgconfig"
+  "${mismatch_prefix}/bin"
+  "${mismatch_prefix}/share/licenses/freeglut"
+  "${mismatch_root}/include"
+  "${mismatch_root}/lib")
+file(COPY_FILE "${PURE_GL_CLANG64_PREFIX}/include/GL/freeglut.h"
+  "${mismatch_prefix}/include/GL/freeglut.h")
+file(COPY_FILE "${PURE_GL_CLANG64_PREFIX}/lib/libfreeglut.dll.a"
+  "${mismatch_prefix}/lib/libfreeglut.dll.a")
+file(COPY_FILE "${PURE_GL_CLANG64_PREFIX}/bin/libfreeglut.dll"
+  "${mismatch_prefix}/bin/libfreeglut.dll")
+file(COPY_FILE "${PURE_GL_CLANG64_PREFIX}/share/licenses/freeglut/COPYING"
+  "${mismatch_prefix}/share/licenses/freeglut/COPYING")
+file(TO_CMAKE_PATH "${mismatch_prefix}" mismatch_prefix_pc)
+file(TO_CMAKE_PATH "${mismatch_root}" mismatch_root_pc)
+file(WRITE "${mismatch_prefix}/lib/pkgconfig/freeglut.pc"
+  "prefix=${mismatch_prefix_pc}\n"
+  "libdir=${mismatch_root_pc}/lib\n"
+  "includedir=${mismatch_root_pc}/include\n\n"
+  "Name: freeglut\nDescription: mismatched contract fixture\n"
+  "Version: 3.8.0\nLibs: -L\${libdir} -lfreeglut\n"
+  "Cflags: -I\${includedir}\n")
+run_configure(mismatched-resolved-freeglut
+  "freeglut pkg-config resolved inputs.*validated CLANG64 inputs"
+  "-DPURE_GL_CLANG64_PREFIX=${mismatch_prefix}")
+
 run_configure(pristine PASS)
 message(STATUS "PURE_GL_CONFIGURE_CONTRACT_OK")

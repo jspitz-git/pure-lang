@@ -36,6 +36,7 @@ endforeach()
 if(NOT TIMEOUT_MS MATCHES "^[1-9][0-9]*$" OR TIMEOUT_MS GREATER 180000)
   message(FATAL_ERROR "TIMEOUT_MS must be an integer from 1 through 180000")
 endif()
+math(EXPR runner_outer_timeout_seconds "(${TIMEOUT_MS} + 5000 + 999) / 1000")
 
 set(arguments --pure "${PURE_EXECUTABLE}" --script "${TEST_SCRIPT}"
   --timeout-ms "${TIMEOUT_MS}" --cwd "${TEST_WORKING_DIRECTORY}")
@@ -64,7 +65,7 @@ list(APPEND arguments --library "${module_directory}"
 
 execute_process(COMMAND "${PURE_GL_RUNNER}" ${arguments}
   RESULT_VARIABLE result OUTPUT_VARIABLE output ERROR_VARIABLE error
-  ENCODING UTF-8)
+  ENCODING UTF-8 TIMEOUT "${runner_outer_timeout_seconds}")
 if(NOT result EQUAL 0)
   message(FATAL_ERROR
     "pure-gl test failed (${result})\nstdout:\n${output}\nstderr:\n${error}")
