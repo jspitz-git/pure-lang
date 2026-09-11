@@ -3,7 +3,8 @@ param([Parameter(Mandatory=$true)][string]$SourceDir,
       [Parameter(Mandatory=$true)][string]$PurePrefix,
       [Parameter(Mandatory=$true)][string]$Runner,
       [ValidateSet('component','guard')][string]$Suite='guard', [switch]$RedOnly,
-      [switch]$IdentityRedOnly)
+      [switch]$IdentityRedOnly,
+      [ValidateSet('','baseline','dispatch')][string]$FixOnly='')
 $ErrorActionPreference='Stop'
 $cmake='C:/msys64/clang64/bin/cmake.exe'
 $BuildDir=$BuildDir.Replace('\','/'); $SourceDir=$SourceDir.Replace('\','/')
@@ -65,6 +66,80 @@ if($RedOnly) {
     try { Run locked-installer $false (InstallArgs $stage runtime) | Out-Null } finally { $lock.Dispose() }
   }
   Same $before $stage; Clean; exit 0
+}
+# These regressions deliberately configure the real project and use its generated
+# cmake_install.cmake. A substituted guard driver cannot catch dispatch bypasses.
+if($Suite -eq 'component' -or $FixOnly) {
+  $productionPrefix=Fresh 'production-prefix'
+  # Leave room for the nested Task4 runner's nonce-owned leaf and marker below
+  # Windows MAX_PATH; keep the production supervisor/cleanup contract unchanged.
+  $productionBuild="$work/b"
+  $preset="$work/production-inputs.cmake"
+  Run production-preset $true @("-DSOURCE_DIR=$SourceDir",'-DCLANG64_PREFIX=C:/msys64/clang64',"-DPURE_PREFIX=$productionPrefix","-DRUNNER=$Runner",'-DWRITE_PRESET_ONLY=ON',"-DPRESET_OUTPUT=$preset",'-P',"$SourceDir/tests/configure_contract.cmake") | Out-Null
+  $configure=@('-S',$SourceDir,'-B',$productionBuild,'-G','Ninja','-C',$preset)
+  Run production-configure $true $configure | Out-Null
+  if($FixOnly -ne 'dispatch') {
+    $contextBefore=Hash "$productionBuild/windows-install-context.cmake"
+    $pin="$productionBuild/windows-install-baseline.tsv"
+    $pinBefore=if(Test-Path -LiteralPath $pin) { Hash $pin } else { $null }
+    foreach($case in @('changed','added','cache-override')) {
+      $path=if($case -eq 'changed') { "$productionPrefix/lib/pure/prelude.pure" } else { "$productionPrefix/unpinned-extra.txt" }
+      $saved=if(Test-Path -LiteralPath $path) { [IO.File]::ReadAllBytes($path) } else { $null }
+      try {
+        [IO.File]::AppendAllText($path,'UNPINNED BASELINE MUTATION')
+        $arguments=$configure
+        if($case -eq 'cache-override') {
+          $arguments+=@('-DMIDI_INSTALL_BASELINE_POLICY=override','-DMIDI_INSTALL_BASELINE_SHA256=override',"-DMIDI_INSTALL_BASELINE_PIN=$work/override.tsv")
+        }
+        Run "reconfigure-baseline-$case" $false $arguments 'frozen portable baseline.*fresh build' | Out-Null
+        if((Hash "$productionBuild/windows-install-context.cmake") -cne $contextBefore -or ($pinBefore -and (Hash $pin) -cne $pinBefore)) { throw 'Rejected reconfiguration rewrote trusted baseline/context' }
+      } finally {
+        if($null -eq $saved) { [IO.File]::Delete($path) } else { [IO.File]::WriteAllBytes($path,$saved) }
+      }
+    }
+    if(-not $pinBefore) { throw 'Complete portable baseline was not persisted' }
+    $policy=([string[]](Tree $productionPrefix) -join "`n")+"`n"
+    if([IO.File]::ReadAllText($pin) -cne $policy) { throw 'Persisted baseline is not the independent complete tree' }
+    [IO.File]::Move($pin,"$work/baseline.saved")
+    try { Run missing-baseline-pin $false $configure 'missing frozen portable baseline.*fresh build' | Out-Null }
+    finally { [IO.File]::Move("$work/baseline.saved",$pin) }
+    Run unchanged-reconfigure $true $configure | Out-Null
+    if((Hash $pin) -cne $pinBefore) { throw 'Unchanged reconfigure rewrote baseline bytes' }
+    "INSTALL_BASELINE_RECONFIGURE_OK negative=4 baseline=$(@(Tree $productionPrefix).Count) pin=$pinBefore"
+  }
+  if($FixOnly -ne 'baseline') {
+    Run production-build $true @('--build',$productionBuild,'--parallel','4') | Out-Null
+    $generatedBefore=Hash "$productionBuild/cmake_install.cmake"
+    $stage=Fresh 'unknown-component'; $before=Tree $stage
+    $target="$work/unknown-manifest-target"; [IO.File]::WriteAllText($target,'KEEP UNKNOWN MANIFEST')
+    $targetBefore=Hash $target
+    $link="$productionBuild/install_manifest_unknown.txt"
+    New-Item -ItemType HardLink -Path $link -Target $target | Out-Null
+    try {
+      Run unknown-component-hardlink $false @('--install',$productionBuild,'--prefix',$stage,'--component','unknown') 'unknown component' | Out-Null
+    } finally {
+      "UNKNOWN_COMPONENT_TARGET before=$targetBefore after=$(Hash $target)"
+      [IO.File]::Delete($link)
+    }
+    Same $before $stage
+    if((Hash $target) -cne $targetBefore) { throw 'Unknown component modified hardlinked metadata endpoint' }
+    foreach($component in @('unknown','Runtime','OFF','all/invalid')) {
+      $buildBefore=Tree $productionBuild
+      Run "unknown-component-$($component.Replace('/','_'))" $false @('--install',$productionBuild,'--prefix',$stage,'--component',$component) 'unknown component' | Out-Null
+      Same $before $stage; Same $buildBefore $productionBuild
+    }
+    foreach($component in @('all','no-component')) {
+      $stage=Fresh "production-$component"
+      $arguments=@('--install',$productionBuild,'--prefix',$stage)
+      if($component -eq 'all') { $arguments+=@('--component','all') }
+      Run "production-$component" $true $arguments 'INSTALL_COMPONENT_OK component=all' | Out-Null
+      Run "production-verify-$component" $true (VerifyArgs $stage "$productionBuild/windows-install-context.cmake") 'INSTALL_PACKAGE_OK.*pe=16.*installed_tests=2' | Out-Null
+      if(@(Tree $stage).Count -ne $before.Count+22) { throw 'All-component dispatch has wrong exact delta' }
+    }
+    if((Hash "$productionBuild/cmake_install.cmake") -cne $generatedBefore) { throw 'Test modified production generated installer' }
+    'INSTALL_PRODUCTION_DISPATCH_OK negative=5 all_controls=2 installed_tests=4 pe=16 metadata_mutations=0'
+  }
+  if($FixOnly) { "INSTALL_FIX_CONTRACT_OK negative=$negative positive=$positive"; Clean; exit 0 }
 }
 if($Suite -eq 'component') {
   if((Hash "$BuildDir/windows-install-inventory.tsv") -cne [IO.File]::ReadAllText("$BuildDir/windows-install-inventory.tsv.sha256").Trim()) { throw 'RED: inventory seal is not the SHA-256 of its actual bytes' }
@@ -185,7 +260,7 @@ if($Suite -eq 'component') {
 # compiled only into this test target. It is never an installed artifact.
 $configuredBuild=$BuildDir
 $fixtureBuild="$work/build"; New-Item -ItemType Directory -Path $fixtureBuild | Out-Null
-foreach($name in @('pmlib.dll','midifile.dll','README','windows-install-inventory.tsv','windows-install-context.cmake')) {
+foreach($name in @('pmlib.dll','midifile.dll','README','windows-install-inventory.tsv','windows-install-context.cmake','windows-install-baseline.tsv')) {
   Copy-Item -LiteralPath "$BuildDir/$name" -Destination "$fixtureBuild/$name"
 }
 Copy-Item -LiteralPath "$BuildDir/install_guard_fixture.exe" -Destination "$fixtureBuild/install_guard.exe"

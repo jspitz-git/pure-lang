@@ -112,9 +112,27 @@ if(PURE_MIDI_STRICT_WINDOWS_AUDIT)
   unset(MIDI_INSTALL_HELPERS_ONLY)
   install_tree("${PURE_MIDI_PURE_PREFIX}" baseline_rows)
   list(JOIN baseline_rows "\n" baseline_policy)
-  string(APPEND context "set(MIDI_INSTALL_BASELINE_POLICY [==[${baseline_policy}\n]==])\n")
+  string(APPEND baseline_policy "\n")
+  # Fixed build-owned data, not a cache input. Compare the complete old policy
+  # before generating a replacement context; reconfiguration must not rebaseline.
+  set(MIDI_INSTALL_BASELINE_PIN "${CMAKE_CURRENT_BINARY_DIR}/windows-install-baseline.tsv")
+  if(EXISTS "${MIDI_INSTALL_BASELINE_PIN}")
+    midi_path("${MIDI_INSTALL_BASELINE_PIN}" file baseline_pin)
+    midi_no_reparse("${baseline_pin}")
+    file(READ "${baseline_pin}" frozen_baseline)
+    if(NOT frozen_baseline STREQUAL baseline_policy)
+      message(FATAL_ERROR "install audit: frozen portable baseline changed; use a fresh build")
+    endif()
+  elseif(EXISTS "${MIDI_INSTALL_CONTEXT}" OR EXISTS "${MIDI_INSTALL_INVENTORY}")
+    message(FATAL_ERROR "install audit: missing frozen portable baseline; use a fresh build")
+  else()
+    file(CONFIGURE OUTPUT "${MIDI_INSTALL_BASELINE_PIN}" CONTENT "${baseline_policy}" @ONLY NEWLINE_STYLE UNIX)
+  endif()
+  string(SHA256 MIDI_INSTALL_BASELINE_SHA256 "${baseline_policy}")
+  string(APPEND context "set(MIDI_INSTALL_BASELINE_POLICY [==[${baseline_policy}]==])\n")
   foreach(var MIDI_INSTALL_INVENTORY MIDI_INSTALL_BUILD_DIR MIDI_INSTALL_SOURCE_DIR
       MIDI_INSTALL_SCRIPT MIDI_INSTALL_GUARD MIDI_INSTALL_RUNNER MIDI_INSTALL_CONTRACT_ROOT
+      MIDI_INSTALL_BASELINE_PIN MIDI_INSTALL_BASELINE_SHA256
       PURE_MIDI_CLANG64_PREFIX PURE_MIDI_PURE_PREFIX PURE_MIDI_WINDOWS_SYSTEM_DIRECTORY
       PURE_MIDI_RUNTIME_MANIFEST PURE_MIDI_LLVM_READOBJ_SHA256 LLVM_READOBJ)
     string(APPEND context "set(${var} [==[${${var}}]==])\n")
@@ -124,7 +142,8 @@ if(PURE_MIDI_STRICT_WINDOWS_AUDIT)
     COMMAND "${CMAKE_COMMAND}" "-DMIDI_INSTALL_CONTEXT=${MIDI_INSTALL_CONTEXT}"
       -DMIDI_INSTALL_MODE=seal -P "${MIDI_INSTALL_SCRIPT}"
     DEPENDS pmlib midifile install_guard VERBATIM)
-  foreach(component runtime documentation)
-    install(CODE "set(MIDI_INSTALL_CONTEXT [==[${MIDI_INSTALL_CONTEXT}]==])\nset(MIDI_INSTALL_MODE install)\nset(MIDI_INSTALL_COMPONENT ${component})\nif(NOT CMAKE_INSTALL_COMPONENT)\n  set(MIDI_INSTALL_COMPONENT all)\nendif()\nset(STAGE_PREFIX \"\${CMAKE_INSTALL_PREFIX}\")\ninclude([==[${MIDI_INSTALL_SCRIPT}]==])\nreturn()" COMPONENT "${component}")
-  endforeach()
+  # Every invocation must dispatch here, including unknown components. Returning
+  # suppresses CMake's unguarded trailing conventional-manifest write. Empty and
+  # explicit "all" both mean the exact union of the two disjoint components.
+  install(CODE "set(MIDI_INSTALL_CONTEXT [==[${MIDI_INSTALL_CONTEXT}]==])\nset(MIDI_INSTALL_MODE install)\nset(MIDI_INSTALL_COMPONENT \"\${CMAKE_INSTALL_COMPONENT}\")\nif(\"\${MIDI_INSTALL_COMPONENT}\" STREQUAL \"\")\n  set(MIDI_INSTALL_COMPONENT all)\nendif()\nif(NOT MIDI_INSTALL_COMPONENT MATCHES \"^(runtime|documentation|all)$\")\n  message(FATAL_ERROR \"install audit: unknown component\")\nendif()\nset(STAGE_PREFIX \"\${CMAKE_INSTALL_PREFIX}\")\ninclude([==[${MIDI_INSTALL_SCRIPT}]==])\nreturn()" ALL_COMPONENTS)
 endif()
