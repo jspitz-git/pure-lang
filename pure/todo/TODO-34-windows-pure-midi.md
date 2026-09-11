@@ -1,6 +1,6 @@
 # TODO-34 - Windows pure-midi Package
 
-Status: Open
+Status: Closed on 2026-09-11
 Branch: todo/34-windows-pure-midi
 
 ## Purpose
@@ -303,3 +303,54 @@ whole-tree crash/power-loss atomicity. File-symlink tests are explicitly skipped
 when Windows denies creation; mandatory junction/hardlink cases still run.
 Task 8 leaves this TODO Open. Only Task 9 may close it after whole-branch review
 and another fresh final gate.
+
+### Task 9 closure evidence (2026-09-11)
+
+The whole-branch review found seven important compatibility, validation,
+packaging and timeout issues. All seven were corrected in
+`9d9d094f8b90b0ec051ca76cf880ad60a9b85a9c`; the scoped re-review found no
+remaining Critical or Important issue.
+
+Fresh final verification used previously absent `C:/pure-lang/z9r`, `z9a`,
+`z9stage` and `s9` roots. The complete checkout passed 19/19 tests in 1343.19s.
+The separate native gate initially hit one unexplained LLVM
+`IMAGE_REL_AMD64_ADDR32NB` startup abort; its unchanged rerun passed 7/7 in
+75.80s, including the ASan boundary's 96 cases in 27.73s. The checkout ASan
+boundary independently passed in 25.30s.
+
+Standalone installation verification passed with baseline=49, runtime=6,
+documentation=11, final=71, PE closure=16, installed tests=2 and license
+payloads=1. Two public 167661-byte archives and their 63-row manifests were
+byte-identical. Archive SHA-256 is
+`c459186261cb2d403f08c5d868de75beae526450e716060f3f13a03bb5780372`;
+manifest SHA-256 is
+`1aa8f5d50dcbe04bef8b143d62e1a85425b364a16c12d597a78cc77f1dde9fdb`.
+
+Public extracted `distcheck` passed 19/19 tests in 1345.55s and returned in
+about 1437.413s. Its exact installation counts matched the standalone stage;
+the leak scan covered 275 files in UTF-8, UTF-16LE and UTF-16BE; all 63 source
+locks were released and source hashes still matched. The extracted ASan
+boundary passed in 28.95s, leaving 1.05s below its 30s timeout.
+
+Workflow validation passed 17 mutation/pristine methods with 800 rejected
+negatives and seven MIDI pristine controls. The semantic validator, actionlint
+1.7.12, all 37 `windows-pure-core` PowerShell blocks and all three documented
+PowerShell fences passed. Final tools included CMake/CTest 4.4.0, Ninja 1.13.2,
+Clang 22.1.8, Pure 0.68, PortMidi package 1~2.0.8-1 (pkgconf 2.0.7), Python
+3.14.5 and PowerShell 7.6.5 / Windows PowerShell 5.1.
+
+The retained initial LLVM abort and 1.05s extracted-ASan timeout margin remain
+explicit reliability residuals. Hardware/loopback timing, ThreadSanitizer,
+native POSIX behavior and hosted-CI runtime are still outside the claimed
+verification boundary. The closure documentation is committed separately as
+`Close TODO-34 Windows pure-midi audit`; its immutable commit ID is recorded in
+the branch handoff because a commit cannot contain its own hash.
+
+After this documentation-only change, the complete checkout suite was run once
+more in the same nonsandboxed Windows environment: 19/19 passed in 1346.14s.
+The ASan boundary passed in 29.65s, narrowing the observed timeout margin to
+0.35s. An earlier sandbox diagnostic attempt timed out that test at 30.11s and
+also produced an MSYS2 `couldn't create signal pipe, Win32 error 5`; it was
+interrupted after those environment-specific failures and is not counted as a
+passing gate. The successful nonsandboxed result is the closure gate, while the
+tight timing margin remains an explicit follow-up risk.
