@@ -1,0 +1,203 @@
+cmake_minimum_required(VERSION 3.25)
+
+foreach(required IN ITEMS SOURCE_DIR BINARY_DIR C_COMPILER PURE_EXECUTABLE
+    PURE_GL_PURE_PREFIX PURE_GL_CLANG64_PREFIX
+    PURE_GL_WINDOWS_SYSTEM_DIRECTORY)
+  if(NOT DEFINED ${required} OR "${${required}}" STREQUAL "")
+    message(FATAL_ERROR "${required} is required")
+  endif()
+endforeach()
+
+set(test_root "${BINARY_DIR}/runner contract with spaces")
+file(REMOVE_RECURSE "${test_root}")
+file(MAKE_DIRECTORY "${test_root}")
+
+set(fixture_source "${test_root}/legacy_probe.c")
+set(fixture_exe "${test_root}/legacy probe.exe")
+file(WRITE "${fixture_source}" [=[
+#include <windows.h>
+#include <stdio.h>
+#include <stdlib.h>
+int main(void) {
+  char cwd[32768];
+  if (!GetCurrentDirectoryA(sizeof(cwd), cwd)) return 2;
+  printf("EFFECTIVE_CWD=%s\n", cwd);
+  printf("EFFECTIVE_PATH=%s\n", getenv("PATH") ? getenv("PATH") : "<absent>");
+  printf("EFFECTIVE_PURELIB=%s\n", getenv("PURELIB") ? getenv("PURELIB") : "UNSET");
+  return 0;
+}
+]=])
+execute_process(COMMAND "${C_COMPILER}" -std=c11 -Wall -Wextra -Werror
+  "${fixture_source}" -o "${fixture_exe}"
+  RESULT_VARIABLE compile_result OUTPUT_VARIABLE compile_output
+  ERROR_VARIABLE compile_error)
+if(NOT compile_result EQUAL 0)
+  message(FATAL_ERROR "Cannot compile legacy runner probe: ${compile_output}${compile_error}")
+endif()
+
+if(LEGACY)
+  set(module_dir "${test_root}/module")
+  file(MAKE_DIRECTORY "${module_dir}")
+  set(ENV{PATH}
+    "${PURE_GL_PURE_PREFIX}/bin;${PURE_GL_CLANG64_PREFIX}/bin;${PURE_GL_WINDOWS_SYSTEM_DIRECTORY};${test_root}/ambient-msys2/bin")
+  set(ENV{PURELIB} "${test_root}/ambient-purelib")
+  execute_process(COMMAND "${CMAKE_COMMAND}"
+    "-DPURE_EXECUTABLE=${fixture_exe}"
+    "-DPURE_LIBRARY_DIR=${module_dir}"
+    "-DPURE_GL_SOURCE_DIR=${SOURCE_DIR}"
+    "-DTEST_SCRIPT=${SOURCE_DIR}/tests/runner_probe.pure"
+    -P "${SOURCE_DIR}/cmake/RunPureTest.cmake"
+    RESULT_VARIABLE result OUTPUT_VARIABLE output ERROR_VARIABLE error)
+  if(NOT result EQUAL 0)
+    message(FATAL_ERROR "Legacy runner probe did not execute: ${output}${error}")
+  endif()
+  string(REGEX MATCH "EFFECTIVE_PATH=([^\r\n]+)" unused "${output}")
+  file(TO_CMAKE_PATH "${CMAKE_MATCH_1}" actual_path)
+  set(expected_path
+    "${PURE_GL_PURE_PREFIX}/bin;${module_dir};${PURE_GL_CLANG64_PREFIX}/bin;${PURE_GL_WINDOWS_SYSTEM_DIRECTORY}")
+  file(TO_CMAKE_PATH "${expected_path}" expected_path)
+  if(NOT actual_path STREQUAL expected_path)
+    message(FATAL_ERROR
+      "Runner leaked inherited PATH. Expected '${expected_path}', got '${actual_path}'")
+  endif()
+  message(FATAL_ERROR "Legacy runner unexpectedly satisfied the native contract")
+endif()
+
+foreach(required IN ITEMS RUNNER FIXTURE)
+  if(NOT DEFINED ${required} OR "${${required}}" STREQUAL "")
+    message(FATAL_ERROR "${required} is required")
+  endif()
+endforeach()
+
+set(source_dir "${test_root}/source inputs")
+set(module_dir "${test_root}/module output")
+set(pure_prefix "${test_root}/pure prefix")
+set(clang_prefix "${test_root}/clang prefix")
+file(MAKE_DIRECTORY "${source_dir}/tests" "${module_dir}"
+  "${pure_prefix}/bin" "${clang_prefix}/bin")
+foreach(interface IN ITEMS GL GL_ARB GL_EXT GL_NV GL_ATI GLU GLUT)
+  file(WRITE "${source_dir}/${interface}.pure" "// ${interface} interface fixture\n")
+endforeach()
+file(COPY_FILE "${FIXTURE}" "${pure_prefix}/bin/pure fixture.exe")
+file(COPY_FILE "${FIXTURE}" "${module_dir}/pure-gl.dll")
+file(COPY_FILE "${FIXTURE}" "${clang_prefix}/bin/libfreeglut.dll")
+file(COPY_FILE "${SOURCE_DIR}/tests/runner_probe.pure"
+  "${source_dir}/tests/runner probe.pure")
+
+set(base_args
+  "-DPURE_GL_RUNNER=${RUNNER}"
+  "-DPURE_EXECUTABLE=${pure_prefix}/bin/pure fixture.exe"
+  "-DPURE_GL_SOURCE_DIR=${source_dir}"
+  "-DPURE_GL_MODULE=${module_dir}/pure-gl.dll"
+  "-DFREEGLUT_RUNTIME_DLL=${clang_prefix}/bin/libfreeglut.dll"
+  "-DPURE_GL_PURE_PREFIX=${pure_prefix}"
+  "-DPURE_GL_CLANG64_PREFIX=${clang_prefix}"
+  "-DPURE_GL_WINDOWS_SYSTEM_DIRECTORY=${PURE_GL_WINDOWS_SYSTEM_DIRECTORY}"
+  "-DTEST_SCRIPT=${source_dir}/tests/runner probe.pure"
+  -DTEST_WORKING_DIRECTORY=C:/Windows
+  -DTIMEOUT_MS=3000)
+
+function(run_adapter expected name)
+  execute_process(COMMAND "${CMAKE_COMMAND}" ${ARGN}
+    -P "${SOURCE_DIR}/cmake/RunPureTest.cmake"
+    RESULT_VARIABLE result OUTPUT_VARIABLE output ERROR_VARIABLE error TIMEOUT 10)
+  set(diagnostics "${output}\n${error}")
+  if(expected STREQUAL "PASS")
+    if(NOT result EQUAL 0)
+      message(FATAL_ERROR "${name} failed: ${diagnostics}")
+    endif()
+  else()
+    if(result EQUAL 0 OR NOT diagnostics MATCHES "${expected}")
+      message(FATAL_ERROR
+        "${name} did not reject with '${expected}' (${result}): ${diagnostics}")
+    endif()
+  endif()
+  set(last_output "${output}" PARENT_SCOPE)
+  set(last_error "${error}" PARENT_SCOPE)
+  set(last_result "${result}" PARENT_SCOPE)
+endfunction()
+
+foreach(missing IN ITEMS PURE_GL_RUNNER PURE_EXECUTABLE PURE_GL_SOURCE_DIR
+    PURE_GL_MODULE FREEGLUT_RUNTIME_DLL PURE_GL_PURE_PREFIX
+    PURE_GL_CLANG64_PREFIX PURE_GL_WINDOWS_SYSTEM_DIRECTORY TEST_SCRIPT
+    TEST_WORKING_DIRECTORY TIMEOUT_MS)
+  set(args ${base_args})
+  list(FILTER args EXCLUDE REGEX "^-D${missing}=")
+  run_adapter("${missing}.*required" "missing-${missing}" ${args})
+endforeach()
+
+foreach(mode IN ITEMS stderr wrong hang pristine)
+  file(WRITE "${source_dir}/tests/${mode}.pure" "${mode}\n")
+  set(args ${base_args})
+  list(FILTER args EXCLUDE REGEX "^-DTEST_SCRIPT=")
+  list(APPEND args "-DTEST_SCRIPT=${source_dir}/tests/${mode}.pure")
+  if(mode STREQUAL stderr)
+    run_adapter("stderr.*not empty" stderr ${args})
+  elseif(mode STREQUAL wrong)
+    run_adapter("completion protocol" wrong-token ${args})
+  elseif(mode STREQUAL hang)
+    list(FILTER args EXCLUDE REGEX "^-DTIMEOUT_MS=")
+    list(APPEND args -DTIMEOUT_MS=400)
+    run_adapter("deadline exceeded" process-tree-timeout ${args})
+    string(REGEX MATCH "DESCENDANT_PID=([0-9]+)" unused
+      "${last_output}${last_error}")
+    if(NOT CMAKE_MATCH_1)
+      message(FATAL_ERROR "Timeout fixture did not report its descendant: ${last_output}${last_error}")
+    endif()
+    execute_process(
+      COMMAND "${PURE_GL_WINDOWS_SYSTEM_DIRECTORY}/WindowsPowerShell/v1.0/powershell.exe"
+        -NoProfile -NonInteractive -Command
+        "if (Get-Process -Id ${CMAKE_MATCH_1} -ErrorAction SilentlyContinue) { exit 1 }"
+      RESULT_VARIABLE alive)
+    if(NOT alive EQUAL 0)
+      message(FATAL_ERROR "Runner left descendant ${CMAKE_MATCH_1} alive")
+    endif()
+  else()
+    run_adapter(PASS paths-with-spaces ${args})
+    set(expected_path
+      "${pure_prefix}/bin;${module_dir};${clang_prefix}/bin;${PURE_GL_WINDOWS_SYSTEM_DIRECTORY}")
+    file(TO_CMAKE_PATH "${expected_path}" expected_path)
+    string(REGEX MATCH "EFFECTIVE_PATH=([^\r\n]+)" unused "${last_output}")
+    file(TO_CMAKE_PATH "${CMAKE_MATCH_1}" actual_path)
+    if(NOT actual_path STREQUAL expected_path)
+      message(FATAL_ERROR "Exact PATH mismatch: expected '${expected_path}', got '${actual_path}'")
+    endif()
+    if(NOT last_output MATCHES "EFFECTIVE_CWD=C:\\\\Windows" OR
+        NOT last_output MATCHES "EFFECTIVE_PURELIB=UNSET")
+      message(FATAL_ERROR "Working directory/PURELIB contract failed: ${last_output}")
+    endif()
+  endif()
+endforeach()
+
+# Exercise the real probe through the same adapter. Its observable output is
+# independent of the native fixture and proves that the token reaches Pure.
+set(real_args ${base_args})
+list(FILTER real_args EXCLUDE REGEX "^-DPURE_EXECUTABLE=")
+list(FILTER real_args EXCLUDE REGEX "^-DPURE_GL_PURE_PREFIX=")
+list(FILTER real_args EXCLUDE REGEX "^-DTEST_SCRIPT=")
+list(APPEND real_args
+  "-DPURE_EXECUTABLE=${PURE_EXECUTABLE}"
+  "-DPURE_GL_PURE_PREFIX=${PURE_GL_PURE_PREFIX}"
+  "-DTEST_SCRIPT=${SOURCE_DIR}/tests/runner_probe.pure"
+  -DTIMEOUT_MS=15000)
+run_adapter(PASS real-pure-probe ${real_args})
+if(NOT last_output MATCHES "EFFECTIVE_CWD=C:\\\\Windows" OR
+    NOT last_output MATCHES "EFFECTIVE_PURELIB=UNSET" OR
+    NOT last_output MATCHES "EFFECTIVE_PATH=")
+  message(FATAL_ERROR "Real Pure probe omitted environment evidence: ${last_output}")
+endif()
+
+execute_process(COMMAND "${RUNNER}" --pure "${pure_prefix}/bin/pure fixture.exe"
+  --pure "${pure_prefix}/bin/pure fixture.exe"
+  --script "${source_dir}/tests/pristine.pure" --timeout-ms 1000
+  --cwd C:/Windows --path-entry "${pure_prefix}/bin"
+  --include "${source_dir}" --library "${module_dir}"
+  --input "${source_dir}/GL.pure"
+  RESULT_VARIABLE duplicate_result OUTPUT_VARIABLE duplicate_output
+  ERROR_VARIABLE duplicate_error)
+if(duplicate_result EQUAL 0 OR
+    NOT "${duplicate_output}${duplicate_error}" MATCHES "duplicate --pure")
+  message(FATAL_ERROR "Runner accepted duplicate --pure: ${duplicate_output}${duplicate_error}")
+endif()
+
+message(STATUS "PURE_GL_RUNNER_CONTRACT_OK")

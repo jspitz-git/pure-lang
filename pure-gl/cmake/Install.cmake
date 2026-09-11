@@ -42,8 +42,13 @@ install(FILES
 
 if(WIN32)
   install(FILES "${FREEGLUT_RUNTIME_DLL}" DESTINATION bin COMPONENT runtime)
-  set(freeglut_license
-    "$ENV{MSYSTEM_PREFIX}/share/licenses/freeglut/COPYING")
+  if(DEFINED FREEGLUT_RUNTIME_LICENSE AND
+      NOT FREEGLUT_RUNTIME_LICENSE STREQUAL "")
+    set(freeglut_license "${FREEGLUT_RUNTIME_LICENSE}")
+  else()
+    set(freeglut_license
+      "$ENV{MSYSTEM_PREFIX}/share/licenses/freeglut/COPYING")
+  endif()
   if(NOT EXISTS "${freeglut_license}")
     message(FATAL_ERROR "Missing FreeGLUT license: ${freeglut_license}")
   endif()

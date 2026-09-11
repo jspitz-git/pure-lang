@@ -1,0 +1,17 @@
+using system;
+
+extern char *getenv(char*);
+
+printf "%s" "EFFECTIVE_CWD=";
+fflush stdout;
+system "cd" == 0 || throw "runner probe could not read its working directory";
+
+let path = getenv "PATH";
+~null path || throw "runner probe PATH is absent";
+printf "EFFECTIVE_PATH=%s\n" path;
+
+let purelib = getenv "PURELIB";
+puts (if null purelib then "EFFECTIVE_PURELIB=UNSET"
+      else "EFFECTIVE_PURELIB="+purelib);
+
+printf "PURE_GL_TEST_OK %s\n" (last argv);
