@@ -38,6 +38,8 @@ static int failure, native_live, memory_live, init_live, timer_live;
 static LONG reads,writes,closes,aborts,wakes,terminates,timer_stops;
 static int blocked, ignore_wake;
 static HANDLE entered, released, closing;
+static HANDLE native_close_entered, native_close_released;
+static PortMidiStream *last_opened_native, *blocked_native_close;
 static SRWLOCK fake_lock=SRWLOCK_INIT;
 static char events[256];
 static size_t event_count;
@@ -56,12 +58,20 @@ static PmError open_common(PortMidiStream **out,int id,int size,int direction) {
   FakeStream *s; event(direction==1?'i':'o'); CHECK(init_live && timer_live && id==direction-1 && size>=0);
   if (failure==(direction==1?FAIL_INPUT:FAIL_OUTPUT)) return pmHostError;
   if (failure==FAIL_NULL_OPEN) return pmNoError;
-  s=calloc(1,sizeof(*s)); CHECK(s); s->direction=direction; native_live++; *out=s;
+  s=calloc(1,sizeof(*s)); CHECK(s); s->direction=direction; native_live++; *out=s; last_opened_native=s;
   return failure==(direction==1?FAIL_PARTIAL_INPUT:FAIL_PARTIAL_OUTPUT) || failure==FAIL_PARTIAL_CLOSE ? pmHostError : pmNoError;
 }
 static PmError open_input(PortMidiStream **s,int id,void *driver,int32_t n,PmTimeProcPtr p,void *info) { (void)p;(void)info;CHECK(!driver);return open_common(s,id,n,1); }
 static PmError open_output(PortMidiStream **s,int id,void *driver,int32_t n,PmTimeProcPtr p,void *info,int32_t latency) { (void)p;(void)info;(void)latency;CHECK(!driver);return open_common(s,id,n,2); }
-static PmError close_stream(PortMidiStream *ptr) { FakeStream *s=ptr; event('C'); InterlockedIncrement(&closes); CHECK(s && !s->active); if (failure==FAIL_CLOSE || failure==FAIL_PARTIAL_CLOSE) return pmHostError; free(s); native_live--; return pmNoError; }
+static PmError close_stream(PortMidiStream *ptr) {
+  FakeStream *s=ptr; event('C'); InterlockedIncrement(&closes); CHECK(s && !s->active);
+  if(ptr==blocked_native_close) {
+    CHECK(SetEvent(native_close_entered));
+    CHECK(WaitForSingleObject(native_close_released,5000)==WAIT_OBJECT_0);
+  }
+  if (failure==FAIL_CLOSE || failure==FAIL_PARTIAL_CLOSE) return pmHostError;
+  free(s); native_live--; return pmNoError;
+}
 static PmError abort_stream(PortMidiStream *ptr) { FakeStream *s=ptr; CHECK(s && s->direction==2); InterlockedIncrement(&aborts);return failure==FAIL_ABORT?pmHostError:pmNoError; }
 static PmError poll_stream(PortMidiStream *ptr) { CHECK(ptr); return pmNoError; }
 static PmError filter(PortMidiStream *ptr,int32_t mask) { (void)mask; CHECK(((FakeStream*)ptr)->direction==1); return pmNoError; }
@@ -243,6 +253,46 @@ static void automatic_wake(void) {
   CHECK(CloseHandle(thread) && CloseHandle(entered) && CloseHandle(released));
   puts("PASS close wakes blocked backend: exactly one read/wake/close, zero net resources");
 }
+static void pending_close_shutdown(void) {
+  PureMidiStream *later=open_stream(2),*head=open_stream(2);
+  PureMidiResources r;PmEvent b={0x403c90,0};
+  Job close_job={head,0,123},stop_job={NULL,3,123};HANDLE close_thread,stop_thread;
+  blocked_native_close=last_opened_native;
+  native_close_entered=CreateEvent(NULL,TRUE,FALSE,NULL);
+  native_close_released=CreateEvent(NULL,TRUE,FALSE,NULL);
+  CHECK(native_close_entered && native_close_released);
+  close_thread=CreateThread(NULL,0,run_job,&close_job,0,NULL);CHECK(close_thread);
+  CHECK(WaitForSingleObject(native_close_entered,2000)==WAIT_OBJECT_0);
+  stop_thread=CreateThread(NULL,0,run_job,&stop_job,0,NULL);CHECK(stop_thread);
+  CHECK(WaitForSingleObject(stop_thread,3500)==WAIT_OBJECT_0 && stop_job.result==pmHostError);
+  /* The original defect returned from stop with this later stream still OPEN. */
+  CHECK(!pure_midi_valid(later,0));
+  CHECK(pure_midi_write(later,&b,1)==pmBadPtr && !pure_midi_valid(head,0));
+  CHECK(pure_midi_write(head,&b,1)==pmBadPtr && !reads && !writes);
+  CHECK(pure_midi_state(later)==PURE_MIDI_CLOSED && pure_midi_state(head)==PURE_MIDI_CLOSING);
+  CHECK(WaitForSingleObject(close_thread,0)==WAIT_TIMEOUT);
+  r=pure_midi_test_resources();
+  CHECK(r.wrappers==2 && r.live==1 && !r.quarantined && !r.active && r.references==2);
+  CHECK(r.allocated==2 && !r.freed && r.close_attempts==2 && r.failure==pmHostError);
+  CHECK(r.initialized==1 && r.timer_started==1 && closes==2 && wakes==2 && !terminates && !timer_stops);
+  CHECK(native_live==1 && memory_live==2);
+  pure_midi_release(later);
+  r=pure_midi_test_resources();CHECK(r.wrappers==1 && r.live==1 && r.references==1 && r.freed==1);
+  CHECK(native_live==1 && memory_live==1);
+  CHECK(SetEvent(native_close_released));
+  CHECK(WaitForSingleObject(close_thread,2000)==WAIT_OBJECT_0 && close_job.result==0);
+  CHECK(pure_midi_state(head)==PURE_MIDI_CLOSED && pure_midi_close(head)==0);
+  pure_midi_release(head);
+  CHECK(pure_midi_stop()==pmHostError && pure_midi_start()==pmHostError);
+  r=pure_midi_test_resources();
+  CHECK(!r.wrappers && !r.live && !r.quarantined && !r.active && !r.references);
+  CHECK(r.allocated==2 && r.freed==2 && r.close_attempts==2 && r.failure==pmHostError);
+  CHECK(!native_live && !memory_live && closes==2 && wakes==2 && !terminates && !timer_stops);
+  CHECK(init_live==1 && timer_live==1 && !strcmp(events,"ISDAoDAoCCFF"));
+  CHECK(CloseHandle(close_thread) && CloseHandle(stop_thread));
+  CHECK(CloseHandle(native_close_entered) && CloseHandle(native_close_released));
+  puts("PASS pending native close shutdown: later stream closed/rejects I/O; close=2 wake=2 terminate=0 timer-stop=0 allocated=2 freed=2 native=0 memory=0; sticky process failure");
+}
 /* Every scenario, including every stress iteration, is a fresh child process
    with a hard parent-enforced deadline independent of library/backend waits. */
 static int child(const char *exe,const char *scenario) {
@@ -265,18 +315,19 @@ int main(int argc,char **argv) {
     else if(!strcmp(argv[2],"release-write"))race(2,0,1);
     else if(!strcmp(argv[2],"timeout"))race(1,1,0);
     else if(!strcmp(argv[2],"wake"))automatic_wake();
+    else if(!strcmp(argv[2],"pending-close"))pending_close_shutdown();
     else if(!strcmp(argv[2],"multiple"))multiple_close_failure();
     else if(!strcmp(argv[2],"partial-close"))partial_failure(FAIL_PARTIAL_CLOSE);
     else if(!strcmp(argv[2],"partial-timer"))partial_failure(FAIL_TIMER_ROLLBACK);
     else return 2;
     return 0;
   }
-  { char exe[32768];const char *cases[]={"matrix","close","terminate","timer","timeout","multiple","partial-close","partial-timer","wake"};
+  { char exe[32768];const char *cases[]={"matrix","close","terminate","timer","timeout","multiple","partial-close","partial-timer","wake","pending-close"};
     const char *races[]={"read","write","release-read","release-write"};
     CHECK(GetModuleFileNameA(NULL,exe,sizeof(exe))>0);
     for(size_t i=0;i<sizeof(cases)/sizeof(cases[0]);i++)CHECK(child(exe,cases[i])==0);
     for(int i=0;i<200;i++)CHECK(child(exe,races[i%4])==0);
-    puts("PASS lifecycle: 9 matrices + 200 deterministic concurrency processes; 8-second independent deadline each; exact per-case counters");
+    puts("PASS lifecycle: 10 matrices + 200 deterministic concurrency processes; 8-second independent deadline each; exact per-case counters");
   }
   return 0;
 }

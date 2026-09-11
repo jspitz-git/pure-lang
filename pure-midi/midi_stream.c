@@ -243,24 +243,18 @@ static int process_transition(int restart) {
   lock(&registry_mutex);
   while(transitioning)if(!wait_until(&registry_condition,&registry_mutex,deadline)) { unlock(&registry_mutex);return pmHostError; }
   transitioning=1;
-  /* Pins keep the selected wrapper alive while another thread releases its
-     final alias. Each close completes (or quarantines) before selecting next. */
-  for(;;) {
-    for(s=streams;s;s=s->next) {
-      int state;lock(&s->mutex);state=s->state;unlock(&s->mutex);
-      if(state==PURE_MIDI_OPEN || state==PURE_MIDI_CLOSING)break;
-    }
-    if(!s)break;
-    {
-      int still_closing;
-      ++s->users;unlock(&registry_mutex);r=close_pinned(s);
-      lock(&s->mutex);still_closing=s->state==PURE_MIDI_CLOSING;unlock(&s->mutex);
-      unpin(s);lock(&registry_mutex);
-      if(r && !process_failure)process_failure=r;
-      /* A timed-out concurrent native close may still own its handle. Other
-         failed closes are terminal; continue closing every remaining stream. */
-      if(still_closing)break;
-    }
+  /* Visit each registry entry once, pinning its successor before unlocking.
+     New opens are excluded by transitioning; alias releases may unlink only
+     unpinned closed entries. A concurrent close that times out still owns its
+     own pin/native handle, and must not prevent closing the rest of the list. */
+  s=streams;
+  if(s)++s->users;
+  while(s) {
+    PureMidiStream *next=s->next;
+    if(next)++next->users;
+    unlock(&registry_mutex);r=close_pinned(s);unpin(s);lock(&registry_mutex);
+    if(r && !process_failure)process_failure=r;
+    s=next;
   }
   if(!process_failure) {
     if(timer_started) {
