@@ -659,6 +659,41 @@ static int test_valid_roundtrip(const char *fixture_path, size_t *valid_event_co
 	return resources_are_zero("valid round trip");
 }
 
+static int test_native_event_boundaries(void)
+{
+  unsigned char sysex[]={0xf0,1,0xf7}, invalid[]={0x90}, payload[]={1};
+  MidiFile_t file;
+  MidiFileTrack_t track;
+  reset_faults();
+  if (MidiFile_new(-1,MIDI_FILE_DIVISION_TYPE_PPQ,96) ||
+      MidiFile_new(1,MIDI_FILE_DIVISION_TYPE_INVALID,96) ||
+      MidiFile_new(1,MIDI_FILE_DIVISION_TYPE_PPQ,0) ||
+      MidiFile_new(1,MIDI_FILE_DIVISION_TYPE_SMPTE25,256))
+    return fail("invalid native file parameters accepted");
+  file=MidiFile_new(1,MIDI_FILE_DIVISION_TYPE_PPQ,96);
+  track=MidiFile_createTrack(file);
+  if (!track) return fail("native boundary setup");
+  if (MidiFileTrack_createSysexEvent(track,-1,3,sysex) ||
+      MidiFileTrack_createSysexEvent(track,0,0,sysex) ||
+      MidiFileTrack_createSysexEvent(track,0,3,NULL) ||
+      MidiFileTrack_createSysexEvent(track,0,1,invalid) ||
+      MidiFileTrack_createMetaEvent(track,-1,1,1,payload) ||
+      MidiFileTrack_createMetaEvent(track,0,256,1,payload) ||
+      MidiFileTrack_createMetaEvent(track,0,1,-1,payload) ||
+      MidiFileTrack_createMetaEvent(track,0,1,1,NULL) ||
+      MidiFileTrack_createMetaEvent(track,0,0x2f,1,payload) ||
+      MidiFileTrack_createVoiceEvent(track,-1,0x403c90) ||
+      MidiFileTrack_createVoiceEvent(track,0,0x00403c00) ||
+      MidiFileTrack_createVoiceEvent(track,0,0x01403c90) ||
+      MidiFile_getFirstEvent(file)) return fail("invalid native event accepted or linked");
+  if (!MidiFileTrack_createMetaEvent(track,0,1,0,NULL) ||
+      !MidiFileTrack_createSysexEvent(track,0,3,sysex) ||
+      !MidiFileTrack_createVoiceEvent(track,0,0x403c90)) return fail("native valid control rejected");
+  MidiFile_free(file);
+  cases_run+=19;
+  return resources_are_zero("native event boundaries");
+}
+
 int main(int argc, char **argv)
 {
 	size_t valid_event_count = 0;
@@ -678,7 +713,7 @@ int main(int argc, char **argv)
 		}
 		return 0;
 	}
-	if (!test_truncation_matrix() || !test_hostile_lengths() || !test_allocation_failures() ||
+	if (!test_native_event_boundaries() || !test_truncation_matrix() || !test_hostile_lengths() || !test_allocation_failures() ||
 		!test_load_io_failure(IO_FAULT_READ, "short read") ||
 		!test_load_io_failure(IO_FAULT_SEEK, "failed load seek") ||
 		!test_load_io_failure(IO_FAULT_TELL, "failed load tell") ||

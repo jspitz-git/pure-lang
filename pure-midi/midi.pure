@@ -1,7 +1,7 @@
 
 /* High-level interface to PortMidi for the Pure programmer. */
 
-using portmidi;
+using pointers, portmidi;
 
 namespace Pm;
 
@@ -127,8 +127,26 @@ let midi::output_time_proc, midi::output_time_info = addr "Pt_Time", NULL;
    can be used to convert between this representation and the PortMidi
    encoding. */
 
-midi::bytes msg::int = vector $ map (and 0xff) $ scanl (>>) msg [8,8,8];
-midi::word data::matrix = foldr (\x y->x+(y<<8)) 0 data if imatrixp data;
+private byte_vector event_buffer short_message short_length
+  input_stream output_stream close_input close_output;
+private extern int pure_midi_byte_count(expr*) = byte_count;
+private extern int pure_midi_event_count(expr*) = event_count;
+byte_vector data = byte_count data>0;
+event_buffer data = event_count data>0;
+short_length status::int = if status>=0xc0 && status<0xe0 then 2 else 3
+  if status>=0x80 && status<0xf0;
+short_length 0xf1 = 2; short_length 0xf2 = 3; short_length 0xf3 = 2;
+short_length status::int = 1 if any (==status) [0xf6,0xf8,0xfa,0xfb,0xfc,0xfe,0xff];
+short_length _ = 0;
+short_message data = byte_vector data && n>0 && #data==n
+  when n=if byte_vector data then short_length (data!0) else 0 end;
+
+midi::bytes msg::int = vector $ map (and 0xff) $ scanl (>>) msg [8,8,8]
+  if msg>=0;
+midi::bytes msg::bigint = vector $ map int $
+  map (and 0xffL) $ scanl (>>) msg [8,8,8] if msg>=0 && msg<=0xffffffffL;
+midi::word data::matrix = foldr (\x y->x+(y<<8)) 0 data
+  if byte_vector data && #data<=4;
 
 /* Opening and closing MIDI devices. The open_input and open_output routines
    return either a pointer to the PortMidi stream, or an error code which can
@@ -137,7 +155,15 @@ midi::word data::matrix = foldr (\x y->x+(y<<8)) 0 data if imatrixp data;
    close themselves automatically using midi::close when garbage-collected. */
 
 public close;
-midi::streamp stream::pointer = get_sentry stream === midi::close;
+midi::streamp stream::pointer = stream~=NULL &&
+  (get_sentry stream === close_input || get_sentry stream === close_output);
+midi::streamp _ = false;
+input_stream stream::pointer = stream~=NULL && get_sentry stream === close_input;
+input_stream _ = false;
+output_stream stream::pointer = stream~=NULL && get_sentry stream === close_output;
+output_stream _ = false;
+close_input stream = midi::close stream;
+close_output stream = midi::close stream;
 
 /* Open a stream for input. id is the index of the device, and the bufsize
    argument determines how many MIDI events can be buffered on input (if zero
@@ -150,7 +176,7 @@ midi::streamp stream::pointer = get_sentry stream === midi::close;
 midi::open_input id::int bufsize::int =
   case Pm::OpenInput stream id NULL bufsize
        midi::input_time_proc midi::input_time_info of
-    0 = sentry midi::close $ get_pointer stream;
+    0 = sentry close_input $ get_pointer stream;
     res = res;
   end when
     stream = ptrtag __C::voidpp_t $ cooked $ malloc SIZEOF_POINTER;
@@ -169,7 +195,7 @@ midi::open_input id::int bufsize::int =
 midi::open_output id::int bufsize::int latency::int =
   case Pm::OpenOutput stream id NULL bufsize
        midi::output_time_proc midi::output_time_info latency of
-    0 = sentry midi::close $ get_pointer stream;
+    0 = sentry close_output $ get_pointer stream;
     res = res;
   end when
     stream = ptrtag __C::voidpp_t $ cooked $ malloc SIZEOF_POINTER;
@@ -249,7 +275,9 @@ midi::poll stream::pointer = Pm::Poll stream;
    non-blocking; it returns zero if no message is currently available. */
 
 midi::read stream::pointer buf::matrix =
-  Pm::Read stream (midi::event buf) (#buf>>1) if imatrixp buf;
+  Pm::Read stream (midi::event buf) (event_count buf)
+  if input_stream stream && event_buffer buf;
+midi::read stream _ = if input_stream stream then Pm::BadData else Pm::BadPtr;
 
 /* Output MIDI events from a buffer. Zero (a.k.a. Pm::NoError) is returned if
    successful, otherwise the return code denotes an error which can be decoded
@@ -257,7 +285,9 @@ midi::read stream::pointer buf::matrix =
    after scheduling events to be delivered later. */
 
 midi::write stream::pointer buf::matrix =
-  Pm::Write stream (midi::event buf) (#buf>>1) if imatrixp buf;
+  Pm::Write stream (midi::event buf) (event_count buf)
+  if output_stream stream && event_buffer buf;
+midi::write stream _ = if output_stream stream then Pm::BadData else Pm::BadPtr;
 
 /* Convenience functions to read and write single MIDI messages. Here, a MIDI
    message is represented using Pure byte vectors, as given by midi::bytes. */
@@ -274,9 +304,11 @@ midi::write stream::pointer buf::matrix =
 
 midi::readmsg stream::pointer = case Pm::Read stream (midi::event buf) 1 of
   0 = midi::sleep 1 $$ midi::readmsg stream;
-  1 = if data!0 == 0xf0 then read_sysex time data [] else time, data when
+  1 = if data!0 == 0xf0 then read_sysex time data []
+      else if short_length (data!0)>0 then time, take (short_length (data!0)) data
+      else Pm::BadData when
         msg, time = buf!0, buf!1;
-	data = midi::bytes msg;
+	data = midi::bytes (bigint msg and 0xffffffffL);
       end with
 	// Keep reading until we see an EOX or a new status.
         read_sysex time data parts
@@ -289,14 +321,15 @@ midi::readmsg stream::pointer = case Pm::Read stream (midi::event buf) 1 of
 	next_sysex
 	  = case Pm::Read stream (midi::event buf) 1 of
   	      0 = midi::sleep 1 $$ next_sysex;
-	      1 = midi::bytes msg when msg,_ = buf!0, buf!1 end;
+	      1 = midi::bytes (bigint msg and 0xffffffffL) when msg,_ = buf!0, buf!1 end;
 	      ret = ret;
 	    end;
 	// Assemble the sysex message from its parts.
 	make_sysex parts = colcat $ reverse parts;
       end;
   ret = ret;
-end when buf = {0,0} end;
+end when buf = {0,0} end if input_stream stream;
+midi::readmsg _ = Pm::BadPtr;
 
 /* midi::writemsg can be used to output either a single regular MIDI message
    or an entire sysex message at the given time. In either case the return
@@ -304,12 +337,15 @@ end when buf = {0,0} end;
 
 midi::writemsg stream::pointer time::int data::matrix =
   Pm::WriteShort stream time (midi::word data)
-  if imatrixp data && ~null data && #data<=4;
+  if output_stream stream && time>=0 && short_message data;
 
 midi::writemsg stream::pointer time::int data::matrix =
   Pm::WriteSysEx stream time msg when
     msg = ptrtag __C::charp_t $ cooked $ byte_pointer NULL data;
-  end if imatrixp data && ~null data && data!0==0xf0;
+  end if output_stream stream && time>=0 && byte_vector data &&
+    #data>=2 && data!0==0xf0 && last data==0xf7 &&
+    all (<128) (init (tail data));
+midi::writemsg stream _ _ = if output_stream stream then Pm::BadData else Pm::BadPtr;
 
 /*****************************************************************************/
 

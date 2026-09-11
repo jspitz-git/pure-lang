@@ -1,0 +1,116 @@
+using system, midi, midifile;
+
+extern int pure_midi_boundary_calls() = boundary_calls;
+extern void pure_midi_boundary_reset_calls() = boundary_reset_calls;
+extern char *getenv(char *);
+extern void pure_midi_boundary_read_queue(int, int, int) = read_queue;
+extern expr* pure_midi_boundary_bad_buffer(int) = bad_buffer;
+
+namespace bounds;
+
+fail name = fprintf stderr "FAIL: %s\n" name $$ fflush stderr $$ exit 1;
+check name condition = () if condition; = fail name otherwise;
+
+no_portmidi_call name value =
+  check name (boundary_calls == 0) when
+    boundary_reset_calls;
+    value ();
+  end;
+one_portmidi_call name value expected =
+  check name (result==expected && boundary_calls==1) when
+    boundary_reset_calls;
+    result=value ();
+  end;
+
+run = () when
+  check "word rejects signed byte" (~intp (midi::word {-1}));
+  check "bytes rejects negative word" (~matrixp (midi::bytes (-1)));
+  no_portmidi_call "read rejects null stream" (\_->midi::read NULL {0,0});
+  no_portmidi_call "write rejects null stream" (\_->midi::write NULL {0,0});
+  no_portmidi_call "readmsg rejects null stream" (\_->midi::readmsg NULL);
+  no_portmidi_call "writemsg rejects null stream" (\_->midi::writemsg NULL 0 {0x90,60,64});
+  check "new rejects invalid format" (~pointerp (midifile::new (-1) 0 96));
+  check "new rejects oversized format" (~pointerp (midifile::new 4294967297L 0 96));
+  check "new rejects division" (~pointerp (midifile::new 1 1 96));
+  check "new rejects resolution" (~pointerp (midifile::new 1 0 65536));
+  check "new rejects wrong type" (~pointerp (midifile::new "1" 0 96));
+  do (\data->check "word rejects invalid bytes" (~intp (midi::word data)))
+    [{}, {256}, {0,0,0,0,0}, {0,0;0,0}, {1.0}, {1L}, "bad", [1],
+     {0,1;2,3}!!(0..1,0..0)];
+  do (\value->check "bytes rejects invalid word" (~matrixp (midi::bytes value)))
+    [-1, -1L, 4294967296L, 1.0, "bad", {}];
+  check "unsigned word decode" (midi::bytes 4294967295L == {255,255,255,255});
+  file = midifile::new 1 0 96;
+  check "valid initial track" (midifile::put_track file [(0,{0x90,60,64})]);
+  original = midifile::get_tracks file;
+  check "out of range track does not wrap" (~listp (midifile::get_track file 2));
+  check "bigint track index does not narrow" (~listp (midifile::get_track file 4294967296L));
+  do (\event->check "invalid event rollback"
+      (~midifile::put_track file [(1,{0x90,60,64}),event] &&
+       midifile::get_tracks file == original))
+    [(0,{0xff}), (0,{0xff,0x2f,1}), (0,{}), (-1,{0x90,60,64}),
+     (2147483648L,{0x90,60,64}), (0L,{0x90,60,64}),
+     (0,{0x90,60}), (0,{0xc0,60,1}), (0,{0x90,60,64,1}), (0,{0x90,60,64,0}),
+     (0,{0x90,60,256}), (0,{0x90,-1,64}), (0,{0x90,60;64,0}),
+     (0,{0x90L,60L,64L}), (0,{144.0,60.0,64.0}), (0,[144,60,64]),
+     (0,{0x90,0;60,0;64,0}!!(0..2,0..0)), (0,{0x90},1), "bad"];
+  check "empty track" (midifile::put_track file [] && midifile::get_tracks file == original);
+  check "empty tracks" (midifile::put_tracks file [] && midifile::get_tracks file == original);
+  check "invalid track container" (~midifile::put_track file {});
+  check "invalid tracks container" (~midifile::put_tracks file {});
+  check "whole call rollback" (~midifile::put_tracks file
+    [[(0,{0x90,60,64})],[(0,{0xff})]] && midifile::get_tracks file == original);
+  copy = midifile::new 1 0 96;
+  check "decoded vectors use canonical lengths" (original == [[(0,{0x90,60,64})]]);
+  check "decoded canonical vectors remain insertable" (midifile::put_tracks copy original &&
+    midifile::get_tracks copy == original);
+  check "free copy" (midifile::free copy);
+  check "free file" (midifile::free file);
+  check "closed file rejects insertion" (~midifile::put_track file []);
+  check "null file rejects insertion" (~midifile::put_track NULL []);
+  input = midi::open_input 0 0;
+  output = midi::open_output 0 0 0;
+  do (\kind->no_portmidi_call "oversized native read matrix" (\_->midi::read input (bad_buffer kind))) [0,1,2];
+  do (\kind->no_portmidi_call "oversized native write matrix" (\_->midi::write output (bad_buffer kind))) [0,1,2];
+  one_portmidi_call "valid buffer write" (\_->midi::write output {0x403c90,0}) Pm::BadPtr;
+  one_portmidi_call "valid short write" (\_->midi::writemsg output 0 {0x90,60,64}) Pm::BadPtr;
+  one_portmidi_call "valid sysex write" (\_->midi::writemsg output 0 {0xf0,1,0xf7}) Pm::BadPtr;
+  read_queue 0x403c90 0 1;
+  one_portmidi_call "valid buffer read" (\_->midi::read input {0,0}) 1;
+  read_queue 0x403c90 0 1;
+  one_portmidi_call "canonical readmsg" (\_->midi::readmsg input) (42,{0x90,60,64});
+  read_queue 0x030201f0 0xf7060504 2;
+  check "signed ABI sysex is normalized" (midi::readmsg input == (42,{0xf0,1,2,3,4,5,6,0xf7}));
+  no_portmidi_call "read wrong direction" (\_->midi::read output {0,0});
+  no_portmidi_call "write wrong direction" (\_->midi::write input {0,0});
+  no_portmidi_call "readmsg wrong direction" (\_->midi::readmsg output);
+  no_portmidi_call "writemsg wrong direction" (\_->midi::writemsg input 0 {0x90,60,64});
+  do (\buf->no_portmidi_call "bad input buffer" (\_->midi::read input buf))
+    [{}, {0}, {0,0,0}, {0;0}, {0.0,0.0}, {0L,0L}, "bad",
+     {0,0,0;0,0,0}!!(0..1,0..1)];
+  do (\buf->no_portmidi_call "bad output buffer" (\_->midi::write output buf))
+    [{}, {0}, {0,0,0}, {0;0}, {0.0,0.0}, {0L,0L}, "bad",
+     {0,0,0;0,0,0}!!(0..1,0..1)];
+  do (\data->no_portmidi_call "bad output message" (\_->midi::writemsg output 0 data))
+    [{}, {-1}, {256}, {0x90,60}, {0xc0,60,1}, {0xf0}, {0xf0,1},
+     {0xf0,0xf7,0}, {0xf0,256,0xf7}, {0,1;2,3}, {1.0}, "bad"];
+  do (\time->no_portmidi_call "bad timestamp" (\_->midi::writemsg output time {0x90,60,64}))
+    [-1, 2147483648L, 0L, "bad"];
+  midi::close input; midi::close output;
+  no_portmidi_call "closed read" (\_->midi::read input {0,0});
+  no_portmidi_call "closed write" (\_->midi::write output {0,0});
+  no_portmidi_call "closed readmsg" (\_->midi::readmsg input);
+  no_portmidi_call "closed writemsg" (\_->midi::writemsg output 0 {0x90,60,64});
+  fixture = midifile::load (getenv "PURE_MIDI_BOUNDS_FIXTURE");
+  fixture_tracks = midifile::get_tracks fixture;
+  check "full fixture event count" (map (#) fixture_tracks == [7,1625]);
+  roundtrip = midifile::new 1 0 120;
+  check "full fixture canonical roundtrip" (midifile::put_tracks roundtrip fixture_tracks &&
+    midifile::get_tracks roundtrip == fixture_tracks);
+  check "free roundtrip" (midifile::free roundtrip);
+  check "free fixture" (midifile::free fixture);
+  midi::stop; Pt::Stop;
+  printf "%s\n" (getenv "PURE_MIDI_BOUNDS_TOKEN");
+end;
+
+bounds::run;

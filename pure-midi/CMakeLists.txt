@@ -19,10 +19,10 @@ function(add_pure_midi_module target)
     WINDOWS_EXPORT_ALL_SYMBOLS ON)
 endfunction()
 
-add_pure_midi_module(pmlib pmdev.c)
+add_pure_midi_module(pmlib pmdev.c midi_bounds.c)
 target_link_libraries(pmlib PRIVATE PkgConfig::PORTMIDI)
 
-add_pure_midi_module(midifile midifile/midifile.c midifile/mf.c)
+add_pure_midi_module(midifile midifile/midifile.c midifile/mf.c midi_bounds.c)
 
 if(WIN32)
   find_file(PORTMIDI_RUNTIME_DLL
@@ -45,6 +45,62 @@ endif()
 
 include(CTest)
 if(BUILD_TESTING)
+	set(MIDI_BOUNDARY_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/midi-boundary")
+	set(MIDI_BOUNDARY_FAKE_DIRECTORY "${MIDI_BOUNDARY_DIRECTORY}/fake")
+	file(MAKE_DIRECTORY "${MIDI_BOUNDARY_DIRECTORY}" "${MIDI_BOUNDARY_FAKE_DIRECTORY}")
+	string(RANDOM LENGTH 24 ALPHABET 0123456789abcdef MIDI_BOUNDS_TOKEN)
+
+	add_library(pure-midi-boundary-fake MODULE tests/midi_boundary_harness.c midi_bounds.c)
+	target_compile_features(pure-midi-boundary-fake PRIVATE c_std_11)
+	target_compile_definitions(pure-midi-boundary-fake PRIVATE PURE_MIDI_BOUNDARY_FAKE=1)
+	target_link_libraries(pure-midi-boundary-fake PRIVATE PkgConfig::PURE)
+	set_target_properties(pure-midi-boundary-fake PROPERTIES
+		PREFIX ""
+		OUTPUT_NAME "pmlib"
+		LIBRARY_OUTPUT_DIRECTORY "${MIDI_BOUNDARY_FAKE_DIRECTORY}"
+		RUNTIME_OUTPUT_DIRECTORY "${MIDI_BOUNDARY_FAKE_DIRECTORY}"
+		WINDOWS_EXPORT_ALL_SYMBOLS ON)
+	if(MINGW)
+		target_compile_options(pure-midi-boundary-fake PRIVATE -Wall -Wextra -Werror)
+		target_link_options(pure-midi-boundary-fake PRIVATE "LINKER:--enable-auto-import")
+	endif()
+
+	add_executable(pure-midi-boundary
+		tests/midi_boundary_harness.c
+		midifile/mf.c
+		midi_bounds.c
+		midifile/midifile.c)
+	target_compile_features(pure-midi-boundary PRIVATE c_std_11)
+	target_compile_definitions(pure-midi-boundary PRIVATE PURE_MIDI_TEST_SEAM=1)
+	target_include_directories(pure-midi-boundary PRIVATE midifile tests)
+	target_link_libraries(pure-midi-boundary PRIVATE PkgConfig::PURE)
+	if(MINGW)
+		target_compile_options(pure-midi-boundary PRIVATE
+			-Wall -Wextra -Werror -fsanitize=address -fno-omit-frame-pointer)
+		target_link_options(pure-midi-boundary PRIVATE -fsanitize=address)
+	endif()
+	add_test(NAME pure-midi-boundary COMMAND pure-midi-boundary)
+	set_tests_properties(pure-midi-boundary PROPERTIES
+		LABELS "midi;boundary;asan;no-hardware"
+		ENVIRONMENT "ASAN_OPTIONS=detect_leaks=0:halt_on_error=1:strict_string_checks=1"
+		ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${PURE_PREFIX}/bin;PATH=path_list_prepend:$ENV{MSYSTEM_PREFIX}/bin"
+		WORKING_DIRECTORY "${MIDI_BOUNDARY_DIRECTORY}"
+		TIMEOUT 30)
+	add_executable(pure-midi-boundary-release
+		tests/midi_boundary_harness.c midifile/mf.c midifile/midifile.c midi_bounds.c)
+	target_compile_features(pure-midi-boundary-release PRIVATE c_std_11)
+	target_compile_definitions(pure-midi-boundary-release PRIVATE PURE_MIDI_TEST_SEAM=1)
+	target_include_directories(pure-midi-boundary-release PRIVATE midifile tests)
+	target_link_libraries(pure-midi-boundary-release PRIVATE PkgConfig::PURE)
+	if(MINGW)
+		target_compile_options(pure-midi-boundary-release PRIVATE -Wall -Wextra -Werror)
+	endif()
+	add_test(NAME pure-midi-boundary-release COMMAND pure-midi-boundary-release)
+	set_tests_properties(pure-midi-boundary-release PROPERTIES
+		LABELS "midi;boundary;no-hardware"
+		ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${PURE_PREFIX}/bin;PATH=path_list_prepend:$ENV{MSYSTEM_PREFIX}/bin"
+		WORKING_DIRECTORY "${MIDI_BOUNDARY_DIRECTORY}" TIMEOUT 30)
+
 	set(MIDIFILE_FAULT_RELEASE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/midifile-fault-release")
 	set(MIDIFILE_FAULT_ASAN_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/midifile-fault-asan")
 	set(MIDIFILE_FAULT_DEADLINE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/midifile-fault-deadline")
@@ -97,12 +153,33 @@ if(BUILD_TESTING)
 			TIMEOUT 30)
 	endif()
 
-  pkg_get_variable(PURE_PREFIX pure prefix)
   find_program(PURE_EXECUTABLE
     NAMES pure
     HINTS "${PURE_PREFIX}/bin"
     NO_DEFAULT_PATH
     REQUIRED)
+  add_test(
+    NAME pure-midi-bounds
+    COMMAND "${CMAKE_COMMAND}" -E env
+      --modify "PATH=path_list_prepend:$<TARGET_FILE_DIR:pure-midi-boundary-fake>"
+      --modify "PATH=path_list_prepend:$<TARGET_FILE_DIR:midifile>"
+      "PURE_MIDI_BOUNDS_TOKEN=${MIDI_BOUNDS_TOKEN}"
+      "PURE_MIDI_BOUNDS_FIXTURE=${CMAKE_CURRENT_SOURCE_DIR}/examples/prelude3.mid"
+      "${PURE_EXECUTABLE}" --norc
+        -I "${CMAKE_CURRENT_SOURCE_DIR}"
+        -I "${CMAKE_CURRENT_SOURCE_DIR}/midifile"
+        -L "$<TARGET_FILE_DIR:pure-midi-boundary-fake>"
+        -L "$<TARGET_FILE_DIR:midifile>"
+        -x "${CMAKE_CURRENT_SOURCE_DIR}/tests/bounds.pure")
+  set_tests_properties(pure-midi-bounds PROPERTIES
+    LABELS "midi;boundary;pure;no-hardware"
+    ENVIRONMENT_MODIFICATION
+      "PATH=path_list_prepend:${PURE_PREFIX}/bin;PATH=path_list_prepend:$ENV{MSYSTEM_PREFIX}/bin"
+    PASS_REGULAR_EXPRESSION "${MIDI_BOUNDS_TOKEN}"
+    REQUIRED_FILES
+      "$<TARGET_FILE:pure-midi-boundary-fake>;$<TARGET_FILE:midifile>;${CMAKE_CURRENT_SOURCE_DIR}/tests/bounds.pure"
+    WORKING_DIRECTORY "${MIDI_BOUNDARY_DIRECTORY}"
+    TIMEOUT 45)
   add_test(
     NAME pure-midi-device-timing
     COMMAND "${CMAKE_COMMAND}"

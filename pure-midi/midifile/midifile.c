@@ -965,7 +965,11 @@ int MidiFile_save(MidiFile_t midi_file, const char* filename)
 
 MidiFile_t MidiFile_new(int file_format, MidiFileDivisionType_t division_type, int resolution)
 {
-	MidiFile_t midi_file = (MidiFile_t)midi_calloc(1, sizeof(struct MidiFile));
+	MidiFile_t midi_file;
+	if (file_format<0 || file_format>2 || division_type<MIDI_FILE_DIVISION_TYPE_PPQ ||
+		division_type>MIDI_FILE_DIVISION_TYPE_SMPTE30 || resolution<1 ||
+		resolution>(division_type==MIDI_FILE_DIVISION_TYPE_PPQ ? 32767 : 255)) return NULL;
+	midi_file = (MidiFile_t)midi_calloc(1, sizeof(struct MidiFile));
 	if (midi_file == NULL) return NULL;
 	midi_file->file_format = file_format;
 	midi_file->division_type = division_type;
@@ -1038,7 +1042,7 @@ MidiFileTrack_t MidiFile_createTrack(MidiFile_t midi_file)
 {
 	MidiFileTrack_t new_track;
 
-	if (midi_file == NULL) return NULL;
+	if (midi_file == NULL || midi_file->number_of_tracks==INT_MAX) return NULL;
 
 	new_track = (MidiFileTrack_t)midi_calloc(1, sizeof(struct MidiFileTrack));
 	if (new_track == NULL) return NULL;
@@ -1332,7 +1336,8 @@ int MidiFileTrack_delete(MidiFileTrack_t track)
 		track->next_track->previous_track = track->previous_track;
 	}
 
-	free_events_in_track(track);
+	/* Each event belongs to both the track and the file's sorted event list. */
+	while (track->first_event != NULL) MidiFileEvent_delete(track->first_event);
 	midi_free(track);
 	return 0;
 }
@@ -1550,7 +1555,8 @@ MidiFileEvent_t MidiFileTrack_createSysexEvent(MidiFileTrack_t track, int32_t ti
 {
 	MidiFileEvent_t new_event;
 
-	if ((track == NULL) || (data_length < 1) || (data_buffer == NULL)) return NULL;
+	if ((track == NULL) || tick<0 || (data_length < 1) || (data_buffer == NULL) ||
+		(data_buffer[0]!=0xf0 && data_buffer[0]!=0xf7)) return NULL;
 
 	new_event = (MidiFileEvent_t)midi_calloc(1, sizeof(struct MidiFileEvent));
 	if (new_event == NULL) return NULL;
@@ -1575,7 +1581,8 @@ MidiFileEvent_t MidiFileTrack_createMetaEvent(MidiFileTrack_t track, int32_t tic
 {
 	MidiFileEvent_t new_event;
 
-	if ((track == NULL) || (data_length < 0) || ((data_length != 0) && (data_buffer == NULL))) return NULL;
+	if ((track == NULL) || tick<0 || number<0 || number>255 || (data_length < 0) ||
+		(number==0x2f && data_length!=0) || ((data_length != 0) && (data_buffer == NULL))) return NULL;
 
 	new_event = (MidiFileEvent_t)midi_calloc(1, sizeof(struct MidiFileEvent));
 	if (new_event == NULL) return NULL;
@@ -1622,7 +1629,9 @@ MidiFileEvent_t MidiFileTrack_createVoiceEvent(MidiFileTrack_t track, int32_t ti
 {
 	MidiFileEvent_t new_event;
 
-	if (track == NULL) return NULL;
+	if (track == NULL || tick<0 || (data&0xff)<0x80 || (data&0xff)>=0xf0 ||
+		(data&0xff000000U) || (((data&0xf0)==0xc0 || (data&0xf0)==0xd0) &&
+		(data&0xffff0000U))) return NULL;
 
 	new_event = (MidiFileEvent_t)midi_calloc(1, sizeof(struct MidiFileEvent));
 	if (new_event == NULL) return NULL;

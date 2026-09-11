@@ -56,12 +56,16 @@ namespace midifile;
    only affects the in-memory representation. You still have to write the file
    to disk using midifile::save to make the changes permanent. */
 
-extern expr* mf_new(int format, int division, int resolution) = new;
+private extern expr* mf_new(int format, int division, int resolution) = new_native;
+new format::int division::int resolution::int = new_native format division resolution
+  if format>=0 && format<=2 && any (==division) [0,24,25,29,30] &&
+    resolution>0 && resolution<=(if division==0 then 32767 else 255);
 extern expr* mf_load(char* filename) = load;
 extern bool mf_save(expr* mf, char* filename) = save;
 extern bool mf_free(expr* mf) = free;
 extern expr* mf_info(expr* mf) = info;
-extern expr* mf_get_track(expr* mf, int number) = get_track;
+private extern expr* mf_get_track(expr* mf, int number) = get_track_native;
+get_track mf number::int = get_track_native mf number if number>=0;
 extern expr* mf_get_tracks(expr* mf) = get_tracks;
 extern bool mf_put_track(expr* mf, expr* track) = put_track;
 extern bool mf_put_tracks(expr* mf, expr* tracks) = put_tracks;
