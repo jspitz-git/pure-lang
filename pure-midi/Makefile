@@ -42,14 +42,17 @@ subdirs:
 	$(MAKE) -C midifile all
 
 clean:
-	test -n "$(DLL)" && rm -Rf *.o *$(DLL)*
+	$(if $(filter .dll .so .dylib,$(DLL)),,$(error Invalid module suffix for clean))
+	$(if $(word 2,$(DLL)),$(error Invalid module suffix for clean),)
+	case "$(DLL)" in .dll|.so|.dylib) ;; *) exit 1 ;; esac
+	rm -f -- pmdev.o midi_bounds.o midi_stream.o "pmlib$(DLL)" portmidi.pure.tmp
 	$(MAKE) -C midifile clean
 
 realclean: clean
 	rm -f portmidi.pure
 
-pmlib$(DLL): pmdev.c
-	$(CC) $(shared) $(dllname) -o $@ $(MOD_CFLAGS) $< $(MOD_LDFLAGS) -lportmidi
+pmlib$(DLL): pmdev.c midi_bounds.c midi_stream.c
+	$(CC) $(shared) $(dllname) -o $@ $(MOD_CFLAGS) $^ $(MOD_LDFLAGS) -lportmidi
 
 # Type 'make generate' to force a rebuild of the PortMidi wrapper. This
 # requires pure-gen and that you have portmidi.h and porttime.h in the current

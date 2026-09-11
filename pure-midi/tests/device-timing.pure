@@ -1,10 +1,11 @@
-using midi;
+using system, midi;
+extern char *getenv(char *);
 
 namespace device_timing;
 
 check name condition
   = () if condition;
-  = exit 1 otherwise;
+  = fprintf stderr "FAIL: %s\n" name $$ fflush stderr $$ exit 1 otherwise;
 
 devicep (interf::string,name::string,input::int,output::int,opened::int)
   = (input == 0 || input == 1) &&
@@ -35,7 +36,9 @@ when
   check "PortMidi terminate" (midi::stop == Pm::NoError);
   check "PortMidi restart" (midi::start == Pm::NoError);
   check "device recount" (Pm::CountDevices >= 0);
-  check "PortTime stop" (Pt::Stop == Pt::NoError);
+  check "final PortMidi stop" (midi::stop == Pm::NoError);
+  check "PortTime stopped" (Pt::Started == 0);
+  printf "%s\n" (getenv "PURE_MIDI_TEST_TOKEN");
 end;
 
 device_timing::run;

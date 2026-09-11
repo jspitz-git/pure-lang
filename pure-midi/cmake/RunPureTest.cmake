@@ -1,32 +1,46 @@
-foreach(required IN ITEMS
-    PURE_EXECUTABLE PURE_SOURCE_DIR MODULE_DIR TEST_SCRIPT TEST_DIRECTORY)
+cmake_minimum_required(VERSION 3.25)
+# Shared build/stage entry point. Only the native runner owns temporary leaves.
+foreach(required IN ITEMS RUNNER CONTRACT_ROOT PURE_EXECUTABLE PURE_SOURCE_DIR MODULE_DIR TEST_SCRIPT RUNTIME_DIRS)
   if(NOT DEFINED ${required} OR "${${required}}" STREQUAL "")
     message(FATAL_ERROR "${required} is required")
   endif()
 endforeach()
-
-file(REMOVE_RECURSE "${TEST_DIRECTORY}")
-file(MAKE_DIRECTORY "${TEST_DIRECTORY}")
-if(DEFINED FIXTURE AND NOT "${FIXTURE}" STREQUAL "")
-  file(COPY "${FIXTURE}" DESTINATION "${TEST_DIRECTORY}")
+if(NOT DEFINED TIMEOUT_MS)
+  set(TIMEOUT_MS 30000)
 endif()
-set(ENV{PATH} "${MODULE_DIR};$ENV{PATH}")
-execute_process(
-  COMMAND "${PURE_EXECUTABLE}" --norc
-    -I "${PURE_SOURCE_DIR}"
-    -I "${PURE_SOURCE_DIR}/midifile"
-    -L "${MODULE_DIR}"
-    -x "${TEST_SCRIPT}"
-  WORKING_DIRECTORY "${TEST_DIRECTORY}"
-  RESULT_VARIABLE result
-  OUTPUT_VARIABLE output
-  ERROR_VARIABLE error
-  TIMEOUT 45
-  ENCODING UTF-8)
-file(REMOVE "${TEST_DIRECTORY}/pure-midi-smoke.mid")
+execute_process(COMMAND "${RUNNER}" --nonce RESULT_VARIABLE result OUTPUT_VARIABLE token OUTPUT_STRIP_TRAILING_WHITESPACE)
 if(NOT result EQUAL 0)
-  message(FATAL_ERROR
-    "pure-midi test failed (${result})\n"
-    "stdout:\n${output}\nstderr:\n${error}")
+  message(FATAL_ERROR "completion nonce generation failed (${result})")
 endif()
-message(STATUS "pure-midi hardware-free test passed")
+set(args --pure "${PURE_EXECUTABLE}" --script "${TEST_SCRIPT}" --token "${token}"
+  --timeout-ms "${TIMEOUT_MS}" --cwd "${CONTRACT_ROOT}"
+  --include "${PURE_SOURCE_DIR}" --include "${PURE_SOURCE_DIR}/midifile"
+  --input "${PURE_SOURCE_DIR}/midi.pure" --input "${PURE_SOURCE_DIR}/portmidi.pure"
+  --input "${PURE_SOURCE_DIR}/midifile/midifile.pure")
+if(NOT DEFINED PMLIB_MODULE)
+  set(PMLIB_MODULE "${MODULE_DIR}/pmlib.dll")
+endif()
+get_filename_component(pmlib_dir "${PMLIB_MODULE}" DIRECTORY)
+list(APPEND args --library "${pmlib_dir}" --library "${MODULE_DIR}"
+  --input "${PMLIB_MODULE}" --input "${MODULE_DIR}/midifile.dll"
+  --path-entry "${pmlib_dir}" --path-entry "${MODULE_DIR}")
+get_filename_component(pure_bin "${PURE_EXECUTABLE}" DIRECTORY)
+list(APPEND args --path-entry "${pure_bin}")
+foreach(directory IN LISTS RUNTIME_DIRS)
+  list(APPEND args --path-entry "${directory}")
+endforeach()
+if(DEFINED PURE_STDLIB)
+  list(APPEND args --include "${PURE_STDLIB}")
+endif()
+if(DEFINED FIXTURE AND NOT FIXTURE STREQUAL "")
+  list(APPEND args --fixture "${FIXTURE}")
+endif()
+if(DEFINED MIDI_OUTPUT_SELECTOR)
+  list(APPEND args --selector "${MIDI_OUTPUT_SELECTOR}")
+endif()
+execute_process(COMMAND "${RUNNER}" ${args}
+  RESULT_VARIABLE result OUTPUT_VARIABLE output ERROR_VARIABLE error ENCODING UTF-8)
+if(NOT result EQUAL 0)
+  message(FATAL_ERROR "pure-midi test failed (${result})\nstdout:\n${output}\nstderr:\n${error}")
+endif()
+message(STATUS "${output}")

@@ -72,7 +72,6 @@ if(BUILD_TESTING)
 	set(MIDI_BOUNDARY_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/midi-boundary")
 	set(MIDI_BOUNDARY_FAKE_DIRECTORY "${MIDI_BOUNDARY_DIRECTORY}/fake")
 	file(MAKE_DIRECTORY "${MIDI_BOUNDARY_DIRECTORY}" "${MIDI_BOUNDARY_FAKE_DIRECTORY}")
-	string(RANDOM LENGTH 24 ALPHABET 0123456789abcdef MIDI_BOUNDS_TOKEN)
 
 	add_library(pure-midi-boundary-fake MODULE tests/midi_boundary_harness.c midi_bounds.c midi_stream.c pmdev.c)
 	target_compile_features(pure-midi-boundary-fake PRIVATE c_std_11)
@@ -181,70 +180,133 @@ if(BUILD_TESTING)
 			TIMEOUT 30)
 	endif()
 
-  find_program(PURE_EXECUTABLE
-    NAMES pure
-    HINTS "${PURE_PREFIX}/bin"
-    NO_DEFAULT_PATH
-    REQUIRED)
-  add_test(
-    NAME pure-midi-bounds
-    COMMAND "${CMAKE_COMMAND}" -E env
-      --modify "PATH=path_list_prepend:$<TARGET_FILE_DIR:pure-midi-boundary-fake>"
-      --modify "PATH=path_list_prepend:$<TARGET_FILE_DIR:midifile>"
-      "PURE_MIDI_BOUNDS_TOKEN=${MIDI_BOUNDS_TOKEN}"
-      "PURE_MIDI_BOUNDS_FIXTURE=${CMAKE_CURRENT_SOURCE_DIR}/examples/prelude3.mid"
-      "${PURE_EXECUTABLE}" --norc
-        -I "${CMAKE_CURRENT_SOURCE_DIR}"
-        -I "${CMAKE_CURRENT_SOURCE_DIR}/midifile"
-        -L "$<TARGET_FILE_DIR:pure-midi-boundary-fake>"
-        -L "$<TARGET_FILE_DIR:midifile>"
-        -x "${CMAKE_CURRENT_SOURCE_DIR}/tests/bounds.pure")
-  set_tests_properties(pure-midi-bounds PROPERTIES
-    LABELS "midi;boundary;pure;no-hardware"
-    ENVIRONMENT_MODIFICATION
-      "PATH=path_list_prepend:${PURE_PREFIX}/bin;PATH=path_list_prepend:$ENV{MSYSTEM_PREFIX}/bin"
-    PASS_REGULAR_EXPRESSION "${MIDI_BOUNDS_TOKEN}"
-    REQUIRED_FILES
-      "$<TARGET_FILE:pure-midi-boundary-fake>;$<TARGET_FILE:midifile>;${CMAKE_CURRENT_SOURCE_DIR}/tests/bounds.pure"
-    WORKING_DIRECTORY "${MIDI_BOUNDARY_DIRECTORY}"
-    TIMEOUT 45)
-  add_test(
-    NAME pure-midi-device-timing
-    COMMAND "${CMAKE_COMMAND}"
-      "-DPURE_EXECUTABLE=${PURE_EXECUTABLE}"
-      "-DPURE_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
-      "-DMODULE_DIR=$<TARGET_FILE_DIR:pmlib>"
-      "-DTEST_SCRIPT=${CMAKE_CURRENT_SOURCE_DIR}/tests/device-timing.pure"
-      "-DTEST_DIRECTORY=${CMAKE_CURRENT_BINARY_DIR}/device-timing-test"
-      -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunPureTest.cmake")
-  set_tests_properties(pure-midi-device-timing PROPERTIES
-    LABELS "midi;device-enumeration;timing;no-hardware"
-    REQUIRED_FILES "$<TARGET_FILE:pmlib>;${CMAKE_CURRENT_SOURCE_DIR}/midi.pure"
-    TIMEOUT 45)
-  add_test(
-    NAME pure-midi-smoke
-    COMMAND "${CMAKE_COMMAND}"
-      "-DPURE_EXECUTABLE=${PURE_EXECUTABLE}"
-      "-DPURE_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
-      "-DMODULE_DIR=$<TARGET_FILE_DIR:pmlib>"
-      "-DTEST_SCRIPT=${CMAKE_CURRENT_SOURCE_DIR}/tests/smoke.pure"
-      "-DTEST_DIRECTORY=${CMAKE_CURRENT_BINARY_DIR}/smoke-test"
-      "-DFIXTURE=${CMAKE_CURRENT_SOURCE_DIR}/examples/prelude3.mid"
-      -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunPureTest.cmake")
-  set_tests_properties(pure-midi-smoke PROPERTIES
-    LABELS "midi;encoding;midifile;cleanup;no-hardware"
-    REQUIRED_FILES
-      "$<TARGET_FILE:pmlib>;$<TARGET_FILE:midifile>;${CMAKE_CURRENT_SOURCE_DIR}/examples/prelude3.mid"
-    TIMEOUT 45)
-  add_custom_target(check-midi-output
-    COMMAND "${CMAKE_COMMAND}"
-      "-DPURE_EXECUTABLE=${PURE_EXECUTABLE}"
-      "-DPURE_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
-      "-DMODULE_DIR=$<TARGET_FILE_DIR:pmlib>"
-      -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunHardwareTest.cmake"
-    DEPENDS pmlib
-    COMMENT "Running bounded pure-midi output validation"
-    VERBATIM)
+  if(WIN32)
+    set(MIDI_CONTRACT_ROOT "${CMAKE_CURRENT_BINARY_DIR}/pure-midi-contract-root")
+    file(MAKE_DIRECTORY "${MIDI_CONTRACT_ROOT}")
+    get_filename_component(MIDI_RUNTIME_DIR "${PORTMIDI_RUNTIME_DLL}" DIRECTORY)
+    add_executable(run_pure_test tests/run_pure_test.c)
+    target_compile_features(run_pure_test PRIVATE c_std_11)
+    target_compile_definitions(run_pure_test PRIVATE
+      "PURE_MIDI_CONTRACT_ROOT=\"${MIDI_CONTRACT_ROOT}\"")
+    target_compile_options(run_pure_test PRIVATE -Wall -Wextra -Werror)
+    target_link_options(run_pure_test PRIVATE -municode)
+    target_link_libraries(run_pure_test PRIVATE bcrypt)
+
+    add_executable(pure-midi-runner-fixture tests/runner_fixture.c)
+    target_compile_options(pure-midi-runner-fixture PRIVATE -Wall -Wextra -Werror)
+    add_test(NAME pure-midi-native-environment-contract COMMAND pure-midi-runner-fixture --native-environment)
+    set_tests_properties(pure-midi-native-environment-contract PROPERTIES
+      LABELS "midi;contract;no-hardware" TIMEOUT 5)
+    # Native fault harnesses also embed Pure. An inherited PURELIB can skip its
+    # normal prelude initialization while their low-level assertions still run.
+    # Preserve the existing harnesses/counters but give them the declared loader
+    # path and remove the same parent settings as the native Pure supervisor.
+    foreach(native IN ITEMS pure-midi-lifecycle-release pure-midi-lifecycle-asan
+        pure-midi-boundary pure-midi-boundary-release pure-midi-midifile-fault
+        pure-midi-midifile-deadline-contract pure-midi-midifile-fault-asan
+        pure-midi-native-environment-contract)
+      if(TEST ${native})
+        set_property(TEST ${native} APPEND PROPERTY ENVIRONMENT_MODIFICATION
+          "PURELIB=unset:" "PURE_INCLUDE=unset:" "PURE_LIBRARY=unset:"
+          "PURE_MIDI_OUT=unset:" "PURE_MIDI_IN=unset:" "PURE_RUNNER_POISON=unset:"
+          "PATH=set:${PURE_PREFIX}/bin" "PATH=path_list_append:${MIDI_RUNTIME_DIR}"
+          "PATH=path_list_append:$ENV{SystemRoot}/System32" "PATH=path_list_append:$ENV{SystemRoot}")
+      endif()
+    endforeach()
+    add_library(pure-midi-hardware-fixture MODULE
+      tests/runner_hardware_fixture.c midi_bounds.c midi_stream.c pmdev.c)
+    target_compile_definitions(pure-midi-hardware-fixture PRIVATE PURE_MIDI_BOUNDARY_FAKE=1)
+    target_compile_options(pure-midi-hardware-fixture PRIVATE -Wall -Wextra -Werror)
+    target_link_libraries(pure-midi-hardware-fixture PRIVATE PkgConfig::PURE)
+    target_include_directories(pure-midi-hardware-fixture PRIVATE ${PORTMIDI_INCLUDE_DIRS})
+    target_link_options(pure-midi-hardware-fixture PRIVATE "LINKER:--enable-auto-import")
+    set_target_properties(pure-midi-hardware-fixture PROPERTIES PREFIX "" OUTPUT_NAME pmlib
+      LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/hardware-fake"
+      RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/hardware-fake"
+      WINDOWS_EXPORT_ALL_SYMBOLS ON)
+    find_program(PURE_EXECUTABLE NAMES pure
+      HINTS "${PURE_PREFIX}/bin" NO_DEFAULT_PATH REQUIRED)
+    set(MIDI_POWERSHELL "$ENV{SystemRoot}/System32/WindowsPowerShell/v1.0/powershell.exe")
+    find_program(MIDI_MAKE_EXECUTABLE NAMES mingw32-make REQUIRED)
+    find_program(MIDI_MAKE_SHELL NAMES sh HINTS "${MIDI_RUNTIME_DIR}/../../usr/bin" REQUIRED)
+    foreach(contract IN ITEMS runner cleanup hardware-runner)
+      set(contract_script "${contract}")
+      set(extra)
+      if(contract STREQUAL hardware-runner)
+        set(contract_script runner)
+        set(extra -DHARDWARE_ONLY=ON)
+      endif()
+      add_test(NAME pure-midi-${contract}-contract
+        COMMAND "${CMAKE_COMMAND}" "-DRUNNER=$<TARGET_FILE:run_pure_test>"
+          "-DFIXTURE_EXE=$<TARGET_FILE:pure-midi-runner-fixture>"
+          "-DCONTRACT_ROOT=${MIDI_CONTRACT_ROOT}"
+          "-DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
+          "-DRUNTIME_DIR=${MIDI_RUNTIME_DIR}" "-DPOWERSHELL=${MIDI_POWERSHELL}"
+          "-DPURE_EXECUTABLE=${PURE_EXECUTABLE}" "-DMODULE_DIR=$<TARGET_FILE_DIR:midifile>"
+          "-DHARDWARE_MODULE=$<TARGET_FILE:pure-midi-hardware-fixture>"
+          "-DMAKE_EXE=${MIDI_MAKE_EXECUTABLE}" "-DMAKE_SHELL=${MIDI_MAKE_SHELL}"
+          ${extra} -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/${contract_script}_contract.cmake")
+      set_tests_properties(pure-midi-${contract}-contract PROPERTIES
+        LABELS "midi;contract;no-hardware" TIMEOUT 90 RUN_SERIAL TRUE)
+    endforeach()
+
+    foreach(case IN ITEMS bounds device-timing smoke)
+      set(test_pmlib "$<TARGET_FILE:pmlib>")
+      if(case STREQUAL bounds)
+        set(test_pmlib "$<TARGET_FILE:pure-midi-boundary-fake>")
+      endif()
+      add_test(NAME pure-midi-${case}
+        COMMAND "${CMAKE_COMMAND}" "-DRUNNER=$<TARGET_FILE:run_pure_test>"
+          "-DCONTRACT_ROOT=${MIDI_CONTRACT_ROOT}"
+          "-DPURE_EXECUTABLE=${PURE_EXECUTABLE}"
+          "-DPURE_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
+          "-DPURE_STDLIB=${PURE_PREFIX}/lib/pure"
+          "-DMODULE_DIR=$<TARGET_FILE_DIR:midifile>"
+          "-DPMLIB_MODULE=${test_pmlib}"
+          "-DRUNTIME_DIRS=${MIDI_RUNTIME_DIR}"
+          "-DTEST_SCRIPT=${CMAKE_CURRENT_SOURCE_DIR}/tests/${case}.pure"
+          "-DFIXTURE=${CMAKE_CURRENT_SOURCE_DIR}/examples/prelude3.mid"
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunPureTest.cmake")
+      set_tests_properties(pure-midi-${case} PROPERTIES
+        LABELS "midi;pure;no-hardware" TIMEOUT 45
+        REQUIRED_FILES "${test_pmlib};$<TARGET_FILE:midifile>")
+    endforeach()
+
+    add_custom_target(check-midi-output
+      COMMAND "${CMAKE_COMMAND}" "-DRUNNER=$<TARGET_FILE:run_pure_test>"
+        "-DCONTRACT_ROOT=${MIDI_CONTRACT_ROOT}"
+        "-DPURE_EXECUTABLE=${PURE_EXECUTABLE}"
+        "-DPURE_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
+        "-DPURE_STDLIB=${PURE_PREFIX}/lib/pure"
+        "-DMODULE_DIR=$<TARGET_FILE_DIR:pmlib>"
+        "-DRUNTIME_DIRS=${MIDI_RUNTIME_DIR}"
+        -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunHardwareTest.cmake"
+      DEPENDS run_pure_test pmlib midifile
+      COMMENT "Running optional bounded MIDI output (PURE_MIDI_TEST_OUTPUT selects device)"
+      VERBATIM)
+  else()
+    # Preserve the upstream non-Windows public tests. The native Windows job,
+    # path and owned-cleanup contracts above make no POSIX verification claim.
+    find_program(PURE_EXECUTABLE NAMES pure HINTS "${PURE_PREFIX}/bin" REQUIRED)
+    string(RANDOM LENGTH 64 ALPHABET 0123456789abcdef portable_token)
+    foreach(case IN ITEMS bounds device-timing smoke)
+      set(test_pmlib "$<TARGET_FILE_DIR:pmlib>")
+      if(case STREQUAL bounds)
+        set(test_pmlib "$<TARGET_FILE_DIR:pure-midi-boundary-fake>")
+      endif()
+      file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/portable-${case}")
+      add_test(NAME pure-midi-${case}
+        COMMAND "${CMAKE_COMMAND}" -E env --unset=PURELIB --unset=PURE_INCLUDE --unset=PURE_LIBRARY
+          "PURE_MIDI_TEST_TOKEN=${portable_token}"
+          "PURE_MIDI_TEST_FIXTURE=${CMAKE_CURRENT_SOURCE_DIR}/examples/prelude3.mid"
+          "${PURE_EXECUTABLE}" --norc -I "${CMAKE_CURRENT_SOURCE_DIR}"
+          -I "${CMAKE_CURRENT_SOURCE_DIR}/midifile" -L "${test_pmlib}"
+          -L "$<TARGET_FILE_DIR:midifile>" -x "${CMAKE_CURRENT_SOURCE_DIR}/tests/${case}.pure")
+      set_tests_properties(pure-midi-${case} PROPERTIES LABELS "midi;pure;no-hardware"
+        TIMEOUT 45 PASS_REGULAR_EXPRESSION "${portable_token}"
+        WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/portable-${case}")
+    endforeach()
+  endif()
 endif()
 
 include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/Install.cmake")

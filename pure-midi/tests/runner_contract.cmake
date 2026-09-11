@@ -1,0 +1,253 @@
+cmake_minimum_required(VERSION 3.25)
+# These are OS-boundary tests: the fixture is launched by the production runner.
+foreach(required FIXTURE_EXE CONTRACT_ROOT SOURCE_DIR)
+  if(NOT DEFINED ${required})
+    message(FATAL_ERROR "${required} required")
+  endif()
+endforeach()
+file(MAKE_DIRECTORY "${CONTRACT_ROOT}/fixtures" "${CONTRACT_ROOT}/poison")
+file(WRITE "${CONTRACT_ROOT}/poison/midi.pure" "poison_module;\n")
+file(WRITE "${CONTRACT_ROOT}/poison/pmlib.dll" "poison module\n")
+set(ENV{PURELIB} "${CONTRACT_ROOT}/poison")
+set(ENV{PURE_INCLUDE} "${CONTRACT_ROOT}/poison")
+set(ENV{PURE_LIBRARY} "${CONTRACT_ROOT}/poison")
+set(ENV{PURE_MIDI_OUT} "poison")
+set(ENV{PURE_RUNNER_POISON} "present")
+set(ENV{PATH} "${CONTRACT_ROOT}/poison;$ENV{PATH}")
+string(RANDOM LENGTH 64 ALPHABET 0123456789abcdef token)
+set(ENV{PURE_MIDI_TEST_TOKEN} "${token}")
+set(count 0)
+if(HARDWARE_ONLY)
+  file(MAKE_DIRECTORY "${CONTRACT_ROOT}/hardware-source/tests" "${CONTRACT_ROOT}/hardware-source/midifile")
+  file(WRITE "${CONTRACT_ROOT}/hardware-source/tests/hardware-output.pure" "selector\n")
+  foreach(file IN ITEMS midi.pure portmidi.pure midifile/midifile.pure)
+    file(WRITE "${CONTRACT_ROOT}/hardware-source/${file}" "fixture interface\n")
+  endforeach()
+  file(WRITE "${CONTRACT_ROOT}/hardware-source/pmlib.dll" "fixture module\n")
+  file(WRITE "${CONTRACT_ROOT}/hardware-source/midifile.dll" "fixture module\n")
+  foreach(case IN ITEMS missing explicit inherited)
+    unset(ENV{PURE_MIDI_TEST_OUTPUT})
+    set(extra)
+    if(case STREQUAL explicit)
+      set(extra "-DMIDI_OUTPUT_SELECTOR=interface:device with spaces")
+    elseif(case STREQUAL inherited)
+      set(ENV{PURE_MIDI_TEST_OUTPUT} "interface:device with spaces")
+    endif()
+    # Legacy wrapper ignores an explicit -D selector. A native fixture is used
+    # instead of Pure, so even the behavioral RED cannot open MIDI hardware.
+    execute_process(COMMAND "${CMAKE_COMMAND}" "-DRUNNER=${RUNNER}"
+      "-DCONTRACT_ROOT=${CONTRACT_ROOT}" "-DPURE_EXECUTABLE=${FIXTURE_EXE}"
+      "-DPURE_SOURCE_DIR=${CONTRACT_ROOT}/hardware-source"
+      "-DMODULE_DIR=${CONTRACT_ROOT}/hardware-source" "-DRUNTIME_DIRS=${RUNTIME_DIR}"
+      ${extra} -P "${SOURCE_DIR}/cmake/RunHardwareTest.cmake"
+      RESULT_VARIABLE result OUTPUT_VARIABLE out ERROR_VARIABLE err TIMEOUT 20)
+    if((case STREQUAL missing AND result EQUAL 0) OR (NOT case STREQUAL missing AND NOT result EQUAL 0))
+      message(FATAL_ERROR "hardware ${case} transport failed (${result}): ${out}${err}")
+    endif()
+  endforeach()
+  if(PURE_EXECUTABLE AND HARDWARE_MODULE)
+    foreach(case IN ITEMS success numeric open-fail on-fail off-fail sleep-fail close-fail invalid ambiguous)
+      set(selector "fake:device with spaces")
+      set(expected 1)
+      set(trace "fake stopped on=1 off=1 close=1 live=0")
+      if(case STREQUAL success)
+        set(expected 0)
+      elseif(case STREQUAL numeric)
+        set(selector "0")
+        set(expected 0)
+      elseif(case STREQUAL open-fail)
+        set(trace "fake stopped on=0 off=0 close=0 live=0")
+      elseif(case STREQUAL on-fail)
+        set(trace "fake stopped on=1 off=0 close=1 live=0")
+      elseif(case STREQUAL close-fail)
+        set(trace "fake close on=1 off=1 close=1 live=1")
+      elseif(case STREQUAL invalid)
+        set(selector "no such device")
+        set(trace "fake stopped on=0 off=0 close=0 live=0")
+      elseif(case STREQUAL ambiguous)
+        set(selector "fake:duplicate")
+        set(trace "fake stopped on=0 off=0 close=0 live=0")
+      endif()
+      file(WRITE "${CONTRACT_ROOT}/fixtures/hardware-${case}.txt" "${case}\n")
+      execute_process(COMMAND "${CMAKE_COMMAND}" "-DRUNNER=${RUNNER}"
+        "-DCONTRACT_ROOT=${CONTRACT_ROOT}" "-DPURE_EXECUTABLE=${PURE_EXECUTABLE}"
+        "-DPURE_SOURCE_DIR=${SOURCE_DIR}" "-DMODULE_DIR=${MODULE_DIR}"
+        "-DPMLIB_MODULE=${HARDWARE_MODULE}" "-DRUNTIME_DIRS=${RUNTIME_DIR}"
+        "-DFIXTURE=${CONTRACT_ROOT}/fixtures/hardware-${case}.txt"
+        "-DMIDI_OUTPUT_SELECTOR=${selector}" -P "${SOURCE_DIR}/cmake/RunHardwareTest.cmake"
+        RESULT_VARIABLE result OUTPUT_VARIABLE out ERROR_VARIABLE err TIMEOUT 20)
+      if(NOT result EQUAL expected OR NOT "${out}${err}" MATCHES "${trace}")
+        message(FATAL_ERROR "hardware ${case}: expected ${expected} and ${trace}, got ${result}\n${out}${err}")
+      endif()
+    endforeach()
+  endif()
+  message(STATUS "PASS hardware runner selector contracts: 3 cases, no hardware")
+  if(PURE_EXECUTABLE AND HARDWARE_MODULE)
+    message(STATUS "PASS real hardware script with fake backend: 9 cleanup/selection cases")
+  endif()
+  return()
+endif()
+foreach(case IN ITEMS parser unhandled missing wrong duplicate embedded-token early nonzero timeout pipes stdout child environment selector pristine)
+  if(ONLY_CASE AND NOT case STREQUAL ONLY_CASE)
+    continue()
+  endif()
+  file(WRITE "${CONTRACT_ROOT}/fixtures/${case}.pure" "${case}\n")
+  if(BASELINE)
+    execute_process(COMMAND "${CMAKE_COMMAND}"
+      "-DPURE_EXECUTABLE=${FIXTURE_EXE}" "-DPURE_SOURCE_DIR=${SOURCE_DIR}"
+      "-DMODULE_DIR=${SOURCE_DIR}" "-DTEST_SCRIPT=${CONTRACT_ROOT}/fixtures/${case}.pure"
+      "-DTEST_DIRECTORY=${CONTRACT_ROOT}/baseline-leaf"
+      -P "${SOURCE_DIR}/cmake/RunPureTest.cmake"
+      RESULT_VARIABLE result OUTPUT_VARIABLE out ERROR_VARIABLE err TIMEOUT 50)
+  else()
+    execute_process(COMMAND "${RUNNER}" --pure "${FIXTURE_EXE}"
+      --script "${CONTRACT_ROOT}/fixtures/${case}.pure" --token "${token}"
+      --timeout-ms 1000 --cwd "${CONTRACT_ROOT}"
+      --path-entry "${RUNTIME_DIR}" --selector "interface:device with spaces"
+      RESULT_VARIABLE result OUTPUT_VARIABLE out ERROR_VARIABLE err TIMEOUT 8)
+  endif()
+  set(expected 125)
+  if(case MATCHES "^(stdout|environment|selector|pristine)$")
+    set(expected 0)
+  elseif(case STREQUAL nonzero)
+    set(expected 37)
+  elseif(case MATCHES "^(timeout|child)$")
+    set(expected 124)
+  endif()
+  if(NOT "${result}" STREQUAL "${expected}")
+    message(FATAL_ERROR "${case}: expected ${expected}, got ${result}\n${out}\n${err}")
+  endif()
+  if(case STREQUAL child)
+    string(REGEX MATCH "descendant=([0-9]+)" match "${out}")
+    if(NOT match)
+      message(FATAL_ERROR "child fixture did not report its descendant")
+    endif()
+    execute_process(COMMAND "${POWERSHELL}" -NoProfile -Command
+      "if (Get-Process -Id ${CMAKE_MATCH_1} -ErrorAction SilentlyContinue) { exit 1 }"
+      RESULT_VARIABLE alive)
+    if(NOT alive EQUAL 0)
+      message(FATAL_ERROR "descendant survived runner timeout")
+    endif()
+  endif()
+  math(EXPR count "${count}+1")
+endforeach()
+if(NOT BASELINE)
+  file(WRITE "${CONTRACT_ROOT}/fixtures/a script with spaces.pure" "pristine\n")
+  configure_file("${FIXTURE_EXE}" "${CONTRACT_ROOT}/fixtures/an executable with spaces.exe" COPYONLY)
+  execute_process(COMMAND "${RUNNER}" --pure "${CONTRACT_ROOT}/fixtures/an executable with spaces.exe"
+    --script "${CONTRACT_ROOT}/fixtures/a script with spaces.pure" --token "${token}" --timeout-ms 1000
+    --cwd "${CONTRACT_ROOT}" --path-entry "${RUNTIME_DIR}"
+    RESULT_VARIABLE result OUTPUT_VARIABLE out ERROR_VARIABLE err)
+  if(NOT result EQUAL 0)
+    message(FATAL_ERROR "canonical space paths failed: ${result}\n${out}${err}")
+  endif()
+  math(EXPR count "${count}+1")
+  execute_process(COMMAND "${FIXTURE_EXE}" --short-path "${CONTRACT_ROOT}/fixtures/a script with spaces.pure"
+    RESULT_VARIABLE result OUTPUT_VARIABLE short_path OUTPUT_STRIP_TRAILING_WHITESPACE)
+  if(result EQUAL 0 AND short_path MATCHES "~")
+    execute_process(COMMAND "${RUNNER}" --pure "${FIXTURE_EXE}" --script "${short_path}"
+      --token "${token}" --timeout-ms 1000 --cwd "${CONTRACT_ROOT}" --path-entry "${RUNTIME_DIR}"
+      RESULT_VARIABLE result OUTPUT_QUIET ERROR_QUIET)
+    if(NOT result EQUAL 125)
+      message(FATAL_ERROR "accepted noncanonical DOS short-name script: ${short_path}")
+    endif()
+    math(EXPR count "${count}+1")
+  endif()
+  # Each input role rejects a directory where a regular file is required,
+  # missing paths, traversal, and reparse endpoints/ancestors before launch.
+  foreach(role IN ITEMS pure script input fixture)
+    foreach(bad IN ITEMS "${CONTRACT_ROOT}/fixtures" "${CONTRACT_ROOT}/absent"
+        "${CONTRACT_ROOT}/fixtures/../fixtures/pristine.pure")
+      set(args --pure "${FIXTURE_EXE}" --script "${CONTRACT_ROOT}/fixtures/pristine.pure")
+      if(role STREQUAL pure)
+        set(args --pure "${bad}" --script "${CONTRACT_ROOT}/fixtures/pristine.pure")
+      elseif(role STREQUAL script)
+        set(args --pure "${FIXTURE_EXE}" --script "${bad}")
+      else()
+        list(APPEND args "--${role}" "${bad}")
+      endif()
+      execute_process(COMMAND "${RUNNER}" ${args} --token "${token}" --timeout-ms 1000
+        --cwd "${CONTRACT_ROOT}" --path-entry "${RUNTIME_DIR}"
+        RESULT_VARIABLE result OUTPUT_QUIET ERROR_QUIET)
+      if(NOT result EQUAL 125)
+        message(FATAL_ERROR "accepted invalid ${role}: ${bad}")
+      endif()
+      math(EXPR count "${count}+1")
+    endforeach()
+  endforeach()
+  foreach(role IN ITEMS path-entry include library cwd)
+    execute_process(COMMAND "${RUNNER}" --pure "${FIXTURE_EXE}"
+      --script "${CONTRACT_ROOT}/fixtures/pristine.pure" --token "${token}" --timeout-ms 1000
+      --cwd "${CONTRACT_ROOT}" "--${role}" "${CONTRACT_ROOT}/fixtures/pristine.pure"
+      RESULT_VARIABLE result OUTPUT_QUIET ERROR_QUIET)
+    if(NOT result EQUAL 125)
+      message(FATAL_ERROR "accepted file as ${role}")
+    endif()
+    math(EXPR count "${count}+1")
+  endforeach()
+  # Reparse fixtures only point into this dedicated contract tree. They are
+  # retained here; neither this contract nor the runner follows them to clean.
+  execute_process(COMMAND "${POWERSHELL}" -NoProfile -Command
+    "$ErrorActionPreference='Stop'; if (-not (Test-Path -LiteralPath '${CONTRACT_ROOT}/fixtures-junction')) { New-Item -ItemType Junction -Path '${CONTRACT_ROOT}/fixtures-junction' -Target '${CONTRACT_ROOT}/fixtures' | Out-Null }"
+    RESULT_VARIABLE result ERROR_VARIABLE err)
+  if(NOT result EQUAL 0)
+    message(FATAL_ERROR "junction setup failed: ${err}")
+  endif()
+  file(CREATE_LINK "${CONTRACT_ROOT}/fixtures/pristine.pure" "${CONTRACT_ROOT}/script-symlink.pure"
+    SYMBOLIC RESULT link_result)
+  if(NOT link_result STREQUAL "0")
+    execute_process(COMMAND "${FIXTURE_EXE}" --symlink "${CONTRACT_ROOT}/fixtures/pristine.pure"
+      "${CONTRACT_ROOT}/script-symlink.pure" RESULT_VARIABLE link_result)
+  endif()
+  set(reparse_paths "${CONTRACT_ROOT}/fixtures-junction" "${CONTRACT_ROOT}/fixtures-junction/pristine.pure")
+  if(link_result STREQUAL "0")
+    list(APPEND reparse_paths "${CONTRACT_ROOT}/script-symlink.pure")
+  else()
+    message(STATUS "SKIP file symlink cases: Windows denies symbolic-link creation; junction cases mandatory")
+  endif()
+  foreach(role IN ITEMS pure script input fixture path-entry include library)
+    foreach(bad IN LISTS reparse_paths)
+      if(role STREQUAL pure)
+        set(args --pure "${bad}" --script "${CONTRACT_ROOT}/fixtures/pristine.pure")
+      elseif(role STREQUAL script)
+        set(args --pure "${FIXTURE_EXE}" --script "${bad}")
+      else()
+        set(args --pure "${FIXTURE_EXE}" --script "${CONTRACT_ROOT}/fixtures/pristine.pure" "--${role}" "${bad}")
+      endif()
+      execute_process(COMMAND "${RUNNER}" ${args} --token "${token}" --timeout-ms 1000
+        --cwd "${CONTRACT_ROOT}" --path-entry "${RUNTIME_DIR}"
+        RESULT_VARIABLE result OUTPUT_QUIET ERROR_QUIET)
+      if(NOT result EQUAL 125)
+        message(FATAL_ERROR "accepted reparse ${role}: ${bad}")
+      endif()
+      math(EXPR count "${count}+1")
+    endforeach()
+  endforeach()
+endif()
+if(PURE_EXECUTABLE AND NOT BASELINE AND NOT ONLY_CASE)
+  get_filename_component(pure_bin "${PURE_EXECUTABLE}" DIRECTORY)
+  foreach(case IN ITEMS pristine parser exception unhandled)
+    set(program "using system; extern char *getenv(char *);\n")
+    if(case STREQUAL parser)
+      string(APPEND program "broken = ;\n")
+    elseif(case STREQUAL exception)
+      string(APPEND program "throw \"contract exception\";\n")
+    elseif(case STREQUAL unhandled)
+      string(APPEND program "unreduced_contract_expression 42;\n")
+    endif()
+    if(NOT case STREQUAL unhandled)
+      string(APPEND program "printf \"%s\\n\" (getenv \"PURE_MIDI_TEST_TOKEN\");\n")
+    endif()
+    file(WRITE "${CONTRACT_ROOT}/fixtures/real-${case}.pure" "${program}")
+    execute_process(COMMAND "${RUNNER}" --pure "${PURE_EXECUTABLE}"
+      --script "${CONTRACT_ROOT}/fixtures/real-${case}.pure" --token "${token}"
+      --timeout-ms 15000 --cwd "${CONTRACT_ROOT}"
+      --path-entry "${pure_bin}" --path-entry "${RUNTIME_DIR}"
+      RESULT_VARIABLE result OUTPUT_VARIABLE out ERROR_VARIABLE err)
+    if((case STREQUAL pristine AND NOT result EQUAL 0) OR (NOT case STREQUAL pristine AND result EQUAL 0))
+      message(FATAL_ERROR "real Pure ${case}: ${result}\n${out}${err}")
+    endif()
+    math(EXPR count "${count}+1")
+  endforeach()
+endif()
+message(STATUS "PASS runner contract: ${count} cases")

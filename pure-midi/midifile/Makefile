@@ -27,9 +27,12 @@ MOD_LDFLAGS = $(shell pkg-config pure --libs) $(LDFLAGS) $(LIBS)
 all: midifile$(DLL)
 
 clean:
-	test -n "$(DLL)" && rm -Rf *.o *$(DLL)*
+	$(if $(filter .dll .so .dylib,$(DLL)),,$(error Invalid module suffix for clean))
+	$(if $(word 2,$(DLL)),$(error Invalid module suffix for clean),)
+	case "$(DLL)" in .dll|.so|.dylib) ;; *) exit 1 ;; esac
+	rm -f -- midifile.o mf.o midi_bounds.o "midifile$(DLL)"
 
-midifile$(DLL): midifile.c mf.c
+midifile$(DLL): midifile.c mf.c ../midi_bounds.c
 	$(CC) $(shared) $(dllname) -o $@ $(MOD_CFLAGS) $^ $(MOD_LDFLAGS)
 
 # You can use this to regenerate midifile.pure from mf.h using pure-gen.

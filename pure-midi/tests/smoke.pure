@@ -1,4 +1,5 @@
 using system, midi, midifile;
+extern char *getenv(char *);
 
 namespace smoke;
 
@@ -22,7 +23,7 @@ when
   check "invalid output open"
     (midi::open_output Pm::NoDevice 0 0 == Pm::InvalidDeviceId);
 
-  source = midifile::load "prelude3.mid";
+  source = midifile::load (getenv "PURE_MIDI_TEST_FIXTURE");
   check "fixture load" (pointerp source);
   check "fixture info" (midifile::info source == (1,0,120,2));
   tracks = midifile::get_tracks source;
@@ -38,6 +39,7 @@ when
   check "PortMidi stop" (midi::stop == Pm::NoError);
   check "PortTime stopped by midi::stop" (Pt::Started == 0);
   check "repeated PortMidi stop" (midi::stop == Pm::NoError);
+  printf "%s\n" (getenv "PURE_MIDI_TEST_TOKEN");
 end;
 
 smoke::run;
