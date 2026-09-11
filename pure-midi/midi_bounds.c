@@ -29,7 +29,7 @@ static MidiMatrix *packed_matrix(pure_expr *value, size_t *count)
   *count=m->rows*m->columns;
   bytes=*count*sizeof(int); block_bytes=m->block->size*sizeof(int);
   start=(uintptr_t)m->data; base=(uintptr_t)m->block->data;
-  if (start<base) return NULL;
+  if (start%_Alignof(int)!=0 || start<base) return NULL;
   offset=start-base;
   if (offset>block_bytes || offset%sizeof(int)!=0 ||
       bytes>block_bytes-offset) return NULL;

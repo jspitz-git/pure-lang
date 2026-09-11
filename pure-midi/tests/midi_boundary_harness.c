@@ -14,17 +14,47 @@ typedef struct PmEvent
 	int32_t timestamp;
 } PmEvent;
 
+typedef struct BoundaryFakeBlock
+{
+  size_t size;
+  int *data;
+} BoundaryFakeBlock;
+
+typedef struct BoundaryFakeMatrix
+{
+  size_t rows,cols,stride;
+  int *data;
+  BoundaryFakeBlock *block;
+  int owner;
+} BoundaryFakeMatrix;
+
 static int boundary_calls;
 static int input_stream;
 static int output_stream;
 static int read_messages[2], read_count, read_index;
+static void *bad_buffer_bases[2], *bad_buffer_blocks[2], *bad_buffer_matrices[2];
+static size_t bad_buffer_count;
+
+void pure_midi_boundary_release_bad_buffers(void)
+{
+  size_t i;
+  for (i=0;i<bad_buffer_count;++i) {
+    BoundaryFakeMatrix *matrix=(BoundaryFakeMatrix *)bad_buffer_matrices[i];
+    matrix->data=NULL;
+    matrix->block=NULL;
+    free(bad_buffer_bases[i]);
+    free(bad_buffer_blocks[i]);
+    bad_buffer_bases[i]=NULL;
+    bad_buffer_blocks[i]=NULL;
+    bad_buffer_matrices[i]=NULL;
+  }
+  bad_buffer_count=0;
+}
 
 pure_expr *pure_midi_boundary_bad_buffer(int kind)
 {
-  struct block { size_t size; int *data; };
-  struct matrix { size_t rows,cols,stride; int *data; struct block *block; int owner; };
-  struct matrix *m=malloc(sizeof(*m));
-  struct block *b=malloc(sizeof(*b));
+  BoundaryFakeMatrix *m=malloc(sizeof(*m));
+  BoundaryFakeBlock *b=malloc(sizeof(*b));
   if (!m || !b) { free(m); free(b); return NULL; }
   b->size=2; b->data=calloc(2,sizeof(int));
   if (!b->data) { free(b); free(m); return NULL; }
@@ -39,6 +69,25 @@ pure_expr *pure_midi_boundary_bad_buffer(int kind)
     if (!b->data) { free(b); free(m); return NULL; }
     m->rows=1; m->cols=2; m->stride=2;
     m->data=(int *)((unsigned char *)b->data+1);
+  } else if (kind==4) {
+    unsigned char *base;
+    pure_expr *value;
+    if (bad_buffer_count==sizeof(bad_buffer_bases)/sizeof(bad_buffer_bases[0])) {
+      free(b->data); free(b); free(m); return NULL;
+    }
+    base=calloc(1,2*sizeof(int)+1);
+    if (!base) { free(b->data); free(b); free(m); return NULL; }
+    value=pure_int_matrix(m);
+    if (!value) { free(base); free(b->data); free(b); free(m); return NULL; }
+    free(b->data);
+    b->size=2;
+    b->data=(int *)(base+1);
+    m->data=b->data;
+    m->owner=0;
+    bad_buffer_bases[bad_buffer_count]=base;
+    bad_buffer_blocks[bad_buffer_count]=b;
+    bad_buffer_matrices[bad_buffer_count++]=m;
+    return value;
   } else { free(b->data); free(b); free(m); return NULL; }
   return pure_int_matrix(m);
 }
@@ -292,10 +341,13 @@ static int test_metadata(void)
 
 static int test_misaligned_matrix(void)
 {
-  BoundaryMatrix *matrix=malloc(sizeof(*matrix));
-  BoundaryBlock *block=malloc(sizeof(*block));
+  BoundaryMatrix *matrix;
+  BoundaryBlock *block;
+  unsigned char *base;
   pure_expr *value;
   int count;
+  matrix=malloc(sizeof(*matrix));
+  block=malloc(sizeof(*block));
   if (!matrix || !block) {
     free(matrix); free(block);
     return fail("misaligned fixture allocation");
@@ -314,7 +366,39 @@ static int test_misaligned_matrix(void)
   count=pure_midi_event_count(value);
   pure_freenew(value);
   cases_run++;
-  return count<0 ? 1 : fail("misaligned matrix accepted");
+  if (count>=0) return fail("relatively misaligned matrix accepted");
+
+  matrix=malloc(sizeof(*matrix));
+  block=malloc(sizeof(*block));
+  base=calloc(1,2*sizeof(int)+1);
+  if (!matrix || !block || !base) {
+    free(matrix); free(block); free(base);
+    return fail("absolute misalignment fixture allocation");
+  }
+  block->size=2;
+  block->data=calloc(block->size,sizeof(*block->data));
+  if (!block->data) {
+    free(base); free(block); free(matrix);
+    return fail("absolute misalignment block allocation");
+  }
+  matrix->size1=1; matrix->size2=2; matrix->tda=2;
+  matrix->data=block->data;
+  matrix->block=block; matrix->owner=1;
+  value=pure_int_matrix(matrix);
+  if (!value) {
+    free(base); free(block->data); free(block); free(matrix);
+    return fail("absolute misalignment Pure matrix");
+  }
+  free(block->data);
+  block->data=(int *)(base+1);
+  matrix->data=block->data;
+  count=pure_midi_event_count(value);
+  matrix->data=NULL;
+  matrix->block=NULL;
+  pure_freenew(value);
+  free(base); free(block);
+  cases_run++;
+  return count<0 ? 1 : fail("absolutely misaligned matrix accepted");
 }
 
 static size_t native_calls, native_fail=SIZE_MAX, native_live;

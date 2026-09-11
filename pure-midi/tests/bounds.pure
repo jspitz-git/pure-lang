@@ -5,6 +5,7 @@ extern void pure_midi_boundary_reset_calls() = boundary_reset_calls;
 extern char *getenv(char *);
 extern void pure_midi_boundary_read_queue(int, int, int) = read_queue;
 extern expr* pure_midi_boundary_bad_buffer(int) = bad_buffer;
+extern void pure_midi_boundary_release_bad_buffers() = release_bad_buffers;
 
 namespace bounds;
 
@@ -93,6 +94,12 @@ run = () when
   do (\buf->no_portmidi_call "bad output buffer" (\_->midi::write output buf))
     [{}, {0}, {0,0,0}, {0;0}, {0.0,0.0}, {0L,0L}, "bad",
      {0,0,0;0,0,0}!!(0..1,0..1), bad_buffer 3];
+  absolute_misaligned = bad_buffer 4;
+  no_portmidi_call "absolutely misaligned input buffer"
+    (\_->midi::read input absolute_misaligned);
+  no_portmidi_call "absolutely misaligned output buffer"
+    (\_->midi::write output absolute_misaligned);
+  release_bad_buffers;
   do (\data->no_portmidi_call "bad output message" (\_->midi::writemsg output 0 data))
     [{}, {-1}, {256}, {0x90,60}, {0xc0,60,1}, {0xf0}, {0xf0,1},
      {0xf0,0xf7,0}, {0xf0,256,0xf7}, {0,1;2,3}, {1.0}, "bad"];
