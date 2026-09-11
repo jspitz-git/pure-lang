@@ -95,16 +95,22 @@ function(verify_case name accept)
   if(name STREQUAL "production-cli-cannot-enable-helper")
     list(APPEND extra_arguments -DPURE_MIDI_VERIFIER_HELPERS_ONLY=ON)
   endif()
+  set(stage_argument "-DSTAGE_PREFIX=${work}/stage")
+  set(verify_modules "${MODULE_DIR}")
+  if(name MATCHES "^build-")
+    set(stage_argument)
+    set(verify_modules "${work}/build")
+  endif()
   execute_process(COMMAND "${CMAKE_COMMAND}" ${extra_arguments}
     "-DSOURCE_DIR=${SOURCE_DIR}"
     "-DLLVM_READOBJ=${inspection_tool}" "-DRUNTIME_DIR=${CLANG64_PREFIX}/bin"
     "-DPMLIB_MODULE=${MODULE_DIR}/pmlib.dll" "-DMIDIFILE_MODULE=${MODULE_DIR}/midifile.dll"
     "-DPORTMIDI_DLL=${CLANG64_PREFIX}/bin/libportmidi.dll"
-    "-DMIDI_MODULE_DIR=${MODULE_DIR}" "-DPURE_MIDI_CLANG64_PREFIX=${inspection_prefix}"
+    "-DMIDI_MODULE_DIR=${verify_modules}" "-DPURE_MIDI_CLANG64_PREFIX=${inspection_prefix}"
     "-DPURE_MIDI_PURE_PREFIX=${PURE_PREFIX}"
     "-DPURE_MIDI_WINDOWS_SYSTEM_DIRECTORY=${system_directory}"
     "-DPURE_MIDI_RUNTIME_MANIFEST=${work}/runtime-sources.txt"
-    "-DSTAGE_PREFIX=${work}/stage"
+    ${stage_argument}
     -P "${driver}"
     RESULT_VARIABLE rc OUTPUT_VARIABLE out ERROR_VARIABLE err TIMEOUT 45)
   file(WRITE "${work}/${name}.log" "${out}\n${err}")
@@ -400,6 +406,18 @@ file(APPEND "${work}/stage/bin/libgmp-10.dll" "altered")
 verify_case(altered-staged-hash FALSE)
 file(COPY_FILE "${PURE_PREFIX}/bin/libgmp-10.dll" "${work}/stage/bin/libgmp-10.dll")
 verify_case(restored-pristine TRUE)
+file(MAKE_DIRECTORY "${work}/build/midi-boundary")
+file(COPY_FILE "${MODULE_DIR}/pmlib.dll" "${work}/build/pmlib.dll")
+file(COPY_FILE "${MODULE_DIR}/midifile.dll" "${work}/build/midifile.dll")
+verify_case(build-pristine TRUE)
+foreach(directory "${work}/build" "${work}/build/midi-boundary")
+  file(WRITE "${directory}/libportmidi.dll" "stale runtime ahead of declared PATH")
+  set(expected_rejection "midi audit: unpinned build loader candidate")
+  get_filename_component(case_directory "${directory}" NAME)
+  verify_case("build-stale-runtime-${case_directory}" FALSE)
+  unset(expected_rejection)
+  file(REMOVE "${directory}/libportmidi.dll")
+endforeach()
 if(failures)
   message(FATAL_ERROR "Runtime verifier accepted mutations (${work}): ${failures}")
 endif()

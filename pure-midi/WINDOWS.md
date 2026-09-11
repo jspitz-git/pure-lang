@@ -190,17 +190,22 @@ strided, misaligned, wrong-shaped or unrepresentable buffers are rejected.
 signed-32-bit timestamp. Channel/system short messages have their MIDI lengths;
 the historical four-byte form remains accepted with zero unused trailing bytes.
 SysEx output begins `0xf0`, ends `0xf7`, and has seven-bit interior data.
+Zero padding after EOX is accepted and excluded from the native write length,
+so received PortMidi words can be forwarded directly; nonzero surplus rejects.
 `readmsg` returns `(timestamp, bytes)`; short messages retain their historical
 four-byte padded vectors. Blocking reads observe terminal stream state.
 
 A Standard MIDI File track is a list of exact `(tick, bytes)` tuples, with
-ticks in `0..2147483647`. File channel events require exact MIDI lengths
-and seven-bit data. Meta events use `{0xff, type, payload...}` with at least
+ticks in `0..2147483647`. File channel events accept exact MIDI lengths or
+four-byte vectors with zero unused bytes, and decode to the historical
+four-byte shape. Channel data and meta types must be seven-bit values.
+Meta events use `{0xff, type, payload...}` with at least
 status/type; `{0xff,0x2f}` has no payload and is handled by the serializer.
 File SysEx vectors start `0xf0` or `0xf7` with representable nonzero length.
 Constructors accept format 0/1/2, musical division 0 with resolution 1..32767,
 or SMPTE division 24/25/29/30 with resolution 1..255. The bundled two-track,
-1632-event fixture retains its valid round trip.
+1632-event fixture retains its valid round trip. Saving requires 1..65535
+tracks (exactly one for format 0), with header validation before opening output.
 
 Malformed chunks, truncation, invalid running status, oversized/overlong lengths,
 invalid events and allocation/short-I/O failures use existing null/false/error

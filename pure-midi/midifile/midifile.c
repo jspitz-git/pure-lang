@@ -494,6 +494,7 @@ static bool parse_track(MidiFileReader *reader, MidiFile_t midi_file)
 		{
 			status = first_byte;
 			if (status < 0xf0) running_status = status;
+			else running_status = 0;
 		}
 
 		switch (status & 0xf0)
@@ -815,6 +816,34 @@ cleanup:
 	return midi_file;
 }
 
+/* Setters and typed event constructors can leave invalid native fields.
+   Validate their full values before serialization can mask or narrow them. */
+static bool event_values_valid(MidiFileEvent_t event)
+{
+	int channel=0, first=0, second=0, maximum=127;
+	switch (event->type)
+	{
+		case MIDI_FILE_EVENT_TYPE_NOTE_OFF:
+			channel=event->u.note_off.channel; first=event->u.note_off.note; second=event->u.note_off.velocity; break;
+		case MIDI_FILE_EVENT_TYPE_NOTE_ON:
+			channel=event->u.note_on.channel; first=event->u.note_on.note; second=event->u.note_on.velocity; break;
+		case MIDI_FILE_EVENT_TYPE_KEY_PRESSURE:
+			channel=event->u.key_pressure.channel; first=event->u.key_pressure.note; second=event->u.key_pressure.amount; break;
+		case MIDI_FILE_EVENT_TYPE_CONTROL_CHANGE:
+			channel=event->u.control_change.channel; first=event->u.control_change.number; second=event->u.control_change.value; break;
+		case MIDI_FILE_EVENT_TYPE_PROGRAM_CHANGE:
+			channel=event->u.program_change.channel; first=event->u.program_change.number; break;
+		case MIDI_FILE_EVENT_TYPE_CHANNEL_PRESSURE:
+			channel=event->u.channel_pressure.channel; first=event->u.channel_pressure.amount; break;
+		case MIDI_FILE_EVENT_TYPE_PITCH_WHEEL:
+			channel=event->u.pitch_wheel.channel; first=event->u.pitch_wheel.value; maximum=16383; break;
+		case MIDI_FILE_EVENT_TYPE_META:
+			return event->u.meta.number>=0 && event->u.meta.number<=127;
+		default: return true;
+	}
+	return channel>=0 && channel<=15 && first>=0 && first<=maximum && second>=0 && second<=127;
+}
+
 int MidiFile_save(MidiFile_t midi_file, const char* filename)
 {
 	FILE *out = NULL;
@@ -822,7 +851,18 @@ int MidiFile_save(MidiFile_t midi_file, const char* filename)
 	MidiFileTrack_t track;
 	bool ok = true;
 
-	if ((midi_file == NULL) || (filename == NULL) || ((out = MIDI_IO(open_file)(filename, "wb")) == NULL)) return -1;
+	if ((midi_file == NULL) || (filename == NULL) ||
+		midi_file->file_format<0 || midi_file->file_format>2 ||
+		midi_file->number_of_tracks<1 || midi_file->number_of_tracks>UINT16_MAX ||
+		(midi_file->file_format==0 && midi_file->number_of_tracks!=1) ||
+		midi_file->division_type<MIDI_FILE_DIVISION_TYPE_PPQ || midi_file->division_type>MIDI_FILE_DIVISION_TYPE_SMPTE30 ||
+		midi_file->resolution<1 || midi_file->resolution>(midi_file->division_type==MIDI_FILE_DIVISION_TYPE_PPQ ? 32767 : 255)) return -1;
+	for (track=midi_file->first_track; track; track=track->next_track) {
+		MidiFileEvent_t event;
+		for (event=track->first_event; event; event=event->next_event_in_track)
+			if (!event_values_valid(event)) return -1;
+	}
+	if ((out = MIDI_IO(open_file)(filename, "wb")) == NULL) return -1;
 	writer.file = out;
 	writer.failed = false;
 	ok = writer_write(&writer, "MThd", 4) && writer_uint32(&writer, 6) &&
@@ -1581,7 +1621,7 @@ MidiFileEvent_t MidiFileTrack_createMetaEvent(MidiFileTrack_t track, int32_t tic
 {
 	MidiFileEvent_t new_event;
 
-	if ((track == NULL) || tick<0 || number<0 || number>255 || (data_length < 0) ||
+	if ((track == NULL) || tick<0 || number<0 || number>127 || (data_length < 0) ||
 		(number==0x2f && data_length!=0) || ((data_length != 0) && (data_buffer == NULL))) return NULL;
 
 	new_event = (MidiFileEvent_t)midi_calloc(1, sizeof(struct MidiFileEvent));
@@ -1630,7 +1670,7 @@ MidiFileEvent_t MidiFileTrack_createVoiceEvent(MidiFileTrack_t track, int32_t ti
 	MidiFileEvent_t new_event;
 
 	if (track == NULL || tick<0 || (data&0xff)<0x80 || (data&0xff)>=0xf0 ||
-		(data&0xff000000U) || (((data&0xf0)==0xc0 || (data&0xf0)==0xd0) &&
+		(data&0xff808000U) || (((data&0xf0)==0xc0 || (data&0xf0)==0xd0) &&
 		(data&0xffff0000U))) return NULL;
 
 	new_event = (MidiFileEvent_t)midi_calloc(1, sizeof(struct MidiFileEvent));

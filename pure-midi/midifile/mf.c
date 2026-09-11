@@ -36,9 +36,11 @@ bool pure_midi_validate_event(int64_t tick, size_t rows, size_t columns,
   status=data[0];
   if (status>=0x80 && status<0xf0) {
     required=(status>=0xc0 && status<0xe0) ? 2 : 3;
-    if (n!=required) return false;
+    if (n!=required && n!=4) return false;
+    for (i=1; i<required; ++i) if (data[i]>127) return false;
+    for (i=required; i<n; ++i) if (data[i]!=0) return false;
   } else if (status==0xff) {
-    if (n<2 || (data[1]==0x2f && n!=2)) return false;
+    if (n<2 || data[1]>127 || (data[1]==0x2f && n!=2)) return false;
   } else if (status!=0xf0 && status!=0xf7) return false;
   *length=n;
   return true;
@@ -241,7 +243,7 @@ static pure_expr *decode_event(MidiFileEvent_t ev)
   if (!ev || MidiFileEvent_getTick(ev)<0) return NULL;
   if (MidiFileEvent_isVoiceEvent(ev)) {
     word=MidiFileVoiceEvent_getData(ev);
-    n=((word&0xf0)==0xc0 || (word&0xf0)==0xd0) ? 2 : 3;
+    n=4;
   } else if (MidiFileEvent_getType(ev)==MIDI_FILE_EVENT_TYPE_SYSEX) {
     native_length=MidiFileSysexEvent_getDataLength(ev);
     data=MidiFileSysexEvent_getData(ev);
@@ -252,7 +254,7 @@ static pure_expr *decode_event(MidiFileEvent_t ev)
     data=MidiFileMetaEvent_getData(ev);
     number=MidiFileMetaEvent_getNumber(ev);
     if (native_length<0 || (native_length && !data) ||
-        number<0 || number>255 ||
+        number<0 || number>127 ||
         !midi_checked_add_size((size_t)native_length,2,&n) ||
         n>INT_MAX || n>INT32_MAX) return NULL;
     offset=2;

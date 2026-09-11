@@ -560,6 +560,43 @@ foreach(name IN LISTS all_names)
   endif()
 endforeach()
 midi_no_reparse(${paths})
+if(NOT STAGE_PREFIX)
+  # Windows searches the executable directory and working directory before
+  # PATH; RunPureTest also prepends module/fake directories to its fixed PATH.
+  # Native CTests use the following working directories. Audit the union of
+  # those effective earlier locations, including Pure's executable directory.
+  # Fresh owned runner leaves start empty and are never ambient directories.
+  set(loader_directories "${PURE_MIDI_PURE_PREFIX}/bin" "${MIDI_MODULE_DIR}"
+    "${MIDI_MODULE_DIR}/midi-boundary" "${MIDI_MODULE_DIR}/midi-boundary/fake"
+    "${MIDI_MODULE_DIR}/hardware-fake" "${MIDI_MODULE_DIR}/midifile-fault-release"
+    "${MIDI_MODULE_DIR}/midifile-fault-asan" "${MIDI_MODULE_DIR}/midifile-fault-deadline"
+    "${MIDI_SYSTEM_DIR}")
+  get_filename_component(windows_directory "${MIDI_SYSTEM_DIR}" DIRECTORY)
+  list(APPEND loader_directories "${windows_directory}")
+  set(loader_paths)
+  foreach(directory IN LISTS loader_directories)
+    if(EXISTS "${directory}")
+      list(APPEND loader_paths "${directory}")
+      foreach(source IN LISTS sources)
+        get_filename_component(name "${source}" NAME)
+        if(name MATCHES "\\.[dD][lL][lL]$")
+          set(candidate "${directory}/${name}")
+          if(EXISTS "${candidate}")
+            list(APPEND loader_paths "${candidate}")
+            file(REAL_PATH "${candidate}" actual_candidate)
+            file(REAL_PATH "${source}" expected_candidate)
+            string(TOLOWER "${actual_candidate}" actual_candidate)
+            string(TOLOWER "${expected_candidate}" expected_candidate)
+            if(NOT actual_candidate STREQUAL expected_candidate)
+              message(FATAL_ERROR "midi audit: unpinned build loader candidate: ${candidate}; expected ${source}")
+            endif()
+          endif()
+        endif()
+      endforeach()
+    endif()
+  endforeach()
+  midi_no_reparse(${loader_paths})
+endif()
 if(STAGE_PREFIX)
   midi_path("${STAGE_PREFIX}" directory STAGE_PREFIX)
   # Check each directory before descending. An additional PE anywhere under

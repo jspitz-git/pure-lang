@@ -65,8 +65,9 @@ Encoding requires an exact `(tick, bytes)` tuple. Tick values must fit signed
 32-bit storage. The event matrix must be a contiguous integer vector with a
 checked element count. Every byte is in `0..255`.
 
-- Channel events require the exact MIDI length implied by their status: two
-  bytes for program/channel pressure and three for the other channel messages.
+- Channel events accept the MIDI length implied by their status (two bytes for
+  program/channel pressure, three otherwise) or historical four-byte vectors
+  with zero unused bytes. Decoding preserves the four-byte public shape.
 - Meta events require at least status and type bytes; end-of-track must have no
   payload and is handled only by the serializer.
 - SysEx begins with `0xf0` or `0xf7`, has a representable nonzero length, and

@@ -200,6 +200,9 @@ typedef struct BoundaryMatrix
 
 static int cases_run;
 
+static int test_legacy_channels(void);
+static int test_seven_bit_values(void);
+
 static int fail(const char *message)
 {
 	fprintf(stderr, "FAIL: %s\n", message);
@@ -255,6 +258,49 @@ static int test_one_byte_meta(void)
 	return accepted ? fail("one-byte meta event was accepted") : 1;
 }
 
+static int test_legacy_channels(void)
+{
+  static const int channels[][4]={{0x90,60,64,0},{0xc0,5,0,0},{0xd0,6,0,0}};
+  size_t i;
+  for (i=0;i<3;++i) {
+    pure_expr *file=mf_new(1,0,96), *list, *decoded;
+    pure_expr **events=NULL, **tuple=NULL;
+    BoundaryMatrix *matrix=NULL;
+    size_t count=0;
+    int32_t tick=-1;
+    list=pure_listl(1,pure_tuplel(2,pure_int(0),make_matrix(1,4,channels[i])));
+    if (!mf_put_track(file,list)) return fail("legacy four-byte channel vector rejected");
+    decoded=mf_get_track(file,0);
+    if (!decoded || !pure_is_listv(decoded,&count,&events) || count!=1 ||
+        !pure_is_tuplev(events[0],&count,&tuple) || count!=2 ||
+        !pure_is_int(tuple[0],&tick) || tick!=0 ||
+        !pure_is_int_matrix(tuple[1],(void**)&matrix) ||
+        matrix->size1!=1 || matrix->size2!=4 ||
+        memcmp(matrix->data,channels[i],sizeof(channels[i]))!=0)
+      return fail("channel decode changed literal four-byte shape");
+    free(tuple); free(events);
+    pure_freenew(decoded); pure_freenew(list); mf_free(file); pure_freenew(file);
+    ++cases_run;
+  }
+  return 1;
+}
+
+static int test_seven_bit_values(void)
+{
+  static const int invalid[][3]={{0x90,128,64},{0x90,60,255},{0xc0,128,0},{0xff,128,1},{0xff,255,1}};
+  size_t i;
+  for (i=0;i<5;++i) {
+    pure_expr *file=mf_new(1,0,96), *list;
+    MidiFile_t native=NULL;
+    list=pure_listl(1,pure_tuplel(2,pure_int(0),make_matrix(1,i==2 ? 2 : 3,invalid[i])));
+    pure_is_pointer(file,(void**)&native);
+    if (mf_put_track(file,list) || MidiFile_getNumberOfTracks(native)!=0)
+      return fail("seven-bit channel/meta value accepted or mutated file");
+    pure_freenew(list); mf_free(file); pure_freenew(file); ++cases_run;
+  }
+  return 1;
+}
+
 /* Each fixture reaches the public native entry point. Exact allocations give
    ASan redzones on both sides; malformed metadata is restored before release. */
 static int test_event_cases(void)
@@ -269,8 +315,9 @@ static int test_event_cases(void)
     {{0x90,60,64},1,3,-1,0}, {{0x90,60,64,0},2,2,0,0},
     {{0xf1,0},1,2,0,0}, {{0xff,1,-1},1,3,0,0},
     {{0x90,60,64},1,3,INT32_MAX,1}, {{0xc0,60},1,2,0,1},
-    {{0xd0,60},2,1,0,1}, {{0x90,60,64,0},1,4,0,0},
-    {{0xff,0x2f},1,2,0,1}, {{0xff,1},1,2,0,1}
+    {{0xd0,60},2,1,0,1}, {{0x90,60,64,0},1,4,0,1},
+    {{0xff,0x2f},1,2,0,1}, {{0xff,1},1,2,0,1},
+    {{0xff,127,255},1,3,0,1}, {{0xf0,255,0xf7},1,3,0,1}
   };
   size_t i;
   for (i=0; i<sizeof(cases)/sizeof(cases[0]); ++i) {
@@ -502,10 +549,17 @@ static int test_construction_failures(void)
   return native_live ? fail("file construction leaked") : 1;
 }
 
-int main(void)
+int main(int argc, char **argv)
 {
 	pure_interp *interpreter = pure_create_interp(0, NULL);
 	if (interpreter == NULL) return fail("could not create Pure interpreter") ? 0 : 2;
+  if (argc==2) {
+    int ok=strcmp(argv[1],"--legacy")==0 ? test_legacy_channels() :
+      strcmp(argv[1],"--seven-bit")==0 ? test_seven_bit_values() : 0;
+    pure_delete_interp(interpreter);
+    return ok ? 0 : 1;
+  }
+  if (!test_legacy_channels() || !test_seven_bit_values()) return 1;
 	if (!test_one_byte_meta()) return 1;
   if (!test_event_cases() || !test_transaction() || !test_metadata() ||
       !test_misaligned_matrix() ||

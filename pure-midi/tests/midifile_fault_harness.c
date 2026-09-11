@@ -6,6 +6,13 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#ifdef _WIN32
+#include <windows.h>
+#else
+#include <signal.h>
+#include <sys/wait.h>
+#include <unistd.h>
+#endif
 
 #define ARRAY_COUNT(a) (sizeof(a) / sizeof((a)[0]))
 #define MAX_TRACKED_ALLOCATIONS 8192
@@ -117,6 +124,9 @@ static size_t test_read(void *buffer, size_t size, size_t count, FILE *file)
 {
 	if ((delayed_read_ms != 0) && !delayed_read_fired)
 	{
+		/* Deliberately nonreturning parser seam: only a separate process can
+		   enforce the malformed-case deadline. */
+		if (delayed_read_ms == 2100) for (;;) {}
 		double started = wall_time_seconds();
 		delayed_read_fired = 1;
 		if (started >= 0.0)
@@ -226,45 +236,79 @@ static size_t make_smf(unsigned char *output, size_t capacity,
 	return 22 + track_size;
 }
 
-static int expect_rejected_bytes(const char *name, const unsigned char *data, size_t size)
+static int reject_fixture_child(size_t size)
 {
 	const char *path = "midifile-fault-input.mid";
 	MidiFile_t midi_file;
 	MidiFileParserCounters counters;
-	double started;
-	double finished;
-
 	reset_faults();
-	if (!write_fixture(path, data, size)) return fail("could not create malformed fixture");
-	started = wall_time_seconds();
-	if (started < 0.0)
-	{
-		remove(path);
-		return fail("could not start malformed-fixture deadline timer");
-	}
 	midi_file = MidiFile_load((char *)path);
-	finished = wall_time_seconds();
-	remove(path);
-	if ((finished < started) || ((finished - started) > 2.0))
-	{
-		if (midi_file != NULL) MidiFile_free(midi_file);
-		if (!resources_are_zero("malformed-fixture deadline")) return 0;
-		deadline_violation_observed = 1;
-		fprintf(deadline_contract ? stdout : stderr,
-			"%s: malformed fixture exceeded two-second deadline: %s (%.3f seconds)\n",
-			deadline_contract ? "PASS" : "FAIL", name, finished - started);
-		return 0;
-	}
 	if (midi_file != NULL)
 	{
 		MidiFile_free(midi_file);
-		fprintf(stderr, "FAIL: malformed fixture accepted: %s\n", name);
-		return 0;
+		return fail("malformed fixture accepted by parser child");
 	}
 	counters = MidiFile_getTestParserCounters();
 	if ((counters.bytes_read > size) || (counters.vlq_bytes_read > 4))
-	{
-		fprintf(stderr, "FAIL: parser counters exceeded bounds for %s\n", name);
+		return fail("parser child counters exceeded bounds");
+	return resources_are_zero("malformed parser child");
+}
+
+/* A hung parser cannot prevent its parent from enforcing this deadline.
+   Terminate only the disposable child process; never a parser thread. */
+static int supervise_rejected_fixture(size_t size)
+{
+#ifdef _WIN32
+	wchar_t executable[32768], command[32864];
+	STARTUPINFOW startup={0};
+	PROCESS_INFORMATION child={0};
+	DWORD count=GetModuleFileNameW(NULL,executable,32768), status, code=1;
+	if (!count || count>=32768) return fail("parser supervisor executable path");
+	if (swprintf(command,32864,L"\"%ls\" --reject-child %zu %d",executable,size,deadline_contract)<0)
+		return fail("parser supervisor command");
+	startup.cb=sizeof(startup);
+	if (!CreateProcessW(executable,command,NULL,NULL,FALSE,CREATE_NO_WINDOW,NULL,NULL,&startup,&child))
+		return fail("parser supervisor launch");
+	status=WaitForSingleObject(child.hProcess,2000);
+	if (status!=WAIT_OBJECT_0) {
+		int stopped=TerminateProcess(child.hProcess,124) && WaitForSingleObject(child.hProcess,1000)==WAIT_OBJECT_0;
+		deadline_violation_observed=status==WAIT_TIMEOUT && stopped;
+	} else if (!GetExitCodeProcess(child.hProcess,&code)) code=1;
+	CloseHandle(child.hThread); CloseHandle(child.hProcess);
+	return status==WAIT_OBJECT_0 && code==0;
+#else
+	pid_t child=fork();
+	struct timespec started, now, pause={0,1000000};
+	int status=0;
+	if (child<0) return fail("parser supervisor fork");
+	if (child==0) _exit(reject_fixture_child(size) ? 0 : 1);
+	clock_gettime(CLOCK_MONOTONIC,&started);
+	for (;;) {
+		pid_t result=waitpid(child,&status,WNOHANG);
+		if (result==child) return WIFEXITED(status) && WEXITSTATUS(status)==0;
+		clock_gettime(CLOCK_MONOTONIC,&now);
+		if (result<0 || (now.tv_sec-started.tv_sec)+(now.tv_nsec-started.tv_nsec)/1e9>=2.0) {
+			kill(child,SIGKILL);
+			deadline_violation_observed=result==0 && waitpid(child,&status,0)==child;
+			return 0;
+		}
+		nanosleep(&pause,NULL);
+	}
+#endif
+}
+
+static int expect_rejected_bytes(const char *name, const unsigned char *data, size_t size)
+{
+	const char *path="midifile-fault-input.mid";
+	int ok;
+	reset_faults();
+	if (!write_fixture(path,data,size)) return fail("could not create malformed fixture");
+	ok=supervise_rejected_fixture(size);
+	remove(path);
+	if (!ok) {
+		fprintf(deadline_contract && deadline_violation_observed ? stdout : stderr,
+			"%s: %s: %s\n",deadline_contract && deadline_violation_observed ? "PASS" : "FAIL",
+			deadline_violation_observed ? "malformed fixture exceeded two-second deadline" : "malformed fixture child failed",name);
 		return 0;
 	}
 	cases_run++;
@@ -694,9 +738,97 @@ static int test_native_event_boundaries(void)
   return resources_are_zero("native event boundaries");
 }
 
+static int test_save_header(void)
+{
+  static const unsigned char sentinel[]={ 'k','e','e','p' };
+  const char *path="midifile-invalid-header.mid";
+  unsigned char actual[4];
+  MidiFile_t file;
+  FILE *in;
+  int rc, i;
+  MidiFile_resetTestApis();
+  file=MidiFile_new(0,MIDI_FILE_DIVISION_TYPE_PPQ,96);
+  if (!file || !MidiFile_createTrack(file) || !MidiFile_createTrack(file)) return fail("header fixture");
+  if (!write_fixture(path,sentinel,sizeof(sentinel))) return fail("header sentinel");
+  rc=MidiFile_save(file,path);
+  MidiFile_free(file);
+  in=fopen(path,"rb");
+  if (!in) return fail("header sentinel missing");
+  i=(fread(actual,1,sizeof(actual),in)==sizeof(actual) && memcmp(actual,sentinel,sizeof(actual))==0);
+  fclose(in); remove(path);
+  if (rc==0 || !i) return fail("format zero with two tracks saved or truncated destination");
+  file=MidiFile_new(1,MIDI_FILE_DIVISION_TYPE_PPQ,96);
+  /* createTrack and free are linear overall; 65536 empty tracks use ~4 MiB. */
+  for (i=0;i<65535;++i) if (!MidiFile_createTrack(file)) return fail("UINT16 track fixture");
+  if (MidiFile_save(file,path)!=0) return fail("UINT16_MAX tracks rejected");
+  {
+    MidiFile_t loaded=MidiFile_load((char *)path);
+    if (!loaded || MidiFile_getNumberOfTracks(loaded)!=65535) return fail("UINT16_MAX saved header changed");
+    MidiFile_free(loaded);
+  }
+  if (!MidiFile_createTrack(file) || !write_fixture(path,sentinel,sizeof(sentinel))) return fail("UINT16 overflow fixture");
+  rc=MidiFile_save(file,path);
+  MidiFile_free(file);
+  in=fopen(path,"rb");
+  if (!in) return fail("overflow sentinel missing");
+  i=(fread(actual,1,sizeof(actual),in)==sizeof(actual) && memcmp(actual,sentinel,sizeof(actual))==0);
+  fclose(in); remove(path);
+  if (rc==0 || !i) return fail("UINT16 overflow saved or truncated destination");
+  cases_run+=3;
+  return 1;
+}
+
+static int test_running_status_reset(void)
+{
+  static const unsigned char tracks[][17]={
+    {0,0x90,60,64,0,0xf0,1,0xf7,0,61,64,0,0xff,0x2f,0},
+    {0,0x90,60,64,0,0xf7,1,0xf7,0,61,64,0,0xff,0x2f,0},
+    {0,0x90,60,64,0,0xff,1,1,65,0,61,64,0,0xff,0x2f,0},
+    {0,0x90,60,64,0,61,64,0,0xff,0x2f,0}
+  };
+  static const size_t lengths[]={15,15,16,11};
+  unsigned char fixture[64];
+  size_t i;
+  int ok=1;
+  for (i=0;i<3;++i) {
+    size_t size=make_smf(fixture,sizeof(fixture),tracks[i],lengths[i]);
+    if (!expect_rejected_bytes(i==0 ? "running after F0" : i==1 ? "running after F7" : "running after FF",fixture,size)) ok=0;
+  }
+  if (!expect_accepted_bytes("consecutive channel running status",fixture,
+      make_smf(fixture,sizeof(fixture),tracks[3],lengths[3]))) ok=0;
+  return ok;
+}
+
+static int test_native_seven_bit(void)
+{
+  const char *path="midifile-invalid-event.mid";
+  MidiFile_t file=MidiFile_new(1,MIDI_FILE_DIVISION_TYPE_PPQ,96);
+  MidiFileTrack_t track=MidiFile_createTrack(file);
+  MidiFileEvent_t event;
+  if (!track) return fail("native seven-bit setup");
+  event=MidiFileTrack_createNoteOnEvent(track,0,0,128,64);
+  if (!event || MidiFile_save(file,path)==0) return fail("serializer silently masked invalid channel data");
+  MidiFileEvent_delete(event);
+  event=MidiFileTrack_createMetaEvent(track,0,1,0,NULL);
+  MidiFileMetaEvent_setNumber(event,128);
+  if (MidiFile_save(file,path)==0) return fail("serializer accepted invalid meta type");
+  MidiFileEvent_delete(event);
+  if (MidiFileTrack_createVoiceEvent(track,0,0x408090) ||
+      MidiFileTrack_createMetaEvent(track,0,128,0,NULL)) return fail("native constructor accepted seven-bit overflow");
+  MidiFile_free(file); remove(path); cases_run+=4;
+  return 1;
+}
+
 int main(int argc, char **argv)
 {
 	size_t valid_event_count = 0;
+	if (argc==4 && strcmp(argv[1],"--reject-child")==0) {
+		delayed_read_ms=strcmp(argv[3],"1")==0 ? 2100 : 0;
+		return reject_fixture_child((size_t)strtoull(argv[2],NULL,10)) ? 0 : 1;
+	}
+	if (argc==3 && strcmp(argv[2],"--header")==0) return test_save_header() ? 0 : 1;
+	if (argc==3 && strcmp(argv[2],"--running")==0) return test_running_status_reset() ? 0 : 1;
+	if (argc==3 && strcmp(argv[2],"--seven-bit")==0) return test_native_seven_bit() ? 0 : 1;
 	if ((argc != 2) && !((argc == 3) && (strcmp(argv[2], "--deadline-contract") == 0)))
 	{
 		fail("expected fixture path and optional --deadline-contract");
@@ -713,7 +845,8 @@ int main(int argc, char **argv)
 		}
 		return 0;
 	}
-	if (!test_native_event_boundaries() || !test_truncation_matrix() || !test_hostile_lengths() || !test_allocation_failures() ||
+	if (!test_save_header() || !test_native_seven_bit() || !test_running_status_reset() ||
+		!test_native_event_boundaries() || !test_truncation_matrix() || !test_hostile_lengths() || !test_allocation_failures() ||
 		!test_load_io_failure(IO_FAULT_READ, "short read") ||
 		!test_load_io_failure(IO_FAULT_SEEK, "failed load seek") ||
 		!test_load_io_failure(IO_FAULT_TELL, "failed load tell") ||

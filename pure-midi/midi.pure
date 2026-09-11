@@ -127,7 +127,7 @@ let midi::output_time_proc, midi::output_time_info = addr "Pt_Time", NULL;
    can be used to convert between this representation and the PortMidi
    encoding. */
 
-private byte_vector event_buffer short_message short_length
+private byte_vector event_buffer short_message short_length sysex_length
   input_stream output_stream;
 private extern void pm_stream_sentry(expr*) = stream_sentry;
 private extern int pure_midi_valid(void*,int) = stream_valid;
@@ -152,8 +152,13 @@ short_length 0xf1 = 2; short_length 0xf2 = 3; short_length 0xf3 = 2;
 short_length status::int = 1 if any (==status) [0xf6,0xf8,0xfa,0xfb,0xfc,0xfe,0xff];
 short_length _ = 0;
 short_message data = byte_vector data && n>0 &&
-  (#data==n || (#data==4 && all (==0) (drop n data)))
+  (#data==n || (#data==4 && all (==0) (drop n data))) &&
+  all (<128) (take (n-1) (tail data))
   when n=if byte_vector data then short_length (data!0) else 0 end;
+sysex_length data = n+2 if byte_vector data && #data>=2 && data!0==0xf0 &&
+  n+1<#data && data!(n+1)==0xf7 && all (==0) (drop (n+2) data)
+  when n=#takewhile (<128) (tail data) end;
+sysex_length _ = 0;
 
 midi::bytes msg::int = vector $ map (and 0xff) $ scanl (>>) msg [8,8,8]
   if msg>=0;
@@ -346,11 +351,10 @@ midi::writemsg stream::pointer time::int data::matrix =
   if output_stream stream && time>=0 && short_message data;
 
 midi::writemsg stream::pointer time::int data::matrix =
-  owned_write_sysex stream time msg (byte_count data) when
+  owned_write_sysex stream time msg (sysex_length data) when
     msg = ptrtag __C::charp_t $ cooked $ byte_pointer NULL data;
   end if output_stream stream && time>=0 && byte_vector data &&
-    #data>=2 && data!0==0xf0 && last data==0xf7 &&
-    all (<128) (init (tail data));
+    sysex_length data>=2;
 midi::writemsg stream _ _ = if output_stream stream then Pm::BadData else Pm::BadPtr;
 
 /*****************************************************************************/

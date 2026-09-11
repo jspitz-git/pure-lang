@@ -23,7 +23,24 @@ one_portmidi_call name value expected =
     result=value ();
   end;
 
+sysex_forwarding = () when
+  input = midi::open_input 0 0;
+  output = midi::open_output 0 0 0;
+  do (\lastword->() when
+    read_queue 0x030201f0 lastword 2;
+    time,data = midi::readmsg input;
+    one_portmidi_call "received padded sysex forwards" (\_->midi::writemsg output time data) Pm::BadPtr;
+  end) [0xf7,0xf704,0xf70504,0xf7060504];
+  read_queue 0xf701f0 0 1;
+  time,data = midi::readmsg input;
+  check "three-byte sysex read shape" (data=={0xf0,1,0xf7,0});
+  one_portmidi_call "three-byte sysex forwards" (\_->midi::writemsg output time data) Pm::BadPtr;
+  no_portmidi_call "nonzero surplus sysex rejected" (\_->midi::writemsg output 0 {0xf0,1,0xf7,2});
+  midi::close input; midi::close output;
+end;
+
 run = () when
+  sysex_forwarding;
   check "word rejects signed byte" (~intp (midi::word {-1}));
   check "bytes rejects negative word" (~matrixp (midi::bytes (-1)));
   no_portmidi_call "read rejects null stream" (\_->midi::read NULL {0,0});
@@ -51,7 +68,8 @@ run = () when
        midifile::get_tracks file == original))
     [(0,{0xff}), (0,{0xff,0x2f,1}), (0,{}), (-1,{0x90,60,64}),
      (2147483648L,{0x90,60,64}), (0L,{0x90,60,64}),
-     (0,{0x90,60}), (0,{0xc0,60,1}), (0,{0x90,60,64,1}), (0,{0x90,60,64,0}),
+     (0,{0x90,60}), (0,{0xc0,60,1}), (0,{0x90,60,64,1}),
+     (0,{0x90,128,64}), (0,{0x90,60,255}), (0,{0xff,128,1}), (0,{0xff,255}),
      (0,{0x90,60,256}), (0,{0x90,-1,64}), (0,{0x90,60;64,0}),
      (0,{0x90L,60L,64L}), (0,{144.0,60.0,64.0}), (0,[144,60,64]),
      (0,{0x90,0;60,0;64,0}!!(0..2,0..0)), (0,{0x90},1), "bad"];
@@ -62,8 +80,8 @@ run = () when
   check "whole call rollback" (~midifile::put_tracks file
     [[(0,{0x90,60,64})],[(0,{0xff})]] && midifile::get_tracks file == original);
   copy = midifile::new 1 0 96;
-  check "decoded vectors use canonical lengths" (original == [[(0,{0x90,60,64})]]);
-  check "decoded canonical vectors remain insertable" (midifile::put_tracks copy original &&
+  check "decoded vectors preserve legacy shape" (original == [[(0,{0x90,60,64,0})]]);
+  check "decoded legacy vectors remain insertable" (midifile::put_tracks copy original &&
     midifile::get_tracks copy == original);
   check "free copy" (midifile::free copy);
   check "free file" (midifile::free file);
@@ -102,7 +120,7 @@ run = () when
   release_bad_buffers;
   do (\data->no_portmidi_call "bad output message" (\_->midi::writemsg output 0 data))
     [{}, {-1}, {256}, {0x90,60}, {0xc0,60,1}, {0xf0}, {0xf0,1},
-     {0xf0,0xf7,0}, {0xf0,256,0xf7}, {0,1;2,3}, {1.0}, "bad"];
+     {0xf0,0xf7,1}, {0xf0,256,0xf7}, {0x90,128,1}, {0,1;2,3}, {1.0}, "bad"];
   do (\time->no_portmidi_call "bad timestamp" (\_->midi::writemsg output time {0x90,60,64}))
     [-1, 2147483648L, 0L, "bad"];
   midi::close input; midi::close output;
