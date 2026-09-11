@@ -72,13 +72,15 @@ run = () when
   output = midi::open_output 0 0 0;
   do (\kind->no_portmidi_call "oversized native read matrix" (\_->midi::read input (bad_buffer kind))) [0,1,2];
   do (\kind->no_portmidi_call "oversized native write matrix" (\_->midi::write output (bad_buffer kind))) [0,1,2];
+  read_queue 0x403c90 0 1;
+  one_portmidi_call "legacy readmsg byte shape" (\_->midi::readmsg input) (42,{0x90,60,64,0});
   one_portmidi_call "valid buffer write" (\_->midi::write output {0x403c90,0}) Pm::BadPtr;
   one_portmidi_call "valid short write" (\_->midi::writemsg output 0 {0x90,60,64}) Pm::BadPtr;
+  one_portmidi_call "legacy bytes compose with writemsg"
+    (\_->midi::writemsg output 0 (midi::bytes 0x403c90)) Pm::BadPtr;
   one_portmidi_call "valid sysex write" (\_->midi::writemsg output 0 {0xf0,1,0xf7}) Pm::BadPtr;
   read_queue 0x403c90 0 1;
   one_portmidi_call "valid buffer read" (\_->midi::read input {0,0}) 1;
-  read_queue 0x403c90 0 1;
-  one_portmidi_call "canonical readmsg" (\_->midi::readmsg input) (42,{0x90,60,64});
   read_queue 0x030201f0 0xf7060504 2;
   check "signed ABI sysex is normalized" (midi::readmsg input == (42,{0xf0,1,2,3,4,5,6,0xf7}));
   no_portmidi_call "read wrong direction" (\_->midi::read output {0,0});
@@ -87,10 +89,10 @@ run = () when
   no_portmidi_call "writemsg wrong direction" (\_->midi::writemsg input 0 {0x90,60,64});
   do (\buf->no_portmidi_call "bad input buffer" (\_->midi::read input buf))
     [{}, {0}, {0,0,0}, {0;0}, {0.0,0.0}, {0L,0L}, "bad",
-     {0,0,0;0,0,0}!!(0..1,0..1)];
+     {0,0,0;0,0,0}!!(0..1,0..1), bad_buffer 3];
   do (\buf->no_portmidi_call "bad output buffer" (\_->midi::write output buf))
     [{}, {0}, {0,0,0}, {0;0}, {0.0,0.0}, {0L,0L}, "bad",
-     {0,0,0;0,0,0}!!(0..1,0..1)];
+     {0,0,0;0,0,0}!!(0..1,0..1), bad_buffer 3];
   do (\data->no_portmidi_call "bad output message" (\_->midi::writemsg output 0 data))
     [{}, {-1}, {256}, {0x90,60}, {0xc0,60,1}, {0xf0}, {0xf0,1},
      {0xf0,0xf7,0}, {0xf0,256,0xf7}, {0,1;2,3}, {1.0}, "bad"];

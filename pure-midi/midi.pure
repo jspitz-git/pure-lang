@@ -138,7 +138,8 @@ short_length status::int = if status>=0xc0 && status<0xe0 then 2 else 3
 short_length 0xf1 = 2; short_length 0xf2 = 3; short_length 0xf3 = 2;
 short_length status::int = 1 if any (==status) [0xf6,0xf8,0xfa,0xfb,0xfc,0xfe,0xff];
 short_length _ = 0;
-short_message data = byte_vector data && n>0 && #data==n
+short_message data = byte_vector data && n>0 &&
+  (#data==n || (#data==4 && all (==0) (drop n data)))
   when n=if byte_vector data then short_length (data!0) else 0 end;
 
 midi::bytes msg::int = vector $ map (and 0xff) $ scanl (>>) msg [8,8,8]
@@ -305,7 +306,7 @@ midi::write stream _ = if output_stream stream then Pm::BadData else Pm::BadPtr;
 midi::readmsg stream::pointer = case Pm::Read stream (midi::event buf) 1 of
   0 = midi::sleep 1 $$ midi::readmsg stream;
   1 = if data!0 == 0xf0 then read_sysex time data []
-      else if short_length (data!0)>0 then time, take (short_length (data!0)) data
+      else if short_message data then time, data
       else Pm::BadData when
         msg, time = buf!0, buf!1;
 	data = midi::bytes (bigint msg and 0xffffffffL);

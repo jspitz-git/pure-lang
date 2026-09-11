@@ -31,7 +31,15 @@ pure_expr *pure_midi_boundary_bad_buffer(int kind)
   m->rows=1; m->cols=2; m->stride=2; m->data=b->data; m->block=b; m->owner=1;
   if (kind==0) m->rows=((size_t)UINT32_MAX)+2;
   else if (kind==1) m->cols=m->stride=((size_t)UINT32_MAX)+3;
-  else m->rows=2; /* shape fits the ABI but exceeds its actual block */
+  else if (kind==2) m->rows=2; /* shape fits the ABI but exceeds its actual block */
+  else if (kind==3) {
+    b->size=3;
+    free(b->data);
+    b->data=calloc(3,sizeof(int));
+    if (!b->data) { free(b); free(m); return NULL; }
+    m->rows=1; m->cols=2; m->stride=2;
+    m->data=(int *)((unsigned char *)b->data+1);
+  } else { free(b->data); free(b); free(m); return NULL; }
   return pure_int_matrix(m);
 }
 
@@ -119,6 +127,7 @@ pure_expr *pm_device_info(int id) { (void)id; return NULL; }
 #else
 
 #include "mf.h"
+#include "../midi_bounds.h"
 #include "midifile.h"
 #include "midifile_test_api.h"
 
@@ -281,6 +290,33 @@ static int test_metadata(void)
   return 1;
 }
 
+static int test_misaligned_matrix(void)
+{
+  BoundaryMatrix *matrix=malloc(sizeof(*matrix));
+  BoundaryBlock *block=malloc(sizeof(*block));
+  pure_expr *value;
+  int count;
+  if (!matrix || !block) {
+    free(matrix); free(block);
+    return fail("misaligned fixture allocation");
+  }
+  block->size=3;
+  block->data=calloc(block->size,sizeof(*block->data));
+  if (!block->data) { free(block); free(matrix); return fail("misaligned block allocation"); }
+  matrix->size1=1; matrix->size2=2; matrix->tda=2;
+  matrix->data=(int *)((unsigned char *)block->data+1);
+  matrix->block=block; matrix->owner=1;
+  value=pure_int_matrix(matrix);
+  if (!value) {
+    free(block->data); free(block); free(matrix);
+    return fail("misaligned Pure matrix");
+  }
+  count=pure_midi_event_count(value);
+  pure_freenew(value);
+  cases_run++;
+  return count<0 ? 1 : fail("misaligned matrix accepted");
+}
+
 static size_t native_calls, native_fail=SIZE_MAX, native_live;
 static void *boundary_allocate(size_t n)
 {
@@ -386,6 +422,7 @@ int main(void)
 	if (interpreter == NULL) return fail("could not create Pure interpreter") ? 0 : 2;
 	if (!test_one_byte_meta()) return 1;
   if (!test_event_cases() || !test_transaction() || !test_metadata() ||
+      !test_misaligned_matrix() ||
       !test_allocation_rollback() || !test_decode_failures() || !test_construction_failures()) return 1;
 	pure_delete_interp(interpreter);
 	printf("PASS: %d native MIDI boundary cases\n", cases_run);
