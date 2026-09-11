@@ -38,6 +38,20 @@ int main(int argc, char **argv)
   else if (!strcmp(mode,"duplicate")) puts(token);
   else if (!strcmp(mode,"embedded-token")) printf("INFO: premature %s\n",token);
   else if (!strcmp(mode,"nonzero")) { puts(token); return 37; }
+  else if (!strcmp(mode,"cleanup-fail") || !strcmp(mode,"cleanup-fail-nonzero")) {
+    char cwd[MAX_PATH]; const char *tmp=getenv("TEMP");
+    if(!GetCurrentDirectoryA(MAX_PATH,cwd) || !tmp || strcmp(cwd,tmp) ||
+       !MoveFileA(".pure-midi-owner",".pure-midi-owner.saved")) return 97;
+    file=fopen("keep.txt","wb"); if(!file) return 98;
+    fputs("cleanup rejection guard\n",file); fclose(file);
+    printf("INFO: cleanup-leaf=%s\n",cwd);
+    puts("INFO: child reached completion before owned cleanup");
+    puts(token);
+    if(!strcmp(mode,"cleanup-fail-nonzero")) {
+      fputs("fixture diagnostic: explicit child failure\n",stderr); return 37;
+    }
+    return 0;
+  }
   else if (!strcmp(mode,"timeout")) { puts(token); fflush(stdout); Sleep(30000); }
   else if (!strcmp(mode,"pipes") || !strcmp(mode,"stdout")) {
     for(i=0;i<4096;++i) {

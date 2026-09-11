@@ -214,10 +214,25 @@ static int completed(Capture *out,Capture *err,const wchar_t *token) {
   }
   return seen;
 }
-static DWORD launch(Text *cmd,Text *environment,const wchar_t *exe,const wchar_t *cwd,DWORD timeout,const wchar_t *token) {
+/* Output remains private until the caller has completed owned CWD cleanup.
+ * On failure, retain diagnostics but never publish a child-supplied completion
+ * token, including tokens embedded in invalid stdout or stderr. */
+static void publish(Capture *capture,FILE *stream,const wchar_t *token,int accepted) {
+  if(!capture->n) return;
+  if(accepted) { fwrite(capture->data,1,capture->n,stream); return; }
+  char bytes[64]; size_t start=0;
+  for(size_t i=0;i<64;++i) bytes[i]=(char)token[i];
+  for(size_t i=0;i+64<=capture->n;++i) if(!memcmp(capture->data+i,bytes,64)) {
+    fwrite(capture->data+start,1,i-start,stream);
+    fputs("[completion token withheld]",stream);
+    i+=63; start=i+1;
+  }
+  fwrite(capture->data+start,1,capture->n-start,stream);
+}
+static DWORD launch(Text *cmd,Text *environment,const wchar_t *exe,const wchar_t *cwd,DWORD timeout,const wchar_t *token,Capture capture[2]) {
   SECURITY_ATTRIBUTES sa={sizeof(sa),NULL,TRUE}; STARTUPINFOEXW si={0}; PROCESS_INFORMATION pi={0};
   HANDLE job=NULL,wr[2]={NULL,NULL},reader[2]={NULL,NULL},nullin=INVALID_HANDLE_VALUE;
-  Capture capture[2]={{0},{0}}; JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits={0};
+  JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits={0};
   SIZE_T attr_size=0; DWORD result=BAD,child=BAD; int started=0,timedout=0;
   job=CreateJobObjectW(NULL,NULL); if(!job) goto done;
   limits.BasicLimitInformation.LimitFlags=JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
@@ -269,9 +284,10 @@ done:
     CloseHandle(reader[i]);
   }
   if(result==0 && !completed(&capture[0],&capture[1],token)) result=BAD;
-  if(capture[0].n) fwrite(capture[0].data,1,capture[0].n,stdout);
-  if(capture[1].n) fwrite(capture[1].data,1,capture[1].n,stderr);
-  for(size_t i=0;i<2;++i) { if(capture[i].pipe) CloseHandle(capture[i].pipe); free(capture[i].data); }
+  for(size_t i=0;i<2;++i) {
+    if(capture[i].pipe) CloseHandle(capture[i].pipe);
+    capture[i].pipe=NULL;
+  }
   if(nullin!=INVALID_HANDLE_VALUE) CloseHandle(nullin);
   if(pi.hThread) CloseHandle(pi.hThread); if(pi.hProcess) CloseHandle(pi.hProcess);
   if(si.lpAttributeList) { DeleteProcThreadAttributeList(si.lpAttributeList); free(si.lpAttributeList); }
@@ -284,6 +300,7 @@ int wmain(int argc,wchar_t **argv) {
   wchar_t *root=NULL,*exe=NULL,*script=NULL,*cwd=NULL,*token=NULL,*selector=NULL,*fixture=NULL;
   wchar_t *leaf=NULL,owner[65]; DWORD result=BAD,timeout=0; int create=0,clean=0;
   Text cmd={0},paths={0},environment={0};
+  Capture capture[2]={{0},{0}};
   wchar_t windows[LIMIT],system[LIMIT];
   if(argc==2 && !wcscmp(argv[1],L"--nonce")) {
     if(!nonce(owner)) return BAD; wprintf(L"%ls\n",owner); return 0;
@@ -336,11 +353,14 @@ int wmain(int argc,wchar_t **argv) {
   Text command={0}; argument(&command,exe); argument(&command,L"--norc");
   if(cmd.n) { append(&command,L" "); append(&command,cmd.v); }
   argument(&command,L"-x"); argument(&command,script);
-  result=launch(&command,&environment,exe,leaf,timeout,token); free(command.v);
+  result=launch(&command,&environment,exe,leaf,timeout,token,capture); free(command.v);
   if(!owned_clean(root,leaf,owner) && result==0) result=BAD;
+  publish(&capture[0],stdout,token,result==0);
+  publish(&capture[1],stderr,token,result==0);
 done:
   release(); free(held.v); free(root); free(exe); free(script); free(fixture); free(leaf);
   free(cmd.v); free(paths.v); free(environment.v);
+  free(capture[0].data); free(capture[1].data);
   if(result==BAD) fputs("runner: contract rejected\n",stderr);
   fflush(stdout); fflush(stderr); ExitProcess(result);
 }
