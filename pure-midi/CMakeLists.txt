@@ -5,6 +5,10 @@ if(PURE_MIDI_STRICT_WINDOWS_AUDIT)
   if(NOT CMAKE_HOST_WIN32 OR NOT CMAKE_GENERATOR STREQUAL "Ninja")
     message(FATAL_ERROR "midi audit: strict Windows audit requires native Windows and Ninja")
   endif()
+  if(CMAKE_SUPPRESS_REGENERATION)
+    message(FATAL_ERROR "midi audit: CMAKE_SUPPRESS_REGENERATION would disable frozen input checks")
+  endif()
+  set(CMAKE_SUPPRESS_REGENERATION OFF CACHE BOOL "Strict input revalidation is mandatory" FORCE)
   set(PURE_MIDI_VERIFIER_HELPERS_ONLY ON)
   include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/VerifyWindowsDependencies.cmake")
   unset(PURE_MIDI_VERIFIER_HELPERS_ONLY)
@@ -225,21 +229,68 @@ if(PURE_MIDI_STRICT_WINDOWS_AUDIT)
   endforeach()
   set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
     ${runtime_paths} "${audit_launcher_tool}")
+  # Expose only the declared header names, with absolute includes selecting the
+  # pinned files themselves. Searching the entire Pure include tree first can
+  # otherwise hide CLANG64 headers behind unrelated/stale copies.
+  set(PURE_MIDI_AUDITED_INCLUDE_DIR "${CMAKE_CURRENT_BINARY_DIR}/strict-include")
+  midi_no_reparse("${CMAKE_CURRENT_BINARY_DIR}")
+  foreach(directory "${PURE_MIDI_AUDITED_INCLUDE_DIR}" "${PURE_MIDI_AUDITED_INCLUDE_DIR}/pure")
+    if(EXISTS "${directory}" OR IS_SYMLINK "${directory}")
+      midi_path("${directory}" directory checked)
+      midi_no_reparse("${directory}")
+    else()
+      file(MAKE_DIRECTORY "${directory}")
+    endif()
+  endforeach()
+  set(audit_header_rows
+    "PURE_HEADER|pure/runtime.h" "PURE_GLOB_HEADER|glob.h"
+    "PORTMIDI_HEADER|portmidi.h" "PORTTIME_HEADER|porttime.h"
+    "GMP_HEADER|gmp.h" "MPFR_HEADER|mpfr.h" "PURE_MIDI_WINDOWS_HEADER|windows.h")
+  set(audit_wrappers)
+  set(existing_wrappers)
+  foreach(row IN LISTS audit_header_rows)
+    string(REPLACE "|" ";" fields "${row}")
+    list(GET fields 1 relative)
+    set(wrapper "${PURE_MIDI_AUDITED_INCLUDE_DIR}/${relative}")
+    list(APPEND audit_wrappers "${wrapper}")
+    if(EXISTS "${wrapper}" OR IS_SYMLINK "${wrapper}")
+      midi_path("${wrapper}" file checked)
+      list(APPEND existing_wrappers "${wrapper}")
+    endif()
+  endforeach()
+  if(existing_wrappers)
+    midi_no_reparse(${existing_wrappers})
+  endif()
+  foreach(row IN LISTS audit_header_rows)
+    string(REPLACE "|" ";" fields "${row}")
+    list(GET fields 0 var)
+    list(GET fields 1 relative)
+    file(CONFIGURE OUTPUT "${PURE_MIDI_AUDITED_INCLUDE_DIR}/${relative}"
+      CONTENT "#include \"${${var}}\"\n" @ONLY)
+  endforeach()
+  # No additional search input may be introduced into this generated namespace.
+  # GLOB verification also catches an extra header added after configuration.
+  file(GLOB audit_include_entries CONFIGURE_DEPENDS LIST_DIRECTORIES TRUE
+    "${PURE_MIDI_AUDITED_INCLUDE_DIR}/*" "${PURE_MIDI_AUDITED_INCLUDE_DIR}/pure/*")
+  midi_no_reparse(${audit_include_entries})
+  foreach(entry IN LISTS audit_include_entries)
+    if(NOT entry IN_LIST audit_wrappers AND
+        NOT entry STREQUAL "${PURE_MIDI_AUDITED_INCLUDE_DIR}/pure")
+      message(FATAL_ERROR "midi audit: undeclared isolated header input: ${entry}")
+    endif()
+  endforeach()
+  set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${audit_wrappers})
 endif()
 
 project(pure-midi VERSION 0.6 LANGUAGES C)
 
 if(PURE_MIDI_STRICT_WINDOWS_AUDIT)
   set(PURE_PREFIX "${PURE_MIDI_PURE_PREFIX}")
-  get_filename_component(PORTMIDI_INCLUDE_DIRS "${PORTMIDI_HEADER}" DIRECTORY)
+  set(PORTMIDI_INCLUDE_DIRS "${PURE_MIDI_AUDITED_INCLUDE_DIR}")
   foreach(package PURE PORTMIDI)
     add_library(PkgConfig::${package} INTERFACE IMPORTED)
-    get_filename_component(include_dir "${${package}_HEADER}" DIRECTORY)
-    if(package STREQUAL "PURE")
-      set(include_dir "${PURE_INCLUDE_DIR}")
-    endif()
     set_target_properties(PkgConfig::${package} PROPERTIES
-      INTERFACE_INCLUDE_DIRECTORIES "${include_dir}"
+      INTERFACE_INCLUDE_DIRECTORIES "${PURE_MIDI_AUDITED_INCLUDE_DIR}"
       INTERFACE_LINK_LIBRARIES "${${package}_IMPORT_LIBRARY}")
   endforeach()
 else()

@@ -159,6 +159,38 @@ function(midi_runtime_rows rows hashes output_paths output_manifest)
 endfunction()
 
 function(midi_parse_pe text path output)
+  # COFF flag names and bits from the Windows SDK/LLVM COFF definitions.
+  # Each printed row must account for exactly one bit in its enclosing mask.
+  set(flags_ImageFileHeader
+    "IMAGE_FILE_RELOCS_STRIPPED|0x1" "IMAGE_FILE_EXECUTABLE_IMAGE|0x2"
+    "IMAGE_FILE_LINE_NUMS_STRIPPED|0x4" "IMAGE_FILE_LOCAL_SYMS_STRIPPED|0x8"
+    "IMAGE_FILE_AGGRESSIVE_WS_TRIM|0x10" "IMAGE_FILE_LARGE_ADDRESS_AWARE|0x20"
+    "IMAGE_FILE_BYTES_REVERSED_LO|0x80" "IMAGE_FILE_32BIT_MACHINE|0x100"
+    "IMAGE_FILE_DEBUG_STRIPPED|0x200" "IMAGE_FILE_REMOVABLE_RUN_FROM_SWAP|0x400"
+    "IMAGE_FILE_NET_RUN_FROM_SWAP|0x800" "IMAGE_FILE_SYSTEM|0x1000"
+    "IMAGE_FILE_DLL|0x2000" "IMAGE_FILE_UP_SYSTEM_ONLY|0x4000"
+    "IMAGE_FILE_BYTES_REVERSED_HI|0x8000")
+  set(flags_ImageOptionalHeader
+    "IMAGE_DLL_CHARACTERISTICS_HIGH_ENTROPY_VA|0x20"
+    "IMAGE_DLL_CHARACTERISTICS_DYNAMIC_BASE|0x40"
+    "IMAGE_DLL_CHARACTERISTICS_FORCE_INTEGRITY|0x80"
+    "IMAGE_DLL_CHARACTERISTICS_NX_COMPAT|0x100"
+    "IMAGE_DLL_CHARACTERISTICS_NO_ISOLATION|0x200"
+    "IMAGE_DLL_CHARACTERISTICS_NO_SEH|0x400"
+    "IMAGE_DLL_CHARACTERISTICS_NO_BIND|0x800"
+    "IMAGE_DLL_CHARACTERISTICS_APPCONTAINER|0x1000"
+    "IMAGE_DLL_CHARACTERISTICS_WDM_DRIVER|0x2000"
+    "IMAGE_DLL_CHARACTERISTICS_GUARD_CF|0x4000"
+    "IMAGE_DLL_CHARACTERISTICS_TERMINAL_SERVER_AWARE|0x8000")
+  foreach(section ImageFileHeader ImageOptionalHeader)
+    foreach(row IN LISTS flags_${section})
+      string(REPLACE "|" ";" parts "${row}")
+      list(GET parts 0 name)
+      list(GET parts 1 bit)
+      list(APPEND flag_names_${section} "${name}")
+      set(flag_value_${section}_${name} "${bit}")
+    endforeach()
+  endforeach()
   set(keys_ImageFileHeader Machine SectionCount TimeDateStamp PointerToSymbolTable
     SymbolCount StringTableSize OptionalHeaderSize Characteristics)
   set(keys_ImageOptionalHeader Magic MajorLinkerVersion MinorLinkerVersion
@@ -244,7 +276,12 @@ function(midi_parse_pe text path output)
           message(FATAL_ERROR "midi audit: duplicate import ${name}")
         endif()
         list(APPEND imports "${name}")
-      elseif(NOT current STREQUAL "Characteristics")
+      elseif(current STREQUAL "Characteristics")
+        if(NOT characteristics_bits EQUAL characteristics_mask)
+          message(FATAL_ERROR "midi audit: incomplete/mismatched Characteristics mask for ${path}")
+        endif()
+        set(header_${section}_Characteristics "${characteristics_bits}")
+      else()
         foreach(key IN LISTS keys_${current})
           if(NOT "${current}_${key}" IN_LIST fields)
             message(FATAL_ERROR "midi audit: incomplete ${current} field ${key} for ${path}")
@@ -281,10 +318,19 @@ function(midi_parse_pe text path output)
         list(APPEND fields Symbol)
       endif()
       set(import_${key} "${value}")
-    elseif(stripped MATCHES "^Characteristics \\[ \\(0x[0-9A-Fa-f]+\\)$" AND depth EQUAL 1)
+    elseif(stripped MATCHES "^Characteristics \\[ \\((0x[0-9A-Fa-f]+)\\)$" AND
+        depth EQUAL 1 AND (section STREQUAL "ImageFileHeader" OR section STREQUAL "ImageOptionalHeader"))
+      set(mask "${CMAKE_MATCH_1}")
+      string(LENGTH "${mask}" mask_length)
+      if(mask_length GREATER 6)
+        message(FATAL_ERROR "midi audit: Characteristics mask exceeds 16 bits for ${path}")
+      endif()
       if("${current}_Characteristics" IN_LIST fields)
         message(FATAL_ERROR "midi audit: duplicate characteristics for ${path}")
       endif()
+      math(EXPR characteristics_mask "${mask}")
+      set(characteristics_bits 0)
+      set(characteristics_seen)
       list(APPEND fields "${current}_Characteristics")
       list(APPEND stack Characteristics)
     elseif(stripped STREQUAL "DataDirectory {" AND section STREQUAL "ImageOptionalHeader" AND depth EQUAL 1)
@@ -294,16 +340,32 @@ function(midi_parse_pe text path output)
       list(APPEND fields ImageOptionalHeader_DataDirectory)
       list(APPEND stack DataDirectory)
     elseif(current STREQUAL "Characteristics")
-      if(NOT stripped MATCHES "^IMAGE_[A-Z0-9_]+ \\(0x[0-9A-Fa-f]+\\)$")
+      if(NOT stripped MATCHES "^(IMAGE_[A-Z0-9_]+) \\((0x[0-9A-Fa-f]+)\\)$")
         message(FATAL_ERROR "midi audit: malformed PE characteristics for ${path}")
       endif()
+      set(flag "${CMAKE_MATCH_1}")
+      set(bit "${CMAKE_MATCH_2}")
+      string(LENGTH "${bit}" bit_length)
+      if(NOT flag IN_LIST flag_names_${section} OR bit_length GREATER 6)
+        message(FATAL_ERROR "midi audit: unknown Characteristics flag ${flag} for ${path}")
+      endif()
+      if(flag IN_LIST characteristics_seen)
+        message(FATAL_ERROR "midi audit: duplicate Characteristics flag ${flag} for ${path}")
+      endif()
+      if(NOT bit EQUAL flag_value_${section}_${flag})
+        message(FATAL_ERROR "midi audit: wrong Characteristics bit for ${flag}: ${path}")
+      endif()
+      list(APPEND characteristics_seen "${flag}")
+      math(EXPR characteristics_bits "${characteristics_bits} | ${bit}")
     elseif(stripped MATCHES "^([A-Za-z][A-Za-z0-9]+): ([^{}]+)$")
       set(key "${CMAKE_MATCH_1}")
       set(value "${CMAKE_MATCH_2}")
       if(NOT key IN_LIST keys_${current})
         message(FATAL_ERROR "midi audit: unknown ${current} field ${key} for ${path}")
       endif()
-      if(key STREQUAL "Machine")
+      if(key STREQUAL "Characteristics")
+        message(FATAL_ERROR "midi audit: bracketed Characteristics record required for ${path}")
+      elseif(key STREQUAL "Machine")
         if(NOT value MATCHES "^IMAGE_FILE_MACHINE_[A-Z0-9_]+ \\(0x[0-9A-Fa-f]+\\)$")
           message(FATAL_ERROR "midi audit: malformed Machine field for ${path}")
         endif()
@@ -344,6 +406,17 @@ function(midi_parse_pe text path output)
       NOT header_ImageOptionalHeader_Magic STREQUAL "0x20B" OR
       NOT header_DOSHeader_Magic STREQUAL "MZ")
     message(FATAL_ERROR "midi audit: AMD64 PE32+ headers required for ${path}")
+  endif()
+  math(EXPR required_file_flags "${header_ImageFileHeader_Characteristics} & 0x22")
+  math(EXPR forbidden_file_flags "${header_ImageFileHeader_Characteristics} & 0x8180")
+  math(EXPR dll_flag "${header_ImageFileHeader_Characteristics} & 0x2000")
+  math(EXPR required_optional_flags "${header_ImageOptionalHeader_Characteristics} & 0x160")
+  string(TOLOWER "${path}" lower_path)
+  if(NOT required_file_flags EQUAL 0x22 OR NOT forbidden_file_flags EQUAL 0 OR
+      NOT required_optional_flags EQUAL 0x160 OR
+      (lower_path MATCHES "\\.dll$" AND NOT dll_flag EQUAL 0x2000) OR
+      (lower_path MATCHES "\\.exe$" AND NOT dll_flag EQUAL 0))
+    message(FATAL_ERROR "midi audit: required AMD64 PE32+ Characteristics semantics for ${path}")
   endif()
   if(NOT header_DataDirectory_DelayImportDescriptorRVA STREQUAL "0x0" OR
       NOT header_DataDirectory_DelayImportDescriptorSize STREQUAL "0x0")
