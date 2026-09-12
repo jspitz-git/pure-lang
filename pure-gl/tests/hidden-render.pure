@@ -1,7 +1,85 @@
-using GL, GLU, GLUT;
+using GL, GLU, GLUT, system;
 
 near actual expected
   = abs (actual - expected) <= 2;
+
+verify_context_strings vendor renderer version = ()
+when
+  #vendor > 0 && #renderer > 0 && #version > 0
+    || throw "OpenGL context information is unavailable";
+  puts "PURE_GL_CONTEXT_STRINGS_OK";
+end;
+
+verify_pixel [red,green,blue,alpha] = ()
+when
+  near red 64 && near green 128 && near blue 191 && near alpha 255
+    || throw ("Unexpected rendered pixel: "+
+      str [red,green,blue,alpha]);
+  puts "PURE_GL_PIXEL_OK";
+end;
+
+verify_errors gl_errors = ()
+when
+  all (==GL::NO_ERROR) gl_errors
+    || throw ("OpenGL error in hidden render: "+str gl_errors);
+  puts "PURE_GL_ERRORS_OK";
+end;
+
+release_pixel pixel_owner = case get pixel_owner of
+  pixel = () if null pixel;
+  pixel = free pixel $$ put pixel_owner null;
+end;
+
+destroy_window window = GLUT::DestroyWindow window $$
+  puts "PURE_GL_WINDOW_DESTROYED_OK";
+
+complete token = printf "PURE_GL_TEST_OK %s\n" token;
+
+cleanup_failure window pixel_owner exception =
+  release_pixel pixel_owner $$
+  GLUT::DestroyWindow window $$
+  throw exception;
+
+render window pixel_owner token = ()
+when
+  GLUT::HideWindow;
+  vendor = GL::GetString GL::VENDOR;
+  renderer = GL::GetString GL::RENDERER;
+  version = GL::GetString GL::VERSION;
+  setup_error = GL::GetError;
+  verify_context_strings vendor renderer version;
+
+  GL::ClearColor 0.25 0.5 0.75 1.0;
+  GL::Clear GL::COLOR_BUFFER_BIT;
+  clear_error = GL::GetError;
+  GL::Finish;
+  finish_error = GL::GetError;
+
+  pixel = calloc 4 1;
+  put pixel_owner pixel;
+  ~null pixel || throw malloc_error;
+  GL::ReadPixels 16 16 1 1 GL::RGBA GL::UNSIGNED_BYTE pixel;
+  readback_error = GL::GetError;
+  pixel_word = uint (get_int pixel);
+  release_pixel pixel_owner;
+  rgba = [
+    pixel_word and 255,
+    (pixel_word >> 8) and 255,
+    (pixel_word >> 16) and 255,
+    (pixel_word >> 24) and 255
+  ];
+  verify_pixel rgba;
+
+  gl_errors = [setup_error,clear_error,finish_error,readback_error];
+  verify_errors gl_errors;
+  puts ("pure-gl hidden render: "+vendor+"; "+renderer+"; OpenGL "+version);
+  destroy_window window;
+  complete token;
+end;
+
+#argv == 2
+  || throw "pure-gl hidden-render test requires exactly one completion token argument";
+let token = last argv;
 
 GLUT::Init {0} NULL;
 GLUT::InitDisplayMode (GLUT::SINGLE or GLUT::RGBA);
@@ -9,32 +87,6 @@ GLUT::InitWindowPosition (-10000) (-10000);
 GLUT::InitWindowSize 32 32;
 let window = GLUT::CreateWindow "pure-gl hidden render smoke";
 window > 0 || throw "FreeGLUT did not create a window";
-GLUT::HideWindow;
 
-let vendor = GL::GetString GL::VENDOR;
-let renderer = GL::GetString GL::RENDERER;
-let version = GL::GetString GL::VERSION;
-#vendor > 0 && #renderer > 0 && #version > 0
-  || throw "OpenGL context information is unavailable";
-
-GL::ClearColor 0.25 0.5 0.75 1.0;
-GL::Clear GL::COLOR_BUFFER_BIT;
-GL::Finish;
-
-let pixel = calloc 4 1;
-~null pixel || throw malloc_error;
-GL::ReadPixels 16 16 1 1 GL::RGBA GL::UNSIGNED_BYTE pixel;
-let pixel_word = uint (get_int pixel);
-free pixel;
-let rgba = [
-  pixel_word and 255,
-  (pixel_word >> 8) and 255,
-  (pixel_word >> 16) and 255,
-  (pixel_word >> 24) and 255
-];
-let [red,green,blue,alpha] = rgba;
-near red 64 && near green 128 && near blue 191 && near alpha 255
-  || throw ("Unexpected rendered pixel: "+str rgba);
-
-puts ("pure-gl hidden render: "+vendor+"; "+renderer+"; OpenGL "+version);
-GLUT::DestroyWindow window;
+let pixel_owner = ref null;
+catch (cleanup_failure window pixel_owner) (render window pixel_owner token);

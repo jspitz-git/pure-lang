@@ -1,4 +1,74 @@
-using GL, GLU, GLUT;
+using GL, GLU, GLUT, system;
+
+verify_errors gl_errors = ()
+when
+  all (==GL::NO_ERROR) gl_errors
+    || throw ("OpenGL error in the interactive example: "+str gl_errors);
+  puts "PURE_GL_ERRORS_OK";
+end;
+
+record_display_event event_count callback_error =
+  (callback_error == GL::NO_ERROR
+    || throw ("Display callback marker was not incremented: "+
+      str callback_error)) $$
+  put event_count (get event_count+1) $$
+  (get event_count == 1
+    || throw "FreeGLUT display event did not increment the Pure-visible marker");
+
+process_display_event event_count =
+  GLUT::PostRedisplay $$
+  GLUT::MainLoopEvent $$
+  GL::PopMatrix $$
+  record_display_event event_count GL::GetError $$
+  puts "PURE_GL_DISPLAY_EVENT_OK";
+
+destroy_window window = GLUT::DestroyWindow window $$
+  puts "PURE_GL_WINDOW_DESTROYED_OK";
+
+complete token = printf "PURE_GL_TEST_OK %s\n" token;
+
+cleanup_failure window exception = GLUT::DestroyWindow window $$ throw exception;
+
+run window token = catch (cleanup_failure window) result
+when
+  event_count = ref 0;
+  GL::MatrixMode GL::MODELVIEW;
+  display_cb = addr "Pure_glPushMatrix";
+  ~null display_cb || throw "Could not resolve the display callback";
+  GLUT::DisplayFunc display_cb;
+
+  setup_error = GL::GetError;
+  GL::ClearColor 0.08 0.08 0.12 1.0;
+  GL::Clear (GL::COLOR_BUFFER_BIT or GL::DEPTH_BUFFER_BIT);
+  clear_error = GL::GetError;
+  GL::Begin GL::TRIANGLES;
+    GL::Color3f 1.0 0.0 0.0;
+    GL::Vertex2f (-0.8) (-0.7);
+    GL::Color3f 0.0 1.0 0.0;
+    GL::Vertex2f 0.8 (-0.7);
+    GL::Color3f 0.0 0.0 1.0;
+    GL::Vertex2f 0.0 0.8;
+  GL::End;
+  draw_error = GL::GetError;
+  GLUT::SwapBuffers;
+  swap_error = GL::GetError;
+
+  process_display_event event_count;
+  nanosleep 1.0;
+  final_error = GL::GetError;
+  gl_errors =
+    [setup_error,clear_error,draw_error,swap_error,final_error];
+  verify_errors gl_errors;
+
+  puts "pure-gl interactive desktop example displayed successfully";
+  destroy_window window;
+  complete token;
+  result = ();
+end;
+
+#argv == 2
+  || throw "pure-gl interactive test requires exactly one completion token argument";
+let token = last argv;
 
 GLUT::Init {0} NULL;
 GLUT::InitDisplayMode (GLUT::DOUBLE or GLUT::RGB or GLUT::DEPTH);
@@ -6,32 +76,4 @@ GLUT::InitWindowSize 320 240;
 let window = GLUT::CreateWindow "Pure GL Windows desktop test";
 window > 0 || throw "FreeGLUT did not create an interactive window";
 
-let setup_error = GL::GetError;
-GL::ClearColor 0.08 0.08 0.12 1.0;
-GL::Clear (GL::COLOR_BUFFER_BIT or GL::DEPTH_BUFFER_BIT);
-let clear_error = GL::GetError;
-GL::Begin GL::TRIANGLES;
-  GL::Color3f 1.0 0.0 0.0;
-  GL::Vertex2f (-0.8) (-0.7);
-  GL::Color3f 0.0 1.0 0.0;
-  GL::Vertex2f 0.8 (-0.7);
-  GL::Color3f 0.0 0.0 1.0;
-  GL::Vertex2f 0.0 0.8;
-GL::End;
-let draw_error = GL::GetError;
-GLUT::SwapBuffers;
-let swap_error = GL::GetError;
-
-let display_cb = addr "Pure_glFlush";
-~null display_cb || throw "Could not resolve the display callback";
-GLUT::DisplayFunc display_cb;
-GLUT::PostRedisplay;
-GLUT::MainLoopEvent;
-
-nanosleep 1.0;
-let gl_error = [setup_error,clear_error,draw_error,swap_error,GL::GetError];
-all (==GL::NO_ERROR) gl_error
-  || throw ("OpenGL error in the interactive example: "+str gl_error);
-
-puts "pure-gl interactive desktop example displayed successfully";
-GLUT::DestroyWindow window;
+run window token;

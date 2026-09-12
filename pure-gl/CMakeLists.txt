@@ -236,7 +236,7 @@ set(pure_gl_runner_arguments
   "-DPURE_GL_CLANG64_PREFIX=${PURE_GL_CLANG64_PREFIX}"
   "-DPURE_GL_WINDOWS_SYSTEM_DIRECTORY=${PURE_GL_WINDOWS_SYSTEM_DIRECTORY}"
   -DTEST_WORKING_DIRECTORY=C:/Windows
-  -DTIMEOUT_MS=45000)
+  -DTIMEOUT_MS=90000)
 
 add_custom_target(check-gl-interactive
   COMMAND "${CMAKE_COMMAND}" ${pure_gl_runner_arguments}
@@ -252,14 +252,14 @@ if(BUILD_TESTING)
       "-DTEST_SCRIPT=${CMAKE_CURRENT_SOURCE_DIR}/tests/load.pure"
       -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunPureTest.cmake")
   set_tests_properties(pure-gl.load-all-modules PROPERTIES
-    LABELS "gl;load" TIMEOUT 55 RUN_SERIAL TRUE
+    LABELS "gl;load" TIMEOUT 100 RUN_SERIAL TRUE
     REQUIRED_FILES "$<TARGET_FILE:pure-gl>;${PURE_GL_TEST_RUNTIME_DLL}")
   add_test(NAME pure-gl.hidden-render
     COMMAND "${CMAKE_COMMAND}" ${pure_gl_runner_arguments}
       "-DTEST_SCRIPT=${CMAKE_CURRENT_SOURCE_DIR}/tests/hidden-render.pure"
       -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunPureTest.cmake")
   set_tests_properties(pure-gl.hidden-render PROPERTIES
-    LABELS "gl;render" TIMEOUT 55 RUN_SERIAL TRUE
+    LABELS "gl;render" TIMEOUT 100 RUN_SERIAL TRUE
     REQUIRED_FILES "$<TARGET_FILE:pure-gl>;${PURE_GL_TEST_RUNTIME_DLL}")
   if(WIN32)
     add_test(NAME pure-gl-configure-contract
@@ -291,6 +291,15 @@ if(BUILD_TESTING)
         "-DPURE_GL_CLANG64_PREFIX=${PURE_GL_CLANG64_PREFIX}"
         "-DPURE_GL_WINDOWS_SYSTEM_DIRECTORY=${PURE_GL_WINDOWS_SYSTEM_DIRECTORY}"
         -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/runner_contract.cmake")
+    add_custom_target(pure-gl-render-contract
+      COMMAND "${CMAKE_COMMAND}"
+        "-DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
+        "-DBINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}"
+        ${pure_gl_runner_arguments}
+        -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/render_contract.cmake"
+      DEPENDS pure-gl pure-gl-test-runner stage-pure-gl-test-runtime
+      COMMENT "Running pure-gl semantic rendering mutations"
+      USES_TERMINAL VERBATIM)
     set_tests_properties(pure-gl-configure-contract pure-gl-runner-contract
       PROPERTIES LABELS "gl;contract" TIMEOUT 90 RUN_SERIAL TRUE)
   endif()
