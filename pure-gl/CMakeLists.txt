@@ -12,6 +12,8 @@ set(LLVM_READOBJ_EXECUTABLE "" CACHE FILEPATH
   "llvm-readobj used for Windows PE validation")
 set(LLVM_STRINGS_EXECUTABLE "" CACHE FILEPATH
   "llvm-strings used for Windows PE validation")
+set(LLVM_READOBJ_SHA256 "" CACHE STRING "Pinned llvm-readobj SHA-256")
+set(LLVM_STRINGS_SHA256 "" CACHE STRING "Pinned llvm-strings SHA-256")
 set(GNU_MAKE_EXECUTABLE "" CACHE FILEPATH
   "GNU make used by source distribution contracts")
 set(PURE_GL_PURE_PREFIX "" CACHE PATH "Canonical staged Pure prefix")
@@ -62,6 +64,13 @@ if(PURE_GL_STRICT_AUDIT)
   foreach(directory_var IN ITEMS PURE_GL_PURE_PREFIX PURE_GL_CLANG64_PREFIX
       PURE_GL_WINDOWS_SYSTEM_DIRECTORY)
     pure_gl_require_path(${directory_var} "directory")
+  endforeach()
+  include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/PeHelpers.cmake")
+  foreach(tool LLVM_READOBJ LLVM_STRINGS)
+    if("${${tool}_SHA256}" STREQUAL "")
+      message(FATAL_ERROR "${tool}_SHA256 is required in PURE_GL_STRICT_AUDIT mode")
+    endif()
+    gl_pe_pin("${${tool}_EXECUTABLE}" "${${tool}_SHA256}")
   endforeach()
   pure_gl_require_below(PURE_EXECUTABLE PURE_GL_PURE_PREFIX)
   foreach(prefix IN ITEMS PURE_GL_PURE_PREFIX PURE_GL_CLANG64_PREFIX)
@@ -217,14 +226,26 @@ if(WIN32)
   endif()
 endif()
 
-add_custom_target(verify-windows-dependencies
-  COMMAND "${CMAKE_COMMAND}"
+if(NOT PURE_GL_STRICT_AUDIT)
+  file(SHA256 "${LLVM_READOBJ_EXECUTABLE}" LLVM_READOBJ_SHA256)
+  file(SHA256 "${LLVM_STRINGS_EXECUTABLE}" LLVM_STRINGS_SHA256)
+endif()
+set(pure_gl_pe_arguments
     "-DLLVM_READOBJ=${LLVM_READOBJ_EXECUTABLE}"
+    "-DLLVM_READOBJ_SHA256=${LLVM_READOBJ_SHA256}"
     "-DLLVM_STRINGS=${LLVM_STRINGS_EXECUTABLE}"
+    "-DLLVM_STRINGS_SHA256=${LLVM_STRINGS_SHA256}"
     "-DPURE_GL_MODULE=$<TARGET_FILE:pure-gl>"
-    "-DFREEGLUT_DLL=${FREEGLUT_RUNTIME_DLL}"
+    "-DFREEGLUT_DLL=${PURE_GL_TEST_RUNTIME_DLL}"
+    "-DPURE_GL_RUNTIME_DIRECTORY=${PURE_GL_TEST_RUNTIME_DIRECTORY}"
+    "-DPURE_GL_PURE_PREFIX=${PURE_GL_PURE_PREFIX}"
+    "-DPURE_GL_CLANG64_PREFIX=${PURE_GL_CLANG64_PREFIX}"
+    "-DPURE_GL_WINDOWS_SYSTEM_DIRECTORY=${PURE_GL_WINDOWS_SYSTEM_DIRECTORY}"
+    -DPURE_GL_AUDIT_MODE=BUILD)
+add_custom_target(verify-windows-dependencies
+  COMMAND "${CMAKE_COMMAND}" ${pure_gl_pe_arguments}
     -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/VerifyWindowsDependencies.cmake"
-  DEPENDS pure-gl VERBATIM)
+  DEPENDS pure-gl stage-pure-gl-test-runtime VERBATIM)
 
 set(pure_gl_runner_arguments
   "-DPURE_GL_RUNNER=$<TARGET_FILE:pure-gl-test-runner>"
@@ -262,6 +283,14 @@ if(BUILD_TESTING)
     LABELS "gl;render" TIMEOUT 100 RUN_SERIAL TRUE
     REQUIRED_FILES "$<TARGET_FILE:pure-gl>;${PURE_GL_TEST_RUNTIME_DLL}")
   if(WIN32)
+    add_test(NAME pure-gl-runtime-verifier-contract
+      COMMAND "${CMAKE_COMMAND}" ${pure_gl_pe_arguments}
+        "-DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
+        "-DBINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}"
+        "-DC_COMPILER=${CMAKE_C_COMPILER}"
+        -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/runtime_verifier_contract.cmake")
+    set_tests_properties(pure-gl-runtime-verifier-contract PROPERTIES
+      LABELS "gl;contract;pe" TIMEOUT 240 RUN_SERIAL TRUE)
     add_test(NAME pure-gl-configure-contract
       COMMAND "${CMAKE_COMMAND}"
         "-DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
@@ -271,7 +300,9 @@ if(BUILD_TESTING)
         "-DC_COMPILER=${CMAKE_C_COMPILER}"
         "-DPKG_CONFIG_EXECUTABLE=${PKG_CONFIG_EXECUTABLE}"
         "-DLLVM_READOBJ_EXECUTABLE=${LLVM_READOBJ_EXECUTABLE}"
+        "-DLLVM_READOBJ_SHA256=${LLVM_READOBJ_SHA256}"
         "-DLLVM_STRINGS_EXECUTABLE=${LLVM_STRINGS_EXECUTABLE}"
+        "-DLLVM_STRINGS_SHA256=${LLVM_STRINGS_SHA256}"
         "-DGNU_MAKE_EXECUTABLE=${GNU_MAKE_EXECUTABLE}"
         "-DPURE_EXECUTABLE=${PURE_EXECUTABLE}"
         "-DPURE_GL_PURE_PREFIX=${PURE_GL_PURE_PREFIX}"

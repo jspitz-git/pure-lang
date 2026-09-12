@@ -1,63 +1,104 @@
-foreach(name IN ITEMS LLVM_READOBJ LLVM_STRINGS PURE_GL_MODULE FREEGLUT_DLL)
-  if(NOT DEFINED ${name} OR "${${name}}" STREQUAL "")
-    message(FATAL_ERROR "${name} is required")
+cmake_minimum_required(VERSION 3.25)
+include("${CMAKE_CURRENT_LIST_DIR}/PeHelpers.cmake")
+foreach(required LLVM_READOBJ LLVM_READOBJ_SHA256 LLVM_STRINGS LLVM_STRINGS_SHA256
+    PURE_GL_MODULE FREEGLUT_DLL PURE_GL_PURE_PREFIX PURE_GL_CLANG64_PREFIX
+    PURE_GL_WINDOWS_SYSTEM_DIRECTORY PURE_GL_RUNTIME_DIRECTORY PURE_GL_AUDIT_MODE)
+  if(NOT DEFINED ${required} OR "${${required}}" STREQUAL "")
+    message(FATAL_ERROR "${required} is required")
   endif()
 endforeach()
-
-foreach(path IN ITEMS "${PURE_GL_MODULE}" "${FREEGLUT_DLL}")
-  if(NOT EXISTS "${path}")
-    message(FATAL_ERROR "Missing binary: ${path}")
-  endif()
-  execute_process(
-    COMMAND "${LLVM_READOBJ}" --file-headers --coff-imports "${path}"
-    RESULT_VARIABLE result
-    OUTPUT_VARIABLE output
-    ERROR_VARIABLE error)
-  if(NOT result EQUAL 0)
-    message(FATAL_ERROR "llvm-readobj failed for ${path}: ${error}")
-  endif()
-  if(NOT output MATCHES "Format: COFF-x86-64")
-    message(FATAL_ERROR "${path} is not a 64-bit PE/COFF binary")
-  endif()
-  string(TOLOWER "${output}" imports)
-  if(imports MATCHES "msys-2\\.0\\.dll|libgcc|libstdc\\+\\+")
-    message(FATAL_ERROR "${path} imports an MSYS/GNU runtime")
-  endif()
+cmake_host_system_information(RESULT windows QUERY WINDOWS_REGISTRY
+  "HKLM/SOFTWARE/Microsoft/Windows NT/CurrentVersion" VALUE SystemRoot)
+file(TO_CMAKE_PATH "${windows}/System32" system)
+gl_pe_equal_path("${PURE_GL_WINDOWS_SYSTEM_DIRECTORY}" "${system}")
+set(GL_PE_POWERSHELL "${system}/WindowsPowerShell/v1.0/powershell.exe")
+foreach(root PURE_GL_PURE_PREFIX PURE_GL_CLANG64_PREFIX
+    PURE_GL_WINDOWS_SYSTEM_DIRECTORY PURE_GL_RUNTIME_DIRECTORY)
+  gl_pe_path("${${root}}" directory)
 endforeach()
-
-execute_process(
-  COMMAND "${LLVM_READOBJ}" --coff-imports "${PURE_GL_MODULE}"
-  OUTPUT_VARIABLE module_imports
-  COMMAND_ERROR_IS_FATAL ANY)
-string(TOLOWER "${module_imports}" module_imports)
-foreach(dll IN ITEMS libpure.dll opengl32.dll)
-  if(NOT module_imports MATCHES "${dll}")
-    message(FATAL_ERROR "pure-gl module does not import ${dll}")
-  endif()
-endforeach()
-
-execute_process(
-  COMMAND "${LLVM_READOBJ}" --coff-imports "${FREEGLUT_DLL}"
-  OUTPUT_VARIABLE freeglut_imports
-  COMMAND_ERROR_IS_FATAL ANY)
-string(TOLOWER "${freeglut_imports}" freeglut_imports)
-foreach(dll IN ITEMS opengl32.dll gdi32.dll user32.dll winmm.dll)
-  if(NOT freeglut_imports MATCHES "${dll}")
-    message(FATAL_ERROR "FreeGLUT runtime does not import ${dll}")
-  endif()
-endforeach()
-
-execute_process(
-  COMMAND "${LLVM_STRINGS}" "${PURE_GL_MODULE}"
-  OUTPUT_VARIABLE module_strings
-  COMMAND_ERROR_IS_FATAL ANY)
-string(REPLACE "\r\n" "\n" module_strings "${module_strings}")
-if(NOT module_strings MATCHES "(^|\n)libfreeglut\\.dll(\n|$)")
-  message(FATAL_ERROR "pure-gl module does not reference libfreeglut.dll")
+get_filename_component(GL_PE_MODULE_DIRECTORY "${PURE_GL_MODULE}" DIRECTORY)
+get_filename_component(module_name "${PURE_GL_MODULE}" NAME)
+if(NOT module_name STREQUAL "pure-gl.dll")
+  message(FATAL_ERROR "pure-gl PE: expected pure-gl.dll, actual ${module_name}")
 endif()
-if(module_strings MATCHES "(^|\n)freeglut\\.dll(\n|$)")
-  message(FATAL_ERROR "pure-gl module still references the obsolete freeglut.dll name")
+if(PURE_GL_AUDIT_MODE STREQUAL "BUILD" OR PURE_GL_AUDIT_MODE STREQUAL "INSTALLED")
+  gl_pe_equal_path("${FREEGLUT_DLL}" "${PURE_GL_RUNTIME_DIRECTORY}/libfreeglut.dll")
+elseif(PURE_GL_AUDIT_MODE STREQUAL "SOURCE")
+  gl_pe_equal_path("${FREEGLUT_DLL}" "${PURE_GL_CLANG64_PREFIX}/bin/libfreeglut.dll")
+else()
+  message(FATAL_ERROR "pure-gl PE: unknown audit mode ${PURE_GL_AUDIT_MODE}")
 endif()
-
-message(STATUS
-  "Verified one x86-64 pure-gl module, seven wrapper families, one FreeGLUT runtime, and Windows system OpenGL APIs")
+gl_pe_no_reparse("${LLVM_READOBJ}" "${LLVM_STRINGS}" "${PURE_GL_MODULE}"
+  "${FREEGLUT_DLL}" "${PURE_GL_PURE_PREFIX}" "${PURE_GL_CLANG64_PREFIX}"
+  "${PURE_GL_WINDOWS_SYSTEM_DIRECTORY}" "${PURE_GL_RUNTIME_DIRECTORY}")
+gl_pe_pin("${LLVM_READOBJ}" "${LLVM_READOBJ_SHA256}")
+gl_pe_pin("${LLVM_STRINGS}" "${LLVM_STRINGS_SHA256}")
+gl_pe_loader()
+set(GL_PE_PURE_NAMES libc++.dll libgmp-10.dll libiconv-2.dll libmpfr-6.dll
+  libpcre-1.dll libpcreposix-0.dll libpure.dll libwinpthread-1.dll libzstd.dll zlib1.dll)
+set(GL_PE_SYSTEM_NAMES advapi32.dll gdi32.dll kernel32.dll ntdll.dll ole32.dll
+  opengl32.dll shell32.dll ucrtbase.dll user32.dll winmm.dll)
+set(expected pure-gl.dll libfreeglut.dll ${GL_PE_PURE_NAMES})
+list(SORT expected)
+# Validate every approved non-system path before invoking the reader. One native
+# check covers shared ancestors; repeat after traversal to catch replacement.
+set(audit_paths)
+foreach(name IN LISTS expected)
+  gl_pe_resolve("${name}" binary is_system)
+  list(APPEND audit_paths "${binary}")
+endforeach()
+gl_pe_no_reparse(${audit_paths})
+set(queue pure-gl.dll libfreeglut.dll)
+set(visited)
+set(system_paths)
+set(all_paths)
+set(import_count 0)
+while(queue)
+  list(POP_FRONT queue name)
+  if(name IN_LIST visited)
+    continue()
+  endif()
+  gl_pe_resolve("${name}" binary is_system)
+  gl_pe_read("${binary}" imports)
+  gl_pe_fixture("${name}" wanted)
+  gl_pe_exact("${name}" "${wanted}" "${imports}")
+  list(APPEND visited "${name}")
+  list(APPEND all_paths "${binary}")
+  list(LENGTH imports count)
+  math(EXPR import_count "${import_count}+${count}")
+  foreach(import IN LISTS imports)
+    gl_pe_resolve("${import}" dependency system_import)
+    if(system_import)
+      list(APPEND system_paths "${dependency}")
+    elseif(NOT import IN_LIST visited)
+      list(APPEND queue "${import}")
+    endif()
+  endforeach()
+endwhile()
+list(SORT visited)
+gl_pe_exact("recursive binary inventory" "${expected}" "${visited}")
+list(REMOVE_DUPLICATES system_paths)
+list(SORT system_paths)
+set(system_names)
+foreach(path IN LISTS system_paths)
+  get_filename_component(name "${path}" NAME)
+  list(APPEND system_names "${name}")
+endforeach()
+gl_pe_exact("Windows system binary inventory" "${GL_PE_SYSTEM_NAMES}" "${system_names}")
+gl_pe_no_reparse(${all_paths} ${system_paths})
+# System imports are terminal OS dependencies, not recursively bundled DLLs.
+# Check PE signatures/machine directly, without loading DLL initialization code.
+set(quoted)
+foreach(path IN LISTS system_paths)
+  list(APPEND quoted "'${path}'")
+endforeach()
+list(JOIN quoted "," array)
+execute_process(COMMAND "${GL_PE_POWERSHELL}" -NoProfile -NonInteractive -Command
+  "$ErrorActionPreference='Stop'; foreach($p in @(${array})) { $b=[IO.File]::ReadAllBytes($p); if($b.Length -lt 64 -or [BitConverter]::ToUInt16($b,0) -ne 0x5a4d) { throw ('invalid system PE '+$p) }; $o=[BitConverter]::ToInt32($b,60); if($o -lt 64 -or $o+26 -ge $b.Length -or [BitConverter]::ToUInt32($b,$o) -ne 0x4550 -or [BitConverter]::ToUInt16($b,$o+4) -ne 0x8664 -or [BitConverter]::ToUInt16($b,$o+24) -ne 0x20b) { throw ('non-AMD64 system PE '+$p) } }"
+  RESULT_VARIABLE rc OUTPUT_VARIABLE out ERROR_VARIABLE err TIMEOUT 30)
+if(NOT rc EQUAL 0 OR NOT out STREQUAL "" OR NOT err STREQUAL "")
+  message(FATAL_ERROR "pure-gl PE: system AMD64 verification failed: ${rc}\n${out}${err}")
+endif()
+list(LENGTH visited binary_count)
+list(LENGTH system_paths system_count)
+message(STATUS "PURE_GL_PE_OK AMD64 non-system=${binary_count} imports=${import_count} system=${system_count}; expected=[${expected}] actual=[${visited}] missing=[] unexpected=[]")
