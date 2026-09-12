@@ -151,8 +151,8 @@ def candidate():
         run('if (Test-Path -LiteralPath $env:AUDIO_STAGE) { throw \'Fresh audio stage required\' }',
             '& $env:CMAKE_EXE -E copy_directory "$env:AUDIO_PREFIX" "$env:AUDIO_STAGE"',
             INSTALL_RUNTIME, INSTALL_DOCS, INSTALLED_VERIFY), run(SOURCE_DIST)]
+    at = next(i for i, step in enumerate(steps) if step.get('name') == AUDIO_NAMES[0])
     steps[:] = [step for step in steps if step.get('name') not in AUDIO_NAMES]
-    at = next(i for i, step in enumerate(steps) if step.get('name') == 'Install and validate the portable runtime') + 1
     steps[at:at] = [dict(name=name, shell='pwsh', env=copy.deepcopy(AUDIO_ENV), run=script)
                    for name, script in zip(AUDIO_NAMES, commands)]
     return document
@@ -575,8 +575,8 @@ def midi_candidate():
             MIDI_INSTALL+' runtime', MIDI_INSTALL+' documentation', MIDI_VERIFY),
         run(MIDI_DIST_DIRECTORY, MIDI_DIST),
     ]
+    at = next(i for i, s in enumerate(steps) if s.get('name') == MIDI_NAMES[0])
     steps[:] = [s for s in steps if s.get('name') not in MIDI_NAMES]
-    at = next(i for i, s in enumerate(steps) if s.get('name') == 'Install and validate the portable runtime') + 1
     steps[at:at] = [dict(name=n, shell='pwsh', env=copy.deepcopy(MIDI_ENV), run=r)
                    for n, r in zip(MIDI_NAMES, commands)]
     return document
@@ -776,6 +776,295 @@ class MidiWorkflowMutationTests(unittest.TestCase):
             with self.subTest(mutation=label), self.assertRaises(AssertionError):
                 validate_data(document)
         print(f'MIDI_WORKFLOW_CASES negatives={len(cases)}')
+
+
+GL_NAMES = [
+    'Prepare pure-gl audit inputs', 'Configure strict pure-gl audit',
+    'Build and verify pure-gl PE closure',
+    'Run mandatory noninteractive pure-gl tests',
+    'Verify pure-gl source distribution', 'Install and verify the pure-gl package',
+]
+GL_PATHS = [
+    'pure-gl/**', 'pure/todo/TODO-35-windows-pure-gl.md',
+    'docs/superpowers/specs/2026-09-11-windows-pure-gl-audit-hardening-design.md',
+    'docs/superpowers/plans/2026-09-12-windows-pure-gl-audit-hardening.md',
+]
+GL_JOB_ENV = {
+    'GL_CHECKOUT_SOURCE': '${{ github.workspace }}/pure-gl',
+    'GL_CHECKOUT_WORKFLOWS': '${{ github.workspace }}/.github',
+    'GL_PURE_ORIGIN': '${{ github.workspace }}/pure/build/windows-clang64-prefix',
+    'GL_CLANG64_PREFIX': 'C:/msys64/clang64',
+    'GL_WINDOWS_SYSTEM_DIRECTORY': 'C:/Windows/System32',
+    'GL_CC': 'C:/msys64/clang64/bin/clang.exe',
+    'GL_NINJA': 'C:/msys64/clang64/bin/ninja.exe',
+    'GL_PKG_CONFIG': 'C:/msys64/clang64/bin/pkgconf.exe',
+    'GL_READOBJ': 'C:/msys64/clang64/bin/llvm-readobj.exe',
+    'GL_READOBJ_SHA256': '040c4cb0740d2a9d9f7b488bc676c0406eb12c7b349acba1797c2f58865087cb',
+    'GL_STRINGS': 'C:/msys64/clang64/bin/llvm-strings.exe',
+    'GL_STRINGS_SHA256': '8d04b5a905fc4d42ee21ae075ced38f5d9a937dbbc03aa571f409002f1bbd411',
+    'GL_MAKE': 'C:/msys64/clang64/bin/mingw32-make.exe',
+    'GL_LOG_DIR': '${{ github.workspace }}/pure/build/native-logs/windows-11-x86_64/pure-gl',
+}
+GL_ENV = {
+    'GL_REPOSITORY': '${{ runner.temp }}/pure gl source',
+    'GL_SOURCE': '${{ runner.temp }}/pure gl source/pure-gl',
+    'GL_BUILD': '${{ runner.temp }}/gl8',
+    'GL_PURE_PREFIX': '${{ runner.temp }}/glp',
+    'GL_STAGE': '${{ runner.temp }}/gl package café',
+    'PATH': 'C:/msys64/clang64/bin;C:/Windows/System32;C:/Windows',
+    'PURELIB': '', 'PURE_INCLUDE': '', 'PURE_LIBRARY': '',
+    'PKG_CONFIG_PATH': '', 'PKG_CONFIG_SYSROOT_DIR': '',
+    'PKG_CONFIG_LIBDIR': '${{ runner.temp }}/glp/lib/pkgconfig;C:/msys64/clang64/lib/pkgconfig',
+}
+GL_INPUTS = {
+    'CMAKE_BUILD_TYPE': 'Release', 'BUILD_TESTING': 'ON', 'PURE_GL_STRICT_AUDIT': 'ON',
+    'CMAKE_C_COMPILER': '$env:GL_CC',
+    'CMAKE_C_COMPILER_TARGET': 'x86_64-w64-windows-gnu',
+    'CMAKE_MAKE_PROGRAM': '$env:GL_NINJA',
+    'PKG_CONFIG_EXECUTABLE': '$env:GL_PKG_CONFIG',
+    'LLVM_READOBJ_EXECUTABLE': '$env:GL_READOBJ',
+    'LLVM_READOBJ_SHA256': '$env:GL_READOBJ_SHA256',
+    'LLVM_STRINGS_EXECUTABLE': '$env:GL_STRINGS',
+    'LLVM_STRINGS_SHA256': '$env:GL_STRINGS_SHA256',
+    'GNU_MAKE_EXECUTABLE': '$env:GL_MAKE',
+    'PURE_EXECUTABLE': '$env:GL_PURE_PREFIX/bin/pure.exe',
+    'PURE_GL_PURE_PREFIX': '$env:GL_PURE_PREFIX',
+    'PURE_GL_CLANG64_PREFIX': '$env:GL_CLANG64_PREFIX',
+    'PURE_GL_WINDOWS_SYSTEM_DIRECTORY': '$env:GL_WINDOWS_SYSTEM_DIRECTORY',
+}
+GL_LOGS = [
+    ['prepare-source.log', 'prepare-workflows.log', 'prepare-baseline.log'],
+    ['configure.log'], ['build.log', 'pe.log'], ['ctest.log'], ['distcheck.log'],
+    ['prepare-stage.log', 'install-runtime.log', 'install-documentation.log', 'installed.log'],
+]
+GL_COMMANDS = [
+    [
+        '& $env:CMAKE_EXE -E copy_directory "$env:GL_CHECKOUT_SOURCE" "$env:GL_SOURCE"',
+        '& $env:CMAKE_EXE -E copy_directory "$env:GL_CHECKOUT_WORKFLOWS" "$env:GL_REPOSITORY/.github"',
+        '& $env:CMAKE_EXE -E copy_directory "$env:GL_PURE_ORIGIN" "$env:GL_PURE_PREFIX"',
+    ],
+    ['& $env:CMAKE_EXE -S "$env:GL_SOURCE" -B "$env:GL_BUILD" -G Ninja ' +
+     ' '.join(f'"-D{k}={v}"' for k, v in GL_INPUTS.items())],
+    [
+        '& $env:CMAKE_EXE --build "$env:GL_BUILD" --parallel 4',
+        '& $env:CMAKE_EXE --build "$env:GL_BUILD" --target verify-windows-dependencies --parallel 4',
+    ],
+    ['& $env:CTEST_EXE --test-dir "$env:GL_BUILD" -L gl --output-on-failure --no-tests=error'],
+    ['& $env:GL_MAKE --no-print-directory -C "$env:GL_SOURCE" distcheck '
+     '"CMAKE=$env:CMAKE_EXE" "PKG_CONFIG=$env:GL_PKG_CONFIG" "DIST_AUDIT_BUILD=$env:GL_BUILD"'],
+    [
+        '& $env:CMAKE_EXE -E copy_directory "$env:GL_PURE_PREFIX" "$env:GL_STAGE"',
+        '& $env:CMAKE_EXE --install "$env:GL_BUILD" --prefix "$env:GL_STAGE" --component runtime',
+        '& $env:CMAKE_EXE --install "$env:GL_BUILD" --prefix "$env:GL_STAGE" --component documentation',
+        '& $env:CMAKE_EXE "-DGL_INSTALL_CONTEXT=$env:GL_BUILD/pure-gl-install-context.cmake" '
+        '"-DSTAGE_PREFIX=$env:GL_STAGE" -P "$env:GL_SOURCE/cmake/VerifyInstalledPackage.cmake"',
+    ],
+]
+GL_FAILURE = "if ($LASTEXITCODE -ne 0) { throw 'GL native command failed' }"
+GL_REMOVE_PURELIB = 'Remove-Item Env:PURELIB -ErrorAction SilentlyContinue'
+GL_UPLOAD = {
+    'name': 'Upload pure-gl audit evidence', 'if': 'always()',
+    'uses': 'actions/upload-artifact@v4',
+    'with': {
+        'name': 'pure-gl-windows-audit', 'retention-days': '14', 'if-no-files-found': 'warn',
+        'path': '${{ github.workspace }}/pure/build/native-logs/windows-11-x86_64/pure-gl\n${{ runner.temp }}/gl8\n',
+    },
+}
+
+
+def gl_step(document, index):
+    return next(s for s in document['jobs']['windows-pure-core']['steps'] if s.get('name') == GL_NAMES[index])
+
+
+def gl_candidate():
+    """A literal complete GL gate, independent of the validator's policy."""
+    document = midi_candidate()
+    core = document['jobs']['windows-pure-core']
+    core['env'].update(GL_JOB_ENV)
+    for event in ('push', 'pull_request'):
+        paths = document['on'][event]['paths']
+        paths.extend(p for p in GL_PATHS if p not in paths)
+    steps = core['steps']
+    prereq = next(s for s in steps if s.get('name') == 'Install the CLANG64 build prerequisites')
+    if 'mingw-w64-clang-x86_64-freeglut' not in prereq['with']['install'].split():
+        prereq['with']['install'] += ' mingw-w64-clang-x86_64-freeglut'
+    prepared = []
+    for index, commands in enumerate(GL_COMMANDS):
+        lines = ["$ErrorActionPreference = 'Stop'", GL_REMOVE_PURELIB]
+        guards = {0: ['GL_REPOSITORY', 'GL_PURE_PREFIX'], 1: ['GL_BUILD'], 5: ['GL_STAGE']}.get(index, [])
+        lines.extend(f"if (Test-Path -LiteralPath $env:{key}) {{ throw 'Fresh GL path required' }}" for key in guards)
+        if index == 0:
+            lines.append('New-Item -ItemType Directory -Path "$env:GL_LOG_DIR" -Force | Out-Null')
+        if index == 1:
+            lines.append("if ($env:GL_BUILD.Length -gt 32) { throw 'Short GL build root required' }")
+        for call, log in zip(commands, GL_LOGS[index]):
+            lines.extend([call + f' 2>&1 | Tee-Object -FilePath "$env:GL_LOG_DIR/{log}"', GL_FAILURE])
+        environment = copy.deepcopy(GL_ENV)
+        if index >= 3:
+            environment['PATH'] = 'C:/Windows/System32;C:/Windows'
+        prepared.append(dict(name=GL_NAMES[index], shell='pwsh', env=environment, run='\n'.join(lines)+'\n'))
+    steps[:] = [s for s in steps if s.get('name') not in [*GL_NAMES, GL_UPLOAD['name']]]
+    at = next(i for i, s in enumerate(steps) if s.get('name') == 'Install and validate the portable runtime') + 1
+    steps[at:at] = prepared
+    steps.append(copy.deepcopy(GL_UPLOAD))
+    return document
+
+
+def gl_mutations():
+    cases = []
+    def mutate(label, diagnostic, operation):
+        document = gl_candidate()
+        operation(document)
+        cases.append((label, diagnostic, document))
+    def replace(label, diagnostic, index, old, new):
+        def operation(d):
+            step = gl_step(d, index)
+            assert old in step['run'], (label, old)
+            step['run'] = step['run'].replace(old, new, 1)
+        mutate(label, diagnostic, operation)
+    for event in ('push', 'pull_request'):
+        for path in GL_PATHS:
+            mutate(f'{event}:{path}', f'GL {event} missing trigger input: {re.escape(path)}',
+                   lambda d, e=event, p=path: d['on'][e]['paths'].remove(p))
+    for package in ('make', 'mingw-w64-clang-x86_64-freeglut'):
+        def omit_package(d, package=package):
+            s = next(s for s in d['jobs']['windows-pure-core']['steps']
+                     if s.get('name') == 'Install the CLANG64 build prerequisites')
+            s['with']['install'] = ' '.join(p for p in s['with']['install'].split() if p != package)
+        diagnostic = 'missing CI prerequisite package: make' if package == 'make' else 'GL prerequisite missing: '+package
+        mutate('package:'+package, diagnostic, omit_package)
+    for key in GL_JOB_ENV:
+        for value in (None, 'C:/wrong', '${{ env.PATH }}'):
+            mutate(f'job:{key}:{value}', 'GL job input origin changed: '+key,
+                   lambda d, k=key, v=value: d['jobs']['windows-pure-core']['env'].update({k:v}))
+    for index in range(len(GL_NAMES)):
+        mutate(f'missing-step:{index}', 'expected exactly one step named '+re.escape(repr(GL_NAMES[index])),
+               lambda d, i=index: d['jobs']['windows-pure-core']['steps'].remove(gl_step(d,i)))
+        mutate(f'duplicate-step:{index}', 'expected exactly one step named '+re.escape(repr(GL_NAMES[index])),
+               lambda d, i=index: d['jobs']['windows-pure-core']['steps'].append(copy.deepcopy(gl_step(d,i))))
+        for field, value in [('if','false'), ('continue-on-error','true'), ('shell','bash'), ('working-directory','pure-gl')]:
+            mutate(f'step:{index}:{field}', 'GL step execution context',
+                   lambda d, i=index, f=field, v=value: gl_step(d,i).update({f:v}))
+        for key in GL_ENV:
+            for mode in ('missing', 'poisoned'):
+                mutate(f'env:{index}:{key}:{mode}', 'GL step environment changed',
+                       lambda d, i=index, k=key, m=mode: gl_step(d,i)['env'].pop(k) if m=='missing'
+                       else gl_step(d,i)['env'].update({k:'${{ env.PATH }}'}))
+        mutate(f'env:{index}:override', 'GL step environment changed',
+               lambda d, i=index: gl_step(d,i)['env'].update(CMAKE_EXE='C:/wrong.exe'))
+        replace(f'purelib:{index}', 'GL must remove PURELIB before commands', index, GL_REMOVE_PURELIB, '')
+        replace(f'errors:{index}', 'GL unsupported PowerShell statement', index, "'Stop'", "'Continue'")
+        replace(f'early-exit:{index}', 'GL unsupported PowerShell statement', index, GL_REMOVE_PURELIB, 'exit 0')
+        for call, log in zip(GL_COMMANDS[index], GL_LOGS[index]):
+            suffix = f' 2>&1 | Tee-Object -FilePath "$env:GL_LOG_DIR/{log}"'
+            replace(f'unlogged:{index}:{log}', 'GL native command requires its retained log', index, suffix, '')
+            replace(f'log-origin:{index}:{log}', 'GL native command requires its retained log', index,
+                    '$env:GL_LOG_DIR/'+log, '$env:LOG_DIR/unrelated.log')
+            replace(f'unchecked:{index}:{log}', 'GL native command must immediately propagate nonzero status',
+                    index, call+suffix+'\n'+GL_FAILURE, call+suffix)
+            replace(f'conditional:{index}:{log}', 'GL unsupported PowerShell statement', index, call, 'if ($false) { '+call+' }')
+        for line in gl_step(gl_candidate(), index)['run'].splitlines():
+            if line.startswith('if ') and '$LASTEXITCODE' not in line:
+                replace(f'preflight:{index}:{line}', 'GL preflight changed', index, line, '')
+    for key, value in GL_INPUTS.items():
+        argument = f'"-D{key}={value}"'
+        replace('configure-missing:'+key, 'GL configure missing input: '+key, 1, argument, '')
+        replace('configure-wrong:'+key, 'GL configure input changed: '+key, 1, argument, f'"-D{key}=OFF"')
+        replace('configure-duplicate:'+key, 'GL duplicate configure input: '+key, 1, argument, argument+' '+argument)
+    replace('configure-override', 'GL unexpected configure input', 1, '-G Ninja', '-G Ninja -DCMAKE_SUPPRESS_REGENERATION=ON')
+    replace('configure-wrong-source', 'GL configure invocation changed', 1, '-S "$env:GL_SOURCE"', '-S "$env:GL_CHECKOUT_SOURCE"')
+    for index in (0, 2, 3, 4, 5):
+        for call in GL_COMMANDS[index]:
+            replace(f'command:{index}:{call}', 'GL command sequence changed', index, call, call+' --extra')
+    for old, new in [('--parallel 4','--parallel 2'), ('--parallel 4','--parallel'),
+                     ('--parallel 4','--parallel 2 --parallel 4'),
+                     ('--target verify-windows-dependencies','--target pure-gl')]:
+        replace('build:'+new, 'GL command sequence changed', 2, old, new)
+    replace('pe-workers', 'GL command sequence changed', 2, GL_COMMANDS[2][1], GL_COMMANDS[2][1].replace('--parallel 4','--parallel 1'))
+    for old, new in [('-L gl','-L absent'), ('-L gl',''), ('--no-tests=error',''),
+                     ('--no-tests=error','--no-tests=ignore'), ('-L gl','-L gl -E install')]:
+        replace('ctest:'+new, 'GL command sequence changed', 3, old, new)
+    for old, new in [('distcheck','dist'), ('$env:GL_SOURCE','$env:GL_CHECKOUT_SOURCE'),
+                     ('DIST_AUDIT_BUILD=$env:GL_BUILD','DIST_AUDIT_BUILD=$env:GL_STAGE')]:
+        replace('dist:'+old, 'GL command sequence changed', 4, old, new)
+    for old, new in [(' runtime',' documentation'), (' documentation',' runtime'),
+                     ('pure-gl-install-context.cmake','windows-install-context.cmake'),
+                     ('-DSTAGE_PREFIX=$env:GL_STAGE','-DSTAGE_PREFIX=$env:GL_PURE_PREFIX'),
+                     ('VerifyInstalledPackage.cmake','VerifyWindowsDependencies.cmake')]:
+        replace('install:'+old, 'GL command sequence changed', 5, old, new)
+    ordered = ['Install and validate the portable runtime', *GL_NAMES,
+               'Install and verify the pure-midi package']
+    for first, second in zip(ordered, ordered[1:]):
+        def swap(d, a=first, b=second):
+            steps = d['jobs']['windows-pure-core']['steps']
+            x,y = [next(i for i,s in enumerate(steps) if s.get('name')==n) for n in (a,b)]
+            steps[x],steps[y] = steps[y],steps[x]
+        mutate('order:'+first+':'+second, 'GL release steps are out of dependency order', swap)
+    for field, value in [('if','success()'), ('uses','actions/upload-artifact@v3'), ('continue-on-error','true')]:
+        mutate('upload:'+field, 'GL logs require unconditional artifact retention',
+               lambda d, f=field, v=value: next(s for s in d['jobs']['windows-pure-core']['steps']
+               if s.get('name')==GL_UPLOAD['name']).update({f:v}))
+    for key in GL_UPLOAD['with']:
+        mutate('upload-option:'+key, 'GL log artifact inputs changed',
+               lambda d, k=key: next(s for s in d['jobs']['windows-pure-core']['steps']
+               if s.get('name')==GL_UPLOAD['name'])['with'].pop(k))
+    return cases
+
+
+class GlWorkflowMutationTests(unittest.TestCase):
+    def test_sdk_prefix_cannot_reintroduce_native_make_space_tokenization(self):
+        document = gl_candidate()
+        for index in range(len(GL_NAMES)):
+            environment = gl_step(document, index)['env']
+            environment['GL_PURE_PREFIX'] = '${{ runner.temp }}/gl pure'
+            environment['PKG_CONFIG_LIBDIR'] = '${{ runner.temp }}/gl pure/lib/pkgconfig;C:/msys64/clang64/lib/pkgconfig'
+        with self.assertRaisesRegex(AssertionError, 'GL step environment changed'):
+            validate_data(document)
+
+    def test_short_guard_cannot_read_a_different_environment_variable(self):
+        document = gl_candidate()
+        step = gl_step(document, 1)
+        step['run'] = step['run'].replace('$env:GL_BUILD.Length', '$env:GL_BUILDxLength')
+        with self.assertRaisesRegex(AssertionError, 'GL unsupported PowerShell statement'):
+            validate_data(document)
+
+    def test_clean_baseline_is_captured_immediately_after_portable_install(self):
+        document = gl_candidate()
+        steps = document['jobs']['windows-pure-core']['steps']
+        steps.insert(steps.index(gl_step(document, 0)),
+                     {'name': 'Install another extension', 'run': '& cmake --install other-build'})
+        with self.assertRaisesRegex(AssertionError, 'GL release steps are out of dependency order'):
+            validate_data(document)
+
+    def test_actual_workflow_has_complete_gl_gate(self):
+        names = [s.get('name') for s in data_workflow()['jobs']['windows-pure-core']['steps']]
+        self.assertTrue(set(GL_NAMES) <= set(names), 'workflow omits the mandatory pure-gl gate')
+        validate_data(data_workflow())
+
+    def test_independent_pristine_and_formatting_variants(self):
+        validate_data(gl_candidate())
+        for variant in ('continuations', 'quoted', 'reordered-inputs'):
+            document = gl_candidate()
+            if variant == 'continuations':
+                for index in range(len(GL_NAMES)):
+                    s = gl_step(document,index)
+                    s['run'] = '# audited comment\n'+s['run'].replace(' --', ' `\n  --')
+            elif variant == 'quoted':
+                s = gl_step(document,3)
+                s['run'] = s['run'].replace('-L gl', "-L 'gl'").replace('$env:CTEST_EXE','"$env:CTEST_EXE"')
+            else:
+                s = gl_step(document,1)
+                tail = ' '.join(f'"-D{k}={v}"' for k,v in GL_INPUTS.items())
+                s['run'] = s['run'].replace(tail, ' '.join(f'"-D{k}={v}"' for k,v in reversed(GL_INPUTS.items())))
+            validate_data(document)
+        print('GL_WORKFLOW_PRISTINE independent=4')
+
+    def test_rejects_each_gl_semantic_mutation_with_diagnostic(self):
+        cases = gl_mutations()
+        for label, diagnostic, document in cases:
+            with self.subTest(mutation=label), self.assertRaisesRegex(AssertionError, diagnostic):
+                validate_data(document)
+        print(f'GL_WORKFLOW_CASES negatives={len(cases)}')
 
 
 class BuildInvocationMutationTests(unittest.TestCase):

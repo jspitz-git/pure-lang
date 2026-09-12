@@ -243,5 +243,96 @@ if(duplicate_result EQUAL 0 OR
   message(FATAL_ERROR "Runner accepted duplicate --pure: ${duplicate_output}${duplicate_error}")
 endif()
 
+# Pure 0.68 derives its prelude path as UTF-8, then uses narrow CRT stat/fopen.
+# On a non-UTF-8 Windows ACP the physical Unicode executable prefix loses the
+# prelude. Exercise only an identity-checked 8.3 spelling of that same executable;
+# scripts, includes, runtime PATH and protected inputs remain physical paths.
+set(unicode_prefix "${test_root}/pure café")
+file(MAKE_DIRECTORY "${unicode_prefix}")
+file(COPY "${PURE_GL_PURE_PREFIX}/" DESTINATION "${unicode_prefix}")
+set(unicode_script "${unicode_prefix}/probe.pure")
+file(COPY_FILE "${SOURCE_DIR}/tests/runner_probe.pure" "${unicode_script}")
+set(unicode_pure "${unicode_prefix}/bin/pure.exe")
+file(SHA256 "${PURE_EXECUTABLE}" original_pure_hash)
+file(SHA256 "${unicode_pure}" copied_pure_hash)
+if(NOT copied_pure_hash STREQUAL original_pure_hash)
+  message(FATAL_ERROR "Unicode probe must use the identical Pure executable")
+endif()
+file(WRITE "${test_root}/short-path.ps1" [=[
+param([string]$Path)
+$ErrorActionPreference='Stop'
+Add-Type -TypeDefinition @'
+using System;
+using System.Text;
+using System.Runtime.InteropServices;
+public static class GlShortPath {
+  [DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true)]
+  public static extern uint GetShortPathName(string p, StringBuilder b, uint n);
+}
+'@
+$buffer=[Text.StringBuilder]::new(32768)
+$count=[GlShortPath]::GetShortPathName($Path,$buffer,32768)
+if ($count -eq 0 -or $count -ge 32768) { throw 'No Windows short path' }
+$buffer.ToString()
+]=])
+execute_process(COMMAND "${PURE_GL_WINDOWS_SYSTEM_DIRECTORY}/WindowsPowerShell/v1.0/powershell.exe"
+  -NoProfile -NonInteractive -File "${test_root}/short-path.ps1" -Path "${unicode_pure}"
+  RESULT_VARIABLE rc OUTPUT_VARIABLE windows_alias ERROR_VARIABLE err OUTPUT_STRIP_TRAILING_WHITESPACE)
+if(NOT rc EQUAL 0 OR windows_alias STREQUAL "")
+  message(FATAL_ERROR "Independent Windows short-path query failed: ${err}")
+endif()
+execute_process(COMMAND "${RUNNER}" --print-pure-executable-alias "${unicode_pure}"
+  RESULT_VARIABLE rc OUTPUT_VARIABLE runner_alias ERROR_VARIABLE err OUTPUT_STRIP_TRAILING_WHITESPACE)
+file(TO_CMAKE_PATH "${windows_alias}" windows_alias)
+file(TO_CMAKE_PATH "${runner_alias}" runner_alias)
+if(NOT rc EQUAL 0 OR NOT runner_alias STREQUAL windows_alias)
+  message(FATAL_ERROR "Runner did not return the independently verified Windows alias (${rc}): ${runner_alias} ${err}")
+endif()
+set(unicode_args --pure "${unicode_pure}" --script "${unicode_script}"
+  --cwd C:/Windows --timeout-ms 15000 --include "${unicode_prefix}/lib/pure"
+  --library "${unicode_prefix}/lib/pure" --input "${unicode_prefix}/lib/pure/prelude.pure"
+  --path-entry "${unicode_prefix}/bin" --path-entry "${PURE_GL_WINDOWS_SYSTEM_DIRECTORY}")
+execute_process(COMMAND "${RUNNER}" ${unicode_args}
+  RESULT_VARIABLE direct_rc OUTPUT_VARIABLE direct_out ERROR_VARIABLE direct_err TIMEOUT 20)
+if(direct_rc EQUAL 0)
+  message(STATUS "PURE_GL_UNICODE_DIRECT_PREFIX_OK host_crt_supports_unicode=1")
+elseif("${direct_err}" MATCHES "stderr was not empty")
+  message(STATUS "PURE_GL_UNICODE_PREFIX_LIMITATION Pure-0.68 UTF8-libdir/narrow-CRT mismatch authenticated_rejection=1")
+else()
+  message(FATAL_ERROR "Unicode prefix control failed outside the known Pure boundary: ${direct_out}${direct_err}")
+endif()
+foreach(case absent nonascii wrong-identity external)
+  if(case STREQUAL absent)
+    set(candidate "${windows_alias}.absent")
+    set(expected "ASCII executable alias missing")
+  elseif(case STREQUAL nonascii)
+    set(candidate "${unicode_pure}")
+    set(expected "executable alias must be ASCII")
+  elseif(case STREQUAL wrong-identity)
+    set(candidate "${pure_prefix}/bin/pure fixture.exe")
+    set(expected "executable alias physical identity mismatch")
+  else()
+    set(candidate "${PURE_EXECUTABLE}")
+    set(expected "executable alias physical identity mismatch")
+  endif()
+  execute_process(COMMAND "${RUNNER}" ${unicode_args} --pure-executable-alias "${candidate}"
+    RESULT_VARIABLE rc OUTPUT_VARIABLE out ERROR_VARIABLE err TIMEOUT 20)
+  if(rc EQUAL 0 OR NOT "${err}" MATCHES "${expected}" OR out MATCHES "PURE_GL_TEST_OK")
+    message(FATAL_ERROR "Unsafe executable alias escaped: ${case} (${rc}) ${out}${err}")
+  endif()
+  message(STATUS "PURE_GL_EXECUTABLE_ALIAS_REJECT_OK ${case}")
+endforeach()
+execute_process(COMMAND "${RUNNER}" ${unicode_args} --pure-executable-alias "${windows_alias}"
+  RESULT_VARIABLE rc OUTPUT_VARIABLE out ERROR_VARIABLE err TIMEOUT 20)
+if(NOT rc EQUAL 0 OR NOT err STREQUAL "" OR
+    NOT out MATCHES "PURE_GL_EXECUTABLE_ALIAS_OK physical_identity=1 ascii=1" OR
+    NOT out MATCHES "EFFECTIVE_PURELIB=UNSET" OR NOT out MATCHES "PURE_GL_TEST_OK")
+  message(FATAL_ERROR "Verified alias failed to run the same physical Unicode prefix: ${out}${err}")
+endif()
+file(SHA256 "${unicode_pure}" after_pure_hash)
+if(NOT after_pure_hash STREQUAL copied_pure_hash)
+  message(FATAL_ERROR "Executable alias changed physical Pure bytes")
+endif()
+message(STATUS "PURE_GL_EXECUTABLE_ALIAS_CONTRACT_OK negatives=4 physical_unicode_stage=1 identical_bytes=1")
 message(STATUS "PURE_GL_RUNNER_CONTRACT_OK")
 gl_audit_clean(runner-contract)

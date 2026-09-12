@@ -129,11 +129,24 @@ endfunction()
 function(gl_pe_read path output)
   execute_process(COMMAND "${LLVM_READOBJ}" --file-headers --coff-imports "${path}"
     RESULT_VARIABLE rc OUTPUT_VARIABLE records ERROR_VARIABLE err TIMEOUT 30
-    ENCODING UTF-8)
-  if(NOT rc EQUAL 0 OR NOT err STREQUAL "" OR records MATCHES "[^\t\r\n -~]")
+    ENCODING NONE)
+  # Preserve raw UTF-8 bytes so decoding cannot repair invalid input into a
+  # matching path. LLVM echoes the physical input in exactly one File: field.
+  # Only those byte-exact canonical path bytes may be non-ASCII; all remaining
+  # records still use the closed ASCII grammar below. An invalid UTF-8 sequence
+  # cannot match the canonical Windows path and therefore remains rejected.
+  string(REPLACE "\r\n" "\n" records "${records}")
+  set(file_record "\nFile: ${path}\n")
+  string(REPLACE "${file_record}" "\nFile: CANONICAL_PHYSICAL_INPUT\n"
+    ascii_records "\n${records}")
+  if(NOT rc EQUAL 0 OR NOT err STREQUAL "" OR ascii_records MATCHES "[^\t\n -~]")
     message(FATAL_ERROR "pure-gl PE: reader failed or decoding failed for ${path}: ${rc}\n${err}")
   endif()
   gl_pe_parse_pe("${records}" "${path}" imports)
+  string(FIND "\n${records}" "${file_record}" exact_file)
+  if(exact_file EQUAL -1)
+    message(FATAL_ERROR "pure-gl PE: File record must equal the canonical physical input: ${path}")
+  endif()
   set(${output} "${imports}" PARENT_SCOPE)
 endfunction()
 

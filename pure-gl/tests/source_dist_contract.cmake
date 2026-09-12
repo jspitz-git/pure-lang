@@ -32,7 +32,7 @@ set(expected_files
   tests/AuditHelpers.cmake tests/ReleaseChecks.cmake tests/cleanup_contract.cmake tests/configure_contract.cmake
   tests/hidden-render.pure tests/install_contract.cmake tests/install_guard_contract.cmake
   tests/interactive.pure tests/load.pure tests/render_contract.cmake tests/runner_contract.cmake
-  tests/runner_probe.pure tests/runtime_verifier_contract.cmake tests/source_dist_contract.cmake
+  tests/runner_probe.pure tests/runtime_verifier_contract.cmake tests/source_dist_contract.cmake tests/workflow_contract.cmake
   tests/fixtures/freeglut-imports.txt tests/fixtures/libc++-imports.txt
   tests/fixtures/libgmp-10-imports.txt tests/fixtures/libiconv-2-imports.txt
   tests/fixtures/libmpfr-6-imports.txt tests/fixtures/libpcre-1-imports.txt

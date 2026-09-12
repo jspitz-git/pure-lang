@@ -59,7 +59,7 @@ cmake/Install.cmake cmake/LegacyPathPolicy.cmake cmake/LegacyWorkflow.cmake cmak
 cmake/VerifyInstalledPackage.cmake cmake/VerifyWindowsDependencies.cmake cmake/pure_gl_install_guard.c cmake/pure_gl_runner.c \
 tests/AuditHelpers.cmake tests/ReleaseChecks.cmake tests/cleanup_contract.cmake tests/configure_contract.cmake tests/hidden-render.pure \
 tests/install_contract.cmake tests/install_guard_contract.cmake tests/interactive.pure tests/load.pure \
-tests/render_contract.cmake tests/runner_contract.cmake tests/runner_probe.pure tests/runtime_verifier_contract.cmake tests/source_dist_contract.cmake \
+tests/render_contract.cmake tests/runner_contract.cmake tests/runner_probe.pure tests/runtime_verifier_contract.cmake tests/source_dist_contract.cmake tests/workflow_contract.cmake \
 tests/fixtures/freeglut-imports.txt tests/fixtures/libc++-imports.txt tests/fixtures/libgmp-10-imports.txt \
 tests/fixtures/libiconv-2-imports.txt tests/fixtures/libmpfr-6-imports.txt tests/fixtures/libpcre-1-imports.txt \
 tests/fixtures/libpcreposix-0-imports.txt tests/fixtures/libpure-imports.txt tests/fixtures/libwinpthread-1-imports.txt \

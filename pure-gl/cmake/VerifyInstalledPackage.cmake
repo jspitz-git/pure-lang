@@ -511,9 +511,19 @@ set(staged_inputs)
 foreach(name GL GL_ARB GL_EXT GL_NV GL_ATI GLU GLUT)
   list(APPEND staged_inputs --input "${stage}/lib/pure/${name}.pure")
 endforeach()
+# Pure 0.68 mixes its UTF-8 default libdir with narrow Windows CRT file APIs.
+# Only the executable spelling uses a verified Windows ASCII alias of the same
+# physical stage. Every ownership/hash/provenance/script/module path stays canonical.
+execute_process(COMMAND "${GL_INSTALL_RUNNER}" --print-pure-executable-alias "${stage}/bin/pure.exe"
+  RESULT_VARIABLE alias_rc OUTPUT_VARIABLE staged_pure_alias ERROR_VARIABLE alias_err
+  OUTPUT_STRIP_TRAILING_WHITESPACE TIMEOUT 20)
+if(NOT alias_rc EQUAL 0 OR staged_pure_alias STREQUAL "" OR NOT alias_err STREQUAL "")
+  message(FATAL_ERROR "install audit: same-stage ASCII executable alias unavailable (${alias_rc}): ${alias_err}")
+endif()
 foreach(case load hidden-render)
   execute_process(COMMAND "${GL_INSTALL_RUNNER}"
     --pure "${stage}/bin/pure.exe"
+    --pure-executable-alias "${staged_pure_alias}"
     --script "${stage}/share/doc/pure-gl/tests/${case}.pure"
     --timeout-ms 90000 --cwd "${install_windows_root}"
     ${staged_inputs} --input "${stage}/lib/pure/pure-gl.dll"

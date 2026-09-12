@@ -79,6 +79,22 @@ function(check name expected)
   message(STATUS "PE contract ${name}: ${expected}")
 endfunction()
 set(extra "Import {\n  Name: libunexpected.dll\n  ImportLookupTableRVA: 0x100\n  ImportAddressTableRVA: 0x200\n  Symbol: test (0)\n}\n")
+# The only non-ASCII output LLVM may emit is the exact physical input in File:.
+# Keep that ownership field byte-exact while rejecting invalid UTF-8 and any
+# Unicode in the remaining structural/import grammar.
+set(unicode_module "${root}/café/pure-gl.dll")
+file(MAKE_DIRECTORY "${root}/café")
+file(COPY_FILE "${PURE_GL_MODULE}" "${unicode_module}")
+file(SHA256 "${LLVM_READOBJ}" actual_reader_hash)
+check(unicode-physical-file PASS "-DPURE_GL_MODULE=${unicode_module}"
+  "-DLLVM_READOBJ=${LLVM_READOBJ}" "-DLLVM_READOBJ_SHA256=${actual_reader_hash}")
+string(ASCII 255 undecodable)
+string(REPLACE "File: ${PURE_GL_MODULE}" "File: ${root}/caf${undecodable}/pure-gl.dll"
+  changed "${module_records}")
+file(WRITE "${reader}.data/pure-gl.dll.txt" "${changed}")
+check(invalid-utf8-file "pure-gl.dll;decoding failed" "-DPURE_GL_MODULE=${unicode_module}")
+file(WRITE "${reader}.data/pure-gl.dll.txt" "${module_records}UnknownRecord: café\n")
+check(unicode-nonfile-record "pure-gl.dll;decoding failed")
 string(REPLACE "[" "@GL_PE_LBRACKET@" changed "${module_records}")
 file(WRITE "${reader}.data/pure-gl.dll.txt" "${changed}")
 check(reserved-encoding "pure-gl.dll;malformed")
@@ -220,4 +236,4 @@ check(strings-decoding "pure-gl.dll;decoding failed" ${strings_args})
 file(REMOVE "${strings_reader}.data/pure-gl.dll.txt")
 check(strings-error "pure-gl.dll;strings tool" ${strings_args})
 check(final-pristine PASS)
-message(STATUS "PURE_GL_RUNTIME_VERIFIER_CONTRACT_OK mutations=29 pristine=6")
+message(STATUS "PURE_GL_RUNTIME_VERIFIER_CONTRACT_OK mutations=31 pristine=7")

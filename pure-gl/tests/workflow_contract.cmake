@@ -1,0 +1,30 @@
+cmake_minimum_required(VERSION 3.25)
+# Execute the repository's semantic gate, including independent mutations.
+# Source archives carry this file but do not carry repository CI configuration;
+# CMake registers this repository-only contract when the sibling .github exists.
+foreach(name REPOSITORY_ROOT PYTHON_EXECUTABLE)
+  if(NOT DEFINED ${name} OR "${${name}}" STREQUAL "")
+    message(FATAL_ERROR "${name} is required for the workflow contract")
+  endif()
+endforeach()
+set(workflow "${REPOSITORY_ROOT}/.github/workflows/non-linux-release-validation.yml")
+set(validator "${REPOSITORY_ROOT}/.github/scripts/validate_non_linux_release_workflow.py")
+set(mutations "${REPOSITORY_ROOT}/.github/scripts/test_validate_non_linux_release_workflow.py")
+foreach(path "${workflow}" "${validator}" "${mutations}" "${PYTHON_EXECUTABLE}")
+  if(NOT IS_ABSOLUTE "${path}" OR NOT EXISTS "${path}" OR IS_DIRECTORY "${path}")
+    message(FATAL_ERROR "Workflow contract requires an absolute regular file: ${path}")
+  endif()
+endforeach()
+execute_process(COMMAND "${PYTHON_EXECUTABLE}" "${mutations}" -v
+  RESULT_VARIABLE rc OUTPUT_VARIABLE out ERROR_VARIABLE err TIMEOUT 360)
+message(STATUS "${out}${err}")
+if(NOT rc EQUAL 0)
+  message(FATAL_ERROR "pure-gl workflow semantic mutations failed (${rc})")
+endif()
+execute_process(COMMAND "${PYTHON_EXECUTABLE}" "${validator}" "${workflow}"
+  RESULT_VARIABLE rc OUTPUT_VARIABLE out ERROR_VARIABLE err TIMEOUT 30)
+message(STATUS "${out}${err}")
+if(NOT rc EQUAL 0)
+  message(FATAL_ERROR "pure-gl workflow validation failed (${rc})")
+endif()
+message(STATUS "PURE_GL_WORKFLOW_CONTRACT_OK semantic_mutations=1 pristine=1")

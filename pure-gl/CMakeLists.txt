@@ -279,6 +279,17 @@ add_custom_target(check-gl-interactive
   USES_TERMINAL VERBATIM)
 
 if(BUILD_TESTING)
+  # Repository CI contracts are not applicable to a standalone source archive.
+  # Copies used by CI preserve the sibling .github so this gate stays mandatory.
+  if(IS_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/../.github")
+    cmake_path(GET CMAKE_CURRENT_SOURCE_DIR PARENT_PATH pure_gl_repository)
+    add_test(NAME pure-gl-workflow-contract COMMAND "${CMAKE_COMMAND}"
+      "-DREPOSITORY_ROOT=${pure_gl_repository}"
+      "-DPYTHON_EXECUTABLE=${PURE_GL_CLANG64_PREFIX}/bin/python.exe"
+      -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/workflow_contract.cmake")
+    set_tests_properties(pure-gl-workflow-contract PROPERTIES
+      LABELS "gl;contract;workflow" TIMEOUT 400 RUN_SERIAL TRUE)
+  endif()
   add_test(NAME pure-gl.load-all-modules
     COMMAND "${CMAKE_COMMAND}" ${pure_gl_runner_arguments}
       "-DTEST_SCRIPT=${CMAKE_CURRENT_SOURCE_DIR}/tests/load.pure"

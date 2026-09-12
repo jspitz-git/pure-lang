@@ -27,6 +27,10 @@ on:
       - "pure-odbc/**"
       - "pure-audio/**"
       - "pure-midi/**"
+      - "pure-gl/**"
+      - "pure/todo/TODO-35-windows-pure-gl.md"
+      - "docs/superpowers/specs/2026-09-11-windows-pure-gl-audit-hardening-design.md"
+      - "docs/superpowers/plans/2026-09-12-windows-pure-gl-audit-hardening.md"
       - "pure/todo/TODO-34-windows-pure-midi.md"
       - "pure/todo/TODO-33-windows-pure-audio.md"
       - "purepad/**"
@@ -74,6 +78,10 @@ on:
       - "pure-odbc/**"
       - "pure-audio/**"
       - "pure-midi/**"
+      - "pure-gl/**"
+      - "pure/todo/TODO-35-windows-pure-gl.md"
+      - "docs/superpowers/specs/2026-09-11-windows-pure-gl-audit-hardening-design.md"
+      - "docs/superpowers/plans/2026-09-12-windows-pure-gl-audit-hardening.md"
       - "pure/todo/TODO-34-windows-pure-midi.md"
       - "pure/todo/TODO-33-windows-pure-audio.md"
       - "purepad/**"
@@ -129,6 +137,20 @@ jobs:
       MIDI_SOURCE: ${{ github.workspace }}/pure-midi
       MIDI_PREFIX: ${{ github.workspace }}/pure/build/windows-clang64-prefix
       MIDI_RUNTIME_PATH: ${{ github.workspace }}/pure/build/windows-clang64-prefix/bin;C:/msys64/clang64/bin;C:/msys64/usr/bin;C:/Windows/System32;C:/Windows
+      GL_CHECKOUT_SOURCE: ${{ github.workspace }}/pure-gl
+      GL_CHECKOUT_WORKFLOWS: ${{ github.workspace }}/.github
+      GL_PURE_ORIGIN: ${{ github.workspace }}/pure/build/windows-clang64-prefix
+      GL_CLANG64_PREFIX: C:/msys64/clang64
+      GL_WINDOWS_SYSTEM_DIRECTORY: C:/Windows/System32
+      GL_CC: C:/msys64/clang64/bin/clang.exe
+      GL_NINJA: C:/msys64/clang64/bin/ninja.exe
+      GL_PKG_CONFIG: C:/msys64/clang64/bin/pkgconf.exe
+      GL_READOBJ: C:/msys64/clang64/bin/llvm-readobj.exe
+      GL_READOBJ_SHA256: 040c4cb0740d2a9d9f7b488bc676c0406eb12c7b349acba1797c2f58865087cb
+      GL_STRINGS: C:/msys64/clang64/bin/llvm-strings.exe
+      GL_STRINGS_SHA256: 8d04b5a905fc4d42ee21ae075ced38f5d9a937dbbc03aa571f409002f1bbd411
+      GL_MAKE: C:/msys64/clang64/bin/mingw32-make.exe
+      GL_LOG_DIR: ${{ github.workspace }}/pure/build/native-logs/windows-11-x86_64/pure-gl
       FAUST_URL: https://github.com/grame-cncm/faust/releases/download/2.85.9/Faust-2.85.9-win64.exe
       FAUST_SHA256: d0994eb444ab4b1e75e3ed7c31897da24013db0672e2c6be8f2ab09b73d16977
 
@@ -154,6 +176,7 @@ jobs:
             mingw-w64-clang-x86_64-flang
             mingw-w64-clang-x86_64-fftw
             mingw-w64-clang-x86_64-flac
+            mingw-w64-clang-x86_64-freeglut
             mingw-w64-clang-x86_64-gmp
             mingw-w64-clang-x86_64-glpk
             mingw-w64-clang-x86_64-gsl
@@ -295,6 +318,126 @@ jobs:
             & C:/msys64/clang64/bin/pkgconf.exe --modversion pure
             if ($LASTEXITCODE -ne 0) { throw 'Installed pkg-config probe failed' }
           } 2>&1 | Tee-Object -FilePath "$env:LOG_DIR/installed-runtime.log"
+
+      # Freeze the Pure-only baseline before any extension package is installed.
+      # Source, short build, canonical baseline and Unicode final stage are disjoint.
+      - name: Prepare pure-gl audit inputs
+        shell: pwsh
+        env: &pure-gl-build-environment
+          GL_REPOSITORY: ${{ runner.temp }}/pure gl source
+          GL_SOURCE: ${{ runner.temp }}/pure gl source/pure-gl
+          GL_BUILD: ${{ runner.temp }}/gl8
+          GL_PURE_PREFIX: ${{ runner.temp }}/glp
+          GL_STAGE: ${{ runner.temp }}/gl package café
+          PATH: C:/msys64/clang64/bin;C:/Windows/System32;C:/Windows
+          PURELIB: ""
+          PURE_INCLUDE: ""
+          PURE_LIBRARY: ""
+          PKG_CONFIG_PATH: ""
+          PKG_CONFIG_SYSROOT_DIR: ""
+          PKG_CONFIG_LIBDIR: ${{ runner.temp }}/glp/lib/pkgconfig;C:/msys64/clang64/lib/pkgconfig
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Remove-Item Env:PURELIB -ErrorAction SilentlyContinue
+          if (Test-Path -LiteralPath $env:GL_REPOSITORY) { throw 'Fresh GL source root already exists' }
+          if (Test-Path -LiteralPath $env:GL_PURE_PREFIX) { throw 'Fresh GL Pure baseline already exists' }
+          New-Item -ItemType Directory -Path "$env:GL_LOG_DIR" -Force | Out-Null
+          & $env:CMAKE_EXE -E copy_directory "$env:GL_CHECKOUT_SOURCE" "$env:GL_SOURCE" `
+            2>&1 | Tee-Object -FilePath "$env:GL_LOG_DIR/prepare-source.log"
+          if ($LASTEXITCODE -ne 0) { throw 'pure-gl source copy failed' }
+          & $env:CMAKE_EXE -E copy_directory "$env:GL_CHECKOUT_WORKFLOWS" "$env:GL_REPOSITORY/.github" `
+            2>&1 | Tee-Object -FilePath "$env:GL_LOG_DIR/prepare-workflows.log"
+          if ($LASTEXITCODE -ne 0) { throw 'pure-gl workflow copy failed' }
+          & $env:CMAKE_EXE -E copy_directory "$env:GL_PURE_ORIGIN" "$env:GL_PURE_PREFIX" `
+            2>&1 | Tee-Object -FilePath "$env:GL_LOG_DIR/prepare-baseline.log"
+          if ($LASTEXITCODE -ne 0) { throw 'pure-gl canonical baseline copy failed' }
+
+      - name: Configure strict pure-gl audit
+        shell: pwsh
+        env: *pure-gl-build-environment
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Remove-Item Env:PURELIB -ErrorAction SilentlyContinue
+          if (Test-Path -LiteralPath $env:GL_BUILD) { throw 'Fresh GL build already exists' }
+          if ($env:GL_BUILD.Length -gt 32) { throw 'Use a GL build root at most 32 characters long' }
+          & $env:CMAKE_EXE -S "$env:GL_SOURCE" -B "$env:GL_BUILD" -G Ninja `
+            -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON -DPURE_GL_STRICT_AUDIT=ON `
+            "-DCMAKE_C_COMPILER=$env:GL_CC" -DCMAKE_C_COMPILER_TARGET=x86_64-w64-windows-gnu `
+            "-DCMAKE_MAKE_PROGRAM=$env:GL_NINJA" "-DPKG_CONFIG_EXECUTABLE=$env:GL_PKG_CONFIG" `
+            "-DLLVM_READOBJ_EXECUTABLE=$env:GL_READOBJ" "-DLLVM_READOBJ_SHA256=$env:GL_READOBJ_SHA256" `
+            "-DLLVM_STRINGS_EXECUTABLE=$env:GL_STRINGS" "-DLLVM_STRINGS_SHA256=$env:GL_STRINGS_SHA256" `
+            "-DGNU_MAKE_EXECUTABLE=$env:GL_MAKE" "-DPURE_EXECUTABLE=$env:GL_PURE_PREFIX/bin/pure.exe" `
+            "-DPURE_GL_PURE_PREFIX=$env:GL_PURE_PREFIX" "-DPURE_GL_CLANG64_PREFIX=$env:GL_CLANG64_PREFIX" `
+            "-DPURE_GL_WINDOWS_SYSTEM_DIRECTORY=$env:GL_WINDOWS_SYSTEM_DIRECTORY" `
+            2>&1 | Tee-Object -FilePath "$env:GL_LOG_DIR/configure.log"
+          if ($LASTEXITCODE -ne 0) { throw 'Strict pure-gl configure failed' }
+
+      - name: Build and verify pure-gl PE closure
+        shell: pwsh
+        env: *pure-gl-build-environment
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Remove-Item Env:PURELIB -ErrorAction SilentlyContinue
+          & $env:CMAKE_EXE --build "$env:GL_BUILD" --parallel 4 `
+            2>&1 | Tee-Object -FilePath "$env:GL_LOG_DIR/build.log"
+          if ($LASTEXITCODE -ne 0) { throw 'pure-gl build failed' }
+          & $env:CMAKE_EXE --build "$env:GL_BUILD" --target verify-windows-dependencies --parallel 4 `
+            2>&1 | Tee-Object -FilePath "$env:GL_LOG_DIR/pe.log"
+          if ($LASTEXITCODE -ne 0) { throw 'pure-gl exact PE closure failed' }
+
+      - name: Run mandatory noninteractive pure-gl tests
+        shell: pwsh
+        env: &pure-gl-runtime-environment
+          GL_REPOSITORY: ${{ runner.temp }}/pure gl source
+          GL_SOURCE: ${{ runner.temp }}/pure gl source/pure-gl
+          GL_BUILD: ${{ runner.temp }}/gl8
+          GL_PURE_PREFIX: ${{ runner.temp }}/glp
+          GL_STAGE: ${{ runner.temp }}/gl package café
+          PATH: C:/Windows/System32;C:/Windows
+          PURELIB: ""
+          PURE_INCLUDE: ""
+          PURE_LIBRARY: ""
+          PKG_CONFIG_PATH: ""
+          PKG_CONFIG_SYSROOT_DIR: ""
+          PKG_CONFIG_LIBDIR: ${{ runner.temp }}/glp/lib/pkgconfig;C:/msys64/clang64/lib/pkgconfig
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Remove-Item Env:PURELIB -ErrorAction SilentlyContinue
+          & $env:CTEST_EXE --test-dir "$env:GL_BUILD" -L gl --output-on-failure --no-tests=error `
+            2>&1 | Tee-Object -FilePath "$env:GL_LOG_DIR/ctest.log"
+          if ($LASTEXITCODE -ne 0) { throw 'Mandatory noninteractive pure-gl tests failed' }
+
+      - name: Verify pure-gl source distribution
+        shell: pwsh
+        env: *pure-gl-runtime-environment
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Remove-Item Env:PURELIB -ErrorAction SilentlyContinue
+          & $env:GL_MAKE --no-print-directory -C "$env:GL_SOURCE" distcheck `
+            "CMAKE=$env:CMAKE_EXE" "PKG_CONFIG=$env:GL_PKG_CONFIG" "DIST_AUDIT_BUILD=$env:GL_BUILD" `
+            2>&1 | Tee-Object -FilePath "$env:GL_LOG_DIR/distcheck.log"
+          if ($LASTEXITCODE -ne 0) { throw 'pure-gl public source distribution failed' }
+
+      - name: Install and verify the pure-gl package
+        shell: pwsh
+        env: *pure-gl-runtime-environment
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Remove-Item Env:PURELIB -ErrorAction SilentlyContinue
+          if (Test-Path -LiteralPath $env:GL_STAGE) { throw 'Fresh GL final stage already exists' }
+          & $env:CMAKE_EXE -E copy_directory "$env:GL_PURE_PREFIX" "$env:GL_STAGE" `
+            2>&1 | Tee-Object -FilePath "$env:GL_LOG_DIR/prepare-stage.log"
+          if ($LASTEXITCODE -ne 0) { throw 'pure-gl final baseline copy failed' }
+          & $env:CMAKE_EXE --install "$env:GL_BUILD" --prefix "$env:GL_STAGE" --component runtime `
+            2>&1 | Tee-Object -FilePath "$env:GL_LOG_DIR/install-runtime.log"
+          if ($LASTEXITCODE -ne 0) { throw 'pure-gl guarded runtime install failed' }
+          & $env:CMAKE_EXE --install "$env:GL_BUILD" --prefix "$env:GL_STAGE" --component documentation `
+            2>&1 | Tee-Object -FilePath "$env:GL_LOG_DIR/install-documentation.log"
+          if ($LASTEXITCODE -ne 0) { throw 'pure-gl guarded documentation install failed' }
+          & $env:CMAKE_EXE "-DGL_INSTALL_CONTEXT=$env:GL_BUILD/pure-gl-install-context.cmake" `
+            "-DSTAGE_PREFIX=$env:GL_STAGE" -P "$env:GL_SOURCE/cmake/VerifyInstalledPackage.cmake" `
+            2>&1 | Tee-Object -FilePath "$env:GL_LOG_DIR/installed.log"
+          if ($LASTEXITCODE -ne 0) { throw 'pure-gl complete installed verification failed' }
 
       # All 19 MIDI CTests are mandatory and hardware-free. Public distcheck
       # repeats the complete gate from an archive with checkout access denied.
@@ -1005,6 +1148,17 @@ jobs:
           & $env:CMAKE_EXE --build $env:RELEASE_BUILD --target uninstall `
             2>&1 | Tee-Object -FilePath "$env:LOG_DIR/uninstall-second.log"
           if ($LASTEXITCODE -ne 0) { throw 'Second uninstall failed' }
+
+      - name: Upload pure-gl audit evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pure-gl-windows-audit
+          retention-days: 14
+          if-no-files-found: warn
+          path: |
+            ${{ github.workspace }}/pure/build/native-logs/windows-11-x86_64/pure-gl
+            ${{ runner.temp }}/gl8
 
       - name: Upload Windows native validation logs
         if: always()

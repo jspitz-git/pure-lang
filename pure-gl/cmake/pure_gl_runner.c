@@ -225,6 +225,81 @@ static void add_path(Paths *paths, const wchar_t *input, int directory,
   paths->values[paths->count++] = path;
 }
 
+static wchar_t *windows_pure_alias(const wchar_t *pure)
+{
+  wchar_t alias[PATH_LIMIT];
+  DWORD count = GetShortPathNameW(pure, alias, PATH_LIMIT);
+  if (!count || count >= PATH_LIMIT)
+    reject("Windows ASCII executable alias unavailable");
+  for (DWORD i = 0; i < count; ++i)
+    if (alias[i] < 32 || alias[i] > 127)
+      reject("Windows ASCII executable alias unavailable; enable 8.3 names for the stage volume");
+  return duplicate(alias);
+}
+
+/* Only Pure's executable spelling may use an alias. The canonical physical
+   paths remain the authority, and both spellings of every component are held
+   without delete sharing until the supervised process has finished. */
+static wchar_t *checked_pure_alias(const wchar_t *pure, const wchar_t *candidate)
+{
+  wchar_t resolved[PATH_LIMIT];
+  wchar_t *alias = duplicate(candidate), *physical = duplicate(pure);
+  size_t length = wcslen(alias), physical_length = wcslen(physical);
+  for (size_t i = 0; i < length; ++i) {
+    if (alias[i] < 32 || alias[i] > 127)
+      reject("executable alias must be ASCII");
+    if (alias[i] == L'/') alias[i] = L'\\';
+  }
+  DWORD count = GetFullPathNameW(alias, PATH_LIMIT, resolved, NULL);
+  if (length < 3 || length >= PATH_LIMIT || !count || count >= PATH_LIMIT ||
+      alias[1] != L':' || alias[2] != L'\\' || _wcsicmp(alias, resolved))
+    reject("ASCII executable alias must be normalized and absolute");
+  for (size_t p = 3, a = 3;; ++p, ++a) {
+    while (p < physical_length && physical[p] != L'\\') ++p;
+    while (a < length && alias[a] != L'\\') ++a;
+    if ((p == physical_length) != (a == length))
+      reject("executable alias physical identity mismatch");
+    wchar_t physical_saved = physical[p], alias_saved = alias[a];
+    physical[p] = alias[a] = 0;
+    HANDLE original = CreateFileW(physical, FILE_READ_ATTRIBUTES,
+      FILE_SHARE_READ|FILE_SHARE_WRITE, NULL, OPEN_EXISTING,
+      FILE_FLAG_BACKUP_SEMANTICS|FILE_FLAG_OPEN_REPARSE_POINT, NULL);
+    HANDLE selected = CreateFileW(alias, FILE_READ_ATTRIBUTES,
+      FILE_SHARE_READ|FILE_SHARE_WRITE, NULL, OPEN_EXISTING,
+      FILE_FLAG_BACKUP_SEMANTICS|FILE_FLAG_OPEN_REPARSE_POINT, NULL);
+    BY_HANDLE_FILE_INFORMATION expected, actual;
+    if (original == INVALID_HANDLE_VALUE || selected == INVALID_HANDLE_VALUE)
+      reject("ASCII executable alias missing or inaccessible");
+    if (!GetFileInformationByHandle(original, &expected) ||
+        !GetFileInformationByHandle(selected, &actual) ||
+        (actual.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) ||
+        (expected.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) ||
+        (!!(actual.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != (p < physical_length)) ||
+        expected.dwVolumeSerialNumber != actual.dwVolumeSerialNumber ||
+        expected.nFileIndexHigh != actual.nFileIndexHigh ||
+        expected.nFileIndexLow != actual.nFileIndexLow)
+      reject("executable alias physical identity mismatch");
+    count = GetFinalPathNameByHandleW(selected, resolved, PATH_LIMIT,
+      FILE_NAME_NORMALIZED|VOLUME_NAME_DOS);
+    if (count <= 4 || count >= PATH_LIMIT || wcsncmp(resolved, L"\\\\?\\", 4) ||
+        _wcsicmp(physical, resolved+4))
+      reject("executable alias physical identity mismatch");
+    if (held.count+2 > sizeof(held.values)/sizeof(held.values[0]))
+      reject("too many executable alias path components");
+    held.values[held.count++] = original;
+    held.values[held.count++] = selected;
+    physical[p] = physical_saved;
+    alias[a] = alias_saved;
+    if (p == physical_length) break;
+  }
+  wchar_t *expected_alias = windows_pure_alias(pure);
+  if (_wcsicmp(alias, expected_alias))
+    reject("executable alias is not the physical executable's Windows short path");
+  free(expected_alias);
+  free(physical);
+  return alias;
+}
+
 static void environment_entry(Text *environment, const wchar_t *name,
                               const wchar_t *value)
 {
@@ -421,7 +496,17 @@ finished:
 
 int wmain(int argc, wchar_t **argv)
 {
+  if (argc == 3 && !wcscmp(argv[1], L"--print-pure-executable-alias")) {
+    wchar_t *physical = regular_path(argv[2], 0);
+    wchar_t *candidate = windows_pure_alias(physical);
+    wchar_t *alias = checked_pure_alias(physical, candidate);
+    printf("%ls\n", alias); /* The checked spelling is ASCII on every ACP. */
+    for (size_t i = 0; i < held.count; ++i) CloseHandle(held.values[i]);
+    free(physical); free(candidate); free(alias);
+    return 0;
+  }
   wchar_t *pure = NULL;
+  const wchar_t *pure_alias_candidate = NULL;
   wchar_t *script = NULL;
   wchar_t *working_directory = NULL;
   DWORD timeout = 0;
@@ -437,6 +522,9 @@ int wmain(int argc, wchar_t **argv)
     if (!wcscmp(option, L"--pure")) {
       if (pure) reject("duplicate --pure");
       pure = regular_path(value, 0);
+    } else if (!wcscmp(option, L"--pure-executable-alias")) {
+      if (pure_alias_candidate) reject("duplicate --pure-executable-alias");
+      pure_alias_candidate = value;
     } else if (!wcscmp(option, L"--script")) {
       if (script) reject("duplicate --script");
       script = regular_path(value, 0);
@@ -472,10 +560,14 @@ int wmain(int argc, wchar_t **argv)
   if (!inputs.count) reject("missing --input");
   if (!path_entries.count) reject("missing --path-entry");
 
+  wchar_t *launch_pure = pure_alias_candidate ? checked_pure_alias(pure, pure_alias_candidate) : pure;
+  if (pure_alias_candidate)
+    puts("PURE_GL_EXECUTABLE_ALIAS_OK physical_identity=1 ascii=1");
+
   wchar_t token[65];
   if (!random_token(token)) reject("completion-token generation failed");
   Text command = {0};
-  argument(&command, pure);
+  argument(&command, launch_pure);
   argument(&command, L"--norc");
   for (size_t i = 0; i < includes.count; ++i) {
     argument(&command, L"-I");
@@ -501,7 +593,7 @@ int wmain(int argc, wchar_t **argv)
   append_n(&environment, L"", 1);
 
   Capture captures[2] = {{0}, {0}};
-  DWORD result = launch(pure, &command, &environment, working_directory,
+  DWORD result = launch(launch_pure, &command, &environment, working_directory,
     timeout, token, captures);
 
   for (size_t i = 0; i < held.count; ++i) CloseHandle(held.values[i]);
@@ -509,6 +601,7 @@ int wmain(int argc, wchar_t **argv)
   for (size_t i = 0; i < libraries.count; ++i) free(libraries.values[i]);
   for (size_t i = 0; i < inputs.count; ++i) free(inputs.values[i]);
   for (size_t i = 0; i < path_entries.count; ++i) free(path_entries.values[i]);
+  if (launch_pure != pure) free(launch_pure);
   free(pure);
   free(script);
   free(working_directory);
