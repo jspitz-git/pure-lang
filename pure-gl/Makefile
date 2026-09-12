@@ -12,20 +12,22 @@ CFLAGS = -O3
 
 # platform-specific setup
 
-DLL         = $(shell pkg-config pure --variable DLL)
-PIC         = $(shell pkg-config pure --variable PIC)
-shared      = $(shell pkg-config pure --variable shared)
+PKG_CONFIG ?= pkg-config
+CMAKE ?= cmake
+DLL         = $(shell "$(PKG_CONFIG)" pure --variable DLL)
+PIC         = $(shell "$(PKG_CONFIG)" pure --variable PIC)
+shared      = $(shell "$(PKG_CONFIG)" pure --variable shared)
 
-prefix      = $(shell pkg-config pure --variable prefix)
+prefix      = $(shell "$(PKG_CONFIG)" pure --variable prefix)
 bindir      = $(prefix)/bin
-libdir      = $(shell pkg-config pure --variable libdir)
+libdir      = $(shell "$(PKG_CONFIG)" pure --variable libdir)
 
 ifeq ($(DLL),.dylib)
 dllname = -install_name "$(libdir)/pure/$@"
 endif
 
-MOD_CFLAGS  = $(PIC) $(shell pkg-config pure --cflags) $(CFLAGS) $(CPPFLAGS)
-MOD_LDFLAGS = $(shell pkg-config pure --libs) $(LDFLAGS) $(LIBS)
+MOD_CFLAGS  = $(PIC) $(shell "$(PKG_CONFIG)" pure --cflags) $(CFLAGS) $(CPPFLAGS)
+MOD_LDFLAGS = $(shell "$(PKG_CONFIG)" pure --libs) $(LDFLAGS) $(LIBS)
 
 # Compilation options to link with OpenGL.
 ifeq ($(DLL),.dylib)
@@ -48,12 +50,34 @@ modules = GL.pure GL_ARB.pure GL_EXT.pure GL_NV.pure GL_ATI.pure \
 GLU.pure GLUT.pure
 c-modules = $(patsubst %.pure,%.c,$(modules))
 
-DISTFILES = COPYING Makefile README gl.templ debian/* \
-examples/*.pure examples/*.jpg examples/flexi-line/*.pure \
-GL/all_gl.h GL/all_gl_freeglut.h $(modules) $(c-modules)
+override DISTFILES = .pure-gl-source COPYING Makefile README gl.templ CMakeLists.txt WINDOWS.md THIRD_PARTY.md \
+debian/changelog debian/compat debian/control debian/copyright debian/docs debian/rules debian/source/format debian/watch \
+examples/Imlib2.pure examples/fractal.jpg examples/simple_glut_example.pure examples/teapot.pure examples/texture.pure \
+examples/flexi-line/flexi-line-auto.pure examples/flexi-line/flexi-line.pure examples/flexi-line/glamour.pure examples/flexi-line/vector_math.pure \
+GL/all_gl.h GL/all_gl_freeglut.h $(modules) $(c-modules) \
+cmake/Install.cmake cmake/LegacyWorkflow.cmake cmake/LegacyWorkflow.ps1 cmake/PeHelpers.cmake cmake/RunPureTest.cmake \
+cmake/VerifyInstalledPackage.cmake cmake/VerifyWindowsDependencies.cmake cmake/pure_gl_install_guard.c cmake/pure_gl_runner.c \
+tests/AuditHelpers.cmake tests/cleanup_contract.cmake tests/configure_contract.cmake tests/hidden-render.pure \
+tests/install_contract.cmake tests/install_guard_contract.cmake tests/interactive.pure tests/load.pure \
+tests/render_contract.cmake tests/runner_contract.cmake tests/runner_probe.pure tests/runtime_verifier_contract.cmake tests/source_dist_contract.cmake \
+tests/fixtures/freeglut-imports.txt tests/fixtures/libc++-imports.txt tests/fixtures/libgmp-10-imports.txt \
+tests/fixtures/libiconv-2-imports.txt tests/fixtures/libmpfr-6-imports.txt tests/fixtures/libpcre-1-imports.txt \
+tests/fixtures/libpcreposix-0-imports.txt tests/fixtures/libpure-imports.txt tests/fixtures/libwinpthread-1-imports.txt \
+tests/fixtures/libzstd-imports.txt tests/fixtures/pure-gl-imports.txt tests/fixtures/zlib1-imports.txt
 SEDFILES = README
 
 .PHONY: all clean realclean generate install uninstall dist distcheck
+
+# Reject invalid discovery even under make -n; no suffix enters a deletion path.
+ifneq ($(filter clean realclean generate dist distcheck deb,$(MAKECMDGOALS)),)
+ifneq ($(words $(DLL)),1)
+$(error Invalid Pure DLL suffix; check pure.pc)
+endif
+ifeq ($(filter .dll .so .dylib,$(DLL)),)
+$(error Invalid Pure DLL suffix; check pure.pc)
+endif
+endif
+legacy_workflow = "$(CMAKE)" "-DMODE=$@" "-DSOURCE_ROOT=$(CURDIR)" "-DDLL_SUFFIX=$(DLL)" "-DPKG_CONFIG_EXECUTABLE=$(PKG_CONFIG)" "-DDIST_FILES=$(DISTFILES)" "-DDIST_AUDIT_BUILD=$(DIST_AUDIT_BUILD)" "-DGNU_MAKE_EXECUTABLE=$(MAKE)" "-DDEBUILD_FLAGS=$(DEBUILD_FLAGS)" -P "$(CURDIR)/cmake/LegacyWorkflow.cmake"
 
 all: pure-gl$(DLL)
 
@@ -63,22 +87,21 @@ pure-gl$(DLL): $(c-modules)
 # Clean, but keep generated modules.
 
 clean:
-	rm -Rf *$(DLL)* *~ *.a *.o
+	$(legacy_workflow)
 
 # Clean all, including generated modules. NOTE: This will delete stuff that
 # needs special tools to rebuild (see below), so only do this if you know what
 # you're doing.
 
-realclean: clean
-	rm -f $(modules) $(c-modules)
+realclean:
+	$(legacy_workflow)
 
-# Regenerate the Pure and C modules. The same caveats apply as for 'make
-# realclean'. Note that we don't do this automatically in case of changes, to
-# avoid regenerating stuff (which needs special tools) if the timestamps are
-# botched, which might be the case when using svn sources.
+# Build the generated modules, preserving existing wrapper sources. To request
+# regeneration, run 'make realclean' first, then 'make generate'; pure-gen and
+# the OpenGL development headers are required for the missing-source rules.
 
 generate: gl.templ $(wildcard GL/*.h)
-	rm -f pure-gl$(DLL) *.o $(modules) $(c-modules)
+	$(legacy_workflow)
 	$(MAKE) all
 
 # Install targets.
@@ -96,27 +119,17 @@ date = $(shell date "+%B %-d, %Y")
 datesubst = sed -e "s?@version@?$(version)?g" -e "s?|today|?$(date)?g" < $(1) > $(2)
 
 dist:
-	rm -rf $(dist)
-	mkdir $(dist) && mkdir $(dist)/debian && mkdir $(dist)/examples $(dist)/examples/flexi-line $(dist)/GL
-	for x in $(DISTFILES); do ln -sf $$PWD/$$x $(dist)/$$x; done
-	for x in $(SEDFILES); do rm -f $(dist)/$$x; $(call datesubst,$$PWD/$$x,$(dist)/$$x); done
-	rm -f $(dist).tar.gz
-	tar cfzh $(dist).tar.gz $(dist)
-	rm -rf $(dist)
+	$(legacy_workflow)
 
-distcheck: dist
-	tar xfz $(dist).tar.gz
-	cd $(dist) && make && make install DESTDIR=./BUILD
-	rm -rf $(dist)
+distcheck:
+	$(legacy_workflow)
 
 # Debian packaging
 
-debsrc = $(shell echo $(dist) | sed -e 's/-$(version)/_$(version)/').orig.tar.gz
+debsrc = pure-gl_$(version).orig.tar.gz
 
-deb: $(debsrc) dist
-	tar xfz $(dist).tar.gz
-	cd $(dist) && debuild $(DEBUILD_FLAGS)
-	rm -rf $(dist)
+deb:
+	$(legacy_workflow)
 
 $(debsrc):
 	wget -nv https://bitbucket.org/purelang/pure-lang/downloads/$(dist).tar.gz -O $@

@@ -9,9 +9,8 @@ foreach(required IN ITEMS SOURCE_DIR BINARY_DIR GENERATOR MAKE_PROGRAM C_COMPILE
   endif()
 endforeach()
 
-set(test_root "${BINARY_DIR}/configure contract")
-file(REMOVE_RECURSE "${test_root}")
-file(MAKE_DIRECTORY "${test_root}")
+include("${SOURCE_DIR}/tests/AuditHelpers.cmake")
+gl_audit_open(configure-contract test_root)
 
 set(base_args
   "-DCMAKE_MAKE_PROGRAM=${MAKE_PROGRAM}"
@@ -43,7 +42,9 @@ function(run_configure name expected)
     list(APPEND args "${override}")
   endforeach()
   set(build_dir "${test_root}/${name}")
-  file(REMOVE_RECURSE "${build_dir}")
+  if(EXISTS "${build_dir}")
+    message(FATAL_ERROR "Configure case requires a fresh owned child")
+  endif()
   execute_process(
     COMMAND "${CMAKE_COMMAND}" -E env
       "PATH=${PURE_GL_CLANG64_PREFIX}/bin;${PURE_GL_WINDOWS_SYSTEM_DIRECTORY}"
@@ -119,9 +120,8 @@ if(NOT unlink_result EQUAL 0)
   message(FATAL_ERROR "Cannot unlink FreeGLUT prefix junction")
 endif()
 
-set(mismatch_prefix "${BINARY_DIR}/mismatched-resolved-prefix")
-set(mismatch_root "${BINARY_DIR}/wrong-resolved-inputs")
-file(REMOVE_RECURSE "${mismatch_prefix}" "${mismatch_root}")
+set(mismatch_prefix "${test_root}/mismatched-resolved-prefix")
+set(mismatch_root "${test_root}/wrong-resolved-inputs")
 file(MAKE_DIRECTORY
   "${mismatch_prefix}/include/GL"
   "${mismatch_prefix}/lib/pkgconfig"
@@ -152,3 +152,4 @@ run_configure(mismatched-resolved-freeglut
 
 run_configure(pristine PASS)
 message(STATUS "PURE_GL_CONFIGURE_CONTRACT_OK")
+gl_audit_clean(configure-contract)

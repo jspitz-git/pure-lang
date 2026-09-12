@@ -339,11 +339,33 @@ if(BUILD_TESTING)
         "-DBINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}"
         ${pure_gl_runner_arguments}
         -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/render_contract.cmake"
-      DEPENDS pure-gl pure-gl-test-runner stage-pure-gl-test-runtime
+      DEPENDS pure-gl pure-gl-test-runner pure-gl-install-guard stage-pure-gl-test-runtime
       COMMENT "Running pure-gl semantic rendering mutations"
       USES_TERMINAL VERBATIM)
     set_tests_properties(pure-gl-configure-contract pure-gl-runner-contract
       PROPERTIES LABELS "gl;contract" TIMEOUT 90 RUN_SERIAL TRUE)
+    foreach(contract source_dist cleanup)
+      string(REPLACE "_" "-" name "${contract}")
+      add_test(NAME "pure-gl-${name}-contract" COMMAND "${CMAKE_COMMAND}"
+        "-DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
+        "-DBINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}"
+        "-DGENERATOR=${CMAKE_GENERATOR}"
+        "-DMAKE_PROGRAM=${CMAKE_MAKE_PROGRAM}"
+        "-DC_COMPILER=${CMAKE_C_COMPILER}"
+        "-DPKG_CONFIG_EXECUTABLE=${PKG_CONFIG_EXECUTABLE}"
+        "-DLLVM_READOBJ_EXECUTABLE=${LLVM_READOBJ_EXECUTABLE}"
+        "-DLLVM_READOBJ_SHA256=${LLVM_READOBJ_SHA256}"
+        "-DLLVM_STRINGS_EXECUTABLE=${LLVM_STRINGS_EXECUTABLE}"
+        "-DLLVM_STRINGS_SHA256=${LLVM_STRINGS_SHA256}"
+        "-DGNU_MAKE_EXECUTABLE=${GNU_MAKE_EXECUTABLE}"
+        "-DPURE_EXECUTABLE=${PURE_EXECUTABLE}"
+        "-DPURE_GL_PURE_PREFIX=${PURE_GL_PURE_PREFIX}"
+        "-DPURE_GL_CLANG64_PREFIX=${PURE_GL_CLANG64_PREFIX}"
+        "-DPURE_GL_WINDOWS_SYSTEM_DIRECTORY=${PURE_GL_WINDOWS_SYSTEM_DIRECTORY}"
+        -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/${contract}_contract.cmake")
+      set_tests_properties("pure-gl-${name}-contract" PROPERTIES
+        LABELS "gl;contract;release" TIMEOUT 1800 RUN_SERIAL TRUE)
+    endforeach()
   endif()
 endif()
 

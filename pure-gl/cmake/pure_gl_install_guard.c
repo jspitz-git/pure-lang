@@ -737,10 +737,18 @@ static int clean_scan(const wchar_t *path) {
   HANDLE h=CreateFileW(path,GENERIC_READ|DELETE,FILE_SHARE_READ,NULL,OPEN_EXISTING,
     FILE_FLAG_OPEN_REPARSE_POINT|FILE_FLAG_BACKUP_SEMANTICS,NULL);
   BY_HANDLE_FILE_INFORMATION info;
+  wchar_t final[PATH_CAP];
+  DWORD final_length=h==INVALID_HANDLE_VALUE?0:GetFinalPathNameByHandleW(
+    h,final,PATH_CAP,FILE_NAME_NORMALIZED|VOLUME_NAME_DOS);
   if (h==INVALID_HANDLE_VALUE) return error("cannot retain owned cleanup endpoint");
   if (!GetFileInformationByHandle(h,&info) || (info.dwFileAttributes&FILE_ATTRIBUTE_REPARSE_POINT) ||
-      (!(info.dwFileAttributes&FILE_ATTRIBUTE_DIRECTORY) && info.nNumberOfLinks!=1)) {
-    CloseHandle(h); return error("reparse or hardlink in audit cleanup leaf");
+      (!(info.dwFileAttributes&FILE_ATTRIBUTE_DIRECTORY) && info.nNumberOfLinks!=1) ||
+      final_length<4 || final_length>=PATH_CAP || wcsncmp(final,L"\\\\?\\",4) ||
+      wcscmp(final+4,path)) {
+    CloseHandle(h); return error("reparse, hardlink or case alias in audit cleanup leaf");
+  }
+  for (size_t i=0;i<clean_count;++i) if (!_wcsicmp(clean_items[i].path,path)) {
+    CloseHandle(h); return error("case-folded duplicate in audit cleanup leaf");
   }
   clean_items[clean_count].handle=h;
   path_copy(clean_items[clean_count++].path,path);
@@ -773,8 +781,13 @@ static int sentinel(HANDLE h,const wchar_t *wanted) {
     ReadFile(h,bytes,sizeof(bytes),&n,NULL) && n==(DWORD)size-1 && !memcmp(bytes,expected,n);
 }
 static int clean_audit(const wchar_t *leaf) {
-  if (wcscmp(leaf,L"install-contract") && wcscmp(leaf,L"install-guard-contract"))
-    return error("unknown fixed audit leaf");
+  const wchar_t *leaves[]={L"install-contract",L"install-guard-contract",
+    L"configure-contract",L"runner-contract",L"render-contract",
+    L"source-dist-contract",L"source-dist-input",L"cleanup-contract"};
+  int known=0;
+  for (size_t i=0;i<sizeof(leaves)/sizeof(*leaves);++i)
+    if (!wcscmp(leaf,leaves[i])) known=1;
+  if (!known) return error("unknown fixed audit leaf");
   wchar_t root[PATH_CAP], path[PATH_CAP], marker[PATH_CAP], expected[PATH_CAP*2], compiled[PATH_CAP];
   swprintf(path,PATH_CAP,L"%ls/pure-gl-audits",GL_NATIVE_BUILD_DIR);
   if (!canonical(path,root) || !directories(root,0)) return 0;
@@ -782,6 +795,14 @@ static int clean_audit(const wchar_t *leaf) {
   swprintf(expected,PATH_CAP*2,L"pure-gl audit root\r\nbuild=%ls\r\nsource=%ls\r\n",GL_NATIVE_BUILD_DIR,GL_NATIVE_SOURCE_DIR);
   if (!hold(marker,0) || !sentinel(held[held_index(marker)].handle,expected))
     return error("audit root sentinel mismatch");
+  const wchar_t *exact_roots[]={root,marker};
+  for (size_t i=0;i<sizeof(exact_roots)/sizeof(*exact_roots);++i) {
+    wchar_t final[PATH_CAP];
+    DWORD n=GetFinalPathNameByHandleW(held[held_index(exact_roots[i])].handle,
+      final,PATH_CAP,FILE_NAME_NORMALIZED|VOLUME_NAME_DOS);
+    if (n<4 || n>=PATH_CAP || wcscmp(final+4,exact_roots[i]))
+      return error("audit root or sentinel case alias");
+  }
   swprintf(path,PATH_CAP,L"%ls\\%ls",root,leaf);
   const wchar_t *protected_roots[]={GL_NATIVE_SOURCE_DIR,GL_NATIVE_BUILD_DIR,
     GL_NATIVE_PURE_PREFIX,GL_NATIVE_CLANG64_PREFIX,GL_NATIVE_SYSTEM};
@@ -794,7 +815,7 @@ static int clean_audit(const wchar_t *leaf) {
   swprintf(marker,PATH_CAP,L"%ls\\.pure-gl-owner",path);
   swprintf(expected,PATH_CAP*2,L"pure-gl audit leaf\r\nleaf=%ls\r\nbuild=%ls\r\nsource=%ls\r\n",leaf,GL_NATIVE_BUILD_DIR,GL_NATIVE_SOURCE_DIR);
   int found=0;
-  for (size_t i=0;ok && i<clean_count;++i) if (!_wcsicmp(clean_items[i].path,marker))
+  for (size_t i=0;ok && i<clean_count;++i) if (!wcscmp(clean_items[i].path,marker))
     found=sentinel(clean_items[i].handle,expected);
   if (ok && !found) ok=error("audit leaf sentinel mismatch");
   for (size_t i=clean_count;i>0;--i) {

@@ -8,9 +8,8 @@ foreach(required IN ITEMS SOURCE_DIR BINARY_DIR PURE_GL_RUNNER PURE_EXECUTABLE
   endif()
 endforeach()
 
-set(test_root "${BINARY_DIR}/render-contract")
-file(REMOVE_RECURSE "${test_root}")
-file(MAKE_DIRECTORY "${test_root}")
+include("${SOURCE_DIR}/tests/AuditHelpers.cmake")
+gl_audit_open(render-contract test_root)
 
 function(record_contract_failure failure)
   set_property(GLOBAL APPEND PROPERTY pure_gl_render_failures "${failure}")
@@ -194,3 +193,4 @@ if(contract_failures)
     "Semantic mutations escaped or bypassed cleanup: ${contract_failures}")
 endif()
 message(STATUS "PURE_GL_RENDER_CONTRACT_OK pristine=3 mutations=18")
+gl_audit_clean(render-contract)

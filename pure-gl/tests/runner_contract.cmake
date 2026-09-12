@@ -17,9 +17,8 @@ if(runtime_from_clang_prefix)
     "Configured test runtime must be staged outside the CLANG64 prefix: ${configured_runtime}")
 endif()
 
-set(test_root "${BINARY_DIR}/runner contract with spaces")
-file(REMOVE_RECURSE "${test_root}")
-file(MAKE_DIRECTORY "${test_root}")
+include("${SOURCE_DIR}/tests/AuditHelpers.cmake")
+gl_audit_open(runner-contract test_root)
 
 set(fixture_source "${test_root}/legacy_probe.c")
 set(fixture_exe "${test_root}/legacy probe.exe")
@@ -245,3 +244,4 @@ if(duplicate_result EQUAL 0 OR
 endif()
 
 message(STATUS "PURE_GL_RUNNER_CONTRACT_OK")
+gl_audit_clean(runner-contract)
