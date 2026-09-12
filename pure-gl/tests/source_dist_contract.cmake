@@ -5,6 +5,7 @@ foreach(required SOURCE_DIR BINARY_DIR GNU_MAKE_EXECUTABLE)
   endif()
 endforeach()
 include("${SOURCE_DIR}/tests/AuditHelpers.cmake")
+gl_audit_require_disjoint_layout()
 gl_audit_open(source-dist-contract work)
 gl_audit_open(source-dist-input input)
 set(copy "${input}/source with spaces")
@@ -19,7 +20,7 @@ set(expected_files
   GL.c GL.pure GL_ARB.c GL_ARB.pure GL_ATI.c GL_ATI.pure GL_EXT.c GL_EXT.pure
   GL_NV.c GL_NV.pure GLU.c GLU.pure GLUT.c GLUT.pure gl.templ
   GL/all_gl.h GL/all_gl_freeglut.h
-  cmake/Install.cmake cmake/LegacyWorkflow.cmake cmake/LegacyWorkflow.ps1
+  cmake/Install.cmake cmake/LegacyPathPolicy.cmake cmake/LegacyWorkflow.cmake cmake/LegacyWorkflow.ps1
   cmake/PeHelpers.cmake cmake/RunPureTest.cmake cmake/VerifyInstalledPackage.cmake
   cmake/VerifyWindowsDependencies.cmake cmake/pure_gl_install_guard.c cmake/pure_gl_runner.c
   debian/changelog debian/compat debian/control debian/copyright debian/docs
@@ -28,7 +29,7 @@ set(expected_files
   examples/teapot.pure examples/texture.pure
   examples/flexi-line/flexi-line-auto.pure examples/flexi-line/flexi-line.pure
   examples/flexi-line/glamour.pure examples/flexi-line/vector_math.pure
-  tests/AuditHelpers.cmake tests/cleanup_contract.cmake tests/configure_contract.cmake
+  tests/AuditHelpers.cmake tests/ReleaseChecks.cmake tests/cleanup_contract.cmake tests/configure_contract.cmake
   tests/hidden-render.pure tests/install_contract.cmake tests/install_guard_contract.cmake
   tests/interactive.pure tests/load.pure tests/render_contract.cmake tests/runner_contract.cmake
   tests/runner_probe.pure tests/runtime_verifier_contract.cmake tests/source_dist_contract.cmake

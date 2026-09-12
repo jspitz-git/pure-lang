@@ -55,9 +55,9 @@ debian/changelog debian/compat debian/control debian/copyright debian/docs debia
 examples/Imlib2.pure examples/fractal.jpg examples/simple_glut_example.pure examples/teapot.pure examples/texture.pure \
 examples/flexi-line/flexi-line-auto.pure examples/flexi-line/flexi-line.pure examples/flexi-line/glamour.pure examples/flexi-line/vector_math.pure \
 GL/all_gl.h GL/all_gl_freeglut.h $(modules) $(c-modules) \
-cmake/Install.cmake cmake/LegacyWorkflow.cmake cmake/LegacyWorkflow.ps1 cmake/PeHelpers.cmake cmake/RunPureTest.cmake \
+cmake/Install.cmake cmake/LegacyPathPolicy.cmake cmake/LegacyWorkflow.cmake cmake/LegacyWorkflow.ps1 cmake/PeHelpers.cmake cmake/RunPureTest.cmake \
 cmake/VerifyInstalledPackage.cmake cmake/VerifyWindowsDependencies.cmake cmake/pure_gl_install_guard.c cmake/pure_gl_runner.c \
-tests/AuditHelpers.cmake tests/cleanup_contract.cmake tests/configure_contract.cmake tests/hidden-render.pure \
+tests/AuditHelpers.cmake tests/ReleaseChecks.cmake tests/cleanup_contract.cmake tests/configure_contract.cmake tests/hidden-render.pure \
 tests/install_contract.cmake tests/install_guard_contract.cmake tests/interactive.pure tests/load.pure \
 tests/render_contract.cmake tests/runner_contract.cmake tests/runner_probe.pure tests/runtime_verifier_contract.cmake tests/source_dist_contract.cmake \
 tests/fixtures/freeglut-imports.txt tests/fixtures/libc++-imports.txt tests/fixtures/libgmp-10-imports.txt \
@@ -102,7 +102,7 @@ realclean:
 
 generate: gl.templ $(wildcard GL/*.h)
 	$(legacy_workflow)
-	$(MAKE) all
+	"$(MAKE)" all
 
 # Install targets.
 

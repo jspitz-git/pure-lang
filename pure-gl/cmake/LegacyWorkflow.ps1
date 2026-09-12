@@ -119,10 +119,20 @@ try {
   if(-not [IO.Path]::IsPathRooted($AuditBuild) -or -not (Test-Path -LiteralPath (Join-Path $AuditBuild 'CMakeCache.txt'))) {
    throw 'distcheck requires DIST_AUDIT_BUILD=<strict configured and built directory>'
   }
-  $taskCache=[IO.File]::ReadAllText((Join-Path $AuditBuild 'CMakeCache.txt'))
+  $taskAudit=[IO.Path]::GetFullPath($AuditBuild)
+  $taskCachePath=Join-Path $taskAudit 'CMakeCache.txt'
+  [GlLegacyOwner]::Ancestors($taskCachePath)
+  $taskCache=$taskUtf8.GetString([GlLegacyOwner]::Read($taskCachePath))
   if($taskCache -notmatch '(?m)^PURE_GL_STRICT_AUDIT:BOOL=ON\r?$') { throw 'distcheck requires a strict audit build' }
+  $taskHomes=[Text.RegularExpressions.Regex]::Matches($taskCache,'(?m)^CMAKE_HOME_DIRECTORY:INTERNAL=([^\r\n]+)\r?$')
+  if($taskHomes.Count -ne 1 -or -not [IO.Path]::IsPathRooted($taskHomes[0].Groups[1].Value)) {
+   throw 'distcheck build source mismatch: missing unique absolute CMAKE_HOME_DIRECTORY'
+  }
+  $taskHome=[IO.Path]::GetFullPath($taskHomes[0].Groups[1].Value)
+  [GlLegacyOwner]::Ancestors($taskHome)
+  if($taskHome -cne $taskSource) { throw 'distcheck build source mismatch: CMAKE_HOME_DIRECTORY does not match the package source' }
   [GlLegacyOwner]::Close()
-  & (Join-Path ([IO.Path]::GetDirectoryName($CMake)) 'ctest.exe') --test-dir $AuditBuild -R '^pure-gl-source-dist-contract$' --no-tests=error --output-on-failure
+  & (Join-Path ([IO.Path]::GetDirectoryName($CMake)) 'ctest.exe') --test-dir $taskAudit -R '^pure-gl-source-dist-contract$' --no-tests=error --output-on-failure
   if($LASTEXITCODE -ne 0) { throw 'Independent source distribution contract failed' }
  } elseif($Mode -eq 'dist') {
   $taskNames=@($DistFiles.Trim() -split '\s+')

@@ -1,4 +1,17 @@
 include_guard(GLOBAL)
+function(gl_audit_require_disjoint_layout)
+  file(REAL_PATH "${SOURCE_DIR}" source_root)
+  file(REAL_PATH "${BINARY_DIR}" build_root)
+  if(CMAKE_HOST_WIN32)
+    string(TOLOWER "${source_root}" source_root)
+    string(TOLOWER "${build_root}" build_root)
+  endif()
+  cmake_path(IS_PREFIX source_root "${build_root}" NORMALIZE build_beneath_source)
+  cmake_path(IS_PREFIX build_root "${source_root}" NORMALIZE source_beneath_build)
+  if(build_beneath_source OR source_beneath_build)
+    message(FATAL_ERROR "Source/build layouts overlap; release contracts require disjoint source and build trees")
+  endif()
+endfunction()
 # All recursive cleanup goes through the compiled native authority. These
 # functions never accept a cleanup path from their caller.
 function(gl_audit_open leaf output)
