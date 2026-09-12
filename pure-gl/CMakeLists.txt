@@ -114,10 +114,21 @@ endif()
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(PURE REQUIRED IMPORTED_TARGET "pure>=0.68")
 pkg_check_modules(FREEGLUT REQUIRED IMPORTED_TARGET freeglut)
-pkg_get_variable(discovered_pure_prefix pure prefix)
-pkg_get_variable(discovered_freeglut_prefix freeglut prefix)
-pkg_get_variable(discovered_freeglut_include freeglut includedir)
-pkg_get_variable(discovered_freeglut_library freeglut libdir)
+# FindPkgConfig's list-valued helper splits directory variables at spaces.
+# These four values are scalar paths, including when the Pure prefix has spaces.
+function(pure_gl_pkg_directory output module variable)
+  execute_process(COMMAND "${PKG_CONFIG_EXECUTABLE}" "--variable=${variable}" "${module}"
+    RESULT_VARIABLE result OUTPUT_VARIABLE value ERROR_VARIABLE error
+    OUTPUT_STRIP_TRAILING_WHITESPACE)
+  if(NOT result EQUAL 0 OR value STREQUAL "" OR value MATCHES "[;\r\n]")
+    message(FATAL_ERROR "Cannot read ${module} ${variable} directory: ${error}")
+  endif()
+  set(${output} "${value}" PARENT_SCOPE)
+endfunction()
+pure_gl_pkg_directory(discovered_pure_prefix pure prefix)
+pure_gl_pkg_directory(discovered_freeglut_prefix freeglut prefix)
+pure_gl_pkg_directory(discovered_freeglut_include freeglut includedir)
+pure_gl_pkg_directory(discovered_freeglut_library freeglut libdir)
 file(TO_CMAKE_PATH "${discovered_pure_prefix}" discovered_pure_prefix)
 file(TO_CMAKE_PATH "${discovered_freeglut_prefix}" discovered_freeglut_prefix)
 file(TO_CMAKE_PATH "${discovered_freeglut_include}" discovered_freeglut_include)
@@ -336,4 +347,6 @@ if(BUILD_TESTING)
   endif()
 endif()
 
+# The install module owns the sealed inventory, native transaction helper and
+# component/guard CTests. No unguarded file installation is registered elsewhere.
 include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/Install.cmake")
