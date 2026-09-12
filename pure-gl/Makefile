@@ -52,7 +52,7 @@ c-modules = $(patsubst %.pure,%.c,$(modules))
 
 override DISTFILES = .pure-gl-source COPYING Makefile README gl.templ CMakeLists.txt WINDOWS.md THIRD_PARTY.md \
 cmake/SealBuiltArtifacts.cmake tests/RunnerRetention.ps1 tests/runner_retention_fixture.c tests/built_authority_contract.cmake \
-tests/LegacyRetention.ps1 tests/legacy_retention_fixture.c tests/IsolateSource.ps1 tests/VerifyExtractedSource.cmake tests/VerifyCTestInventory.cmake \
+tests/LegacyRetention.ps1 tests/legacy_retention_fixture.c tests/IsolateSource.ps1 tests/VerifyExtractedSource.cmake tests/VerifyCTestInventory.cmake tests/source_preflight_contract.cmake \
 debian/changelog debian/compat debian/control debian/copyright debian/docs debian/rules debian/source/format debian/watch \
 examples/Imlib2.pure examples/fractal.jpg examples/simple_glut_example.pure examples/teapot.pure examples/texture.pure \
 examples/flexi-line/flexi-line-auto.pure examples/flexi-line/flexi-line.pure examples/flexi-line/glamour.pure examples/flexi-line/vector_math.pure \

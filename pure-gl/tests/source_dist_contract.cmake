@@ -17,7 +17,7 @@ file(COPY "${SOURCE_DIR}/" DESTINATION "${copy}")
 # Independent, reviewed release policy, not a parse of the production Makefile.
 set(expected_files
   cmake/SealBuiltArtifacts.cmake tests/RunnerRetention.ps1 tests/runner_retention_fixture.c tests/built_authority_contract.cmake
-  tests/LegacyRetention.ps1 tests/legacy_retention_fixture.c tests/IsolateSource.ps1 tests/VerifyExtractedSource.cmake tests/VerifyCTestInventory.cmake
+  tests/LegacyRetention.ps1 tests/legacy_retention_fixture.c tests/IsolateSource.ps1 tests/VerifyExtractedSource.cmake tests/VerifyCTestInventory.cmake tests/source_preflight_contract.cmake
   .pure-gl-source CMakeLists.txt COPYING Makefile README THIRD_PARTY.md WINDOWS.md
   GL.c GL.pure GL_ARB.c GL_ARB.pure GL_ATI.c GL_ATI.pure GL_EXT.c GL_EXT.pure
   GL_NV.c GL_NV.pure GLU.c GLU.pure GLUT.c GLUT.pure gl.templ
@@ -129,7 +129,48 @@ endif()
 file(MAKE_DIRECTORY "${work}/extracted elsewhere")
 execute_process(COMMAND "${CMAKE_COMMAND}" -E tar xfz "${work}/pure-gl-0.9.tar.gz"
   WORKING_DIRECTORY "${work}/extracted elsewhere" COMMAND_ERROR_IS_FATAL ANY)
+include("${SOURCE_DIR}/tests/source_preflight_contract.cmake")
 set(extracted "${work}/extracted elsewhere/pure-gl-0.9")
+# Authenticate the complete extracted tree with the trusted outer driver before
+# any archive-contained code can decide how its own bytes should be checked.
+execute_process(COMMAND "${BINARY_DIR}/pure-gl-install-guard.exe" --check-tree "${extracted}"
+  RESULT_VARIABLE preflight_rc OUTPUT_VARIABLE preflight_out ERROR_VARIABLE preflight_err)
+if(NOT preflight_rc EQUAL 0)
+  message(FATAL_ERROR "Outer archive preflight rejected tree identity: ${preflight_out}${preflight_err}")
+endif()
+file(GLOB_RECURSE extracted_files LIST_DIRECTORIES FALSE RELATIVE "${extracted}" "${extracted}/*")
+list(SORT extracted_files)
+if(NOT extracted_files STREQUAL expected_files)
+  message(FATAL_ERROR "Outer archive preflight rejected exact file inventory")
+endif()
+file(GLOB_RECURSE extracted_entries LIST_DIRECTORIES TRUE RELATIVE "${extracted}" "${extracted}/*")
+set(extracted_dirs)
+foreach(path IN LISTS extracted_entries)
+  if(IS_DIRECTORY "${extracted}/${path}")
+    list(APPEND extracted_dirs "${path}")
+  endif()
+endforeach()
+list(SORT extracted_dirs)
+if(NOT extracted_dirs STREQUAL expected_dirs)
+  message(FATAL_ERROR "Outer archive preflight rejected exact directory inventory")
+endif()
+foreach(path IN LISTS expected_files)
+  if(path STREQUAL README)
+    file(READ "${extracted}/README" readme)
+    string(REGEX MATCH "[A-Z][a-z]+ [0-9]+, [0-9][0-9][0-9][0-9]" date "${readme}")
+    string(REPLACE "@version@" "0.9" expected_readme "${readme_template}")
+    string(REPLACE "|today|" "${date}" expected_readme "${expected_readme}")
+    if(date STREQUAL "" OR NOT readme STREQUAL expected_readme)
+      message(FATAL_ERROR "Outer archive preflight rejected README substitution")
+    endif()
+  else()
+    file(SHA256 "${extracted}/${path}" hash)
+    if(NOT hash STREQUAL "${source_hash_${path}}")
+      message(FATAL_ERROR "Outer archive preflight rejected changed bytes: ${path}")
+    endif()
+  endif()
+endforeach()
+message(STATUS "PURE_GL_SOURCE_OUTER_PREFLIGHT_OK archive_code_executed=0")
 # Freeze archive expectations in the owned workspace, then load all remaining
 # driver code from the archive with checkout inputs unavailable to reads.
 set(authority "")

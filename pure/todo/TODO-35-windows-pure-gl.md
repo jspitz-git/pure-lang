@@ -335,3 +335,73 @@ Build, validate, and package `pure-gl` with native Windows OpenGL and FreeGLUT.
     Full RED/GREEN evidence, exact commands, retained archives, metrics and
     self-review are in the final-fix SDD report. Documentation/new-helper/CI
     PowerShell parsing, real YAML parsing and final whitespace checks pass.
+- 2026-09-12: The scoped re-review confirmed all five prior fixes but found R1:
+  archive-contained bootstrap code ran before independent extracted-byte
+  validation. The user explicitly authorized a second fix wave.
+  - A new independent regression exercises the real outer handoff with changed
+    `IsolateSource.ps1`, `VerifyExtractedSource.cmake`, and `AuditHelpers.cmake`.
+    Before the production fix all three execution markers appeared; two stale
+    bootstraps exited successfully and the third rejected itself only after
+    execution. The fresh RED source-dist test failed as expected in 4.42 seconds.
+  - The trusted outer driver now checks the complete extracted file/directory
+    inventory, regular no-reparse/non-hardlinked tree, every frozen source hash,
+    and permitted README substitution before any archive helper runs. All three
+    focused negatives now reject without executing the changed helper; the
+    restored pristine outer preflight passes. Genuine original-input isolation
+    and the prior in-isolation mutations remain unchanged. The shipped new
+    regression increases the archive to 88 files/nine directories; registration
+    remains eleven repository/ten standalone CTests.
+  - The reported reused-`gf4` Windows error 5 was reproduced by the ordinary
+    seal verifier in the default sandbox. The identical command immediately
+    passed in the approved native authentication-channel scope, without cleanup,
+    rebuilding, ACL changes or source repair. Both original gf4 install/guard
+    contracts then passed in 447.13 seconds (276.29/170.83), including final
+    pristine checks and zero protected writes. No reentrance regression was
+    found, so no speculative authentication/reentrance change was made.
+- 2026-09-13: Completed the second fix wave's entirely fresh release gate using
+  `.../todo35-audit/sf source2/pure-gl`, sibling `.github`, `.../sfpure2`, short
+  build `C:/pure-lang/gs2`, and separate physical `.../sf final2 café` stage.
+  - Configure/four-worker build/exact PE checks passed in 3.009/7.060/2.925
+    seconds with the documented local Make/compiler-probe fallback and approved
+    native authentication-channel scope. The full executed sequence included:
+
+    ```powershell
+    & C:/msys64/clang64/bin/mingw32-make.exe --no-print-directory -C 'C:/pure-lang/.worktrees/todo35-audit/sf source2/pure-gl' distcheck CMAKE=C:/msys64/clang64/bin/cmake.exe PKG_CONFIG=C:/msys64/clang64/bin/pkgconf.exe DIST_AUDIT_BUILD=C:/pure-lang/gs2
+    & C:/msys64/clang64/bin/cmake.exe -DBINARY_DIR=C:/pure-lang/gs2 -P 'C:/pure-lang/.worktrees/todo35-audit/sf source2/pure-gl/tests/VerifyCTestInventory.cmake'
+    & C:/msys64/clang64/bin/ctest.exe --test-dir C:/pure-lang/gs2 -L gl --output-on-failure --no-tests=error -V
+    & C:/msys64/clang64/bin/cmake.exe --install C:/pure-lang/gs2 --prefix 'C:/pure-lang/.worktrees/todo35-audit/sf final2 café' --component runtime
+    & C:/msys64/clang64/bin/cmake.exe --install C:/pure-lang/gs2 --prefix 'C:/pure-lang/.worktrees/todo35-audit/sf final2 café' --component documentation
+    & C:/msys64/clang64/bin/cmake.exe -DGL_INSTALL_CONTEXT=C:/pure-lang/gs2/pure-gl-install-context.cmake '-DSTAGE_PREFIX=C:/pure-lang/.worktrees/todo35-audit/sf final2 café' -P 'C:/pure-lang/.worktrees/todo35-audit/sf source2/pure-gl/cmake/VerifyInstalledPackage.cmake'
+    ```
+
+  - Public distcheck passed 1/1 in 1,015.30 seconds (1,016.190 including public
+    dispatch), with nine isolated extracted tests in 995.75 seconds. All eleven
+    repository CTests then passed in 2,330.56 seconds. Their separate source-dist
+    gate passed in 1,125.41 seconds, including nine extracted tests in 1,105.74
+    seconds. Both gates reject all three changed bootstrap/helpers before
+    execution, pass the pristine outer preflight and original-dependency
+    regressions, deny 393/470 original inputs respectively, and seal 26 payloads.
+  - Both retained archives contain 88 files/nine directories. The public
+    250,926-byte archive has SHA-256
+    `d30719c157d4e078915eafe4892a6f624c5f4273191827176a354363a6fd39d8`;
+    the repository suite's 250,928-byte archive has SHA-256
+    `3c0c476187f1d9507e5bb73c0d7d1776ab611a5d9b935012ebecf624499114a1`.
+  - Separate runtime/documentation installs passed in 4.331/3.886 seconds;
+    full installed verification passed in 75.382 seconds with two authenticated
+    same-stage launches, exact 22-PE/141-import closure and final equality.
+    The physical stage contains 81 entries, 66 files/15 directories and
+    100,069,412 file bytes. Baseline counts/bytes remain unchanged.
+  - Independent checks passed 23 Python methods/408 GL mutations in 246.562
+    seconds; the final registered workflow suite repeated them in 170.161
+    seconds. Actual validator CLI, YAML parsing, six CI/two documentation
+    PowerShell ASTs and whitespace checks pass. Final metrics confirm identical
+    bytes for all 88 package files and all four workflow files in the tested
+    snapshot. Tool versions and reviewed runtime/tool pins remain unchanged.
+  - Final inventory TSV SHA-256 is
+    `18d0146009dc41baefdcf07740007468eaa8c9fc3d7775b23fcc968e4f6d889a`;
+    module SHA-256 is `913a50aaa22c09f178d0b3525e8d641b6f56e5ec8df02012db62b0bc96758c05`;
+    completed seal SHA-256 is
+    `900c7054376857fc09a7c95132dcefcaf8367fcb211c7bd90f43ed16d2d53109`.
+    Detailed RED/GREEN, error-5 diagnosis, commands, archives, metrics and scoped
+    self-review are preserved in the second-fix SDD report. No hosted CI/Ninja
+    execution or visible interactive rerun is claimed.

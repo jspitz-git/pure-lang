@@ -271,11 +271,15 @@ the matching strict CMake build. It verifies the retained canonical
 `CMAKE_HOME_DIRECTORY`; its source directory chain and cache remain retained
 through CTest dispatch. That contract
 runs public `make dist` in an owned spaced source copy and validates exactly
-**87 regular files and 9 directory entries**, including the CMake build, all
+**88 regular files and 9 directory entries**, including the CMake build, all
 helpers/native helper sources, Windows/provenance documentation, and tests.
 It checks archived bytes against the input snapshot (including README's
 declared version/date substitution), removes the copied
-source, rejects missing/extra/stale-generated/symlink mutations, and performs
+source, then the trusted outer driver verifies the complete extracted
+file/directory inventory, bytes and README substitution before executing any
+archived helper. Three independent helper-corruption negatives require outer
+rejection without executing the changed code. It also rejects the existing
+missing/extra/stale-generated/symlink mutations and performs
 an extracted strict build, four-worker generation, exact PE audit, and nine
 non-source-dist contracts. Archive-contained helpers deny new reads and image
 opens of original checkout/build helpers during extracted verification; a

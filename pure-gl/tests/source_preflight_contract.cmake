@@ -1,0 +1,56 @@
+cmake_minimum_required(VERSION 3.25)
+# Exercise the real archive-to-bootstrap handoff, including its ordering. A
+# removed/late outer preflight must fail these cases even if archive code exits
+# successfully or detects its own changed bytes only after it has executed.
+file(READ "${SOURCE_DIR}/tests/source_dist_contract.cmake" driver)
+set(anchor [=[set(extracted "${work}/extracted elsewhere/pure-gl-0.9")]=])
+string(FIND "${driver}" "${anchor}" handoff)
+if(handoff LESS 0)
+  message(FATAL_ERROR "Cannot locate source archive handoff for behavioral regression")
+endif()
+string(SUBSTRING "${driver}" ${handoff} -1 tail)
+# Parent owns restoration and cleanup; do not let a successful stale bootstrap
+# erase the evidence before the independent parent can assert on its effects.
+string(REPLACE "gl_audit_clean(source-dist-contract)" "# parent-owned negative fixture" tail "${tail}")
+set(context "cmake_minimum_required(VERSION 3.25)\n")
+foreach(name expected_files expected_dirs readme_template archive_hash work
+    SOURCE_DIR BINARY_DIR GENERATOR MAKE_PROGRAM C_COMPILER PKG_CONFIG_EXECUTABLE
+    LLVM_READOBJ_EXECUTABLE LLVM_READOBJ_SHA256 LLVM_STRINGS_EXECUTABLE LLVM_STRINGS_SHA256
+    GNU_MAKE_EXECUTABLE PURE_EXECUTABLE PURE_GL_PURE_PREFIX PURE_GL_CLANG64_PREFIX
+    PURE_GL_WINDOWS_SYSTEM_DIRECTORY)
+  string(APPEND context "set(${name} [==[${${name}}]==])\n")
+endforeach()
+foreach(path IN LISTS expected_files)
+  string(APPEND context "set(source_hash_${path} ${source_hash_${path}})\n")
+endforeach()
+string(APPEND context "include([==[${SOURCE_DIR}/tests/AuditHelpers.cmake]==])\n")
+file(WRITE "${work}/outer-preflight-driver.cmake" "${context}${tail}")
+set(failures)
+foreach(helper IsolateSource.ps1 VerifyExtractedSource.cmake AuditHelpers.cmake)
+  set(candidate "${work}/extracted elsewhere/pure-gl-0.9/tests/${helper}")
+  set(marker "${work}/executed-${helper}.txt")
+  file(REMOVE "${marker}")
+  file(COPY_FILE "${candidate}" "${work}/preflight-saved")
+  if(helper STREQUAL IsolateSource.ps1)
+    file(WRITE "${candidate}" "[IO.File]::WriteAllText('${marker}','executed')\nexit 0\n")
+  elseif(helper STREQUAL VerifyExtractedSource.cmake)
+    file(WRITE "${candidate}" "file(WRITE [==[${marker}]==] executed)\nreturn()\n")
+  else()
+    file(READ "${candidate}" original)
+    file(WRITE "${candidate}" "file(WRITE [==[${marker}]==] executed)\n${original}")
+  endif()
+  execute_process(COMMAND "${CMAKE_COMMAND}" -P "${work}/outer-preflight-driver.cmake"
+    RESULT_VARIABLE rc OUTPUT_VARIABLE out ERROR_VARIABLE err TIMEOUT 45)
+  file(COPY_FILE "${work}/preflight-saved" "${candidate}")
+  file(WRITE "${work}/outer-preflight-${helper}.log" "exit=${rc}\n${out}${err}")
+  if(rc EQUAL 0 OR NOT err MATCHES "Outer archive preflight rejected" OR EXISTS "${marker}")
+    list(APPEND failures "${helper}: outer rejection absent or archive helper executed (exit=${rc})")
+  else()
+    message(STATUS "SOURCE_DIST_OUTER_PREFLIGHT_REJECT_OK ${helper} archive_code_executed=0")
+  endif()
+endforeach()
+file(REMOVE "${work}/preflight-saved")
+if(failures)
+  message(FATAL_ERROR "Independent outer archive preflight failed: ${failures}")
+endif()
+message(STATUS "PURE_GL_SOURCE_PREFLIGHT_CONTRACT_OK negatives=3 archive_code_executed=0")
