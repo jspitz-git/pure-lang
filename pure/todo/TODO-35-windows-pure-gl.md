@@ -72,3 +72,182 @@ Build, validate, and package `pure-gl` with native Windows OpenGL and FreeGLUT.
     `gdi32.dll`, `user32.dll`, and `winmm.dll` are explicitly forbidden from
     the package.
   - A negative configure test rejected `PURE_LIBRARY_INSTALL_DIR=../escape`.
+- 2026-09-12: Hardened strict configuration and native test completion in a
+  follow-up audit. The historical 2026-07 closure and desktop evidence above
+  remain intact.
+  - `pure-gl-configure-contract` rejects omitted, noncanonical, wrong-type,
+    and wrong-prefix inputs, including pkg-config include/library paths that
+    disagree with the explicit CLANG64 prefix. CI supplies all tool/root
+    paths and both reviewed LLVM tool hashes explicitly.
+  - `pure-gl-runner-contract` proves that inherited PATH/PURELIB cannot supply
+    runtime dependencies. The native supervisor retains input identities,
+    creates a bounded Job Object, drains both output streams, and requires
+    exit zero, empty stderr, and exactly one terminal random-token completion
+    record. Functional limits are 90 seconds inside the supervisor, a
+    five-second adapter margin, and 100 seconds in CTest.
+  - Mandatory load and hidden-render checks cover all seven interfaces,
+    nonempty OpenGL context strings, RGBA `[64,128,191,255]` within two per
+    channel, OpenGL error boundaries, and verified window destruction.
+    The separate opt-in `pure-gl-render-contract` supplies semantic mutation
+    coverage; Task 2's retained result was three pristine scripts and 18
+    rejected mutations. That optional target is not counted as an additional
+    CTest or as a rerun in the final verification below.
+- 2026-09-12: Replaced the partial PE checks with an exact recursive import
+  and origin contract.
+  - `pure-gl-runtime-verifier-contract` now passes 31 negative mutations and
+    seven pristine cases, including missing/unexpected imports, malformed
+    records, pinned-tool changes, architecture, runtime shadows, reparses,
+    and decorated or obsolete FreeGLUT loader strings.
+  - Both fresh build and installed audits inspect 12 non-system AMD64 DLLs
+    plus ten terminal AMD64 Windows system DLLs: 22 PE files and 141 normal
+    import edges, with empty missing/unexpected sets. Windows OpenGL, GLU,
+    GDI, User32, and WinMM binaries remain forbidden package payloads.
+  - The pinned reader's physical Unicode `File:` path is accepted only as
+    byte-exact canonical UTF-8; every other record remains strict ASCII.
+    Invalid UTF-8 and non-ASCII structural-record regressions are mandatory.
+- 2026-09-12: Replaced path-existence installation checks with sealed package
+  ownership and same-prefix FreeGLUT provenance.
+  - `pure-gl-install-contract` passes 33 negatives/eight positives, including
+    altered bytes, extra files/directories outside historical globs,
+    collisions, manifest changes, wrong runtime/notice origins, and attempts
+    to change or install into the canonical baseline.
+  - `pure-gl-install-guard-contract` passes 18 negatives/20 positives with
+    zero protected writes. It covers retained identities, stage exclusion,
+    authenticated context/source consumption, reservations across components,
+    final equality, child completion, and controlled-failure rollback with
+    existing-manifest restoration. This is not a crash/power-loss atomicity
+    claim.
+  - The frozen baseline is 49 entries (40 files, nine directories). Runtime
+    adds nine files and documentation adds 17, with six new directories:
+    **49 + 26 + 6 = 81 entries**, or 66 files and 15 directories. Full
+    verification requires both disjoint components and an unchanged final
+    snapshot after the two installed functional tests.
+  - The sole added third-party DLL is FreeGLUT 3.8.0 from CLANG64 package
+    `mingw-w64-clang-x86_64-freeglut` 3.8.0-1. Its 359,936-byte runtime and
+    1,439-byte notice use the canonical `bin/libfreeglut.dll` and
+    `share/licenses/freeglut/COPYING` origins; the unchanged notice installs
+    as `share/doc/pure-gl/licenses/FreeGLUT.txt`. The inventory binds project,
+    version, upstream archive URL, MIT metadata, notice mapping, and both
+    source hashes. Pins remain
+    `a297e3b3fa824de6eb21285e23a409fbbf0bc573c60dd04c227bbc89d8398519`
+    and `b6593d5ec4c113a274abb85b10e8615895cb0ddb89f7912af5fe5aa8df38a275`.
+- 2026-09-12: Made the public source release independently verifiable and
+  guarded the legacy deletion/generation paths.
+  - `pure-gl-source-dist-contract` executes public `make dist`, verifies the
+    exact 78-file/nine-directory archive including all CMake/native helpers,
+    Windows/provenance docs and tests, removes its copied source, then
+    configures/builds/inspects/tests the extracted archive. Four archive
+    negatives cover missing, extra, stale generated, and symlink inputs.
+    A standalone archive registers nine tests and runs eight non-source-dist
+    tests inside this gate; it carries the workflow contract script but not
+    repository `.github`.
+  - Public `make distcheck` binds `DIST_AUDIT_BUILD` to the retained canonical
+    `CMAKE_HOME_DIRECTORY` of the same strict source tree. Source and build
+    roots must be disjoint before either copying driver creates an audit leaf.
+  - `pure-gl-cleanup-contract` passes 35 public legacy negatives, 15 inherited
+    driver negatives, one source/cache binding case, four layout cases and
+    eight POSIX name-policy cases, with zero protected writes. It proves
+    byte-exact clean inventory, realclean, and real four-worker generation
+    using a Make executable path with spaces and an ampersand. Fixed owned
+    leaves, sentinels, no-follow identity and protected-descendant checks
+    replace the old broad cleanup paths.
+- 2026-09-12: Added mandatory Windows CI coverage and independent semantic
+  workflow regressions.
+  - Both push and pull-request path filters in
+    `.github/workflows/non-linux-release-validation.yml` include `pure-gl/**`,
+    this TODO, the approved design, and the implementation plan. The existing
+    Windows 2025 job includes CLANG64 FreeGLUT, native GNU Make and PyYAML.
+  - Six unconditional PowerShell steps capture Pure immediately after its
+    portable install, configure strict Release/Ninja in `${{ runner.temp }}/gl8`,
+    build/inspect PE with four workers, run every `gl` CTest, independently
+    execute public distcheck, and install/verify both components in physical
+    `${{ runner.temp }}/gl package café`. Source retains spaces and sibling
+    `.github`; the SDK copy is ASCII/unspaced `${{ runner.temp }}/glp`.
+  - Parent runtime PATH is exactly `C:/Windows/System32;C:/Windows`, PURELIB
+    is removed, and pkg-config roots are explicit. Each native failure stops
+    the step. An `always()` artifact upload retains GL logs/build for 14 days.
+  - The registered `pure-gl-workflow-contract` runs the actual validator and
+    independent Python suite. Fresh working-tree verification passed all 23
+    methods in 199.256 seconds, including 402 GL mutation cases, four
+    independently authored pristine/formatting variants and focused guard/SDK
+    regressions. Actual validator CLI, real YAML parse, both documentation
+    PowerShell blocks, six CI PowerShell blocks, and `git diff --check` pass.
+    Hosted CI was not dispatched, so its graphics support, 8.3 availability
+    and combined job duration are not established by these local results.
+- 2026-09-12: Recorded the three investigated Windows path boundaries.
+  - Pure 0.68 converts its executable-relative library prefix to UTF-8, while
+    prelude loading reaches narrow Windows CRT `stat`/`fopen`. Retained direct
+    executable/script 2x2 and wide/ACP/UTF-8 path probes isolated the lost
+    prelude to a physical Unicode executable prefix on the local ACP 1250
+    host, including misleading Pure exit zero with diagnostics.
+  - The installed supervisor launches the same physical stage's `pure.exe`
+    through its identity-checked ASCII Windows 8.3 spelling. Physical paths
+    still own every source/hash/manifest/DLL/PE check; no ASCII runtime copy
+    or alternate Pure executable is used. Four unsafe alias cases fail and
+    the same-stage identical-byte positive passes. The selected volume must
+    already provide a valid ASCII alias; otherwise verification fails closed.
+    Arbitrary Unicode Pure argument paths are not claimed supported.
+  - Native Make/pkgconf splits POSIX-escaped include/library flags from a
+    spaced SDK prefix, so the immutable SDK is ASCII/unspaced. Source and
+    tool paths with spaces remain covered, as does the Unicode/spaced final
+    stage. The exact physical UTF-8 PE `File:` exception above is separate
+    from Pure's executable-launch compatibility path.
+- 2026-09-12: Completed the first entirely fresh follow-up release
+  verification before adding these TODO entries.
+  - Fresh source `C:/pure-lang/.worktrees/todo35-audit/t7 source2/pure-gl`
+    preserved sibling `.github`; SDK `.../t7pure2` copied the unchanged
+    98,751,285-byte canonical Pure baseline. Build `C:/pure-lang/g7b` is
+    separate and 16 characters long. Final physical stage is
+    `C:/pure-lang/.worktrees/todo35-audit/t7 final2 café`.
+  - Tools measured by their actual executables: Pure 0.68 compiled for LLVM
+    22.1.8; Clang/llvm-readobj/llvm-strings 22.1.8; CMake/CTest 4.4.0; GNU Make
+    4.4.1; pkgconf 3.0.4; CLANG64 Python 3.14.6; native Python 3.14.5;
+    PyYAML 6.0.3. Installed Ninja reports 1.13.2 but was not used for this
+    local build. Windows reports build 26200.9445, display version 25H2.
+  - The local Ninja lock/compiler-probe limitation uses the documented
+    `MinGW Makefiles` fallback with explicit native Make and the recorded
+    `CMAKE_C_COMPILER_WORKS=1` / `CMAKE_C_ABI_COMPILED=1` overrides. Top-level
+    CI retains Ninja with normal probing. Native guard operations require
+    the approved local named-pipe execution scope; authentication remains
+    enabled. The sandbox-denied initial attempt is retained as diagnostic
+    evidence and is not counted as the successful clean build.
+  - Exact commands and cache pins are in [the operator reference](../../pure-gl/WINDOWS.md).
+    This local run used those strict inputs with the documented generator
+    fallback, followed by:
+
+    ```powershell
+    & C:/msys64/clang64/bin/cmake.exe --build C:/pure-lang/g7b --parallel 4
+    & C:/msys64/clang64/bin/cmake.exe --build C:/pure-lang/g7b --target verify-windows-dependencies --parallel 4
+    & C:/msys64/clang64/bin/ctest.exe --test-dir C:/pure-lang/g7b -L gl --output-on-failure --no-tests=error -V
+    & C:/msys64/clang64/bin/mingw32-make.exe --no-print-directory -C 'C:/pure-lang/.worktrees/todo35-audit/t7 source2/pure-gl' distcheck CMAKE=C:/msys64/clang64/bin/cmake.exe PKG_CONFIG=C:/msys64/clang64/bin/pkgconf.exe DIST_AUDIT_BUILD=C:/pure-lang/g7b
+    & C:/msys64/clang64/bin/cmake.exe --install C:/pure-lang/g7b --prefix 'C:/pure-lang/.worktrees/todo35-audit/t7 final2 café' --component runtime
+    & C:/msys64/clang64/bin/cmake.exe --install C:/pure-lang/g7b --prefix 'C:/pure-lang/.worktrees/todo35-audit/t7 final2 café' --component documentation
+    & C:/msys64/clang64/bin/cmake.exe -DGL_INSTALL_CONTEXT=C:/pure-lang/g7b/pure-gl-install-context.cmake '-DSTAGE_PREFIX=C:/pure-lang/.worktrees/todo35-audit/t7 final2 café' -P 'C:/pure-lang/.worktrees/todo35-audit/t7 source2/pure-gl/cmake/VerifyInstalledPackage.cmake'
+    ```
+
+  - Strict configure passed in 2.926 seconds, four-worker build in 6.110
+    seconds, and exact PE target in 2.811 seconds. All ten repository CTests
+    passed in 1,377.74 seconds. The source-dist test within that suite passed
+    in 611.06 seconds, including eight extracted tests in 595.80 seconds.
+  - The independent public distcheck then passed 1/1 in 618.79 seconds
+    (619.670 seconds including public dispatch), with eight extracted tests
+    passing in 603.38 seconds. Both archives contain 78 files/nine directories.
+    The separately retained public archive is 241,982 bytes, SHA-256
+    `4e51cc95a7e32811370aaeeb794980fb235e7c9d08a13a273f5a1601f9741f81`.
+  - Runtime/documentation installations passed in 4.057/3.426 seconds.
+    Complete installed verification passed in 57.172 seconds, including two
+    authenticated same-stage alias launches, context/pixel/error/destruction
+    checks, the 22-file/141-import PE audit, and unchanged final inventory.
+    The physical stage contains 81 entries, 66 files/15 directories and
+    100,067,661 file bytes. Its renderer was AMD Radeon(TM) Graphics,
+    OpenGL 4.6.0 Compatibility Profile Context 22.20.27.09.230330.
+  - Baseline TSV SHA-256 is
+    `7afa989e6f687351c221c3e43ca99cfde5d1a5d5e84bba77553ea21ab5182683`;
+    inventory TSV is
+    `038579d5e9f3b22cfc266a973a63bda2c7afdd20097126a8483ede9ed2010057`;
+    the 616,448-byte module is
+    `8098fe2268ccaa5f6934b5b0084b9b4459cd2acb12a7b70ae0401e31828f8a15`.
+    The full measured logs, exact commands, archive copies, and context/runner/guard
+    hashes are retained in the Task 7 SDD report. No visible desktop validation
+    was rerun for this final gate;
+    `check-gl-interactive` remains optional.

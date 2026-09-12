@@ -24,8 +24,42 @@ An identical file selected from another prefix or license directory is not
 accepted as the declared source. Updating either payload requires a reviewed
 pin update and a fresh configured build.
 
+For the audited `C:/msys64/clang64` prefix, the runtime is 359,936 bytes and the
+notice is 1,439 bytes. Strict configuration also requires the header
+`include/GL/freeglut.h` and import library `lib/libfreeglut.dll.a` from that
+same prefix and cross-checks pkg-config's resolved include/library paths.
+Neither development input is a portable package payload. Build-tree tests
+load an explicitly staged copy of the pinned DLL from `pure-gl-runtime`;
+the CLANG64 `bin` directory is absent from the supervised runtime PATH.
+
+The generated `pure-gl-install-inventory.tsv` binds each source and hash to
+its component and destination. The complete stage is the unchanged 49-entry
+Pure baseline plus nine runtime files, 17 documentation files, and six new
+directories: 81 entries (66 files, 15 directories). It contains exactly one
+FreeGLUT notice payload. The installed verifier checks both component seals,
+the actual notice bytes, and the same source-origin mapping before running
+the staged load/render tests and final no-residue scan. Mutable inventory
+files are data; the configured native authority and retained file identities
+must agree with them.
+
 OpenGL, GLU, GDI, User32, and WinMM are Windows system components. Their DLLs
 must not be copied into the portable distribution.
+
+The pinned normal-import closure is 12 non-system AMD64 binaries, 141 import
+edges, and ten terminal AMD64 Windows binaries (22 inspected PE files). The
+ten non-system dependencies beyond this package's two DLLs are already owned
+by the canonical Pure baseline, not additional pure-gl payloads. Exact import
+fixtures, canonical origin checks, and the complete stage inventory reject
+unreviewed dependencies and system-DLL copies. The full dependency names,
+strict tool hashes, commands, and path limitations are in
+[WINDOWS.md](WINDOWS.md).
+
+For a Unicode stage, only Pure's executable launch uses an identity-checked
+ASCII 8.3 spelling of that same physical `pure.exe`. FreeGLUT provenance and
+PE inspection continue to use the physical stage; non-ASCII PE-reader output
+is allowed only in its exact physical UTF-8 `File:` field. A host without a
+valid ASCII 8.3 executable alias fails verification. This does not authorize
+an alternate runtime source or relax the pinned notice/DLL checks.
 
 The traditional callback-based examples also use the separately packaged
 `pure-ffi` module. `texture.pure` and `Imlib2.pure` additionally require an
