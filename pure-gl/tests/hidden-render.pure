@@ -25,12 +25,14 @@ when
   puts "PURE_GL_ERRORS_OK";
 end;
 
-release_pixel pixel_owner = case get pixel_owner of
-  pixel = () if null pixel;
-  pixel = free pixel $$ put pixel_owner null;
-end;
+// free(NULL) is safe before allocation and after an earlier release.
+release_pixel pixel_owner = free (get pixel_owner) $$ put pixel_owner NULL;
+
+require_window_destroyed phase window = GLUT::GetWindow == 0
+  || throw (phase+" window remains current after destruction: "+str window);
 
 destroy_window window = GLUT::DestroyWindow window $$
+  require_window_destroyed "success" window $$
   puts "PURE_GL_WINDOW_DESTROYED_OK";
 
 complete token = printf "PURE_GL_TEST_OK %s\n" token;
@@ -38,6 +40,8 @@ complete token = printf "PURE_GL_TEST_OK %s\n" token;
 cleanup_failure window pixel_owner exception =
   release_pixel pixel_owner $$
   GLUT::DestroyWindow window $$
+  require_window_destroyed "failure" window $$
+  puts "PURE_GL_FAILURE_CLEANUP_OK" $$
   throw exception;
 
 render window pixel_owner token = ()
@@ -88,5 +92,5 @@ GLUT::InitWindowSize 32 32;
 let window = GLUT::CreateWindow "pure-gl hidden render smoke";
 window > 0 || throw "FreeGLUT did not create a window";
 
-let pixel_owner = ref null;
+let pixel_owner = ref NULL;
 catch (cleanup_failure window pixel_owner) (render window pixel_owner token);

@@ -22,14 +22,22 @@ process_display_event event_count =
   record_display_event event_count GL::GetError $$
   puts "PURE_GL_DISPLAY_EVENT_OK";
 
+require_window_destroyed phase window = GLUT::GetWindow == 0
+  || throw (phase+" window remains current after destruction: "+str window);
+
 destroy_window window = GLUT::DestroyWindow window $$
+  require_window_destroyed "success" window $$
   puts "PURE_GL_WINDOW_DESTROYED_OK";
 
 complete token = printf "PURE_GL_TEST_OK %s\n" token;
 
-cleanup_failure window exception = GLUT::DestroyWindow window $$ throw exception;
+cleanup_failure window exception =
+  GLUT::DestroyWindow window $$
+  require_window_destroyed "failure" window $$
+  puts "PURE_GL_FAILURE_CLEANUP_OK" $$
+  throw exception;
 
-run window token = catch (cleanup_failure window) result
+render window token = ()
 when
   event_count = ref 0;
   GL::MatrixMode GL::MODELVIEW;
@@ -63,8 +71,9 @@ when
   puts "pure-gl interactive desktop example displayed successfully";
   destroy_window window;
   complete token;
-  result = ();
 end;
+
+run window token = catch (cleanup_failure window) (render window token);
 
 #argv == 2
   || throw "pure-gl interactive test requires exactly one completion token argument";
