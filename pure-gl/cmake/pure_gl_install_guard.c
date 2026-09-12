@@ -29,6 +29,8 @@ typedef struct {
 typedef struct {
   DWORD magic, owner, child, volume, high, low;
   wchar_t capability[65];
+  DWORD tree_length;
+  char tree[TEXT_CAP*4];
 } Answer;
 static Held *held;
 static size_t held_count;
@@ -47,7 +49,8 @@ typedef struct {
 } BatchFile;
 static BatchFile batch[MAX_BATCH];
 static size_t batch_count;
-static int batch_started, batch_committed;
+static int batch_started, batch_published, batch_checked, batch_committed;
+static int mode_seal, mode_install;
 typedef NTSTATUS (NTAPI *NativeSetInfo)(HANDLE,PIO_STATUS_BLOCK,PVOID,ULONG,FILE_INFORMATION_CLASS);
 
 static int error(const char *message) {
@@ -77,7 +80,10 @@ static int held_index(const wchar_t *path) {
 static int hold(const wchar_t *path, int directory) {
   if (held_index(path) >= 0) return 1;
   if (held_count == MAX_HELD) return error("identity handle limit exceeded");
-  HANDLE h = CreateFileW(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING,
+  DWORD access=GENERIC_READ;
+  if (directory) for (size_t i=0;i<created_count;++i)
+    if (!_wcsicmp(path,created_dirs[i])) { access|=DELETE; break; }
+  HANDLE h = CreateFileW(path, access, FILE_SHARE_READ, NULL, OPEN_EXISTING,
     FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS, NULL);
   if (h == INVALID_HANDLE_VALUE) return error("cannot retain exclusive file/directory identity");
   BY_HANDLE_FILE_INFORMATION info;
@@ -167,6 +173,18 @@ static int sha_handle(HANDLE file, wchar_t output[65]) {
   return SetFilePointerEx(file,zero,NULL,FILE_BEGIN) != 0;
 }
 static int allowed(const wchar_t *dest, int text) {
+  if (mode_seal) {
+    if (!text) return 0;
+    const wchar_t *names[]={L"pure-gl-install-inventory.tsv",L"pure-gl-install-inventory.tsv.sha256",
+      L"install-guard.sha256",L"install-runner.sha256"};
+    wchar_t path[PATH_CAP];
+    for (size_t i=0;i<sizeof(names)/sizeof(*names);++i) {
+      swprintf(path,PATH_CAP,L"%ls\\%ls",build,names[i]);
+      if (!_wcsicmp(dest,path)) return 1;
+    }
+    return 0;
+  }
+  if (!mode_install) return 0;
   if (!text) return under(dest,stage) && _wcsicmp(dest,stage);
   wchar_t prefix[PATH_CAP];
   swprintf(prefix,PATH_CAP,L"%ls\\install-audits",build);
@@ -245,6 +263,11 @@ static void fixture_gate(const wchar_t *phase) {
   if (!a || !b || !SetEvent(a) || WaitForSingleObject(b,30000)!=WAIT_OBJECT_0) ExitProcess(90);
   CloseHandle(a); CloseHandle(b);
 }
+static void fixture_path_gate(const wchar_t *phase,const wchar_t *path) {
+  wchar_t selected[PATH_CAP], normalized[PATH_CAP];
+  if (GetEnvironmentVariableW(L"GL_GUARD_TEST_TARGET",selected,PATH_CAP) &&
+      canonical(selected,normalized) && !_wcsicmp(path,normalized)) fixture_gate(phase);
+}
 #endif
 static int queue_file(const wchar_t *destination,HANDLE source,const wchar_t *hash) {
   if (batch_started || batch_count==MAX_BATCH) return error("batch state/limit exceeded");
@@ -313,22 +336,25 @@ static int atomic_payload(BatchFile *item) {
   item->output=output;
   return 1;
 }
-/* Remove only empty directories created by this operation. Existing prefix
- * directories are never removed. The parent identities stay retained while
- * the exact child pin is released; a nonempty child is immediately re-pinned.
- * This is controlled rollback for cooperating installers, not crash atomicity.
+/* Remove only empty directories created by this operation, through their
+ * original DELETE/NOFOLLOW handles. Never release identity before deletion or
+ * reopen a pathname during rollback. Nonempty directories keep their pins.
  */
 static int prune_created_dirs(void) {
   for (size_t i=created_count;i>0;--i) {
     wchar_t *path=created_dirs[i-1];
     if (!*path) continue;
     int index=held_index(path);
-    if (index>=0) {
+    if (index<0) return error("created directory deletion authority was not retained");
+#ifdef PURE_GL_INSTALL_GUARD_FIXTURE
+    fixture_path_gate(L"prune",path);
+#endif
+    FILE_DISPOSITION_INFO remove={TRUE};
+    if (SetFileInformationByHandle(held[index].handle,FileDispositionInfo,&remove,sizeof(remove))) {
       CloseHandle(held[index].handle);
       held[index]=held[--held_count];
-    }
-    if (RemoveDirectoryW(path)) *path=0;
-    else if (GetLastError()!=ERROR_DIR_NOT_EMPTY || !hold(path,1))
+      *path=0;
+    } else if (GetLastError()!=ERROR_DIR_NOT_EMPTY)
       return error("cannot remove owned empty transaction directory");
   }
   return 1;
@@ -439,22 +465,80 @@ static int publish_batch(void) {
   }
   if (ok) ok=prune_created_dirs();
   if (!ok) { rollback_batch(); return error("batch failed before commit"); }
-  /* COMMIT POINT: selected payloads AND final manifests are verified/flushed;
-   * every unused reservation has been removed. No later payload can collide.
-   * Abrupt process/power failure is not a durable whole-tree transaction.
+  /* Publication is not commit. Keep every output's write/delete authority and
+   * prior manifest bytes until CMake confirms exact-tree equality AND exits
+   * successfully. The owner supplies hashes from these retained handles.
    */
-  batch_committed=1;
-  for (size_t i=0;i<batch_count;++i) if (batch[i].output!=INVALID_HANDLE_VALUE) {
-    CloseHandle(batch[i].output); batch[i].output=INVALID_HANDLE_VALUE;
-    if (!hold(batch[i].path,0)) ok=0;
-  }
-  if (!ok) return error("post-commit endpoint identity changed");
-  fprintf(stdout,"INSTALL_BATCH_COMMIT_OK artifacts=%zu manifests=%zu reserved=%zu\n",payload_count,written_count-payload_count,batch_count);
+  batch_published=1;
+#ifdef PURE_GL_INSTALL_GUARD_FIXTURE
+  fixture_gate(L"published");
+#endif
+  fprintf(stdout,"INSTALL_BATCH_READY_OK artifacts=%zu manifests=%zu reserved=%zu\n",payload_count,written_count-payload_count,batch_count);
   return 1;
 }
-static int handle_request(Request *r) {
+/* CMake cannot reopen files whose rollback handles retain WRITE/DELETE access
+ * without relaxing their exclusion. Export data, never code, from the exact
+ * held identities instead. Late entries are pinned NOFOLLOW before hashing.
+ */
+static int tree_rows(const wchar_t *root,Answer *answer) {
+  wchar_t pattern[PATH_CAP], path[PATH_CAP];
+  if (wcslen(root)+3>=PATH_CAP) return error("tree path too long");
+  swprintf(pattern,PATH_CAP,L"%ls\\*",root);
+  WIN32_FIND_DATAW data;
+  HANDLE search=FindFirstFileW(pattern,&data);
+  if (search==INVALID_HANDLE_VALUE) return GetLastError()==ERROR_FILE_NOT_FOUND;
+  int ok=1;
+  do {
+    if (!wcscmp(data.cFileName,L".") || !wcscmp(data.cFileName,L"..")) continue;
+    if (wcslen(root)+wcslen(data.cFileName)+2>=PATH_CAP) { ok=0; break; }
+    swprintf(path,PATH_CAP,L"%ls\\%ls",root,data.cFileName);
+    HANDLE input=INVALID_HANDLE_VALUE;
+    for (size_t i=0;i<batch_count;++i)
+      if (!_wcsicmp(path,batch[i].path)) { input=batch[i].output; break; }
+    int directory=!!(data.dwFileAttributes&FILE_ATTRIBUTE_DIRECTORY);
+    if (input==INVALID_HANDLE_VALUE) {
+      if (!hold(path,directory)) { ok=0; break; }
+      input=held[held_index(path)].handle;
+    }
+    BY_HANDLE_FILE_INFORMATION info; LARGE_INTEGER size; wchar_t hash[65]=L"-";
+    if (!GetFileInformationByHandle(input,&info) ||
+        (info.dwFileAttributes&FILE_ATTRIBUTE_REPARSE_POINT) ||
+        !!(info.dwFileAttributes&FILE_ATTRIBUTE_DIRECTORY)!=directory ||
+        (!directory && (info.nNumberOfLinks!=1 || !GetFileSizeEx(input,&size) || !sha_handle(input,hash)))) {
+      ok=error("retained tree identity/hash mismatch"); break;
+    }
+    wchar_t *relative=path+wcslen(stage)+1;
+    for (wchar_t *p=relative;*p;++p) if (*p==L'\\') *p=L'/';
+    char name[PATH_CAP*4], digest[65];
+    if (!WideCharToMultiByte(CP_UTF8,WC_ERR_INVALID_CHARS,relative,-1,name,sizeof(name),NULL,NULL) ||
+        !WideCharToMultiByte(CP_UTF8,WC_ERR_INVALID_CHARS,hash,-1,digest,sizeof(digest),NULL,NULL)) { ok=0; break; }
+    int n=snprintf(answer->tree+answer->tree_length,sizeof(answer->tree)-answer->tree_length,
+      "%s|%c|%llu|%s\n",name,directory?'d':'f',directory?0:(unsigned long long)size.QuadPart,digest);
+    if (n<0 || (size_t)n>=sizeof(answer->tree)-answer->tree_length) {
+      ok=error("retained tree record limit exceeded"); break;
+    }
+    answer->tree_length+=(DWORD)n;
+    for (wchar_t *p=relative;*p;++p) if (*p==L'/') *p=L'\\';
+    if (directory) ok=tree_rows(path,answer);
+  } while(ok && FindNextFileW(search,&data));
+  DWORD end=GetLastError(); FindClose(search);
+  return ok && end==ERROR_NO_MORE_FILES;
+}
+static int handle_request(Request *r,Answer *answer) {
   r->a[PATH_CAP-1]=r->b[PATH_CAP-1]=r->text[TEXT_CAP-1]=0;
-  if (r->op==1) return 1;
+  if (r->op==1) {
+#ifdef PURE_GL_INSTALL_GUARD_FIXTURE
+    /* The child is paused in its authenticated pre-include probe, after the
+     * owner has validated context and while that exact context stays pinned. */
+    fixture_gate(L"context-consume");
+#endif
+    return 1;
+  }
+  if (r->op==9) return !mode_seal && tree_rows(stage,answer);
+  if (r->op==8) {
+    if (!mode_install || !batch_published || batch_checked) return error("invalid final equality acknowledgement");
+    batch_checked=1; return 1;
+  }
   if (r->op==5) return publish_batch();
   wchar_t dest[PATH_CAP];
   if (!canonical(r->op==3?r->b:r->a,dest) || !allowed(dest,r->op!=3 && r->op!=6))
@@ -549,7 +633,7 @@ static DWORD WINAPI serve(void *unused) {
     if (!InterlockedCompareExchange(&stopping,0,0) &&
         GetNamedPipeClientProcessId(pipe,&pid) && parent_pid(pid)==child_pid &&
         ReadFile(pipe,r,sizeof(*r),&n,NULL) && n==sizeof(*r) && request_scope(r,&answer))
-      answer.magic=handle_request(r)?0x41554449:0;
+      answer.magic=handle_request(r,&answer)?0x41554449:0;
     WriteFile(pipe,&answer,sizeof(answer),&n,NULL);
     FlushFileBuffers(pipe); DisconnectNamedPipe(pipe);
   }
@@ -565,6 +649,8 @@ static int client(int argc,wchar_t **argv) {
   argc-=3;
   if (argc==2 && !wcscmp(argv[1],L"--probe")) r->op=1;
   else if (argc==2 && !wcscmp(argv[1],L"--publish")) r->op=5;
+  else if (argc==2 && !wcscmp(argv[1],L"--checked")) r->op=8;
+  else if (argc==2 && !wcscmp(argv[1],L"--tree")) r->op=9;
   else if (argc==3 && !wcscmp(argv[1],L"--reserve")) { r->op=6; path_copy(r->a,argv[2]); }
   else if (argc==3 && !wcscmp(argv[1],L"--mkdir")) { r->op=2; path_copy(r->a,argv[2]); }
   else if (argc==5 && !wcscmp(argv[1],L"--copy") && wcslen(argv[4])==64) {
@@ -605,6 +691,10 @@ static int client(int argc,wchar_t **argv) {
   if (owner) CloseHandle(owner);
   if (parent) CloseHandle(parent);
   if (pipe!=INVALID_HANDLE_VALUE) CloseHandle(pipe);
+  if (ok && r->op==9) {
+    ok=answer.tree_length<sizeof(answer.tree) &&
+      fwrite(answer.tree,1,answer.tree_length,stdout)==answer.tree_length;
+  }
   free(r); return ok?0:!error("owner authentication or guarded operation failed");
 }
 /* All arguments are paths/options generated by trusted CMake. Reject embedded
@@ -625,6 +715,7 @@ static int validate_context(const wchar_t *input) {
   swprintf(own,PATH_CAP,L"%ls/pure-gl-install-guard.exe",GL_NATIVE_BUILD_DIR);
   if (!canonical(own,wanted) || _wcsicmp(actual,wanted))
     return error("configured native guard build identity mismatch");
+  if (!parent_dirs(actual,0) || !hold(actual,0)) return 0;
   if (!parent_dirs(expected,0) || !hold(expected,0) ||
       !sha_handle(held[held_index(expected)].handle,hash) || wcscmp(hash,GL_NATIVE_CONTEXT_HASH))
     return error("configured context identity mismatch");
@@ -776,6 +867,11 @@ int wmain(int argc,wchar_t **argv) {
       !canonical(GL_NATIVE_SCRIPT,trusted_script) || !canonical(argv[6],requested_script) ||
       _wcsicmp(trusted_script,requested_script) || !validate_context(argv[5]))
     return !error("configured native transaction authority mismatch");
+  wchar_t cmake_path[PATH_CAP], requested_cmake[PATH_CAP], cmake_hash[65];
+  if (!canonical(GL_NATIVE_CMAKE,cmake_path) || !canonical(argv[4],requested_cmake) ||
+      _wcsicmp(cmake_path,requested_cmake) || !parent_dirs(cmake_path,0) || !hold(cmake_path,0) ||
+      !sha_handle(held[held_index(cmake_path)].handle,cmake_hash) || wcscmp(cmake_hash,GL_NATIVE_CMAKE_HASH))
+    return !error("configured CMake executable identity mismatch");
   wchar_t lock_path[PATH_CAP]; swprintf(lock_path,PATH_CAP,L"%ls\\install-operation.lock",build);
   HANDLE lock=CreateFileW(lock_path,GENERIC_READ|GENERIC_WRITE,0,NULL,OPEN_ALWAYS,
     FILE_FLAG_OPEN_REPARSE_POINT,NULL);
@@ -790,9 +886,12 @@ int wmain(int argc,wchar_t **argv) {
   HANDLE mutex=CreateMutexW(NULL,FALSE,mutex_name);
   DWORD wait=mutex?WaitForSingleObject(mutex,0):WAIT_FAILED;
   if (wait!=WAIT_OBJECT_0 && wait!=WAIT_ABANDONED) return !error("stage identity already owned by another installer");
-  if (!snapshot(stage)) return 1;
+  mode_seal=!wcscmp(argv[7],L"seal");
+  mode_install=!wcscmp(argv[7],L"install");
+  if (!mode_seal && !mode_install && wcscmp(argv[7],L"verify")) return !error("unknown guarded mode");
+  if (!mode_seal && !snapshot(stage)) return 1;
   wchar_t sessions[PATH_CAP]; swprintf(sessions,PATH_CAP,L"%ls\\install-audits",build);
-  if (GetFileAttributesW(sessions)!=INVALID_FILE_ATTRIBUTES && !snapshot(sessions)) return 1;
+  if (!mode_seal && GetFileAttributesW(sessions)!=INVALID_FILE_ATTRIBUTES && !snapshot(sessions)) return 1;
   BYTE nonce[16]; if (BCryptGenRandom(NULL,nonce,sizeof(nonce),BCRYPT_USE_SYSTEM_PREFERRED_RNG)) return 1;
   wcscpy(pipe_name,L"\\\\.\\pipe\\pure-gl-install-"); size_t offset=wcslen(pipe_name);
   for (int i=0;i<16;++i) swprintf(pipe_name+offset+i*2,3,L"%02x",nonce[i]);
@@ -802,7 +901,7 @@ int wmain(int argc,wchar_t **argv) {
   for (int i=0;i<32;++i) swprintf(capability+i*2,3,L"%02x",secret[i]);
   if (!SetEnvironmentVariableW(L"PURE_GL_INSTALL_CAPABILITY",capability)) return 1;
   wchar_t *command=calloc(32768,sizeof(wchar_t)), option[PATH_CAP+64];
-  if (!command || !argument(command,argv[4])) return 1;
+  if (!command || !argument(command,cmake_path)) return 1;
   const wchar_t *names[]={L"STAGE_PREFIX",L"GL_INSTALL_CONTEXT",L"GL_INSTALL_MODE",L"GL_INSTALL_COMPONENT"};
   const wchar_t *values[]={stage,argv[5],argv[7],argv[8]};
   for (int i=0;i<4;++i) {
@@ -825,7 +924,7 @@ int wmain(int argc,wchar_t **argv) {
       !SetHandleInformation(startup.hStdOutput,HANDLE_FLAG_INHERIT,HANDLE_FLAG_INHERIT) ||
       !SetHandleInformation(startup.hStdError,HANDLE_FLAG_INHERIT,HANDLE_FLAG_INHERIT))
     return !error("cannot preserve guarded diagnostics");
-  if (!CreateProcessW(argv[4],command,NULL,NULL,TRUE,CREATE_SUSPENDED|CREATE_NO_WINDOW,NULL,NULL,&startup,&process))
+  if (!CreateProcessW(cmake_path,command,NULL,NULL,TRUE,CREATE_SUSPENDED|CREATE_NO_WINDOW,NULL,NULL,&startup,&process))
     return !error("cannot launch guarded CMake");
   free(command);
   CloseHandle(input);
@@ -844,7 +943,14 @@ int wmain(int argc,wchar_t **argv) {
   if (WaitForSingleObject(server,10000)!=WAIT_OBJECT_0) return !error("owner server teardown failed");
   CloseHandle(server_ready);
   CloseHandle(server); CloseHandle(process.hThread); CloseHandle(process.hProcess); CloseHandle(job);
-  if (!batch_committed && !rollback_batch()) rc=1;
+  if (!rc && mode_install && !batch_checked) { error("successful child omitted final equality acknowledgement"); rc=1; }
+  if (!rc && batch_checked) {
+    batch_committed=1;
+    for (size_t i=0;i<batch_count;++i) if (batch[i].output!=INVALID_HANDLE_VALUE) {
+      CloseHandle(batch[i].output); batch[i].output=INVALID_HANDLE_VALUE;
+    }
+    fprintf(stdout,"INSTALL_BATCH_COMMIT_OK final_equality=1 child_success=1\n");
+  } else if (!rollback_batch()) rc=1;
   for (size_t i=0;i<batch_count;++i) { free(batch[i].text); free(batch[i].previous); }
   for (size_t i=held_count;i>0;--i) CloseHandle(held[i-1].handle);
   free(held); free(created_dirs); ReleaseMutex(mutex); CloseHandle(mutex); CloseHandle(lock);
