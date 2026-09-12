@@ -14,12 +14,22 @@ function(gl_pe_loader)
   endif()
   # Each wrapper family embeds the same loader name. Repetition is expected;
   # alternate case, prefixes, suffixes or whitespace are ambiguous loader names.
-  string(REGEX MATCHALL "[^\n]*[Ff][Rr][Ee][Ee][Gg][Ll][Uu][Tt]\\.[Dd][Ll][Ll][^\n]*" loader_names "${strings}")
-  foreach(loader IN LISTS loader_names)
+  # MATCHALL/IN LISTS would split semicolon-decorated lines into canonical
+  # names. Consume one complete matched line as a scalar, preserving delimiters.
+  set(remaining "${strings}")
+  while(TRUE)
+    string(REGEX MATCH "[^\n]*[Ff][Rr][Ee][Ee][Gg][Ll][Uu][Tt]\\.[Dd][Ll][Ll][^\n]*" loader "${remaining}")
+    if(loader STREQUAL "")
+      break()
+    endif()
     if(NOT loader STREQUAL "libfreeglut.dll")
       message(FATAL_ERROR "pure-gl PE: ${PURE_GL_MODULE} ambiguous loader string ${loader}")
     endif()
-  endforeach()
+    string(FIND "${remaining}" "${loader}" start)
+    string(LENGTH "${loader}" length)
+    math(EXPR after "${start}+${length}")
+    string(SUBSTRING "${remaining}" ${after} -1 remaining)
+  endwhile()
 endfunction()
 
 function(gl_pe_equal_path actual expected)
@@ -152,7 +162,10 @@ function(gl_pe_resolve name output system_output)
     message(FATAL_ERROR "pure-gl PE: unreviewed dependency ${name}")
   endif()
   set(candidates)
-  foreach(directory "${GL_PE_MODULE_DIRECTORY}" "${PURE_GL_RUNTIME_DIRECTORY}")
+  # Match RunPureTest's PATH order, including the interpreter's own directory:
+  # a Pure/bin copy can shadow the selected FreeGLUT or Windows system DLL.
+  foreach(directory "${PURE_GL_PURE_PREFIX}/bin" "${GL_PE_MODULE_DIRECTORY}"
+      "${PURE_GL_RUNTIME_DIRECTORY}")
     if(EXISTS "${directory}/${name}")
       list(APPEND candidates "${directory}/${name}")
     endif()
