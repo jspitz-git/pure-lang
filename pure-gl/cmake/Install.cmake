@@ -30,7 +30,7 @@ endif()
 # SPDX/license name|installed license. Only the linked module is sealed on build.
 function(gl_install_artifact component destination source project version url license mapping)
   if(source STREQUAL "${CMAKE_CURRENT_BINARY_DIR}/pure-gl.dll")
-    set(hash BUILD)
+    set(hash NATIVE_COMPLETED_MODULE)
   else()
     gl_pe_path("${source}" file)
     file(SHA256 "${source}" hash)
@@ -78,6 +78,7 @@ set(GL_INSTALL_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
 set(GL_INSTALL_SCRIPT "${CMAKE_CURRENT_SOURCE_DIR}/cmake/VerifyInstalledPackage.cmake")
 set(GL_INSTALL_GUARD "${CMAKE_CURRENT_BINARY_DIR}/pure-gl-install-guard.exe")
 set(GL_INSTALL_RUNNER "${CMAKE_CURRENT_BINARY_DIR}/pure-gl-test-runner.exe")
+set(GL_INSTALL_COMPLETED_SEAL "${CMAKE_CURRENT_BINARY_DIR}/pure-gl-built-authority.cmake")
 set(GL_INSTALL_BASELINE_PIN "${CMAKE_CURRENT_BINARY_DIR}/pure-gl-install-baseline.tsv")
 set(GL_INSTALL_HELPERS_ONLY ON)
 include("${GL_INSTALL_SCRIPT}")
@@ -114,6 +115,7 @@ string(SHA256 GL_INSTALL_BASELINE_SHA256 "${GL_INSTALL_BASELINE_POLICY}")
 set(context "# Trusted pure-gl configure output.\n")
 set(GL_INSTALL_TRUSTED_SOURCES)
 foreach(path CMakeLists.txt cmake/Install.cmake cmake/VerifyInstalledPackage.cmake
+    cmake/SealBuiltArtifacts.cmake
     cmake/pure_gl_install_guard.c cmake/pure_gl_runner.c cmake/RunPureTest.cmake
     cmake/PeHelpers.cmake cmake/VerifyWindowsDependencies.cmake
     GL.c GL_ARB.c GL_EXT.c GL_NV.c GL_ATI.c GLU.c GLUT.c)
@@ -127,7 +129,7 @@ foreach(path IN LISTS pe_fixtures)
   string(APPEND GL_INSTALL_TRUSTED_SOURCES "${path}|${hash}\n")
 endforeach()
 foreach(var GL_INSTALL_POLICY GL_INSTALL_INVENTORY GL_INSTALL_BUILD_DIR
-    GL_INSTALL_SOURCE_DIR GL_INSTALL_SCRIPT GL_INSTALL_GUARD GL_INSTALL_RUNNER
+    GL_INSTALL_SOURCE_DIR GL_INSTALL_SCRIPT GL_INSTALL_GUARD GL_INSTALL_RUNNER GL_INSTALL_COMPLETED_SEAL
     GL_INSTALL_BASELINE_PIN GL_INSTALL_BASELINE_SHA256 GL_INSTALL_BASELINE_POLICY
     GL_INSTALL_TRUSTED_SOURCES PURE_GL_PURE_PREFIX PURE_GL_CLANG64_PREFIX
     PURE_GL_WINDOWS_SYSTEM_DIRECTORY LLVM_READOBJ_EXECUTABLE LLVM_READOBJ_SHA256
@@ -148,7 +150,15 @@ string(APPEND header "#define GL_NATIVE_CONTEXT_HASH L\"${GL_NATIVE_CONTEXT_HASH
 string(APPEND header "#define GL_NATIVE_CMAKE L\"${CMAKE_COMMAND}\"\n#define GL_NATIVE_CMAKE_HASH L\"${GL_NATIVE_CMAKE_HASH}\"\n")
 string(APPEND header "#define GL_NATIVE_PURE_PREFIX L\"${PURE_GL_PURE_PREFIX}\"\n#define GL_NATIVE_CLANG64_PREFIX L\"${PURE_GL_CLANG64_PREFIX}\"\n#define GL_NATIVE_SYSTEM L\"${PURE_GL_WINDOWS_SYSTEM_DIRECTORY}\"\n")
 file(CONFIGURE OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/pure_gl_install_authority.h" CONTENT "${header}" @ONLY NEWLINE_STYLE UNIX)
-add_executable(pure-gl-install-guard cmake/pure_gl_install_guard.c)
+add_custom_command(OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/pure_gl_built_authority.h"
+    "${GL_INSTALL_COMPLETED_SEAL}"
+  COMMAND "${CMAKE_COMMAND}" "-DMODULE=$<TARGET_FILE:pure-gl>"
+    "-DRUNNER=$<TARGET_FILE:pure-gl-test-runner>" "-DBUILD_DIR=${CMAKE_CURRENT_BINARY_DIR}"
+    -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/SealBuiltArtifacts.cmake"
+  DEPENDS pure-gl pure-gl-test-runner "${CMAKE_CURRENT_SOURCE_DIR}/cmake/SealBuiltArtifacts.cmake"
+  VERBATIM)
+add_executable(pure-gl-install-guard cmake/pure_gl_install_guard.c
+  "${CMAKE_CURRENT_BINARY_DIR}/pure_gl_built_authority.h")
 target_include_directories(pure-gl-install-guard PRIVATE "${CMAKE_CURRENT_BINARY_DIR}")
 target_compile_features(pure-gl-install-guard PRIVATE c_std_11)
 target_compile_options(pure-gl-install-guard PRIVATE -Wall -Wextra -Werror)

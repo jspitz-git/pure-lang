@@ -16,6 +16,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include "pure_gl_install_authority.h"
+#include "pure_gl_built_authority.h"
 
 #define PATH_CAP 4096
 #define TEXT_CAP 16384
@@ -722,6 +723,15 @@ static int validate_context(const wchar_t *input) {
   if (!canonical(GL_NATIVE_SCRIPT,expected) || !parent_dirs(expected,0) || !hold(expected,0) ||
       !sha_handle(held[held_index(expected)].handle,hash) || wcscmp(hash,GL_NATIVE_SCRIPT_HASH))
     return error("configured verifier source identity mismatch");
+  if (!canonical(GL_NATIVE_BUILT_SEAL,expected) || !parent_dirs(expected,0) || !hold(expected,0) ||
+      !sha_handle(held[held_index(expected)].handle,hash) || wcscmp(hash,GL_NATIVE_BUILT_SEAL_HASH))
+    return error("completed build seal identity mismatch");
+  if (!canonical(GL_NATIVE_MODULE,expected) || !parent_dirs(expected,0) || !hold(expected,0) ||
+      !sha_handle(held[held_index(expected)].handle,hash) || wcscmp(hash,GL_NATIVE_MODULE_HASH))
+    return error("completed module identity mismatch");
+  if (!canonical(GL_NATIVE_RUNNER,expected) || !parent_dirs(expected,0) || !hold(expected,0) ||
+      !sha_handle(held[held_index(expected)].handle,hash) || wcscmp(hash,GL_NATIVE_RUNNER_HASH))
+    return error("completed runner identity mismatch");
   return 1;
 }
 

@@ -834,7 +834,7 @@ GL_INPUTS = {
 }
 GL_LOGS = [
     ['prepare-source.log', 'prepare-workflows.log', 'prepare-baseline.log'],
-    ['configure.log'], ['build.log', 'pe.log'], ['ctest.log'], ['distcheck.log'],
+    ['configure.log'], ['build.log', 'pe.log'], ['ctest-inventory.log', 'ctest.log'], ['distcheck.log'],
     ['prepare-stage.log', 'install-runtime.log', 'install-documentation.log', 'installed.log'],
 ]
 GL_COMMANDS = [
@@ -849,7 +849,8 @@ GL_COMMANDS = [
         '& $env:CMAKE_EXE --build "$env:GL_BUILD" --parallel 4',
         '& $env:CMAKE_EXE --build "$env:GL_BUILD" --target verify-windows-dependencies --parallel 4',
     ],
-    ['& $env:CTEST_EXE --test-dir "$env:GL_BUILD" -L gl --output-on-failure --no-tests=error'],
+    ['& $env:CMAKE_EXE "-DBINARY_DIR=$env:GL_BUILD" -P "$env:GL_SOURCE/tests/VerifyCTestInventory.cmake"',
+     '& $env:CTEST_EXE --test-dir "$env:GL_BUILD" -L gl --output-on-failure --no-tests=error'],
     ['& $env:GL_MAKE --no-print-directory -C "$env:GL_SOURCE" distcheck '
      '"CMAKE=$env:CMAKE_EXE" "PKG_CONFIG=$env:GL_PKG_CONFIG" "DIST_AUDIT_BUILD=$env:GL_BUILD"'],
     [
@@ -982,7 +983,8 @@ def gl_mutations():
         replace('build:'+new, 'GL command sequence changed', 2, old, new)
     replace('pe-workers', 'GL command sequence changed', 2, GL_COMMANDS[2][1], GL_COMMANDS[2][1].replace('--parallel 4','--parallel 1'))
     for old, new in [('-L gl','-L absent'), ('-L gl',''), ('--no-tests=error',''),
-                     ('--no-tests=error','--no-tests=ignore'), ('-L gl','-L gl -E install')]:
+                     ('--no-tests=error','--no-tests=ignore'), ('-L gl','-L gl -E install'),
+                     ('-L gl','-L gl -E render-contract')]:
         replace('ctest:'+new, 'GL command sequence changed', 3, old, new)
     for old, new in [('distcheck','dist'), ('$env:GL_SOURCE','$env:GL_CHECKOUT_SOURCE'),
                      ('DIST_AUDIT_BUILD=$env:GL_BUILD','DIST_AUDIT_BUILD=$env:GL_STAGE')]:

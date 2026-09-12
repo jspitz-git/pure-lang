@@ -172,8 +172,8 @@ static wchar_t *regular_path(const wchar_t *input, int directory)
     wchar_t saved = path[i];
     BY_HANDLE_FILE_INFORMATION information;
     path[i] = 0;
-    HANDLE handle = CreateFileW(path, FILE_READ_ATTRIBUTES,
-      FILE_SHARE_READ|FILE_SHARE_WRITE, NULL, OPEN_EXISTING,
+    HANDLE handle = CreateFileW(path, GENERIC_READ,
+      FILE_SHARE_READ, NULL, OPEN_EXISTING,
       FILE_FLAG_BACKUP_SEMANTICS|FILE_FLAG_OPEN_REPARSE_POINT, NULL);
     path[i] = saved;
     if (handle == INVALID_HANDLE_VALUE) goto invalid;
@@ -261,11 +261,11 @@ static wchar_t *checked_pure_alias(const wchar_t *pure, const wchar_t *candidate
       reject("executable alias physical identity mismatch");
     wchar_t physical_saved = physical[p], alias_saved = alias[a];
     physical[p] = alias[a] = 0;
-    HANDLE original = CreateFileW(physical, FILE_READ_ATTRIBUTES,
-      FILE_SHARE_READ|FILE_SHARE_WRITE, NULL, OPEN_EXISTING,
+    HANDLE original = CreateFileW(physical, GENERIC_READ,
+      FILE_SHARE_READ, NULL, OPEN_EXISTING,
       FILE_FLAG_BACKUP_SEMANTICS|FILE_FLAG_OPEN_REPARSE_POINT, NULL);
-    HANDLE selected = CreateFileW(alias, FILE_READ_ATTRIBUTES,
-      FILE_SHARE_READ|FILE_SHARE_WRITE, NULL, OPEN_EXISTING,
+    HANDLE selected = CreateFileW(alias, GENERIC_READ,
+      FILE_SHARE_READ, NULL, OPEN_EXISTING,
       FILE_FLAG_BACKUP_SEMANTICS|FILE_FLAG_OPEN_REPARSE_POINT, NULL);
     BY_HANDLE_FILE_INFORMATION expected, actual;
     if (original == INVALID_HANDLE_VALUE || selected == INVALID_HANDLE_VALUE)

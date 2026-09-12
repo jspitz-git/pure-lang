@@ -122,11 +122,13 @@ function(require_completion_failure name)
   message(STATUS "Rejected ${name}/completion: missing completion record")
 endfunction()
 
+if(INTERACTIVE_ONLY)
+  require_pristine(interactive
+    "PURE_GL_DISPLAY_EVENT_OK;PURE_GL_ERRORS_OK;PURE_GL_WINDOW_DESTROYED_OK")
+else()
 require_pristine(load "PURE_GL_ALL_FAMILIES_OK")
 require_pristine(hidden-render
   "PURE_GL_CONTEXT_STRINGS_OK;PURE_GL_PIXEL_OK;PURE_GL_ERRORS_OK;PURE_GL_WINDOW_DESTROYED_OK")
-require_pristine(interactive
-  "PURE_GL_DISPLAY_EVENT_OK;PURE_GL_ERRORS_OK;PURE_GL_WINDOW_DESTROYED_OK")
 
 require_failure(load all-family "GL::VERSION_1_1 == 1 &&"
   "GL::VERSION_1_1 == -1 &&" PURE_GL_ALL_FAMILIES_OK
@@ -166,7 +168,9 @@ require_failure(hidden-render clear-color
   "GL::ClearColor 0.0 0.0 0.0 1.0;" PURE_GL_PIXEL_OK
   "Unexpected rendered pixel" PURE_GL_FAILURE_CLEANUP_OK)
 require_completion_failure(hidden-render)
+endif()
 
+if(INTERACTIVE_ONLY)
 require_failure(interactive gl-errors "verify_errors gl_errors;"
   "verify_errors [GL::INVALID_OPERATION];" PURE_GL_ERRORS_OK
   "OpenGL error in the interactive example" PURE_GL_FAILURE_CLEANUP_OK)
@@ -186,11 +190,16 @@ require_failure(interactive injected-failure
   "throw \"INJECTED_INTERACTIVE_FAILURE\";" PURE_GL_WINDOW_DESTROYED_OK
   INJECTED_INTERACTIVE_FAILURE PURE_GL_FAILURE_CLEANUP_OK)
 require_completion_failure(interactive)
+endif()
 
 get_property(contract_failures GLOBAL PROPERTY pure_gl_render_failures)
 if(contract_failures)
   message(FATAL_ERROR
     "Semantic mutations escaped or bypassed cleanup: ${contract_failures}")
 endif()
-message(STATUS "PURE_GL_RENDER_CONTRACT_OK pristine=3 mutations=18")
+if(INTERACTIVE_ONLY)
+  message(STATUS "PURE_GL_INTERACTIVE_CONTRACT_OK pristine=1 mutations=6")
+else()
+  message(STATUS "PURE_GL_RENDER_CONTRACT_OK pristine=2 mutations=12 interactive=0")
+endif()
 gl_audit_clean(render-contract)

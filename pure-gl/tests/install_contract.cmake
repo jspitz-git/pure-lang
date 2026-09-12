@@ -1,4 +1,5 @@
 cmake_minimum_required(VERSION 3.25)
+include("${CMAKE_CURRENT_LIST_DIR}/built_authority_contract.cmake")
 # Removing full-tree equality, source pins, or disjoint manifest validation must
 # make the corresponding mutation below succeed, and therefore fail this test.
 set(GL_INSTALL_CONTRACT_HELPERS_ONLY ON)

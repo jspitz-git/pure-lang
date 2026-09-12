@@ -625,7 +625,7 @@ GL_CONFIGURE_INPUTS = {
 }
 GL_COMMAND_LOGS = (
     ('prepare-source.log', 'prepare-workflows.log', 'prepare-baseline.log'),
-    ('configure.log',), ('build.log', 'pe.log'), ('ctest.log',), ('distcheck.log',),
+    ('configure.log',), ('build.log', 'pe.log'), ('ctest-inventory.log', 'ctest.log'), ('distcheck.log',),
     ('prepare-stage.log', 'install-runtime.log', 'install-documentation.log', 'installed.log'),
 )
 
@@ -738,7 +738,8 @@ def validate_gl(root: dict[str, Any], core: dict[str, Any], steps: list[Any]) ->
             copy+['$env:GL_PURE_ORIGIN', '$env:GL_PURE_PREFIX']],
         2: [cmake+['--build', '$env:GL_BUILD', '--parallel', '4'],
             cmake+['--build', '$env:GL_BUILD', '--target', 'verify-windows-dependencies', '--parallel', '4']],
-        3: [['&', '$env:CTEST_EXE', '--test-dir', '$env:GL_BUILD', '-L', 'gl',
+        3: [cmake+['-DBINARY_DIR=$env:GL_BUILD', '-P', '$env:GL_SOURCE/tests/VerifyCTestInventory.cmake'],
+            ['&', '$env:CTEST_EXE', '--test-dir', '$env:GL_BUILD', '-L', 'gl',
              '--output-on-failure', '--no-tests=error']],
         4: [['&', '$env:GL_MAKE', '--no-print-directory', '-C', '$env:GL_SOURCE', 'distcheck',
              'CMAKE=$env:CMAKE_EXE', 'PKG_CONFIG=$env:GL_PKG_CONFIG', 'DIST_AUDIT_BUILD=$env:GL_BUILD']],

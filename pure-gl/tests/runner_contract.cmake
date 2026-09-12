@@ -19,6 +19,14 @@ endif()
 
 include("${SOURCE_DIR}/tests/AuditHelpers.cmake")
 gl_audit_open(runner-contract test_root)
+execute_process(COMMAND "${PURE_GL_WINDOWS_SYSTEM_DIRECTORY}/WindowsPowerShell/v1.0/powershell.exe"
+  -NoProfile -NonInteractive -File "${SOURCE_DIR}/tests/RunnerRetention.ps1"
+  -Runner "${RUNNER}" -Compiler "${C_COMPILER}" -Root "${test_root}" -Source "${SOURCE_DIR}"
+  RESULT_VARIABLE retention_rc OUTPUT_VARIABLE retention_out ERROR_VARIABLE retention_err TIMEOUT 60)
+if(NOT retention_rc EQUAL 0)
+  message(FATAL_ERROR "Retained runner inputs failed: ${retention_out}${retention_err}")
+endif()
+message(STATUS "${retention_out}")
 
 set(fixture_source "${test_root}/legacy_probe.c")
 set(fixture_exe "${test_root}/legacy probe.exe")

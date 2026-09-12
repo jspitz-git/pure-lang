@@ -119,6 +119,7 @@ Invoke-GLNative $glCmake @('--build', $glBuild, '--target', 'verify-windows-depe
 
 $env:PATH = 'C:/Windows/System32;C:/Windows'
 Remove-Item Env:PURELIB -ErrorAction SilentlyContinue
+Invoke-GLNative $glCmake @("-DBINARY_DIR=$glBuild", '-P', "$glSource/tests/VerifyCTestInventory.cmake")
 Invoke-GLNative "$glTools/ctest.exe" @('--test-dir', $glBuild, '-L', 'gl', '--output-on-failure', '--no-tests=error')
 Invoke-GLNative "$glTools/mingw32-make.exe" @('--no-print-directory', '-C', $glSource, 'distcheck',
   "CMAKE=$glCmake", "PKG_CONFIG=$glTools/pkgconf.exe", "DIST_AUDIT_BUILD=$glBuild")
@@ -158,35 +159,40 @@ The supervisor constructs a fresh child environment containing only `PATH`,
 absent. Build-tree PATH consists of SDK `bin`, module directory, the selected
 FreeGLUT copy in `pure-gl-runtime`, and `C:/Windows/System32`. Installed PATH
 consists of stage `bin`, stage `lib/pure`, and System32. Tests run from
-`C:/Windows`, outside source and build trees. Retained no-follow handles bind
-the inputs, and a Job Object bounds the complete child tree. Success requires
+`C:/Windows`, outside source and build trees. Retained read handles without
+write/delete sharing bind every input and both executable alias spellings;
+a Job Object bounds the complete child tree. Success requires
 exit zero, empty stderr, and one terminal `PURE_GL_TEST_OK <random-token>`
 completion line. The supervisor has a 90-second functional deadline, the
 adapter adds a five-second outer margin, and each functional CTest has a
 100-second limit.
 
-`ctest -L gl` runs all ten repository tests: load-all-modules, hidden-render,
-runtime-verifier, configure, runner, source-dist, cleanup, install,
+`ctest -L gl` runs all eleven repository tests: load-all-modules, hidden-render,
+render-contract, runtime-verifier, configure, runner, source-dist, cleanup, install,
 install-guard, and workflow contracts. All carry `gl`; additional labels are
 `load`, `render`, `contract`, `pe`, `release`, `install`, and `workflow` as
 appropriate. The load test covers all seven interfaces. Hidden rendering
 creates and hides a 32 by 32 RGBA FreeGLUT window, checks nonempty OpenGL
 vendor/renderer/version strings, checks the pixel against `[64,128,191,255]`
 with a tolerance of two per channel, checks errors, and
-destroys the window before authenticated completion. The separate
-`pure-gl-render-contract` build target exercises script-semantic mutations;
-it is not an extra registered CTest.
+destroys the window before authenticated completion. The mandatory
+`pure-gl-render-contract` CTest runs two pristine scripts and twelve load/hidden
+semantic mutations, including failure cleanup. CI and extracted verification
+check the actual CTest inventory before running the suite.
 
 Visible desktop validation remains opt-in and is never registered as a CTest:
 
 ```powershell
 Invoke-GLNative $glCmake @('--build', $glBuild, '--target', 'check-gl-interactive', '--parallel', '4')
+Invoke-GLNative $glCmake @('--build', $glBuild, '--target', 'pure-gl-interactive-contract', '--parallel', '4')
 ```
 
 It shows a 320 by 240 RGB triangle for one second, processes the display event,
 checks OpenGL errors, destroys the window, and terminates through the same
 supervisor. The 2026-09-12 follow-up did not rerun this visible target; the
 2026-07-28 desktop observation remains historical evidence.
+The optional interactive contract runs the pristine visible script and six
+visible semantic mutations. Neither visible command contributes to CTest counts.
 
 `.github/workflows/non-linux-release-validation.yml` makes the strict gate
 mandatory in the existing Windows 2025 job. Both push and pull-request filters
@@ -211,6 +217,11 @@ URL, license identity, and installed notice mapping. The generated
 `pure-gl-install-context.cmake` is the public verifier input. Keep it and its
 matching source/build/helpers available when auditing a stage; a loose list
 of caller-selected payload paths is not a substitute for that authority.
+After the module and runner link, their hashes are recorded in
+`pure-gl-built-authority.cmake` and embedded with that seal's hash in the native
+install guard. Ordinary installation and verification retain and validate this
+independent authority before consuming inventory or runner sidecars. Missing,
+changed, or coordinated artifact/sidecar changes require a fresh build.
 
 | Component | Exact added files |
 | --- | --- |
@@ -257,15 +268,20 @@ structural/import records fail. PE inspection does not use an alias path.
 
 The public `make distcheck` command above requires `DIST_AUDIT_BUILD` to name
 the matching strict CMake build. It verifies the retained canonical
-`CMAKE_HOME_DIRECTORY` before dispatching the source contract. That contract
+`CMAKE_HOME_DIRECTORY`; its source directory chain and cache remain retained
+through CTest dispatch. That contract
 runs public `make dist` in an owned spaced source copy and validates exactly
-**78 regular files and 9 directory entries**, including the CMake build, all
+**87 regular files and 9 directory entries**, including the CMake build, all
 helpers/native helper sources, Windows/provenance documentation, and tests.
 It checks archived bytes against the input snapshot (including README's
 declared version/date substitution), removes the copied
 source, rejects missing/extra/stale-generated/symlink mutations, and performs
-an extracted strict build, four-worker generation, exact PE audit, and eight
-non-source-dist contracts. The standalone archive registers nine tests;
+an extracted strict build, four-worker generation, exact PE audit, and nine
+non-source-dist contracts. Archive-contained helpers deny new reads and image
+opens of original checkout/build helpers during extracted verification; a
+regression requiring the original `CMakeLists.txt` must fail in that interval.
+The already consumed dispatch cache retains its identity and has its bytes
+locked until the extracted run finishes. The standalone archive registers ten tests;
 repository `.github` is not shipped, so its workflow test is not registered.
 
 To create only the public `pure-gl-0.9.tar.gz` archive, use the same explicit

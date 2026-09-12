@@ -322,6 +322,9 @@ function(gl_contract_reservation_mutation)
   foreach(name pure-gl.dll pure-gl-test-runner.exe README pure-gl-install-baseline.tsv)
     file(COPY_FILE "${original_build}/${name}" "${fixture_build}/${name}")
   endforeach()
+  execute_process(COMMAND "${CMAKE_COMMAND}" "-DMODULE=${fixture_build}/pure-gl.dll"
+    "-DRUNNER=${fixture_build}/pure-gl-test-runner.exe" "-DBUILD_DIR=${fixture_build}"
+    -P "${SOURCE_DIR}/cmake/SealBuiltArtifacts.cmake" COMMAND_ERROR_IS_FATAL ANY)
   set(original_script "${SOURCE_DIR}/cmake/VerifyInstalledPackage.cmake")
   set(fixture_script "${fixture_build}/policy/VerifyInstalledPackage.cmake")
   file(READ "${original_script}" mutant)
@@ -506,6 +509,9 @@ file(COPY "${PURE_PREFIX}/" DESTINATION "${fixture_stage}")
 foreach(name pure-gl.dll pure-gl-test-runner.exe README pure-gl-install-baseline.tsv)
   file(COPY_FILE "${BINARY_DIR}/${name}" "${fixture_build}/${name}")
 endforeach()
+execute_process(COMMAND "${CMAKE_COMMAND}" "-DMODULE=${fixture_build}/pure-gl.dll"
+  "-DRUNNER=${fixture_build}/pure-gl-test-runner.exe" "-DBUILD_DIR=${fixture_build}"
+  -P "${SOURCE_DIR}/cmake/SealBuiltArtifacts.cmake" COMMAND_ERROR_IS_FATAL ANY)
 file(READ "${context}" fixture_context)
 string(REPLACE "${BINARY_DIR}" "${fixture_build}" fixture_context "${fixture_context}")
 file(CONFIGURE OUTPUT "${fixture_build}/pure-gl-install-context.cmake"

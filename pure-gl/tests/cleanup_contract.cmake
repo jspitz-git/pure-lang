@@ -11,6 +11,14 @@ set(ENV{PKG_CONFIG_PATH} "")
 set(ENV{PKG_CONFIG_LIBDIR} "${PURE_GL_PURE_PREFIX}/lib/pkgconfig;${PURE_GL_CLANG64_PREFIX}/lib/pkgconfig")
 unset(ENV{PKG_CONFIG_SYSROOT_DIR})
 gl_audit_open(cleanup-contract work)
+execute_process(COMMAND "C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe"
+  -NoProfile -NonInteractive -File "${SOURCE_DIR}/tests/LegacyRetention.ps1"
+  -Source "${SOURCE_DIR}" -Root "${work}" -Compiler "${C_COMPILER}" -CMake "${CMAKE_COMMAND}"
+  RESULT_VARIABLE retain_rc OUTPUT_VARIABLE retain_out ERROR_VARIABLE retain_err TIMEOUT 90)
+if(NOT retain_rc EQUAL 0)
+  message(FATAL_ERROR "Legacy retention contract failed: ${retain_out}${retain_err}")
+endif()
+message(STATUS "${retain_out}")
 set(copy "${work}/source with spaces")
 file(MAKE_DIRECTORY "${copy}")
 execute_process(COMMAND "${BINARY_DIR}/pure-gl-install-guard.exe" --check-tree "${SOURCE_DIR}"

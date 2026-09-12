@@ -403,6 +403,9 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           Remove-Item Env:PURELIB -ErrorAction SilentlyContinue
+          & $env:CMAKE_EXE "-DBINARY_DIR=$env:GL_BUILD" -P "$env:GL_SOURCE/tests/VerifyCTestInventory.cmake" `
+            2>&1 | Tee-Object -FilePath "$env:GL_LOG_DIR/ctest-inventory.log"
+          if ($LASTEXITCODE -ne 0) { throw 'pure-gl CTest inventory failed' }
           & $env:CTEST_EXE --test-dir "$env:GL_BUILD" -L gl --output-on-failure --no-tests=error `
             2>&1 | Tee-Object -FilePath "$env:GL_LOG_DIR/ctest.log"
           if ($LASTEXITCODE -ne 0) { throw 'Mandatory noninteractive pure-gl tests failed' }

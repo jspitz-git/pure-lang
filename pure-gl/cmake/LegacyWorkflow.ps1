@@ -45,8 +45,9 @@ public static class GlLegacyOwner {
   for(string q=p;q!=null&&q.Length>3;q=Path.GetDirectoryName(q)) chain.Push(q);
   while(chain.Count>0) Hold(chain.Pop(),false);
  }
- public static void Tree(string p) {
-  Hold(p,true);
+ public static void Tree(string p) { Tree(p,true); }
+ public static void Tree(string p,bool deleting) {
+  Hold(p,deleting);
   if(!directories.Contains(p)) return;
   var seen=new HashSet<string>(StringComparer.OrdinalIgnoreCase);
   foreach(string child in Directory.GetFileSystemEntries(p)) {
@@ -55,7 +56,7 @@ public static class GlLegacyOwner {
    if(name.Equals(".git",StringComparison.OrdinalIgnoreCase)||name.Equals(".codex",StringComparison.OrdinalIgnoreCase)||
       name.Equals(".agents",StringComparison.OrdinalIgnoreCase)||name.Equals(".pure-gl-protected",StringComparison.OrdinalIgnoreCase))
      Fail("protected descendant: "+child);
-   Tree(child);
+   Tree(child,deleting);
   }
  }
  public static void FileOnly(string p) {
@@ -90,6 +91,20 @@ public static class GlLegacyOwner {
   byte[] bytes=Read(source);
   using(var f=new FileStream(destination,FileMode.CreateNew,FileAccess.Write,FileShare.None)) f.Write(bytes,0,bytes.Length);
  }
+ public static void NewDirectory(string p) {
+  Directory.CreateDirectory(p);
+  Hold(p,true);
+  if(!directories.Contains(p)) Fail("New package path is not a directory: "+p);
+ }
+ public static void ReleaseSourceReaders(string source) {
+  // Distcheck dispatch authority is the retained directory chain plus the
+  // separately held cache. Release consumed source bytes so the extracted
+  // verifier can make checkout files unavailable with exclusive file sharing.
+  var paths=new List<string>();
+  foreach(string p in held.Keys)
+   if(p.StartsWith(source+"\\",StringComparison.Ordinal)&&!directories.Contains(p)) paths.Add(p);
+  foreach(string p in paths) { CloseHandle(held[p]); held.Remove(p); }
+ }
  public static void Close() { foreach(IntPtr h in held.Values) CloseHandle(h); held.Clear(); directories.Clear(); }
 }
 '@
@@ -103,7 +118,7 @@ function Assert-LeafOwner {
 }
 try {
  [GlLegacyOwner]::Ancestors($taskSource)
- [GlLegacyOwner]::Tree($taskSource)
+ [GlLegacyOwner]::Tree($taskSource,($Mode -ne 'distcheck'))
  $taskOwner=$taskUtf8.GetString([GlLegacyOwner]::Read((Join-Path $taskSource '.pure-gl-source')))
  # Git text checkouts use LF or CRLF. Both have one exact, single-line record;
  # additional whitespace, extra records and altered contents are rejected.
@@ -131,7 +146,7 @@ try {
   $taskHome=[IO.Path]::GetFullPath($taskHomes[0].Groups[1].Value)
   [GlLegacyOwner]::Ancestors($taskHome)
   if($taskHome -cne $taskSource) { throw 'distcheck build source mismatch: CMAKE_HOME_DIRECTORY does not match the package source' }
-  [GlLegacyOwner]::Close()
+  [GlLegacyOwner]::ReleaseSourceReaders($taskSource)
   & (Join-Path ([IO.Path]::GetDirectoryName($CMake)) 'ctest.exe') --test-dir $taskAudit -R '^pure-gl-source-dist-contract$' --no-tests=error --output-on-failure
   if($LASTEXITCODE -ne 0) { throw 'Independent source distribution contract failed' }
  } elseif($Mode -eq 'dist') {
@@ -143,12 +158,12 @@ try {
    $null=[GlLegacyOwner]::Read((Join-Path $taskSource $name))
   }
   if(Test-Path -LiteralPath $taskLeaf) { [GlLegacyOwner]::DeleteTree($taskLeaf) }
-  $null=[IO.Directory]::CreateDirectory($taskLeaf)
+  [GlLegacyOwner]::NewDirectory($taskLeaf)
   [IO.File]::WriteAllText((Join-Path $taskLeaf '.pure-gl-owner'),$taskLeafOwner,$taskUtf8)
   $taskPackage=Join-Path $taskLeaf 'pure-gl-0.9'
   # The release's complete directory inventory is explicit as well.
   foreach($name in @('','GL','cmake','debian','debian/source','examples','examples/flexi-line','tests','tests/fixtures')) {
-   $null=[IO.Directory]::CreateDirectory((Join-Path $taskPackage $name))
+   [GlLegacyOwner]::NewDirectory((Join-Path $taskPackage $name).TrimEnd('\'))
   }
   foreach($name in $taskNames) {
    $destination=Join-Path $taskPackage $name

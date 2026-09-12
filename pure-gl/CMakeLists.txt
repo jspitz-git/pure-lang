@@ -344,11 +344,20 @@ if(BUILD_TESTING)
         "-DPURE_GL_CLANG64_PREFIX=${PURE_GL_CLANG64_PREFIX}"
         "-DPURE_GL_WINDOWS_SYSTEM_DIRECTORY=${PURE_GL_WINDOWS_SYSTEM_DIRECTORY}"
         -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/runner_contract.cmake")
-    add_custom_target(pure-gl-render-contract
+    add_test(NAME pure-gl-render-contract
       COMMAND "${CMAKE_COMMAND}"
         "-DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
         "-DBINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}"
         ${pure_gl_runner_arguments}
+        -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/render_contract.cmake")
+    set_tests_properties(pure-gl-render-contract PROPERTIES
+      LABELS "gl;contract;render" TIMEOUT 1500 RUN_SERIAL TRUE)
+    add_custom_target(pure-gl-interactive-contract
+      COMMAND "${CMAKE_COMMAND}"
+        "-DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
+        "-DBINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}"
+        ${pure_gl_runner_arguments}
+        -DINTERACTIVE_ONLY=ON
         -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/render_contract.cmake"
       DEPENDS pure-gl pure-gl-test-runner pure-gl-install-guard stage-pure-gl-test-runtime
       COMMENT "Running pure-gl semantic rendering mutations"

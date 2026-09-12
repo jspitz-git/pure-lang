@@ -251,3 +251,87 @@ Build, validate, and package `pure-gl` with native Windows OpenGL and FreeGLUT.
     hashes are retained in the Task 7 SDD report. No visible desktop validation
     was rerun for this final gate;
     `check-gl-interactive` remains optional.
+- 2026-09-12: Implemented fixes for the final review's five authority gaps; these
+  results supersede the earlier follow-up's registration/archive counts while
+  preserving that run as historical evidence.
+  - Canonical runner inputs and every validated executable-alias component now
+    retain read handles without write/delete sharing through supervised
+    execution. Synchronized independent-child RED/GREEN coverage proves eight
+    denied writes over two owned launches and two post-release controls.
+  - Post-link module and runner hashes plus the completed-seal hash are embedded
+    in the native installation guard. Ordinary verification authenticates and
+    retains them before consuming mutable sidecars; the module policy no longer
+    exempts BUILD hashes. Eight new negatives reject missing/modified modules,
+    runners and completed seals, including coordinated artifact/sidecar changes.
+    Corrected focused install/guard verification passed 2/2 in 569.03 seconds;
+    existing 33 install negatives/eight positives and 18 guard negatives/20
+    positives remain, with zero protected writes. Fixture restoration uses
+    byte-exact copies; investigated initial line-ending failures are retained.
+  - Public distcheck retains source-directory/cache authority through dispatch,
+    and distribution creation retains each new leaf/package directory before
+    child access. Synchronized checks cover dispatch, ten new directories and
+    compatible child reads; destructive modes retain their required access.
+  - The mandatory `pure-gl-render-contract` CTest now runs two pristine scripts
+    and twelve load/hidden mutations. Only one visible pristine script and six
+    visible mutations remain in the optional `pure-gl-interactive-contract`
+    target. CI/extracted gates inspect the real CTest inventory before running
+    it: eleven repository tests, ten standalone tests, no interactive CTest.
+    Workflow regressions now cover 408 GL mutations and four independent
+    positives within the unchanged 23-method Python suite.
+  - The archive contains 87 regular files and nine directories. Its own
+    bootstrap/helper code performs extracted verification while original
+    checkout/build helpers deny new reads and image opens. A regression proves
+    accidental original-source reads and original-helper execution fail during
+    that interval. Toolchain/SDK roots remain explicit external dependencies;
+    the already-consumed dispatch cache retains identity and locked bytes.
+    No hosted CI or visible interactive rerun is claimed by this fix wave.
+- 2026-09-12: Completed fresh final-fix verification using source snapshot
+  `.../todo35-audit/ff source4/pure-gl`, immutable SDK `.../ffpure4`, short build
+  `C:/pure-lang/gf4`, and separate physical stage `.../ff final4 café`.
+  - Strict configure/four-worker build/exact PE checks passed in
+    3.325/6.824/2.770 seconds with the previously documented local MinGW
+    Makefiles/compiler-probe fallback. Tool versions and pinned dependency
+    hashes remain unchanged from the earlier measured follow-up. These are
+    local results, not evidence of hosted Ninja execution.
+  - The fresh public distcheck ran before the complete repository suite:
+
+    ```powershell
+    & C:/msys64/clang64/bin/mingw32-make.exe --no-print-directory -C 'C:/pure-lang/.worktrees/todo35-audit/ff source4/pure-gl' distcheck CMAKE=C:/msys64/clang64/bin/cmake.exe PKG_CONFIG=C:/msys64/clang64/bin/pkgconf.exe DIST_AUDIT_BUILD=C:/pure-lang/gf4
+    & C:/msys64/clang64/bin/cmake.exe -DBINARY_DIR=C:/pure-lang/gf4 -P 'C:/pure-lang/.worktrees/todo35-audit/ff source4/pure-gl/tests/VerifyCTestInventory.cmake'
+    & C:/msys64/clang64/bin/ctest.exe --test-dir C:/pure-lang/gf4 -L gl --output-on-failure --no-tests=error -V
+    & C:/msys64/clang64/bin/cmake.exe --install C:/pure-lang/gf4 --prefix 'C:/pure-lang/.worktrees/todo35-audit/ff final4 café' --component runtime
+    & C:/msys64/clang64/bin/cmake.exe --install C:/pure-lang/gf4 --prefix 'C:/pure-lang/.worktrees/todo35-audit/ff final4 café' --component documentation
+    & C:/msys64/clang64/bin/cmake.exe -DGL_INSTALL_CONTEXT=C:/pure-lang/gf4/pure-gl-install-context.cmake '-DSTAGE_PREFIX=C:/pure-lang/.worktrees/todo35-audit/ff final4 café' -P 'C:/pure-lang/.worktrees/todo35-audit/ff source4/pure-gl/cmake/VerifyInstalledPackage.cmake'
+    ```
+
+  - Public distcheck passed 1/1 in 1,198.07 seconds (1,198.924 seconds including
+    dispatch), with nine extracted tests passing in 1,179.23 seconds. Its
+    249,777-byte archive SHA-256 is
+    `5169735bd27deb41a538c1ff3a83ecae314fa1274af417daf864b756673358c2`.
+    All eleven repository CTests then passed in 2,315.81 seconds. Its independent
+    source-dist gate passed in 1,085.20 seconds, including nine extracted tests
+    in 1,064.57 seconds; that 249,749-byte archive SHA-256 is
+    `7401c1fabf8c806320a6f654cc39dc75383f4f96e2cc45bdfbc76c2882d67df2`.
+    Both archives contain 87 files/nine directories and seal all 26 payloads.
+    Isolation denied 392/469 original input files respectively and rejected
+    both accidental original-source and original-helper dependencies.
+  - The final repository render contract passed in 346.35 seconds; extracted
+    render passed in 356.61 seconds. Final workflow verification passed the
+    23-method/408-mutation suite in 177.346 seconds. Repository install/guard
+    contracts passed in 319.72/196.27 seconds, with zero protected writes.
+  - Separate stage runtime/documentation installation passed in 4.284/3.883
+    seconds. Complete installed verification passed in 70.278 seconds, including
+    two authenticated same-stage alias launches, context/pixel/error/destruction
+    checks, exact 22-file/141-import PE audit, and unchanged final inventory.
+    The stage has 81 entries, 66 files/15 directories and 100,069,130 file bytes;
+    the baseline remains 49 entries and 98,751,285 bytes.
+  - Final metrics prove byte-for-byte equality of all 87 package source files
+    and all four `.github` files with the reviewed worktree. The inventory TSV
+    SHA-256 is `f72b3037d90770e9f55d8d01b9ca2469812532bc87bb4eff7ab38abda1410cc3`;
+    the 616,448-byte module is
+    `7991cd0d8d8a7b4c1261a50a50f88359e091ec6dd99163fe72aadb3f32bd2668`;
+    the 190-byte completed seal is
+    `f1d261f48655805644571c696f754361a78f1b12c0a64d319c0b8e94dc01c765`.
+    Full RED/GREEN evidence, exact commands, retained archives, metrics and
+    self-review are in the final-fix SDD report. Documentation/new-helper/CI
+    PowerShell parsing, real YAML parsing and final whitespace checks pass.
